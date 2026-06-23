@@ -25,7 +25,7 @@ module TestHost =
   "name": "echo",
   "description": "Echo back the input text.",
   "execution": { "type": "process", "command": "echo", "args": ["{{input}}"] },
-  "outputContentType": "text"
+  "output_content_type": "text"
 }"""
 
     let agentJson = """{
@@ -37,7 +37,7 @@ module TestHost =
     "constraints": ["Be concise"]
   },
   "tools": ["echo"],
-  "maxRounds": 5
+  "max_rounds": 5
 }"""
 
     /// Reserve an ephemeral loopback port for a test host.
@@ -257,7 +257,7 @@ type RegisterFlowTests() =
   "name": "greet",
   "description": "Greet the user.",
   "execution": { "type": "process", "command": "echo", "args": ["hi {{input}}"] },
-  "outputContentType": "text"
+  "output_content_type": "text"
 }"""
             use doc = JsonDocument.Parse(toolJson)
             let request = { Name = "greet"; Definition = doc.RootElement }

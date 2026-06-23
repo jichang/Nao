@@ -115,8 +115,20 @@ module RuntimePolicy =
             elif lower.StartsWith "container:" then Containerized (Some (m.Substring("container:".Length)))
             else ForceRuntime m
 
+/// The two kinds of tool a definition can describe.
+type ToolKind =
+    /// Prompt-defined: the tool body is an LLM prompt. Invoking the tool completes the
+    /// prompt against the configured provider (optionally enriched with conversation
+    /// context). Always synchronous — there is no external process to background.
+    | PromptTool of prompt: Prompt
+    /// Executable: the tool runs external code through a process, HTTP endpoint, or a
+    /// custom executor. May run synchronously (inline) or asynchronously (spawned as a
+    /// background task) when `isAsync` is set.
+    | ExecutableTool of execution: ToolExecutionDef * runtime: string * isAsync: bool
+
 /// Parsed tool definition loaded from JSON configuration.
-/// Supports multiple execution strategies: process, HTTP, custom.
+/// A tool is either prompt-defined (LLM-backed, sync) or executable (process/HTTP/custom,
+/// sync or async) — see `ToolKind`.
 type ToolDef =
     { /// Unique name identifying this tool
       Name: string
@@ -124,19 +136,31 @@ type ToolDef =
       Version: string option
       /// Human-readable description shown to agents
       Description: string
-      /// How this tool executes
-      Execution: ToolExecutionDef
-      /// Runtime the tool's process needs (e.g. "deno", "ts-node", "python").
-      /// Empty = native (run the command directly). Ignored for HTTP/custom tools.
-      Runtime: string
+      /// Whether this tool is prompt-defined or executable, and how it executes.
+      Kind: ToolKind
       /// Content type of the tool's output (e.g. "text/plain", "application/json")
       OutputContentType: string
-      /// Optional execution definition for verifying output
+      /// Optional execution definition for verifying output (executable tools only)
       VerifyExecution: ToolExecutionDef option
-      /// Optional execution definition for reverting changes
+      /// Optional execution definition for reverting changes (executable tools only)
       RevertExecution: ToolExecutionDef option
       /// Where this tool definition came from (populated by the loading source).
       Provenance: ToolProvenance option }
+
+/// Accessors over a tool definition's kind.
+module ToolDef =
+
+    /// The executable runtime the tool declares ("" / native for prompt tools).
+    let runtime (def: ToolDef) : string =
+        match def.Kind with
+        | ExecutableTool (_, rt, _) -> rt
+        | PromptTool _ -> ""
+
+    /// Whether the tool runs asynchronously (false for prompt tools).
+    let isAsync (def: ToolDef) : bool =
+        match def.Kind with
+        | ExecutableTool (_, _, async) -> async
+        | PromptTool _ -> false
 
 /// Reference to an evaluator used in an eval suite
 type EvaluatorRef =

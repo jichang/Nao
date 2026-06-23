@@ -616,7 +616,9 @@ module EmbeddedServer =
 
                 // Async-task executors — matched by Kind on the SessionTaskGrain. Agent tasks
                 // drive a sub-session (e.g. the async converter agent runs its whole harness there).
+                // Tool tasks run an async executable tool in the background on its own grain.
                 builder.Services.AddSingleton<ITaskExecutor, AgentTaskExecutor>() |> ignore
+                builder.Services.AddSingleton<ITaskExecutor, ToolTaskExecutor>() |> ignore
 
                 let app = builder.Build()
                 app.UseWebSockets() |> ignore

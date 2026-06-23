@@ -125,42 +125,103 @@ module DefinitionBuilder =
         }
 
     /// Build a Tool from a ToolDef, applying the given session runtime policy.
+    /// Only executable tools are built here; prompt tools require an LLM provider and must
+    /// be built via `buildPromptTool`. Async executable tools are built inline (the async
+    /// wrapping is layered on separately by `wrapAsyncTool`).
     let buildToolWith (policy: RuntimePolicy) (def: ToolDef) : Tool =
-        let verify =
-            match def.VerifyExecution with
-            | None -> None
-            | Some verifyExec ->
-                Some (fun (input: string) (output: string) ->
-                    task {
-                        let! result = executeDefAsync policy def.Runtime verifyExec [input; output]
-                        return result |> Result.map ignore
-                    })
-        let revert =
-            match def.RevertExecution with
-            | None -> None
-            | Some revertExec ->
-                Some (fun (ctx: RevertContext) ->
-                    task {
-                        let! result = executeDefAsync policy def.Runtime revertExec [ctx.Input; ctx.Output]
-                        return result |> Result.map ignore
-                    })
+        match def.Kind with
+        | PromptTool _ ->
+            failwithf
+                "Tool '%s' is prompt-defined and must be built with an LLM provider (DefinitionBuilder.buildPromptTool); it cannot be built as an executable tool."
+                def.Name
+        | ExecutableTool (execution, runtime, _isAsync) ->
+            let verify =
+                match def.VerifyExecution with
+                | None -> None
+                | Some verifyExec ->
+                    Some (fun (input: string) (output: string) ->
+                        task {
+                            let! result = executeDefAsync policy runtime verifyExec [input; output]
+                            return result |> Result.map ignore
+                        })
+            let revert =
+                match def.RevertExecution with
+                | None -> None
+                | Some revertExec ->
+                    Some (fun (ctx: RevertContext) ->
+                        task {
+                            let! result = executeDefAsync policy runtime revertExec [ctx.Input; ctx.Output]
+                            return result |> Result.map ignore
+                        })
+            let contentType =
+                if String.IsNullOrEmpty(def.OutputContentType) then ContentMeta.Text
+                else ContentMeta.Of def.OutputContentType
+            { Name = def.Name
+              Description = def.Description
+              Version = def.Version
+              Execute = fun input -> task {
+                let! result = executeDefAsync policy runtime execution [input]
+                return
+                    match result with
+                    | Ok output -> output
+                    | Error err -> sprintf "[Error] %s" err
+              }
+              OutputContentType = contentType
+              Verify = verify
+              Revert = revert
+              Provenance = def.Provenance }
+
+    /// Build a prompt-defined Tool: invoking the tool completes its prompt against the
+    /// given LLM provider. The caller is responsible for any conversation/memory context
+    /// (the runtime prepends it to the input before invoking the tool).
+    let buildPromptTool (provider: ILlmProvider) (def: ToolDef) (prompt: Prompt) : Tool =
         let contentType =
             if String.IsNullOrEmpty(def.OutputContentType) then ContentMeta.Text
             else ContentMeta.Of def.OutputContentType
+        let execute (input: string) : Task<string> =
+            task {
+                let conversation : Conversation =
+                    [ { Role = Role.System; Content = Prompt.render prompt }
+                      { Role = Role.User; Content = input } ]
+                let! result = provider.CompleteAsync conversation CompletionOptions.Default
+                return result.Content
+            }
         { Name = def.Name
           Description = def.Description
           Version = def.Version
-          Execute = fun input -> task {
-            let! result = executeDefAsync policy def.Runtime def.Execution [input]
-            return
-                match result with
-                | Ok output -> output
-                | Error err -> sprintf "[Error] %s" err
-          }
+          Execute = execute
           OutputContentType = contentType
-          Verify = verify
-          Revert = revert
+          Verify = None
+          Revert = None
           Provenance = def.Provenance }
+
+    /// Layer asynchronous execution onto an already-built (inline) executable tool. When a
+    /// session task host is available on the ambient `SessionExecution` scope, invoking the
+    /// tool spawns a background "tool" task and immediately returns a tracking token instead
+    /// of blocking; otherwise it falls back to running the tool inline.
+    let wrapAsyncTool (def: ToolDef) (inlineTool: Tool) : Tool =
+        let title = sprintf "Async tool: %s" def.Name
+        let execute (input: string) : Task<string> =
+            task {
+                match SessionExecution.current () with
+                | Some scope ->
+                    let! taskId =
+                        scope.SpawnTask
+                            { Kind = "tool"
+                              Title = title
+                              Params = Map [ "tool", def.Name; "input", input ] }
+                    if String.IsNullOrEmpty taskId then
+                        // No async task host available — run inline.
+                        return! inlineTool.Execute input
+                    else
+                        return
+                            sprintf
+                                "Started background task **%s** (`%s`). Track its progress or open the result from the task tag."
+                                title taskId
+                | None ->
+                    return! inlineTool.Execute input
+            }
+        { inlineTool with Execute = execute }
 
     /// Build a Tool from a ToolDef using the host-default runtime policy
     /// (each tool uses its own declared runtime, executed on the host).

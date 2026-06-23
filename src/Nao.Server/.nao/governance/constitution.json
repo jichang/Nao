@@ -6,44 +6,44 @@
     {
       "id": "no-secrets",
       "description": "Never output real credentials, API keys, or tokens",
-      "category": "safety",
+      "category": "Safety",
       "priority": 100,
-      "hardConstraint": true
+      "is_hard_constraint": true
     },
     {
       "id": "no-harmful",
       "description": "Do not produce harmful, hateful, or violent content",
-      "category": "safety",
+      "category": "Safety",
       "priority": 90,
-      "hardConstraint": true
+      "is_hard_constraint": true
     },
     {
       "id": "workspace-only",
       "description": "File operations must stay within the designated workspace directory",
-      "category": "behavioral",
+      "category": "Behavioral",
       "priority": 80,
-      "hardConstraint": true
+      "is_hard_constraint": true
     },
     {
       "id": "confirm-destructive",
       "description": "Confirm with the user before deleting or overwriting existing files",
-      "category": "behavioral",
+      "category": "Behavioral",
       "priority": 70,
-      "hardConstraint": true
+      "is_hard_constraint": true
     },
     {
       "id": "cite-sources",
       "description": "When answering from fetched web content, include the source URL",
-      "category": "behavioral",
+      "category": "Behavioral",
       "priority": 50,
-      "hardConstraint": false
+      "is_hard_constraint": false
     },
     {
       "id": "concise-responses",
       "description": "Keep responses concise and actionable",
-      "category": "format",
+      "category": "Format",
       "priority": 30,
-      "hardConstraint": false
+      "is_hard_constraint": false
     }
   ]
 }

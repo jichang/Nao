@@ -214,6 +214,16 @@ module Shell =
                             Settings = { model.SettingsState.Settings with Language = lang }
                             IsDirty = true } },
                 Cmd.none
+            | SettingsView.SettingsChanged newSettings ->
+                // Apply appearance immediately so the theme/language toggle is live.
+                Theme.apply (Theme.parse newSettings.Theme)
+                Localization.apply (Localization.parse newSettings.Language)
+                { model with
+                    SettingsState =
+                        { model.SettingsState with
+                            Settings = newSettings
+                            IsDirty = true } },
+                Cmd.none
             | SettingsView.ProviderTypeSelected providerId ->
                 // Picking a provider also "sets it up" by pre-filling that provider's
                 // default endpoint and a valid default model, so the user doesn't need to
@@ -230,15 +240,36 @@ module Shell =
                             Settings = { model.SettingsState.Settings with Provider = provider }
                             IsDirty = true } },
                 Cmd.none
-            | SettingsView.SettingsChanged newSettings ->
-                // Apply appearance immediately so the theme/language toggle is live.
-                Theme.apply (Theme.parse newSettings.Theme)
-                Localization.apply (Localization.parse newSettings.Language)
+            | SettingsView.ServerModeSelected mode ->
+                // Granular, single-field update so switching Local/Remote never clobbers
+                // the remote URL, email, or token.
+                let server = { model.SettingsState.Settings.Server with Mode = mode }
                 { model with
                     SettingsState =
                         { model.SettingsState with
-                            Settings = newSettings
+                            Settings = { model.SettingsState.Settings with Server = server }
                             IsDirty = true } },
+                Cmd.none
+            | SettingsView.RequestLoginLink ->
+                // No hosted auth backend exists yet; surface a clear status message rather
+                // than fabricating a sign-in. The verification-link exchange is wired here
+                // once a remote auth service is available.
+                let email = model.SettingsState.Settings.Server.AuthEmail
+                let status =
+                    if System.String.IsNullOrWhiteSpace email then "Enter an email to receive a verification link."
+                    else sprintf "Verification link sent to %s. Check your inbox to finish signing in." email
+                { model with
+                    SettingsState =
+                        { model.SettingsState with StatusMessage = status } },
+                Cmd.none
+            | SettingsView.SignOut ->
+                let server = { model.SettingsState.Settings.Server with AuthToken = "" }
+                { model with
+                    SettingsState =
+                        { model.SettingsState with
+                            Settings = { model.SettingsState.Settings with Server = server }
+                            IsDirty = true
+                            StatusMessage = "Signed out." } },
                 Cmd.none
             | SettingsView.Save ->
                 AppSettingsStore.save model.SettingsState.Settings

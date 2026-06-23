@@ -330,7 +330,23 @@ type SessionGrain
         |> Option.orElseWith (fun () ->
             workspace.ToolDefs
             |> List.tryFind (fun d -> d.Name = n && VersionRef.matches ver d.Version)
-            |> Option.map (DefinitionBuilder.buildToolWith policy))
+            |> Option.map (fun def ->
+                match def.Kind with
+                | PromptTool prompt ->
+                    // Prompt-defined tool: complete the prompt against this session's
+                    // provider, prefixing recent conversation history so the prompt has the
+                    // context the user is referring to (mirrors async-agent input handling).
+                    let basePromptTool = DefinitionBuilder.buildPromptTool provider def prompt
+                    let execute (input: string) =
+                        let contextual =
+                            ConversationContextRender.withHistory 8 (activeConversation().Messages) input
+                        basePromptTool.Execute contextual
+                    { basePromptTool with Execute = execute }
+                | ExecutableTool (_, _, isAsync) ->
+                    // Executable tool: build it inline; async tools additionally spawn a
+                    // background "tool" task on invocation and return a tracking token.
+                    let inlineTool = DefinitionBuilder.buildToolWith policy def
+                    if isAsync then DefinitionBuilder.wrapAsyncTool def inlineTool else inlineTool))
 
     let resolveTools (workspace: WorkspaceDefinitions) (policy: RuntimePolicy) (names: string list) : Tool list =
         names |> List.choose (resolveTool workspace policy)

@@ -12,6 +12,7 @@
     <Project Path="src/Nao.Providers/Nao.Providers.fsproj" />
     <Project Path="src/Nao.Runtime.Orleans/Nao.Runtime.Orleans.fsproj" />
     <Project Path="src/Nao.Runtime.Orleans.Codegen/Nao.Runtime.Orleans.Codegen.csproj" />
+    <Project Path="src/Nao.Server/Nao.Server.fsproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Nao.Agents.Tests/Nao.Agents.Tests.fsproj" />

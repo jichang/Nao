@@ -209,8 +209,11 @@ type WorkspaceE2ETests() =
         File.WriteAllText(Path.Combine(toolsDir, "echo.json"), """{
             "name": "echo",
             "description": "Echo the input back. Useful for testing.",
-            "command": "echo",
-            "args": ["-n"],
+            "execution": {
+                "type": "process",
+                "command": "echo",
+                "args": ["-n"]
+            },
             "output_content_type": "text/plain"
         }""")
 
@@ -218,9 +221,12 @@ type WorkspaceE2ETests() =
         File.WriteAllText(Path.Combine(toolsDir, "http-status.json"), """{
             "name": "http_status",
             "description": "Check HTTP status of a URL",
-            "mode": "http",
-            "url": "http://localhost:19999/status",
-            "method": "GET",
+            "execution": {
+                "type": "http",
+                "url": "http://localhost:19999/status",
+                "method": "GET",
+                "headers": {}
+            },
             "output_content_type": "application/json"
         }""")
 
@@ -228,12 +234,21 @@ type WorkspaceE2ETests() =
         File.WriteAllText(Path.Combine(toolsDir, "safe-mkdir.json"), """{
             "name": "safe_mkdir",
             "description": "Create a directory safely with verify and revert",
-            "command": "mkdir",
-            "args": ["-p"],
-            "verify_command": "test",
-            "verify_args": ["-d"],
-            "revert_command": "rmdir",
-            "revert_args": [],
+            "execution": {
+                "type": "process",
+                "command": "mkdir",
+                "args": ["-p"]
+            },
+            "verify": {
+                "type": "process",
+                "command": "test",
+                "args": ["-d"]
+            },
+            "revert": {
+                "type": "process",
+                "command": "rmdir",
+                "args": []
+            },
             "output_content_type": "text/plain"
         }""")
 
@@ -247,7 +262,9 @@ type WorkspaceE2ETests() =
                 "role": "You are a helpful assistant for file management.",
                 "objective": "Help the user create and organize files and folders.",
                 "constraints": ["Only operate within the designated temp directory"],
-                "output_format": "json"
+                "output_format": {
+                    "type": "json"
+                }
             },
             "tools": ["create_folder", "write_file", "list_folder", "echo"],
             "max_rounds": 10
@@ -313,14 +330,14 @@ type WorkspaceE2ETests() =
 
         // echo: Process mode
         let echo = tools |> List.find (fun t -> t.Name = "echo")
-        match echo.Execution with
-        | ToolExecutionDef.Process (cmd, _) -> Assert.AreEqual("echo", cmd)
+        match echo.Kind with
+        | ExecutableTool (ToolExecutionDef.Process (cmd, _), _, _) -> Assert.AreEqual("echo", cmd)
         | _ -> Assert.Fail("Expected Process execution for echo tool")
 
         // http_status: HTTP mode
         let httpTool = tools |> List.find (fun t -> t.Name = "http_status")
-        match httpTool.Execution with
-        | ToolExecutionDef.Http (url, method, _) ->
+        match httpTool.Kind with
+        | ExecutableTool (ToolExecutionDef.Http (url, method, _), _, _) ->
             Assert.AreEqual("http://localhost:19999/status", url)
             Assert.AreEqual("GET", method)
         | _ -> Assert.Fail("Expected HTTP execution for http_status tool")

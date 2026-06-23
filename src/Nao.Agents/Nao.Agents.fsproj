@@ -60,10 +60,12 @@
     <Compile Include="src/Orchestration/Router.fs" />
     <Compile Include="src/Orchestration/Pipeline.fs" />
     <Compile Include="src/Orchestration/AgentGroup.fs" />
+    <!-- Trace types are referenced by the orchestrator (per-tool spans), so they must
+         be compiled before it. -->
+    <Compile Include="src/Observability/Trace.fs" />
     <Compile Include="src/Orchestration/Orchestrator.fs" />
 
     <!-- O: Observability & Operations -->
-    <Compile Include="src/Observability/Trace.fs" />
     <Compile Include="src/Observability/Metrics.fs" />
     <Compile Include="src/Observability/Resilience.fs" />
 

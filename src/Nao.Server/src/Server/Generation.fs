@@ -46,23 +46,67 @@ module Generation =
     }
 
     let private toolSystem =
-        "You generate ONE JSON tool definition for the Nao agent framework. "
-        + "Output ONLY the JSON object — no prose, no markdown fences.\n"
-        + "Process/shell tool schema (flat keys):\n"
-        + "{\n  \"name\": \"snake_case_unique_name\",\n  \"description\": \"what it does and the expected input format\",\n"
-        + "  \"command\": \"executable\",\n  \"args\": [\"fixed\", \"args\"],\n  \"output_content_type\": \"text\"\n}\n"
-        + "HTTP tool schema instead:\n"
-        + "{\n  \"name\": \"...\",\n  \"description\": \"...\",\n  \"mode\": \"http\",\n  \"method\": \"GET\",\n  \"url\": \"https://...\",\n  \"output_content_type\": \"application/json\"\n}\n"
-        + "Rules: choose exactly ONE style (command OR http). The runtime appends the user's input string as the final CLI argument. "
-        + "Use only widely-available commands (bash, curl, echo, date, jq, grep, ls, cat, python3). Keep it read-only unless writes are required."
+        """You generate ONE JSON tool definition for the Nao agent framework. Output ONLY the JSON object — no prose, no markdown fences.
+A tool is one of two kinds, set by the top-level "kind" field (omitted ⇒ "executable").
+
+1) Prompt tool ("kind": "prompt") — backed by the LLM, always synchronous. No execution/runtime/is_async:
+{
+  "name": "snake_case_unique_name",
+  "description": "what it does and the expected input format",
+  "kind": "prompt",
+  "prompt": {
+    "role": "you are ...",
+    "objective": "...",
+    "constraints": ["..."],
+    "output_format": "free_text"
+  },
+  "output_content_type": "text"
+}
+
+2) Executable tool ("kind": "executable") — runs external code. May be async via "is_async": true.
+Process/shell tool schema:
+{
+  "name": "snake_case_unique_name",
+  "description": "what it does and the expected input format",
+  "kind": "executable",
+  "execution": {
+    "type": "process",
+    "command": "executable",
+    "args": ["fixed", "args"]
+  },
+  "is_async": false,
+  "output_content_type": "text"
+}
+HTTP tool schema instead:
+{
+  "name": "...",
+  "description": "...",
+  "kind": "executable",
+  "execution": {
+    "type": "http",
+    "method": "GET",
+    "url": "https://...",
+    "headers": {}
+  },
+  "output_content_type": "application/json"
+}
+Rules: pick exactly ONE kind. For an executable tool choose exactly ONE execution type ("process" OR "http"); the runtime appends the user's input string as the final CLI argument; use only widely-available commands (bash, curl, echo, date, jq, grep, ls, cat, python3); keep it read-only unless writes are required; set "is_async": true only for long-running executable work. A prompt tool must never set execution, runtime, or is_async."""
 
     let private agentSystem (availableTools: string list) =
-        "You generate ONE JSON agent (workflow) definition for the Nao framework. "
-        + "Output ONLY the JSON object — no prose, no markdown fences.\n"
-        + "Schema:\n{\n  \"name\": \"kebab-or-snake-name\",\n  \"description\": \"what task/workflow this agent accomplishes\",\n"
-        + "  \"prompt\": {\n    \"role\": \"You are ...\",\n    \"objective\": \"...\",\n    \"constraints\": [\"...\"]\n  },\n"
-        + "  \"tools\": [\"tool_name\"],\n  \"maxRounds\": 10\n}\n"
-        + "Choose tools ONLY from this available list: " + String.Join(", ", availableTools)
+        """You generate ONE JSON agent (workflow) definition for the Nao framework. Output ONLY the JSON object — no prose, no markdown fences.
+Schema:
+{
+  "name": "kebab-or-snake-name",
+  "description": "what task/workflow this agent accomplishes",
+  "prompt": {
+    "role": "You are ...",
+    "objective": "...",
+    "constraints": ["..."]
+  },
+  "tools": ["tool_name"],
+  "max_rounds": 10
+}
+Choose tools ONLY from this available list: """ + String.Join(", ", availableTools)
 
     let private nameOf (json: string) : string =
         try

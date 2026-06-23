@@ -29,7 +29,7 @@ type WorkspaceLoaderTests() =
         let agentJson = """{"name": "ws-agent", "description": "workspace agent"}"""
         File.WriteAllText(Path.Combine(naoDir, "agents", "ws-agent.json"), agentJson)
 
-        let toolJson = """{"name": "ws-tool", "description": "workspace tool", "command": "echo"}"""
+        let toolJson = """{"name": "ws-tool", "description": "workspace tool", "execution": {"type": "process", "command": "echo", "args": []}}"""
         File.WriteAllText(Path.Combine(naoDir, "tools", "ws-tool.json"), toolJson)
 
         let result = WorkspaceLoader.loadWorkspace tempDir

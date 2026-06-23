@@ -25,6 +25,11 @@ module SettingsView =
         // Switching provider also pre-fills that provider's default endpoint, so picking
         // vLLM/llama.cpp/etc. "sets it up" without the user knowing each server's URL.
         | ProviderTypeSelected of string
+        // Connection mode: bundled embedded engine vs a remote server cluster, plus the
+        // verification-link sign-in flow remote mode requires.
+        | ServerModeSelected of string
+        | RequestLoginLink
+        | SignOut
         | Save
         | Close
 
@@ -197,6 +202,57 @@ module SettingsView =
             ]
         ]
 
+    /// Connection: bundled local engine vs a remote server cluster. Remote mode unlocks
+    /// cluster-backed performance and hosted features, and requires signing in via a
+    /// verification link sent to the user's email.
+    let private serverSection (dispatch: Msg -> unit) (s: AppSettings) : IView =
+        let t = Localization.current ()
+        let change f = dispatch (SettingsChanged (f s))
+        let isRemote = s.Server.Mode = "Remote"
+        let signedIn = not (System.String.IsNullOrWhiteSpace s.Server.AuthToken)
+        let statusText =
+            if signedIn then sprintf "%s %s" t.ServerSignedInAs s.Server.AuthEmail
+            else t.ServerNotSignedIn
+        let rows =
+            [ yield FormControls.row t.ServerMode 120.0 [
+                ComboBox.create [
+                    // Bind by INDEX (0 = Local, 1 = Remote) so a language switch — which
+                    // re-localizes the item labels — does NOT reset the selection.
+                    ComboBox.dataItems [ t.ServerLocal; t.ServerRemote ]
+                    ComboBox.selectedIndex (if isRemote then 1 else 0)
+                    ComboBox.width 200.0
+                    ComboBox.onSelectedIndexChanged (fun idx ->
+                        let mode = if idx = 1 then "Remote" else "Local"
+                        if mode <> s.Server.Mode then dispatch (ServerModeSelected mode))
+                ]
+              ]
+              if isRemote then
+                  yield FormControls.textRow t.ServerRemoteUrl 120.0 s.Server.RemoteUrl 300.0 (fun v ->
+                      change (fun s -> { s with Server = { s.Server with RemoteUrl = v } }))
+                  yield FormControls.textRow t.ServerEmail 120.0 s.Server.AuthEmail 300.0 (fun v ->
+                      change (fun s -> { s with Server = { s.Server with AuthEmail = v } }))
+                  yield FormControls.row "" 120.0 [
+                      (if signedIn then
+                          Button.create [
+                              Button.content t.ServerSignOut
+                              Button.onClick (fun _ -> dispatch SignOut)
+                          ] :> IView
+                       else
+                          Button.create [
+                              Button.content t.ServerSendLink
+                              // Can't send a verification link without an address.
+                              Button.isEnabled (not (System.String.IsNullOrWhiteSpace s.Server.AuthEmail))
+                              Button.onClick (fun _ -> dispatch RequestLoginLink)
+                          ] :> IView)
+                      TextBlock.create [
+                          TextBlock.text statusText
+                          TextBlock.verticalAlignment VerticalAlignment.Center
+                          TextBlock.foreground (if signedIn then Theme.success else Theme.textMuted)
+                      ] :> IView
+                  ]
+              yield FormControls.hint t.ServerHint ]
+        FormControls.section t.Server rows
+
     let private workspaceSection (dispatch: Msg -> unit) (s: AppSettings) : IView =
         let t = Localization.current ()
         FormControls.section t.Workspace [
@@ -245,6 +301,7 @@ module SettingsView =
                         header dispatch
                         appearanceSection dispatch s
                         providerSection dispatch s
+                        serverSection dispatch s
                         orchestratorSection dispatch s
                         workspaceSection dispatch s
                         footer dispatch model

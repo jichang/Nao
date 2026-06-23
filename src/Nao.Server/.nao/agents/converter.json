@@ -22,5 +22,5 @@
   },
   "tools": ["convert_document", "read_file", "write_file", "list_folder", "find_files", "create_folder"],
   "max_rounds": 10,
-  "async": true
+  "is_async": true
 }

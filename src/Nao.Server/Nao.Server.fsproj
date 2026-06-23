@@ -1,33 +1,29 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project Sdk="Microsoft.NET.Sdk.Web">
   <PropertyGroup>
-    <OutputType>WinExe</OutputType>
+    <OutputType>Exe</OutputType>
     <TargetFramework>net10.0</TargetFramework>
     <IsPackable>false</IsPackable>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="src/Client/NaoClient.fs" />
-    <Compile Include="src/Components/Theme.fs" />
-    <Compile Include="src/Components/Localization.fs" />
-    <Compile Include="src/Components/Components.fs" />
-    <Compile Include="src/Components/FormControls.fs" />
-    <Compile Include="src/Components/ExecutionTrace.fs" />
-    <Compile Include="src/Components/MessageActions.fs" />
-    <Compile Include="src/Components/MessageBubble.fs" />
-    <Compile Include="src/Components/ChatInput.fs" />
-    <Compile Include="src/Components/FeedbackDialog.fs" />
-    <Compile Include="src/Views/UiContext.fs" />
-    <Compile Include="src/Views/SessionView.fs" />
-    <Compile Include="src/Views/SettingsView.fs" />
-    <Compile Include="src/Views/BuilderView.fs" />
-    <Compile Include="src/Views/Shell.fs" />
+    <Compile Include="src/Domain/Contracts.fs" />
+    <Compile Include="src/Domain/AppSettings.fs" />
+    <Compile Include="src/Domain/ProviderCatalog.fs" />
+    <Compile Include="src/Domain/SessionFiles.fs" />
+    <Compile Include="src/Domain/AsyncTasks.fs" />
+    <Compile Include="src/Server/AssistantOrchestrator.fs" />
+    <Compile Include="src/Server/ProviderHealth.fs" />
+    <Compile Include="src/Server/AssistantTools.fs" />
+    <Compile Include="src/Server/Knowledge.fs" />
+    <Compile Include="src/Server/Generation.fs" />
+    <Compile Include="src/Server/Database.fs" />
+    <Compile Include="src/Server/EmbeddedServer.fs" />
     <Compile Include="src/Program.fs" />
   </ItemGroup>
   <ItemGroup>
-    <Content Include="..\Nao.Server\.nao\**\*" Link=".nao\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include=".nao/**/*" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="..\Nao.Server\Nao.Server.fsproj" />
     <ProjectReference Include="..\Nao.Core\Nao.Core.fsproj" />
     <ProjectReference Include="..\Nao.Agents\Nao.Agents.fsproj" />
     <ProjectReference Include="..\Nao.Loader\Nao.Loader.fsproj" />

@@ -92,47 +92,137 @@ type OrchestratorBase(config: OrchestratorConfig) =
             | Option.None -> return ""
         }
 
+    // Strip a single surrounding Markdown code fence (```lang ... ```), which models often
+    // wrap structured JSON in despite being told not to.
+    let stripCodeFence (text: string) : string =
+        let t = text.Trim()
+        if t.StartsWith("```") then
+            let firstNl = t.IndexOf('\n')
+            if firstNl >= 0 then
+                let body = t.Substring(firstNl + 1)
+                let endFence = body.LastIndexOf("```")
+                if endFence >= 0 then body.Substring(0, endFence).Trim() else body.Trim()
+            else t
+        else t
+
+    // Extract each top-level brace-balanced JSON object from arbitrary text, ignoring
+    // braces inside string literals. Tolerates surrounding prose and stray characters
+    // (e.g. a model emitting an extra closing brace between objects), so the planner's
+    // JSON object is recovered even when surrounded by stray text.
+    let extractJsonObjects (text: string) : string list =
+        let results = ResizeArray<string>()
+        let mutable depth = 0
+        let mutable start = -1
+        let mutable inString = false
+        let mutable escaped = false
+        for i in 0 .. text.Length - 1 do
+            let c = text.[i]
+            if inString then
+                if escaped then escaped <- false
+                elif c = '\\' then escaped <- true
+                elif c = '"' then inString <- false
+            else
+                match c with
+                | '"' -> inString <- true
+                | '{' ->
+                    if depth = 0 then start <- i
+                    depth <- depth + 1
+                | '}' ->
+                    if depth > 0 then
+                        depth <- depth - 1
+                        if depth = 0 && start >= 0 then
+                            results.Add(text.Substring(start, i - start + 1))
+                            start <- -1
+                | _ -> ()
+        List.ofSeq results
+
+    // Parse a single planner step (one element of the "actions" array, or a legacy
+    // single-action object) into an AgentAction. The planner schema uses "type"/"params";
+    // the legacy schema used "action"/"input" — both are accepted for robustness.
+    let parseActionElement (root: JsonElement) : AgentAction option =
+        let getValue (key: string) =
+            match root.TryGetProperty(key) with
+            | true, elem when elem.ValueKind = JsonValueKind.String -> Some (elem.GetString())
+            | _ -> None
+
+        let name = getValue "name"
+        let args = getValue "params" |> Option.orElse (getValue "input") |> Option.defaultValue ""
+        let isKnownTool n = config.Tools |> List.exists (fun t -> t.Name = n)
+        let isKnownAgent n = config.SubAgents |> List.exists (fun a -> a.Id.Name = n)
+
+        match getValue "type" |> Option.orElse (getValue "action") with
+        | Some kind ->
+            match kind.ToLowerInvariant() with
+            | "tool" | "tool-invoke" | "invoke-tool" -> name |> Option.map (fun n -> InvokeTool (n, args))
+            | "delegate" | "agent-delegate" | "delegate-agent" -> name |> Option.map (fun n -> DelegateToAgent (n, args))
+            | _ when isKnownTool kind -> Some (InvokeTool (kind, args))
+            | _ when isKnownAgent kind -> Some (DelegateToAgent (kind, args))
+            | _ ->
+                match name with
+                | Some n when isKnownTool n -> Some (InvokeTool (n, args))
+                | Some n when isKnownAgent n -> Some (DelegateToAgent (n, args))
+                | _ -> None
+        | None -> None
+
     /// The orchestrator configuration.
     member _.Config = config
 
-    /// Default action parsing logic. Can be called by subclasses that cannot use base in task CEs.
-    member _.DefaultTryParseAction(content: string) : AgentAction option =
-        let trimmed = content.Trim()
-        if trimmed.StartsWith("{\"action\"") then
-            try
-                use doc = JsonDocument.Parse(trimmed)
-                let root = doc.RootElement
+    /// Tracing context (tracer + parent span) optionally injected by the harness so each
+    /// tool invocation is recorded as a child span carrying the tool name, parameters, and
+    /// round. `None` disables per-tool tracing (e.g. when no tracer is configured).
+    member val TraceContext : (ITracer * Span) option = None with get, set
 
-                let getValue (key: string) =
-                    match root.TryGetProperty(key) with
-                    | true, elem when elem.ValueKind = JsonValueKind.String -> Some (elem.GetString())
-                    | _ -> None
+    /// Start a child span for a tool invocation, tagging it with the tool name, its
+    /// parameters, the invoking agent, and the current round. Returns None when no tracer
+    /// is wired so callers stay allocation-free in the untraced path.
+    member private this.StartToolSpan (toolName: string) (toolInput: string) (round: int) : (ITracer * Span) option =
+        match this.TraceContext with
+        | Some (tracer, parent) ->
+            let span = tracer.StartSpan parent "tool.invoke"
+            let trimmedInput =
+                if String.IsNullOrEmpty toolInput then ""
+                elif toolInput.Length > 1000 then toolInput.Substring(0, 1000) + "…"
+                else toolInput
+            tracer.SetAttributes span (Map.ofList
+                [ "tool.name", toolName
+                  "tool.input", trimmedInput
+                  "agent.name", id.Name
+                  "round", string round ])
+            Some (tracer, span)
+        | None -> None
 
-                match getValue "action" with
-                | Some "tool" ->
-                    match getValue "name", getValue "input" with
-                    | Some name, Some input -> Some (InvokeTool (name, input))
-                    | Some name, None -> Some (InvokeTool (name, ""))
-                    | _ -> None
-                | Some "delegate" ->
-                    match getValue "name", getValue "input" with
-                    | Some name, Some input -> Some (DelegateToAgent (name, input))
-                    | Some name, None -> Some (DelegateToAgent (name, ""))
-                    | _ -> None
-                | Some actionValue ->
-                    let isKnownTool = config.Tools |> List.exists (fun t -> t.Name = actionValue)
-                    let isKnownAgent = config.SubAgents |> List.exists (fun a -> a.Id.Name = actionValue)
-                    if isKnownTool then
-                        let input = getValue "input" |> Option.orElse (getValue "name") |> Option.defaultValue ""
-                        Some (InvokeTool (actionValue, input))
-                    elif isKnownAgent then
-                        let input = getValue "input" |> Option.orElse (getValue "name") |> Option.defaultValue ""
-                        Some (DelegateToAgent (actionValue, input))
-                    else None
-                | None -> None
-            with _ -> None
+    /// Close a tool-invocation span with the given status, recording a `tool.result` event
+    /// with any extra attributes (e.g. result size). No-op when tracing is disabled.
+    member private _.EndToolSpan (span: (ITracer * Span) option) (status: SpanStatus) (resultAttrs: Map<string, string>) =
+        match span with
+        | Some (tracer, s) ->
+            if not (Map.isEmpty resultAttrs) then tracer.AddEvent s "tool.result" resultAttrs
+            tracer.EndSpan s status
+        | None -> ()
+
+    /// Parse a planner response into the actions to execute. The planner emits a single JSON
+    /// object: { "actions": [ {type,name,params}, ... ] }; every step is returned in order.
+    /// Tolerates a leading label or prose (e.g. "PLAN:") before the JSON and a bare legacy
+    /// action object. Returns an empty list when the content is a normal final answer.
+    member _.DefaultTryParseActions(content: string) : AgentAction list =
+        let trimmed = stripCodeFence content
+        if not (trimmed.Contains("\"actions\"") || trimmed.StartsWith("{")) then []
         else
-            None
+            extractJsonObjects trimmed
+            |> List.collect (fun json ->
+                try
+                    use doc = JsonDocument.Parse(json)
+                    let root = doc.RootElement
+                    match root.TryGetProperty("actions") with
+                    | true, arr when arr.ValueKind = JsonValueKind.Array ->
+                        [ for el in arr.EnumerateArray() -> parseActionElement el ] |> List.choose (fun a -> a)
+                    | _ -> parseActionElement root |> Option.toList
+                with _ -> [])
+
+    /// Default single-action parsing logic. Returns the FIRST recognised action, if any.
+    /// Can be called by subclasses that cannot use base in task CEs.
+    member this.DefaultTryParseAction(content: string) : AgentAction option =
+        this.DefaultTryParseActions(content) |> List.tryHead
 
     /// Override to customize the system prompt generation.
     abstract member BuildSystemPrompt: unit -> string
@@ -161,16 +251,21 @@ type OrchestratorBase(config: OrchestratorConfig) =
             | Some custom -> custom
             | None -> """
 # Action Format
-When you need to use a tool, respond with EXACTLY this JSON format on a single line:
-{"action":"tool","name":"<tool_name>","input":"<input_string>"}
+When the request requires tools or sub-agents, respond with a SINGLE JSON object and nothing else — no label (do NOT write "PLAN:"), no prose, no code fences, and do NOT repeat or emit more than one object. The one object lists every step to run, in order:
+{"actions":[{"type":"tool","name":"<tool_name>","params":"<input_string>"},{"type":"delegate","name":"<agent_name>","params":"<input_string>"}]}
 
-When you need to delegate to a sub-agent, respond with EXACTLY this JSON format:
-{"action":"delegate","name":"<agent_name>","input":"<input_string>"}
+Rules:
+- "actions" is a single array; put EVERY step inside it. Do NOT emit multiple JSON objects.
+- Each element is one step with "type" ("tool" or "delegate"), "name" (the exact tool/agent name), and "params" (the input string).
+- The steps execute in order and their results are fed back to you for the next round.
+- Output strictly valid JSON: every brace and bracket balanced, no trailing characters.
+- Prefer delegating to a specialist sub-agent over invoking a tool when both could accomplish the task: the agent is purpose-built for it and may run the work in the background.
 
-Prefer delegating to a specialist sub-agent over invoking a tool when both could accomplish the task: the agent is purpose-built for it and may run the work in the background.
+Example — for "Convert README.md to PDF and HTML":
+{"actions":[{"type":"delegate","name":"converter","params":"Convert README.md to PDF"},{"type":"delegate","name":"converter","params":"Convert README.md to HTML"}]}
 
-When you have enough information to answer the user directly, just respond normally with your answer.
-Do NOT wrap your final answer in the action JSON format above. Only use the action JSON when invoking a tool or delegating.
+When you have enough information to answer the user directly, just respond normally with your answer in plain text.
+Do NOT wrap your final answer in the actions JSON. Only emit the actions JSON when invoking tools or delegating.
 If the user requests output in a specific format (e.g. JSON, XML, CSV, Markdown, YAML), encode your final answer in that format."""
 
         sprintf "%s\n\n%s\n%s" basePrompt capabilities instructions
@@ -180,6 +275,12 @@ If the user requests output in a specific format (e.g. JSON, XML, CSV, Markdown,
     abstract member TryParseActionAsync: string -> Task<AgentAction option>
     default this.TryParseActionAsync(content: string) =
         this.DefaultTryParseAction(content) |> Task.FromResult
+
+    /// Override to customize how LLM output is parsed into MULTIPLE actions. Return the
+    /// actions to execute in order; an empty list treats the response as a final answer.
+    abstract member TryParseActionsAsync: string -> Task<AgentAction list>
+    default this.TryParseActionsAsync(content: string) =
+        this.DefaultTryParseActions(content) |> Task.FromResult
 
     /// Override to add custom logic after a tool executes.
     abstract member OnToolResult: toolName: string * input: string * result: string -> unit
@@ -217,67 +318,80 @@ If the user requests output in a specific format (e.g. JSON, XML, CSV, Markdown,
                 conversation <- conversation @ [ assistantMsg ]
                 emit (AgentEvent.MessageAdded (Assistant, result.Content))
 
-                let! parsedAction = this.TryParseActionAsync(result.Content)
-                match parsedAction with
-                | Some (InvokeTool (toolName, toolInput)) ->
-                    emit (AgentEvent.InvokingTool (toolName, toolInput))
-                    match config.Tools |> List.tryFind (fun t -> t.Name = toolName) with
-                    | Some tool ->
-                        let! toolResult = tool.Execute toolInput
-                        emit (AgentEvent.ToolResult (toolName, toolResult))
-                        this.OnToolResult(toolName, toolInput, toolResult)
-                        let! verifyMsg =
-                            match tool.Verify with
-                            | Some verify ->
-                                task {
-                                    let! vr = verify toolInput toolResult
-                                    match vr with
-                                    | Ok () -> return None
-                                    | Error reason ->
-                                        emit (AgentEvent.ToolVerifyFailed (toolName, reason))
-                                        return Some (sprintf "[Verification Failed for %s]: %s. Please retry or choose a different approach." toolName reason)
-                                }
-                            | None -> Task.FromResult None
-                        let resultContent = sprintf "[Tool Result from %s]: %s" toolName toolResult
-                        let resultMsg = { Role = User; Content = resultContent }
-                        conversation <- conversation @ [ resultMsg ]
-                        match verifyMsg with
-                        | Some failMsg ->
-                            let failMsgEntry = { Role = User; Content = failMsg }
-                            conversation <- conversation @ [ failMsgEntry ]
-                        | None -> ()
-                    | None ->
-                        let err = sprintf "Tool '%s' not found. Available tools: %s" toolName (config.Tools |> List.map (fun t -> t.Name) |> String.concat ", ")
-                        emit (AgentEvent.RoundError err)
-                        let errMsg = { Role = User; Content = sprintf "[Error]: %s" err }
-                        conversation <- conversation @ [ errMsg ]
-
-                | Some (DelegateToAgent (agentName, agentInput)) ->
-                    emit (AgentEvent.DelegatingToAgent (agentName, agentInput))
-                    let! handled = this.TryHandleDelegationAsync(agentName, agentInput)
-                    match handled with
-                    | Some tokenAnswer ->
-                        // The delegation was handed off (e.g. to a background task); reply with
-                        // the token immediately instead of running the sub-agent inline.
-                        emit (AgentEvent.AgentResult (agentName, tokenAnswer))
-                        finalAnswer <- tokenAnswer
-                        finished <- true
-                    | None ->
-                        match config.SubAgents |> List.tryFind (fun a -> a.Id.Name = agentName) with
-                        | Some agent ->
-                            let! agentResult = agent.RunAsync agentInput
-                            emit (AgentEvent.AgentResult (agentName, agentResult))
-                            let resultMsg = { Role = User; Content = sprintf "[Agent Result from %s]: %s" agentName agentResult }
-                            conversation <- conversation @ [ resultMsg ]
-                        | None ->
-                            let err = sprintf "Agent '%s' not found. Available agents: %s" agentName (config.SubAgents |> List.map (fun a -> a.Id.Name) |> String.concat ", ")
-                            emit (AgentEvent.RoundError err)
-                            let errMsg = { Role = User; Content = sprintf "[Error]: %s" err }
-                            conversation <- conversation @ [ errMsg ]
-
-                | Some (DelegateToAgent _) | Some (Think _) | Some (Respond _) | None ->
+                let! parsedActions = this.TryParseActionsAsync(result.Content)
+                if List.isEmpty parsedActions then
                     finalAnswer <- result.Content
                     finished <- true
+                else
+                    // A single LLM response may request MULTIPLE tool calls / delegations.
+                    // Execute them in order, feeding each result back into the conversation,
+                    // and stop early if a delegation hands the turn off (async token answer).
+                    for action in parsedActions do
+                        if not finished then
+                            match action with
+                            | InvokeTool (toolName, toolInput) ->
+                                emit (AgentEvent.InvokingTool (toolName, toolInput))
+                                // O: record the tool invocation (name + parameters + context) as a span.
+                                let toolSpan = this.StartToolSpan toolName toolInput (rounds + 1)
+                                match config.Tools |> List.tryFind (fun t -> t.Name = toolName) with
+                                | Some tool ->
+                                    let! toolResult = tool.Execute toolInput
+                                    emit (AgentEvent.ToolResult (toolName, toolResult))
+                                    this.OnToolResult(toolName, toolInput, toolResult)
+                                    let! verifyMsg =
+                                        match tool.Verify with
+                                        | Some verify ->
+                                            task {
+                                                let! vr = verify toolInput toolResult
+                                                match vr with
+                                                | Ok () -> return None
+                                                | Error reason ->
+                                                    emit (AgentEvent.ToolVerifyFailed (toolName, reason))
+                                                    return Some (sprintf "[Verification Failed for %s]: %s. Please retry or choose a different approach." toolName reason)
+                                            }
+                                        | None -> Task.FromResult None
+                                    let resultContent = sprintf "[Tool Result from %s]: %s" toolName toolResult
+                                    let resultMsg = { Role = User; Content = resultContent }
+                                    conversation <- conversation @ [ resultMsg ]
+                                    let resultAttrs = Map.ofList [ "result.length", string toolResult.Length ]
+                                    match verifyMsg with
+                                    | Some failMsg ->
+                                        let failMsgEntry = { Role = User; Content = failMsg }
+                                        conversation <- conversation @ [ failMsgEntry ]
+                                        this.EndToolSpan toolSpan (SpanStatus.Error (sprintf "verification failed for %s" toolName)) resultAttrs
+                                    | None ->
+                                        this.EndToolSpan toolSpan SpanStatus.Ok resultAttrs
+                                | None ->
+                                    let err = sprintf "Tool '%s' not found. Available tools: %s" toolName (config.Tools |> List.map (fun t -> t.Name) |> String.concat ", ")
+                                    emit (AgentEvent.RoundError err)
+                                    let errMsg = { Role = User; Content = sprintf "[Error]: %s" err }
+                                    conversation <- conversation @ [ errMsg ]
+                                    this.EndToolSpan toolSpan (SpanStatus.Error err) Map.empty
+
+                            | DelegateToAgent (agentName, agentInput) ->
+                                emit (AgentEvent.DelegatingToAgent (agentName, agentInput))
+                                let! handled = this.TryHandleDelegationAsync(agentName, agentInput)
+                                match handled with
+                                | Some tokenAnswer ->
+                                    // The delegation was handed off (e.g. to a background task); reply with
+                                    // the token immediately instead of running the sub-agent inline.
+                                    emit (AgentEvent.AgentResult (agentName, tokenAnswer))
+                                    finalAnswer <- tokenAnswer
+                                    finished <- true
+                                | None ->
+                                    match config.SubAgents |> List.tryFind (fun a -> a.Id.Name = agentName) with
+                                    | Some agent ->
+                                        let! agentResult = agent.RunAsync agentInput
+                                        emit (AgentEvent.AgentResult (agentName, agentResult))
+                                        let resultMsg = { Role = User; Content = sprintf "[Agent Result from %s]: %s" agentName agentResult }
+                                        conversation <- conversation @ [ resultMsg ]
+                                    | None ->
+                                        let err = sprintf "Agent '%s' not found. Available agents: %s" agentName (config.SubAgents |> List.map (fun a -> a.Id.Name) |> String.concat ", ")
+                                        emit (AgentEvent.RoundError err)
+                                        let errMsg = { Role = User; Content = sprintf "[Error]: %s" err }
+                                        conversation <- conversation @ [ errMsg ]
+
+                            | Think _ | Respond _ -> ()
 
                 this.OnRoundComplete(rounds + 1, if finished then finalAnswer else "")
                 rounds <- rounds + 1

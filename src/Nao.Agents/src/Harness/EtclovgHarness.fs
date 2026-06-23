@@ -230,9 +230,18 @@ module EtclovgHarness =
                     tracer.SetAttributes s (Map.ofList ["sandbox.isolation", string config.Execution.Isolation])
                     Some s
                 | _ -> None
+            // O: hand the orchestrator a tracing context so every tool it invokes is recorded
+            // as a child span (tool name, parameters, round) under agent.execute.
+            match box agent, execSpan, config.Tracer with
+            | (:? OrchestratorBase as orch), Some parent, Some tracer -> orch.TraceContext <- Some (tracer, parent)
+            | _ -> ()
             let env = ExecutionEnvironment.local ()
             let! execResult = env.ExecuteAsync execCtx agent input
             sw.Stop()
+            // Detach the tracing context once execution completes.
+            match box agent with
+            | :? OrchestratorBase as orch -> orch.TraceContext <- None
+            | _ -> ()
 
             // === O: Record metrics ===
             config.Metrics |> Option.iter (fun m -> m.RecordLlmCall 0 0 sw.ElapsedMilliseconds)

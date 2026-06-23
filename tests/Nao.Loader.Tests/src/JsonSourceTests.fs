@@ -71,8 +71,11 @@ type JsonSourceTests() =
         let json = """{
             "name": "web-search",
             "description": "Search the web",
-            "command": "curl",
-            "args": ["-s", "https://api.example.com/search?q="]
+            "execution": {
+                "type": "process",
+                "command": "curl",
+                "args": ["-s", "https://api.example.com/search?q="]
+            }
         }"""
         File.WriteAllText(Path.Combine(tempDir, "tools", "web-search.json"), json)
 
@@ -84,8 +87,8 @@ type JsonSourceTests() =
         | Result.Ok def ->
             Assert.AreEqual("web-search", def.Name)
             Assert.AreEqual("Search the web", def.Description)
-            match def.Execution with
-            | ToolExecutionDef.Process (cmd, args) ->
+            match def.Kind with
+            | ExecutableTool (ToolExecutionDef.Process (cmd, args), _, _) ->
                 Assert.AreEqual("curl", cmd)
                 Assert.AreEqual(["-s"; "https://api.example.com/search?q="], args)
             | _ -> Assert.Fail("Expected Process execution")
@@ -96,7 +99,11 @@ type JsonSourceTests() =
         let json = """{
             "name": "ts-tool",
             "description": "A TypeScript tool",
-            "command": "tool.ts",
+            "execution": {
+                "type": "process",
+                "command": "tool.ts",
+                "args": []
+            },
             "runtime": "deno"
         }"""
         File.WriteAllText(Path.Combine(tempDir, "tools", "ts-tool.json"), json)
@@ -106,7 +113,7 @@ type JsonSourceTests() =
 
         Assert.AreEqual(1, result.Tools.Length)
         match result.Tools.[0] with
-        | Result.Ok def -> Assert.AreEqual("deno", def.Runtime)
+        | Result.Ok def -> Assert.AreEqual("deno", ToolDef.runtime def)
         | Result.Error e -> Assert.Fail(LoadError.format e)
 
     [<TestMethod>]
@@ -114,7 +121,11 @@ type JsonSourceTests() =
         let json = """{
             "name": "plain-tool",
             "description": "No runtime declared",
-            "command": "echo"
+            "execution": {
+                "type": "process",
+                "command": "echo",
+                "args": []
+            }
         }"""
         File.WriteAllText(Path.Combine(tempDir, "tools", "plain-tool.json"), json)
 
@@ -122,8 +133,99 @@ type JsonSourceTests() =
         let result = source.Load()
 
         match result.Tools.[0] with
-        | Result.Ok def -> Assert.AreEqual("", def.Runtime)
+        | Result.Ok def -> Assert.AreEqual("", ToolDef.runtime def)
         | Result.Error e -> Assert.Fail(LoadError.format e)
+
+    [<TestMethod>]
+    member _.LoadsPromptToolFromJson() =
+        let json = """{
+            "name": "summarize",
+            "description": "Summarize the input text",
+            "kind": "prompt",
+            "prompt": {
+                "role": "You are a concise summarizer",
+                "objective": "Produce a one-sentence summary"
+            },
+            "output_content_type": "text"
+        }"""
+        File.WriteAllText(Path.Combine(tempDir, "tools", "summarize.json"), json)
+
+        let result = (JsonSource.fromDirectory tempDir).Load()
+        Assert.AreEqual(1, result.Tools.Length)
+        match result.Tools.[0] with
+        | Result.Ok def ->
+            Assert.AreEqual("summarize", def.Name)
+            match def.Kind with
+            | PromptTool prompt -> Assert.AreEqual("You are a concise summarizer", prompt.Role)
+            | _ -> Assert.Fail("Expected a prompt tool")
+            Assert.IsFalse(ToolDef.isAsync def, "Prompt tools are synchronous")
+        | Result.Error e -> Assert.Fail(LoadError.format e)
+
+    [<TestMethod>]
+    member _.LoadsAsyncExecutableToolFromJson() =
+        let json = """{
+            "name": "long-job",
+            "description": "A long running job",
+            "kind": "executable",
+            "execution": { "type": "process", "command": "sleep", "args": ["5"] },
+            "is_async": true
+        }"""
+        File.WriteAllText(Path.Combine(tempDir, "tools", "long-job.json"), json)
+
+        let result = (JsonSource.fromDirectory tempDir).Load()
+        match result.Tools.[0] with
+        | Result.Ok def ->
+            Assert.IsTrue(ToolDef.isAsync def, "Tool should be async")
+            match def.Kind with
+            | ExecutableTool (ToolExecutionDef.Process (cmd, _), _, true) -> Assert.AreEqual("sleep", cmd)
+            | _ -> Assert.Fail("Expected an async process executable tool")
+        | Result.Error e -> Assert.Fail(LoadError.format e)
+
+    [<TestMethod>]
+    member _.PromptToolWithExecutionIsRejected() =
+        let json = """{
+            "name": "bad-tool",
+            "description": "Invalid: prompt with execution",
+            "kind": "prompt",
+            "prompt": { "role": "x", "objective": "y" },
+            "execution": { "type": "process", "command": "echo", "args": [] }
+        }"""
+        File.WriteAllText(Path.Combine(tempDir, "tools", "bad-tool.json"), json)
+
+        let result = (JsonSource.fromDirectory tempDir).Load()
+        match result.Tools.[0] with
+        | Result.Ok _ -> Assert.Fail("Expected a prompt tool with execution to be rejected")
+        | Result.Error _ -> ()
+
+    [<TestMethod>]
+    member _.PromptToolMarkedAsyncIsRejected() =
+        let json = """{
+            "name": "bad-async-prompt",
+            "description": "Invalid: prompt cannot be async",
+            "kind": "prompt",
+            "prompt": { "role": "x", "objective": "y" },
+            "is_async": true
+        }"""
+        File.WriteAllText(Path.Combine(tempDir, "tools", "bad-async-prompt.json"), json)
+
+        let result = (JsonSource.fromDirectory tempDir).Load()
+        match result.Tools.[0] with
+        | Result.Ok _ -> Assert.Fail("Expected an async prompt tool to be rejected")
+        | Result.Error _ -> ()
+
+    [<TestMethod>]
+    member _.ExecutableToolWithoutExecutionIsRejected() =
+        let json = """{
+            "name": "bad-exec",
+            "description": "Invalid: executable without execution",
+            "kind": "executable"
+        }"""
+        File.WriteAllText(Path.Combine(tempDir, "tools", "bad-exec.json"), json)
+
+        let result = (JsonSource.fromDirectory tempDir).Load()
+        match result.Tools.[0] with
+        | Result.Ok _ -> Assert.Fail("Expected an executable tool without execution to be rejected")
+        | Result.Error _ -> ()
 
     [<TestMethod>]
     member _.LoadsEvalSuiteFromJson() =
@@ -207,8 +309,10 @@ type JsonSourceTests() =
             "name": "formatted-agent",
             "prompt": {
                 "role": "formatter",
-                "output_format": "json",
-                "output_schema": "{\"type\":\"object\"}",
+                "output_format": {
+                    "type": "json",
+                    "schema": "{\"type\":\"object\"}"
+                },
                 "examples": [
                     {"input": "hello", "output": "hi", "explanation": "greeting"}
                 ]

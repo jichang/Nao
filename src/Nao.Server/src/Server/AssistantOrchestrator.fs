@@ -15,19 +15,20 @@ type ToolConfirmationRequest =
 type AssistantOrchestrator(config: OrchestratorConfig, onConfirmation: ToolConfirmationRequest -> unit) =
     inherit OrchestratorBase(config)
 
-    override this.TryParseActionAsync(content: string) =
+    override this.TryParseActionsAsync(content: string) =
         task {
-            match this.DefaultTryParseAction(content) with
-            | Some (InvokeTool (toolName, input)) ->
-                let tcs = TaskCompletionSource<bool>()
-                let request = { ToolName = toolName; Input = input; Completion = tcs }
-                onConfirmation request
-                let! confirmed = tcs.Task
-                if confirmed then
-                    return Some (InvokeTool (toolName, input))
-                else
-                    return None
-            | other -> return other
+            let actions = this.DefaultTryParseActions(content)
+            let approved = ResizeArray<AgentAction>()
+            for action in actions do
+                match action with
+                | InvokeTool (toolName, input) ->
+                    let tcs = TaskCompletionSource<bool>()
+                    let request = { ToolName = toolName; Input = input; Completion = tcs }
+                    onConfirmation request
+                    let! confirmed = tcs.Task
+                    if confirmed then approved.Add(InvokeTool (toolName, input))
+                | other -> approved.Add other
+            return List.ofSeq approved
         }
 
     /// When the LLM delegates to an agent flagged async (e.g. the converter), launch a

@@ -82,6 +82,10 @@ module AssistantTools =
             s.Substring(0, max) + sprintf "\n…(truncated to %d of %d chars)" max s.Length
         else s
 
+    /// Serialize a value (typically an anonymous record) to a compact JSON tool result.
+    /// Preferred over hand-writing JSON so strings are always correctly escaped.
+    let private json (value: 'T) = JsonSerializer.Serialize value
+
     /// Hook into the per-workspace knowledge base, set by the embedded server at startup.
     /// Given a query and a result count, returns up to that many (fileName, passage) matches
     /// from files the user explicitly uploaded. The knowledge base is NEVER injected into the
@@ -97,48 +101,51 @@ module AssistantTools =
             fun input -> task {
                 let path = resolvePath input
                 Directory.CreateDirectory(path) |> ignore
-                return sprintf """{"created":"%s","exists":true}""" (path.Replace("\\", "/"))
+                return json {| created = path.Replace("\\", "/"); exists = true |}
             })
 
     let writeFile: Tool =
         Tool.Create("write_file",
-            "Write text to a workspace file. Input: 'relative/path|content' (overwrites), or "
-            + "'relative/path|append|content' to append. Content is written straight to disk; for very "
-            + "large files, build them up with several append calls instead of one huge write.",
+            "Write text to a workspace file. Input: 'relative/path|content' (overwrites), or \
+            \'relative/path|append|content' to append. Content is written straight to disk; for very \
+            \large files, build them up with several append calls instead of one huge write.",
             fun input -> task {
                 let parts = input.Split('|', 2)
-                if parts.Length < 2 then return """{"error":"Expected 'path|content' or 'path|append|content'"}"""
+                if parts.Length < 2 then return json {| error = "Expected 'path|content' or 'path|append|content'" |}
                 else
                     let path = resolvePath parts.[0]
                     let rest = parts.[1]
                     let isAppend = rest.StartsWith("append|")
                     let content = if isAppend then rest.Substring("append|".Length) else rest
                     if content.Length > maxWriteChars then
-                        return sprintf """{"error":"Content too large (%d chars); write in smaller pieces using 'path|append|...'.","maxChars":%d}""" content.Length maxWriteChars
+                        return json {| error = sprintf "Content too large (%d chars); write in smaller pieces using 'path|append|...'." content.Length
+                                       maxChars = maxWriteChars |}
                     else
                         let dir = Path.GetDirectoryName(path)
                         if not (Directory.Exists(dir)) then Directory.CreateDirectory(dir) |> ignore
                         if isAppend then do! File.AppendAllTextAsync(path, content)
                         else do! File.WriteAllTextAsync(path, content)
                         let total = (FileInfo path).Length
-                        return sprintf """{"written":"%s","mode":"%s","bytes":%d,"totalBytes":%d}"""
-                                (path.Replace("\\", "/")) (if isAppend then "append" else "overwrite") content.Length total
+                        return json {| written = path.Replace("\\", "/")
+                                       mode = (if isAppend then "append" else "overwrite")
+                                       bytes = content.Length
+                                       totalBytes = total |}
             })
 
     let readFile: Tool =
         Tool.Create("read_file",
-            "Read a text file's contents. Input: 'name-or-path' (returns up to ~20k chars), or "
-            + "'name-or-path|offset' / 'name-or-path|offset|length' to read a character window so you can "
-            + "page through large files. This is also how you read a file the user attached: pass the "
-            + "attachment's file name. Attachments are NOT included in the conversation automatically — call "
-            + "this tool to read one only when you actually need its contents. Oversized files are truncated "
-            + "with a note showing the total size and the offset to continue from.",
+            "Read a text file's contents. Input: 'name-or-path' (returns up to ~20k chars), or \
+            \'name-or-path|offset' / 'name-or-path|offset|length' to read a character window so you can \
+            \page through large files. This is also how you read a file the user attached: pass the \
+            \attachment's file name. Attachments are NOT included in the conversation automatically — call \
+            \this tool to read one only when you actually need its contents. Oversized files are truncated \
+            \with a note showing the total size and the offset to continue from.",
             fun input -> task {
                 let parts = input.Split('|')
                 let nameOrPath = parts.[0].Trim()
                 let path = resolvePath nameOrPath
                 if not (File.Exists path) then
-                    return sprintf """{"error":"File not found: %s"}""" nameOrPath
+                    return json {| error = sprintf "File not found: %s" nameOrPath |}
                 else
                     let content = File.ReadAllText path
                     let total = content.Length
@@ -171,16 +178,13 @@ module AssistantTools =
             fun input -> task {
                 let path = if String.IsNullOrWhiteSpace(input) then currentWorkDir () else resolvePath input
                 if not (Directory.Exists(path)) then
-                    return sprintf """{"error":"Directory not found: %s"}""" input
+                    return json {| error = sprintf "Directory not found: %s" input |}
                 else
                     let entries =
                         Directory.GetFileSystemEntries(path)
                         |> Array.map (fun e ->
-                            let name = Path.GetFileName(e)
-                            let isDir = Directory.Exists(e)
-                            sprintf """{"name":"%s","type":"%s"}""" name (if isDir then "dir" else "file"))
-                        |> String.concat ","
-                    return sprintf """{"path":"%s","entries":[%s]}""" (path.Replace("\\", "/")) entries
+                            {| name = Path.GetFileName(e); ``type`` = (if Directory.Exists(e) then "dir" else "file") |})
+                    return json {| path = path.Replace("\\", "/"); entries = entries |}
             })
 
     let delete: Tool =
@@ -189,12 +193,12 @@ module AssistantTools =
                 let path = resolvePath input
                 if File.Exists(path) then
                     File.Delete(path)
-                    return sprintf """{"deleted":"%s","type":"file"}""" input
+                    return json {| deleted = input; ``type`` = "file" |}
                 elif Directory.Exists(path) then
                     Directory.Delete(path, true)
-                    return sprintf """{"deleted":"%s","type":"dir"}""" input
+                    return json {| deleted = input; ``type`` = "dir" |}
                 else
-                    return sprintf """{"error":"Not found: %s"}""" input
+                    return json {| error = sprintf "Not found: %s" input |}
             })
 
     let dateTime: Tool =
@@ -216,11 +220,12 @@ module AssistantTools =
                             | "+" -> a + b | "-" -> a - b
                             | "*" -> a * b | "/" -> if b <> 0.0 then a / b else Double.NaN
                             | _ -> Double.NaN
-                        return sprintf """{"result":%g}""" result
+                        if Double.IsNaN result then return json {| error = "Invalid expression" |}
+                        else return json {| result = result |}
                     else
-                        return """{"error":"Expected format: 'a op b'"}"""
+                        return json {| error = "Expected format: 'a op b'" |}
                 with ex ->
-                    return sprintf """{"error":"%s"}""" ex.Message
+                    return json {| error = ex.Message |}
             })
 
     /// Shared HTTP client for the web tools (connection pooling, sane timeout).
@@ -254,9 +259,9 @@ module AssistantTools =
                     | None -> ()
                     let! resp = httpClient.SendAsync(req)
                     let! content = resp.Content.ReadAsStringAsync()
-                    return sprintf """{"status":%d,"body":%s}""" (int resp.StatusCode) (JsonSerializer.Serialize(truncate 8000 content))
+                    return json {| status = int resp.StatusCode; body = truncate 8000 content |}
                 with ex ->
-                    return sprintf """{"error":%s}""" (JsonSerializer.Serialize(ex.Message))
+                    return json {| error = ex.Message |}
             })
 
     let webFetch: Tool =
@@ -272,7 +277,7 @@ module AssistantTools =
                     let collapsed = Regex.Replace(decoded, "\\s+", " ").Trim()
                     return truncate 8000 collapsed
                 with ex ->
-                    return sprintf """{"error":%s}""" (JsonSerializer.Serialize(ex.Message))
+                    return json {| error = ex.Message |}
             })
 
     let searchFiles: Tool =
@@ -287,7 +292,7 @@ module AssistantTools =
                         | i -> trimmed.Substring(0, i).Trim(), trimmed.Substring(i + 1).Trim()
                     let baseDir = currentWorkDir ()
                     let root = if String.IsNullOrWhiteSpace sub then baseDir else resolvePath sub
-                    if not (Directory.Exists root) then return sprintf """{"error":"Directory not found: %s"}""" sub
+                    if not (Directory.Exists root) then return json {| error = sprintf "Directory not found: %s" sub |}
                     else
                         let regex = Regex(pattern, RegexOptions.IgnoreCase)
                         let matches = ResizeArray<string>()
@@ -302,7 +307,7 @@ module AssistantTools =
                                 with _ -> ()
                         return (if matches.Count = 0 then "(no matches)" else String.Join("\n", matches))
                 with ex ->
-                    return sprintf """{"error":%s}""" (JsonSerializer.Serialize(ex.Message))
+                    return json {| error = ex.Message |}
             })
 
     let findFiles: Tool =
@@ -329,7 +334,7 @@ module AssistantTools =
                             |> List.ofSeq
                         return (if results.IsEmpty then "(no matches)" else String.Join("\n", results))
                 with ex ->
-                    return sprintf """{"error":%s}""" (JsonSerializer.Serialize(ex.Message))
+                    return json {| error = ex.Message |}
             })
 
     /// Map a file extension to the IANA media type understood by the document registry.
@@ -372,43 +377,45 @@ module AssistantTools =
 
     let convertDocument: Tool =
         Tool.Create("convert_document",
-            "Convert a workspace document from one format to another via the unified document model. "
-            + "Input format: 'source|target'. The source is a file path/name; the target is either a "
-            + "destination filename (e.g. 'README.pdf') or just the desired format ('pdf', 'docx', 'html', "
-            + "'xlsx', 'pptx', 'md', 'txt') in which case the output is named after the source. Reads "
-            + ".md/.markdown, .txt, .html and .docx; writes those plus .pdf, .xlsx and .pptx.",
+            "Convert a workspace document from one format to another via the unified document model. \
+            \Input format: 'source|target'. The source is a file path/name; the target is either a \
+            \destination filename (e.g. 'README.pdf') or just the desired format ('pdf', 'docx', 'html', \
+            \'xlsx', 'pptx', 'md', 'txt') in which case the output is named after the source. Reads \
+            \.md/.markdown, .txt, .html and .docx; writes those plus .pdf, .xlsx and .pptx.",
             fun input -> task {
                 try
                     let parts = input.Split('|', 2)
                     if parts.Length < 2 then
-                        return """{"error":"Expected 'source|target' (target is a filename or a format like 'pdf')"}"""
+                        return json {| error = "Expected 'source|target' (target is a filename or a format like 'pdf')" |}
                     else
                         let sourceRaw = parts.[0].Trim()
                         let sourcePath = resolvePath sourceRaw
                         if not (File.Exists sourcePath) then
-                            return sprintf """{"error":"Source not found: %s"}""" sourceRaw
+                            return json {| error = sprintf "Source not found: %s" sourceRaw |}
                         else
                             match resolveTargetName sourceRaw (parts.[1].Trim()) with
                             | None ->
-                                return sprintf """{"error":"Unsupported target format: %s"}""" (parts.[1].Trim())
+                                return json {| error = sprintf "Unsupported target format: %s" (parts.[1].Trim()) |}
                             | Some targetName ->
                                 let targetPath = resolvePath targetName
                                 let srcMt = mediaTypeForExt (Path.GetExtension sourcePath)
                                 let tgtMt = mediaTypeForExt (Path.GetExtension targetPath)
                                 match srcMt, tgtMt with
                                 | None, _ ->
-                                    return sprintf """{"error":"Unsupported source format: %s"}""" (Path.GetExtension sourcePath)
+                                    return json {| error = sprintf "Unsupported source format: %s" (Path.GetExtension sourcePath) |}
                                 | _, None ->
-                                    return sprintf """{"error":"Unsupported target format: %s"}""" (Path.GetExtension targetPath)
+                                    return json {| error = sprintf "Unsupported target format: %s" (Path.GetExtension targetPath) |}
                                 | Some src, Some tgt ->
                                     let dir = Path.GetDirectoryName(targetPath)
                                     if not (Directory.Exists dir) then Directory.CreateDirectory(dir) |> ignore
                                     Nao.Documents.Converter.convertFile documentRegistry src tgt sourcePath targetPath
                                     let bytes = (FileInfo targetPath).Length
-                                    return sprintf """{"converted":"%s","from":"%s","to":"%s","bytes":%d}"""
-                                            (targetPath.Replace("\\", "/")) src tgt bytes
+                                    return json {| converted = targetPath.Replace("\\", "/")
+                                                   from = src
+                                                   ``to`` = tgt
+                                                   bytes = bytes |}
                 with ex ->
-                    return sprintf """{"error":%s}""" (JsonSerializer.Serialize(ex.Message))
+                    return json {| error = ex.Message |}
             })
 
     /// Search the user's uploaded knowledge base on demand. The base is not loaded into the
@@ -416,19 +423,19 @@ module AssistantTools =
     /// genuinely needs information from files the user uploaded.
     let searchKnowledge: Tool =
         Tool.Create("search_knowledge",
-            "Search the user's knowledge base — documents the user explicitly uploaded — for passages "
-            + "relevant to a query, returning the top matches as { file, text } snippets. The knowledge "
-            + "base is NOT loaded automatically: only call this when you actually need information from the "
-            + "user's uploaded files, and ASK THE USER FOR PERMISSION before each search. "
-            + "Input: 'query' or 'query|topK' (topK defaults to 4, max 10).",
+            "Search the user's knowledge base — documents the user explicitly uploaded — for passages \
+            \relevant to a query, returning the top matches as { file, text } snippets. The knowledge \
+            \base is NOT loaded automatically: only call this when you actually need information from the \
+            \user's uploaded files, and ASK THE USER FOR PERMISSION before each search. \
+            \Input: 'query' or 'query|topK' (topK defaults to 4, max 10).",
             fun input -> task {
                 match knowledgeSearch with
-                | None -> return """{"error":"Knowledge base is not available."}"""
+                | None -> return json {| error = "Knowledge base is not available." |}
                 | Some search ->
                     let parts = input.Split('|')
                     let query = parts.[0].Trim()
                     if String.IsNullOrWhiteSpace query then
-                        return """{"error":"Expected a search query."}"""
+                        return json {| error = "Expected a search query." |}
                     else
                         let topK =
                             if parts.Length > 1 then
@@ -438,14 +445,12 @@ module AssistantTools =
                             else 4
                         let hits = search query topK
                         if List.isEmpty hits then
-                            return """{"matches":[],"note":"No relevant passages found in the knowledge base."}"""
+                            return json {| matches = ([||]: obj[]); note = "No relevant passages found in the knowledge base." |}
                         else
                             let matches =
                                 hits
-                                |> List.map (fun (f, t) ->
-                                    sprintf """{"file":%s,"text":%s}""" (JsonSerializer.Serialize f) (JsonSerializer.Serialize t))
-                                |> String.concat ","
-                            return sprintf """{"matches":[%s]}""" matches
+                                |> List.map (fun (f, t) -> {| file = f; text = t |})
+                            return json {| matches = matches |}
             })
 
     let allTools =

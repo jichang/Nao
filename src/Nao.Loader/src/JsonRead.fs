@@ -1,261 +1,234 @@
 namespace Nao.Loader
 
-open System
 open System.Text.Json
+open System.Text.Json.Serialization
 open Nao.Agents
 open Nao.Core
 open Nao.Eval
 
-/// Functions for deserializing domain types directly from System.Text.Json elements.
+/// Strict, schema-driven loading of definition JSON.
+///
+/// Each definition is deserialized directly into a well-typed object via
+/// System.Text.Json with full F# support (records, options, unions, lists, maps).
+/// The schema is described once by the `*Wire` records below; anything that does not
+/// match it — a wrong type, an unknown union tag, an unknown property, or a missing
+/// required field — throws instead of being silently defaulted. There are no aliases
+/// and no value fallbacks: omission is the ONLY leniency, and only for fields modelled
+/// as `option`, which then resolve to their type's natural empty value.
 [<RequireQualifiedAccess>]
 module JsonRead =
 
-    // ─── Primitive helpers ───
+    /// Shared serializer options: snake_case property names, and F# unions encoded with
+    /// an internal "type" discriminator plus named fields (fieldless cases collapse to
+    /// their bare snake_case name). Unknown properties are rejected.
+    let private options =
+        let fsharp : JsonFSharpOptions =
+            JsonFSharpOptions.Default()
+                .WithUnionInternalTag()
+                .WithUnionNamedFields()
+                .WithUnionTagName("type")
+                .WithUnionTagNamingPolicy(JsonNamingPolicy.SnakeCaseLower)
+                .WithUnionFieldNamingPolicy(JsonNamingPolicy.SnakeCaseLower)
+                .WithUnionUnwrapFieldlessTags()
+                .WithSkippableOptionFields()
+        let o =
+            JsonSerializerOptions(
+                PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+                UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow)
+        o.Converters.Add(JsonFSharpConverter(fsharp))
+        o
 
-    let internal str (elem: JsonElement) (prop: string) =
-        match elem.TryGetProperty(prop) with
-        | true, v when v.ValueKind = JsonValueKind.String -> v.GetString()
-        | _ -> ""
+    let private deserialize<'T> (json: string) : 'T = JsonSerializer.Deserialize<'T>(json, options)
 
-    let internal strOpt (elem: JsonElement) (prop: string) =
-        match elem.TryGetProperty(prop) with
-        | true, v when v.ValueKind = JsonValueKind.String ->
-            let s = v.GetString()
-            if String.IsNullOrEmpty(s) then None else Some s
-        | _ -> None
+    // ─── Wire schema: an exact, strict mirror of the on-disk JSON ───
+    // `option` fields may be omitted (absence is well-defined); every other field is
+    // mandatory and its type is enforced.
 
-    let internal intVal (elem: JsonElement) (prop: string) (defaultVal: int) =
-        match elem.TryGetProperty(prop) with
-        | true, v when v.ValueKind = JsonValueKind.Number -> v.GetInt32()
-        | _ -> defaultVal
+    type private PromptWire =
+        { Role: string option
+          Objective: string option
+          DomainKnowledge: string list option
+          Constraints: string list option
+          Examples: PromptExample list option
+          OutputFormat: OutputFormat option
+          Context: string list option }
 
-    let internal boolVal (elem: JsonElement) (prop: string) (defaultVal: bool) =
-        match elem.TryGetProperty(prop) with
-        | true, v when v.ValueKind = JsonValueKind.True -> true
-        | true, v when v.ValueKind = JsonValueKind.False -> false
-        | _ -> defaultVal
+    type private CompletionOptionsWire =
+        { Temperature: float option
+          MaxTokens: int option
+          StopSequences: string list option }
 
-    let internal intOpt (elem: JsonElement) (prop: string) =
-        match elem.TryGetProperty(prop) with
-        | true, v when v.ValueKind = JsonValueKind.Number -> Some (v.GetInt32())
-        | _ -> None
+    type private AgentWire =
+        { Name: string
+          Version: string option
+          Description: string option
+          Provider: string option
+          Model: string option
+          Prompt: PromptWire option
+          Tools: string list option
+          SubAgents: string list option
+          Options: CompletionOptionsWire option
+          MaxRounds: int option
+          IsAsync: bool option }
 
-    let internal floatVal (elem: JsonElement) (prop: string) (defaultVal: float) =
-        match elem.TryGetProperty(prop) with
-        | true, v when v.ValueKind = JsonValueKind.Number -> v.GetDouble()
-        | _ -> defaultVal
+    type private ToolWire =
+        { Name: string
+          Version: string option
+          Description: string option
+          /// "prompt" or "executable". Omitted ⇒ "executable".
+          Kind: string option
+          /// Prompt body — required when kind = "prompt".
+          Prompt: PromptWire option
+          /// How an executable tool runs — required when kind = "executable".
+          Execution: ToolExecutionDef option
+          Runtime: string option
+          /// Run the executable tool as a background task. Executable tools only.
+          IsAsync: bool option
+          OutputContentType: string option
+          Verify: ToolExecutionDef option
+          Revert: ToolExecutionDef option }
 
-    let internal strArray (elem: JsonElement) (prop: string) =
-        match elem.TryGetProperty(prop) with
-        | true, v when v.ValueKind = JsonValueKind.Array ->
-            [ for item in v.EnumerateArray() do
-                if item.ValueKind = JsonValueKind.String then
-                    yield item.GetString() ]
-        | _ -> []
+    type private EvaluatorWire =
+        { Type: string option
+          Criteria: string option
+          Scale: string option
+          Pattern: string option
+          Keywords: string list option }
 
-    let internal objArray (elem: JsonElement) (prop: string) =
-        match elem.TryGetProperty(prop) with
-        | true, v when v.ValueKind = JsonValueKind.Array ->
-            [ for item in v.EnumerateArray() do
-                if item.ValueKind = JsonValueKind.Object then
-                    yield item ]
-        | _ -> []
+    type private EvalCaseWire =
+        { Id: string
+          Description: string option
+          Input: string option
+          Expected: string option
+          Tags: string list option
+          Metadata: Map<string, string> option }
 
-    let internal subObj (elem: JsonElement) (prop: string) =
-        match elem.TryGetProperty(prop) with
-        | true, v when v.ValueKind = JsonValueKind.Object -> Some v
-        | _ -> None
+    type private EvalSuiteWire =
+        { Name: string
+          Description: string option
+          Agent: string option
+          Evaluator: EvaluatorWire option
+          Cases: EvalCaseWire list option }
 
-    let internal strMap (elem: JsonElement) (prop: string) =
-        match elem.TryGetProperty(prop) with
-        | true, v when v.ValueKind = JsonValueKind.Object ->
-            [ for kv in v.EnumerateObject() do
-                if kv.Value.ValueKind = JsonValueKind.String then
-                    yield (kv.Name, kv.Value.GetString()) ]
-            |> Map.ofList
-        | _ -> Map.empty
+    type private ConstitutionRuleWire =
+        { Id: string
+          Description: string option
+          Category: string option
+          Priority: int option
+          IsHardConstraint: bool option
+          Pattern: string option }
 
-    // ─── Domain type readers ───
+    type private ConstitutionWire =
+        { Name: string
+          Version: string option
+          Description: string option
+          Rules: ConstitutionRuleWire list option }
 
-    let promptExample (elem: JsonElement) : PromptExample =
-        { Input = str elem "input"
-          Output = str elem "output"
-          Explanation = strOpt elem "explanation" }
+    // ─── Wire -> domain mapping (omitted optional fields resolve to natural empties) ───
 
-    let outputFormat (elem: JsonElement) : OutputFormat =
-        let format = str elem "output_format"
-        let schema = strOpt elem "output_schema"
-        match format with
-        | "json" -> Json schema
-        | "markdown" -> Markdown
-        | "custom" -> Custom (schema |> Option.defaultValue "")
-        | _ -> FreeText
+    let private toPrompt (w: PromptWire) : Prompt =
+        { Role = defaultArg w.Role ""
+          Objective = defaultArg w.Objective ""
+          DomainKnowledge = defaultArg w.DomainKnowledge []
+          Constraints = defaultArg w.Constraints []
+          Examples = defaultArg w.Examples []
+          OutputFormat = defaultArg w.OutputFormat FreeText
+          Context = defaultArg w.Context [] }
 
-    let prompt (elem: JsonElement) : Prompt =
-        { Role = str elem "role"
-          Objective = str elem "objective"
-          DomainKnowledge = strArray elem "domain_knowledge"
-          Constraints = strArray elem "constraints"
-          Examples = objArray elem "examples" |> List.map promptExample
-          OutputFormat = outputFormat elem
-          Context = strArray elem "context" }
+    let private toCompletionOptions (w: CompletionOptionsWire) : CompletionOptions =
+        { Temperature = defaultArg w.Temperature CompletionOptions.Default.Temperature
+          MaxTokens = w.MaxTokens
+          StopSequences = defaultArg w.StopSequences [] }
 
-    let completionOptions (elem: JsonElement) : CompletionOptions =
-        { Temperature = floatVal elem "temperature" CompletionOptions.Default.Temperature
-          MaxTokens = intOpt elem "max_tokens"
-          StopSequences = strArray elem "stop_sequences" }
+    let private toEvaluatorRef (w: EvaluatorWire) : EvaluatorRef =
+        { Type = defaultArg w.Type ""
+          Criteria = defaultArg w.Criteria ""
+          Scale = defaultArg w.Scale ""
+          Pattern = defaultArg w.Pattern ""
+          Keywords = defaultArg w.Keywords [] }
 
-    let evalCase (elem: JsonElement) : EvalCase =
-        { Id = str elem "id"
-          Description = str elem "description"
-          Input = str elem "input"
-          Expected = strOpt elem "expected"
-          Tags = strArray elem "tags"
-          Metadata = strMap elem "metadata" }
+    let private toEvalCase (w: EvalCaseWire) : EvalCase =
+        { Id = w.Id
+          Description = defaultArg w.Description ""
+          Input = defaultArg w.Input ""
+          Expected = w.Expected
+          Tags = defaultArg w.Tags []
+          Metadata = defaultArg w.Metadata Map.empty }
 
-    let evalDataset (elem: JsonElement) : EvalDataset =
-        { Name = str elem "name"
-          Cases = objArray elem "cases" |> List.map evalCase }
+    let private toConstitutionRule (w: ConstitutionRuleWire) : ConstitutionRuleDef =
+        { Id = w.Id
+          Description = defaultArg w.Description ""
+          Category = defaultArg w.Category ""
+          Priority = defaultArg w.Priority 0
+          IsHardConstraint = defaultArg w.IsHardConstraint true
+          Pattern = defaultArg w.Pattern "" }
 
-    let agentDef (elem: JsonElement) : AgentDef =
-        let promptElem = subObj elem "prompt" |> Option.defaultWith (fun () -> JsonDocument.Parse("{}").RootElement)
-        let optionsElem = subObj elem "options" |> Option.defaultWith (fun () -> JsonDocument.Parse("{}").RootElement)
-        { Name = str elem "name"
-          Version = strOpt elem "version"
-          Description = str elem "description"
-          Provider = str elem "provider"
-          Model = str elem "model"
-          Prompt = prompt promptElem
-          Tools = strArray elem "tools"
-          SubAgents = strArray elem "sub_agents"
-          Options = completionOptions optionsElem
-          MaxRounds = intVal elem "max_rounds" 5
-          IsAsync = boolVal elem "async" false
+    // ─── Public readers: parse a raw JSON document into a definition ───
+
+    let agentDef (json: string) : AgentDef =
+        let w = deserialize<AgentWire> json
+        { Name = w.Name
+          Version = w.Version
+          Description = defaultArg w.Description ""
+          Provider = defaultArg w.Provider ""
+          Model = defaultArg w.Model ""
+          Prompt = w.Prompt |> Option.map toPrompt |> Option.defaultValue Prompt.Empty
+          Tools = defaultArg w.Tools []
+          SubAgents = defaultArg w.SubAgents []
+          Options = w.Options |> Option.map toCompletionOptions |> Option.defaultValue CompletionOptions.Default
+          MaxRounds = defaultArg w.MaxRounds 5
+          IsAsync = defaultArg w.IsAsync false
           Provenance = None }
 
-    let private toolExecution (elem: JsonElement) (prefix: string) : ToolExecutionDef option =
-        let mode =
-            if prefix = "" then str elem "mode"
-            else str elem (prefix + "_mode")
-        let cmd =
-            if prefix = "" then str elem "command"
-            else str elem (prefix + "_command")
-        let url =
-            if prefix = "" then str elem "url"
-            else str elem (prefix + "_url")
-        let executor =
-            if prefix = "" then str elem "executor"
-            else str elem (prefix + "_executor")
-
-        match mode with
-        | "http" ->
-            let httpMethod =
-                if prefix = "" then str elem "method"
-                else str elem (prefix + "_method")
-            let method = if httpMethod = "" then "POST" else httpMethod
-            let headers =
-                if prefix = "" then strMap elem "headers"
-                else strMap elem (prefix + "_headers")
-            Some (ToolExecutionDef.Http (url, method, headers))
-        | "custom" ->
-            let config =
-                if prefix = "" then strMap elem "config"
-                else strMap elem (prefix + "_config")
-            Some (ToolExecutionDef.Custom (executor, config))
-        | "process" ->
-            let args =
-                if prefix = "" then strArray elem "args"
-                else strArray elem (prefix + "_args")
-            Some (ToolExecutionDef.Process (cmd, args))
-        | _ ->
-            // Default: if "command" is present, treat as process
-            if cmd <> "" then
-                let args =
-                    if prefix = "" then strArray elem "args"
-                    else strArray elem (prefix + "_args")
-                Some (ToolExecutionDef.Process (cmd, args))
-            elif url <> "" then
-                let httpMethod =
-                    if prefix = "" then str elem "method"
-                    else str elem (prefix + "_method")
-                let method = if httpMethod = "" then "POST" else httpMethod
-                let headers =
-                    if prefix = "" then strMap elem "headers"
-                    else strMap elem (prefix + "_headers")
-                Some (ToolExecutionDef.Http (url, method, headers))
-            elif executor <> "" then
-                let config =
-                    if prefix = "" then strMap elem "config"
-                    else strMap elem (prefix + "_config")
-                Some (ToolExecutionDef.Custom (executor, config))
-            else
-                None
-
-    let toolDef (elem: JsonElement) : ToolDef =
-        let execution =
-            toolExecution elem ""
-            |> Option.defaultValue (ToolExecutionDef.Process (str elem "command", strArray elem "args"))
-        { Name = str elem "name"
-          Version = strOpt elem "version"
-          Description = str elem "description"
-          Execution = execution
-          Runtime = str elem "runtime"
-          OutputContentType = str elem "output_content_type"
-          VerifyExecution = toolExecution elem "verify"
-          RevertExecution = toolExecution elem "revert"
+    let toolDef (json: string) : ToolDef =
+        let w = deserialize<ToolWire> json
+        let kindStr = (defaultArg w.Kind "executable").Trim().ToLowerInvariant()
+        let kind =
+            match kindStr with
+            | "prompt" ->
+                // Prompt tools are LLM-backed and always synchronous; executable-only
+                // fields must not appear on them.
+                if w.Execution.IsSome then
+                    failwithf "Tool '%s': a prompt tool must not declare 'execution'." w.Name
+                if w.Runtime.IsSome then
+                    failwithf "Tool '%s': a prompt tool must not declare 'runtime'." w.Name
+                if defaultArg w.IsAsync false then
+                    failwithf "Tool '%s': a prompt tool is always synchronous and must not set 'is_async'." w.Name
+                if w.Verify.IsSome || w.Revert.IsSome then
+                    failwithf "Tool '%s': a prompt tool must not declare 'verify' or 'revert'." w.Name
+                match w.Prompt with
+                | Some p -> PromptTool (toPrompt p)
+                | None -> failwithf "Tool '%s': a prompt tool requires a 'prompt' block." w.Name
+            | "executable" ->
+                if w.Prompt.IsSome then
+                    failwithf "Tool '%s': an executable tool must not declare a 'prompt' block." w.Name
+                match w.Execution with
+                | Some e -> ExecutableTool (e, defaultArg w.Runtime "", defaultArg w.IsAsync false)
+                | None -> failwithf "Tool '%s': an executable tool requires an 'execution' block." w.Name
+            | other ->
+                failwithf "Tool '%s': unknown kind '%s' (expected 'prompt' or 'executable')." w.Name other
+        { Name = w.Name
+          Version = w.Version
+          Description = defaultArg w.Description ""
+          Kind = kind
+          OutputContentType = defaultArg w.OutputContentType ""
+          VerifyExecution = w.Verify
+          RevertExecution = w.Revert
           Provenance = None }
 
-    let evaluatorRef (elem: JsonElement) : EvaluatorRef =
-        { Type = str elem "type"
-          Criteria = str elem "criteria"
-          Scale = str elem "scale"
-          Pattern = str elem "pattern"
-          Keywords = strArray elem "keywords" }
+    let evalSuiteDef (json: string) : EvalSuiteDef =
+        let w = deserialize<EvalSuiteWire> json
+        { Name = w.Name
+          Description = defaultArg w.Description ""
+          Agent = defaultArg w.Agent ""
+          Evaluator =
+            match w.Evaluator with
+            | Some e -> toEvaluatorRef e
+            | None -> { Type = ""; Criteria = ""; Scale = ""; Pattern = ""; Keywords = [] }
+          Cases = defaultArg w.Cases [] |> List.map toEvalCase }
 
-    let evalSuiteDef (elem: JsonElement) : EvalSuiteDef =
-        let evaluatorElem = subObj elem "evaluator" |> Option.defaultWith (fun () -> JsonDocument.Parse("{}").RootElement)
-        { Name = str elem "name"
-          Description = str elem "description"
-          Agent = str elem "agent"
-          Evaluator = evaluatorRef evaluatorElem
-          Cases = objArray elem "cases" |> List.map evalCase }
-
-    let constitutionRuleDef (elem: JsonElement) : ConstitutionRuleDef =
-        { Id = str elem "id"
-          Description = str elem "description"
-          Category = str elem "category"
-          Priority = intVal elem "priority" 0
-          IsHardConstraint = boolVal elem "hard_constraint" true
-          Pattern = str elem "pattern" }
-
-    let constitutionDef (elem: JsonElement) : ConstitutionDef =
-        { Name = str elem "name"
-          Version = str elem "version"
-          Rules = objArray elem "rules" |> List.map constitutionRuleDef }
-
-    let toolParameter (elem: JsonElement) : ToolParameter =
-        { Name = str elem "name"
-          Type = str elem "type"
-          Required = boolVal elem "required" false
-          Description = str elem "description"
-          Default = strOpt elem "default"
-          Examples = strArray elem "examples" }
-
-    let private parseCostCategory (s: string) =
-        match s.ToLowerInvariant() with
-        | "free" -> ToolCostCategory.Free
-        | "low" | "cheap" -> ToolCostCategory.Cheap
-        | "medium" | "moderate" -> ToolCostCategory.Moderate
-        | "high" | "expensive" -> ToolCostCategory.Expensive
-        | _ -> ToolCostCategory.Unknown
-
-    let toolSchema (elem: JsonElement) : ToolSchema =
-        { Name = str elem "name"
-          Description = str elem "description"
-          Category = strOpt elem "category"
-          Parameters = objArray elem "parameters" |> List.map toolParameter
-          ReturnDescription = strOpt elem "return_description"
-          Examples = []
-          IsSideEffectFree = boolVal elem "side_effect_free" false
-          CostCategory = str elem "cost_category" |> (fun s -> if s = "" then "Cheap" else s) |> parseCostCategory
-          Version = strOpt elem "version" }
+    let constitutionDef (json: string) : ConstitutionDef =
+        let w = deserialize<ConstitutionWire> json
+        { Name = w.Name
+          Version = defaultArg w.Version ""
+          Rules = defaultArg w.Rules [] |> List.map toConstitutionRule }

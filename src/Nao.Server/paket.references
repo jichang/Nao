@@ -1,0 +1,3 @@
+Microsoft.Orleans.Server
+Microsoft.Orleans.Persistence.AdoNet
+Microsoft.Data.Sqlite

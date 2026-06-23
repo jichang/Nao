@@ -1,7 +1,6 @@
 namespace Nao.Loader
 
 open System.IO
-open System.Text.Json
 open Nao.Agents
 
 /// Loads definitions from a directory of JSON files.
@@ -19,18 +18,16 @@ open Nao.Agents
 ///       └── coding-suite.json
 type JsonSource(rootDir: string) =
 
-    let parseFile (filePath: string) (reader: JsonElement -> 'T) : LoadResult<'T> =
+    let parseFile (filePath: string) (reader: string -> 'T) : LoadResult<'T> =
         if not (File.Exists filePath) then
             Result.Error (FileNotFound filePath)
         else
             try
-                let json = File.ReadAllText(filePath)
-                use doc = JsonDocument.Parse(json)
-                Result.Ok (reader doc.RootElement)
+                Result.Ok (reader (File.ReadAllText filePath))
             with ex ->
                 Result.Error (ParseError (filePath, ex.Message))
 
-    let loadFromDir (subDir: string) (reader: JsonElement -> 'T) : LoadResult<'T> list =
+    let loadFromDir (subDir: string) (reader: string -> 'T) : LoadResult<'T> list =
         let dir = Path.Combine(rootDir, subDir)
         if Directory.Exists dir then
             Directory.GetFiles(dir, "*.json")
