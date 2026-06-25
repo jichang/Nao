@@ -21,6 +21,8 @@ type NaoEvent =
     | Conversations of string list
     | Error of string
     | ServerEvent of string
+    /// Server is asking the user to approve a resource access (file/web/tool).
+    | PermissionRequest of PermissionRequestDto
 
 /// Client for the Nao Demo Server using HTTP (session creation) + WebSocket (chat & commands).
 type NaoClient(baseUrl: string) =
@@ -83,6 +85,9 @@ type NaoClient(baseUrl: string) =
                 Some (NaoEvent.Conversations (Array.toList convs))
             | WsResponseType.Error -> Some (NaoEvent.Error resp.Payload)
             | WsResponseType.Event -> Some (NaoEvent.ServerEvent resp.Payload)
+            | WsResponseType.PermissionRequest ->
+                let req = JsonSerializer.Deserialize<PermissionRequestDto>(resp.Payload, jsonOptions)
+                Some (NaoEvent.PermissionRequest req)
             | _ -> None
         with _ -> None
 
@@ -406,6 +411,13 @@ type NaoClient(baseUrl: string) =
     /// Switch conversation.
     member _.SendSwitchAsync(name: string) : Task =
         sendWs { Type = WsRequestType.Switch; Payload = name }
+
+    /// Reply to a server permission prompt. `decision` is "allow" | "deny"; `scope` is
+    /// "once" | "session" | "global" (ignored for deny).
+    member _.SendPermissionResponseAsync(requestId: string, decision: string, scope: string) : Task =
+        let dto = { PermissionResponseDto.RequestId = requestId; Decision = decision; Scope = scope }
+        let payload = JsonSerializer.Serialize(dto, jsonOptions)
+        sendWs { Type = WsRequestType.PermissionResponse; Payload = payload }
 
     /// Send a chat message and wait for the full response (blocking convenience method).
     member this.ChatAsync(sessionId: string, message: string) : Task<string> = task {

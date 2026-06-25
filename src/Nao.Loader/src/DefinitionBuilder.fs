@@ -159,13 +159,15 @@ module DefinitionBuilder =
             { Name = def.Name
               Description = def.Description
               Version = def.Version
-              Execute = fun input -> task {
+              Schema = []
+              Execute = fun _ctx input -> task {
                 let! result = executeDefAsync policy runtime execution [input]
                 return
                     match result with
                     | Ok output -> output
                     | Error err -> sprintf "[Error] %s" err
               }
+              Permissions = []
               OutputContentType = contentType
               Verify = verify
               Revert = revert
@@ -189,7 +191,9 @@ module DefinitionBuilder =
         { Name = def.Name
           Description = def.Description
           Version = def.Version
-          Execute = execute
+          Schema = []
+          Execute = (fun _ctx input -> execute input)
+          Permissions = []
           OutputContentType = contentType
           Verify = None
           Revert = None
@@ -201,7 +205,7 @@ module DefinitionBuilder =
     /// of blocking; otherwise it falls back to running the tool inline.
     let wrapAsyncTool (def: ToolDef) (inlineTool: Tool) : Tool =
         let title = sprintf "Async tool: %s" def.Name
-        let execute (input: string) : Task<string> =
+        let execute (ctx: ToolContext) (input: string) : Task<string> =
             task {
                 match SessionExecution.current () with
                 | Some scope ->
@@ -212,14 +216,14 @@ module DefinitionBuilder =
                               Params = Map [ "tool", def.Name; "input", input ] }
                     if String.IsNullOrEmpty taskId then
                         // No async task host available — run inline.
-                        return! inlineTool.Execute input
+                        return! inlineTool.Execute ctx input
                     else
                         return
                             sprintf
                                 "Started background task **%s** (`%s`). Track its progress or open the result from the task tag."
                                 title taskId
                 | None ->
-                    return! inlineTool.Execute input
+                    return! inlineTool.Execute ctx input
             }
         { inlineTool with Execute = execute }
 

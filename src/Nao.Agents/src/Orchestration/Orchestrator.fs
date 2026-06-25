@@ -145,8 +145,21 @@ type OrchestratorBase(config: OrchestratorConfig) =
             | true, elem when elem.ValueKind = JsonValueKind.String -> Some (elem.GetString())
             | _ -> None
 
+        // The tool/agent input. Tools take a JSON-object input, so "params" is normally an
+        // object — passed through as its raw JSON text. A plain string is also accepted (for
+        // single-value inputs and the legacy schema).
+        let getArgs (key: string) =
+            match root.TryGetProperty(key) with
+            | true, elem ->
+                match elem.ValueKind with
+                | JsonValueKind.String -> Some (elem.GetString())
+                | JsonValueKind.Object | JsonValueKind.Array -> Some (elem.GetRawText())
+                | JsonValueKind.Null | JsonValueKind.Undefined -> None
+                | _ -> Some (elem.GetRawText())
+            | _ -> None
+
         let name = getValue "name"
-        let args = getValue "params" |> Option.orElse (getValue "input") |> Option.defaultValue ""
+        let args = getArgs "params" |> Option.orElse (getArgs "input") |> Option.defaultValue ""
         let isKnownTool n = config.Tools |> List.exists (fun t -> t.Name = n)
         let isKnownAgent n = config.SubAgents |> List.exists (fun a -> a.Id.Name = n)
 
@@ -163,6 +176,38 @@ type OrchestratorBase(config: OrchestratorConfig) =
                 | Some n when isKnownAgent n -> Some (DelegateToAgent (n, args))
                 | _ -> None
         | None -> None
+
+    // Extract the JSON payload of the planner's fenced action block, identified by the
+    // explicit info string ```application/json+nao. Some means "the model asked to act";
+    // None means "this is a normal answer". Tolerates the JSON on the same line as the
+    // info string and a missing closing fence.
+    let extractActionBlock (text: string) : string option =
+        let m =
+            System.Text.RegularExpressions.Regex.Match(
+                text,
+                "```[ \\t]*application/json\\+nao[ \\t]*\\r?\\n?",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+        if not m.Success then None
+        else
+            let startIdx = m.Index + m.Length
+            let closeIdx = text.IndexOf("```", startIdx, System.StringComparison.Ordinal)
+            if closeIdx < 0 then Some (text.Substring(startIdx).Trim())
+            else Some (text.Substring(startIdx, closeIdx - startIdx).Trim())
+
+    // Parse a planner JSON payload (either { "actions": [...] } or a bare action object)
+    // into actions, tolerating surrounding prose/stray braces. Returns [] when nothing
+    // valid is found — used both to extract actions and to detect a malformed block.
+    let parseActionsFromJson (json: string) : AgentAction list =
+        extractJsonObjects json
+        |> List.collect (fun obj ->
+            try
+                use doc = JsonDocument.Parse(obj)
+                let root = doc.RootElement
+                match root.TryGetProperty("actions") with
+                | true, arr when arr.ValueKind = JsonValueKind.Array ->
+                    [ for el in arr.EnumerateArray() -> parseActionElement el ] |> List.choose (fun a -> a)
+                | _ -> parseActionElement root |> Option.toList
+            with _ -> [])
 
     /// The orchestrator configuration.
     member _.Config = config
@@ -205,24 +250,30 @@ type OrchestratorBase(config: OrchestratorConfig) =
     /// Tolerates a leading label or prose (e.g. "PLAN:") before the JSON and a bare legacy
     /// action object. Returns an empty list when the content is a normal final answer.
     member _.DefaultTryParseActions(content: string) : AgentAction list =
-        let trimmed = stripCodeFence content
-        if not (trimmed.Contains("\"actions\"") || trimmed.StartsWith("{")) then []
-        else
-            extractJsonObjects trimmed
-            |> List.collect (fun json ->
-                try
-                    use doc = JsonDocument.Parse(json)
-                    let root = doc.RootElement
-                    match root.TryGetProperty("actions") with
-                    | true, arr when arr.ValueKind = JsonValueKind.Array ->
-                        [ for el in arr.EnumerateArray() -> parseActionElement el ] |> List.choose (fun a -> a)
-                    | _ -> parseActionElement root |> Option.toList
-                with _ -> [])
+        match extractActionBlock content with
+        | Some inner ->
+            // The model explicitly tagged an action block — parse only its payload.
+            parseActionsFromJson inner
+        | None ->
+            // Backward-compatible fallback: accept a bare JSON action object/array even
+            // without the fence (legacy planners and scripted tests).
+            let trimmed = stripCodeFence content
+            if not (trimmed.Contains("\"actions\"") || trimmed.TrimStart().StartsWith("{")) then []
+            else parseActionsFromJson trimmed
 
     /// Default single-action parsing logic. Returns the FIRST recognised action, if any.
     /// Can be called by subclasses that cannot use base in task CEs.
     member this.DefaultTryParseAction(content: string) : AgentAction option =
         this.DefaultTryParseActions(content) |> List.tryHead
+
+    /// True when the response contains a tagged `application/json+nao` action block whose
+    /// payload is NOT well-formed (or yields no valid action). Lets the run loop ask the
+    /// model to repair the block instead of silently dropping the action or echoing the
+    /// broken JSON to the user. A response with no action block is never "malformed".
+    member _.HasMalformedActionBlock(content: string) : bool =
+        match extractActionBlock content with
+        | Some inner -> List.isEmpty (parseActionsFromJson inner)
+        | None -> false
 
     /// Override to customize the system prompt generation.
     abstract member BuildSystemPrompt: unit -> string
@@ -251,22 +302,32 @@ type OrchestratorBase(config: OrchestratorConfig) =
             | Some custom -> custom
             | None -> """
 # Action Format
-When the request requires tools or sub-agents, respond with a SINGLE JSON object and nothing else — no label (do NOT write "PLAN:"), no prose, no code fences, and do NOT repeat or emit more than one object. The one object lists every step to run, in order:
-{"actions":[{"type":"tool","name":"<tool_name>","params":"<input_string>"},{"type":"delegate","name":"<agent_name>","params":"<input_string>"}]}
+To use a tool or sub-agent, reply with EXACTLY ONE fenced code block whose info string is `application/json+nao`. The block holds a single JSON object listing every step, in order. Put the action JSON ONLY inside this block:
+
+```application/json+nao
+{"actions":[{"type":"tool","name":"<tool_name>","params":{ ...tool arguments... }},{"type":"delegate","name":"<agent_name>","params":"<input_string>"}]}
+```
 
 Rules:
-- "actions" is a single array; put EVERY step inside it. Do NOT emit multiple JSON objects.
-- Each element is one step with "type" ("tool" or "delegate"), "name" (the exact tool/agent name), and "params" (the input string).
+- The action JSON goes ONLY inside the ```application/json+nao fenced block, and you open at most ONE such block.
+- "actions" is a single array; include EVERY step in it, in order.
+- Each element has "type" ("tool" or "delegate"), "name" (the exact tool/agent name) and "params".
+- For a "tool", "params" is a JSON object with the tool's named arguments (see each tool's description for its fields), e.g. {"path":"notes.txt","content":"hello"}. For a "delegate", "params" is the input string for the sub-agent.
+- The block's JSON must be strictly valid: every brace and bracket balanced, no trailing text. If told it was malformed, re-send a corrected block.
 - The steps execute in order and their results are fed back to you for the next round.
-- Output strictly valid JSON: every brace and bracket balanced, no trailing characters.
-- Prefer delegating to a specialist sub-agent over invoking a tool when both could accomplish the task: the agent is purpose-built for it and may run the work in the background.
+- Prefer delegating to a specialist sub-agent over invoking a tool when both could accomplish the task.
 
-Example — for "Convert README.md to PDF and HTML":
-{"actions":[{"type":"delegate","name":"converter","params":"Convert README.md to PDF"},{"type":"delegate","name":"converter","params":"Convert README.md to HTML"}]}
+Example — write a file then convert it:
+```application/json+nao
+{"actions":[{"type":"tool","name":"write_file","params":{"path":"README.md","content":"# Title"}},{"type":"tool","name":"convert_document","params":{"source":"README.md","target":"pdf"}}]}
+```
 
-When you have enough information to answer the user directly, just respond normally with your answer in plain text.
-Do NOT wrap your final answer in the actions JSON. Only emit the actions JSON when invoking tools or delegating.
-If the user requests output in a specific format (e.g. JSON, XML, CSV, Markdown, YAML), encode your final answer in that format."""
+Example — for "Convert README.md to PDF and HTML" (delegate ONCE; the specialist produces both):
+```application/json+nao
+{"actions":[{"type":"delegate","name":"converter","params":"Convert README.md to PDF and HTML"}]}
+```
+
+When you can answer the user directly, reply in plain text with NO action block. Only emit the block to invoke a tool or delegate. If the user requests a specific output format (JSON, XML, CSV, Markdown, YAML), encode your final answer in that format as plain text (still no action block)."""
 
         sprintf "%s\n\n%s\n%s" basePrompt capabilities instructions
 
@@ -310,17 +371,35 @@ If the user requests output in a specific format (e.g. JSON, XML, CSV, Markdown,
             let mutable rounds = 0
             let mutable finalAnswer = ""
             let mutable finished = false
+            let mutable repairAttempts = 0
+            let maxRepairAttempts = 2
 
             while not finished && rounds < config.MaxRounds do
                 emit (AgentEvent.Thinking (rounds + 1))
                 let! result = config.Provider.CompleteAsync conversation config.Options
-                let assistantMsg = { Role = Assistant; Content = result.Content }
-                conversation <- conversation @ [ assistantMsg ]
-                emit (AgentEvent.MessageAdded (Assistant, result.Content))
+                let mutable working = result.Content
+                conversation <- conversation @ [ { Role = Assistant; Content = working } ]
+                emit (AgentEvent.MessageAdded (Assistant, working))
 
-                let! parsedActions = this.TryParseActionsAsync(result.Content)
+                // Validate-and-repair: if the model emitted a tagged action block that is
+                // not well-formed JSON, ask it to re-send a corrected block (bounded) before
+                // we decide. This keeps a broken action from being silently dropped or shown
+                // to the user as the final answer, without consuming the tool/round budget.
+                while this.HasMalformedActionBlock(working) && repairAttempts < maxRepairAttempts do
+                    repairAttempts <- repairAttempts + 1
+                    emit (AgentEvent.RoundError (sprintf "Malformed action block; requesting correction (%d/%d)." repairAttempts maxRepairAttempts))
+                    let fixMsg =
+                        { Role = User
+                          Content = "[System]: Your previous message contained an ```application/json+nao``` action block, but its JSON was not well-formed. Re-send ONLY that block as a single strictly-valid JSON object — every brace and bracket balanced, no trailing text — e.g. ```application/json+nao\n{\"actions\":[{\"type\":\"tool\",\"name\":\"<tool>\",\"params\":\"<input>\"}]}\n```. If you no longer need a tool, reply in plain text with no block." }
+                    conversation <- conversation @ [ fixMsg ]
+                    let! fixResult = config.Provider.CompleteAsync conversation config.Options
+                    working <- fixResult.Content
+                    conversation <- conversation @ [ { Role = Assistant; Content = working } ]
+                    emit (AgentEvent.MessageAdded (Assistant, working))
+
+                let! parsedActions = this.TryParseActionsAsync(working)
                 if List.isEmpty parsedActions then
-                    finalAnswer <- result.Content
+                    finalAnswer <- working
                     finished <- true
                 else
                     // A single LLM response may request MULTIPLE tool calls / delegations.
@@ -335,7 +414,7 @@ If the user requests output in a specific format (e.g. JSON, XML, CSV, Markdown,
                                 let toolSpan = this.StartToolSpan toolName toolInput (rounds + 1)
                                 match config.Tools |> List.tryFind (fun t -> t.Name = toolName) with
                                 | Some tool ->
-                                    let! toolResult = tool.Execute toolInput
+                                    let! toolResult = tool.InvokeAsync(ToolContext.current (), toolInput)
                                     emit (AgentEvent.ToolResult (toolName, toolResult))
                                     this.OnToolResult(toolName, toolInput, toolResult)
                                     let! verifyMsg =

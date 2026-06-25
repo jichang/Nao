@@ -36,7 +36,7 @@ The framework implements the **ETCLOVG** seven-layer taxonomy for structured age
 │ │Limits │ │Schema│ │Compact  │ │Hooks      │ │Metrics  │ │Judge │ │
 │ └───────┘ └──────┘ └─────────┘ └───────────┘ └─────────┘ └──────┘ │
 │ ┌────────────────────────────────────────────────────────────────┐  │
-│ │G: Governance — Permission · Constitution · AuditLog · Policy  │  │
+│ │G: Permission · ResourceAccess · Constitution · Audit · Policy  │  │
 │ └────────────────────────────────────────────────────────────────┘  │
 │ ┌────────────────────────────────────────────────────────────────┐  │
 │ │               EtclovgHarness (integrates all layers)           │  │
@@ -127,10 +127,22 @@ Pre-flight readiness, execution traces, quality judgement, and regression detect
 Permissions, constitutional rules, audit logging, and runtime policy enforcement:
 
 - `PermissionModel` — Permissive/Restrictive with per-capability grants
+- `ResourceAccess` — Resource-level requests (`File`/`Web`/`ToolCall`) evaluated by the pure `ResourcePermission` engine (`Allow`/`Deny`/`Ask`, deny-by-default)
+- `ToolContext` — Passed to every `Tool.Execute`; lets tools request approval dynamically and carries the session key. Tools can also declare a static `Permissions` list that `InvokeAsync` auto-requests before running
+- `PermissionGate` — Process-wide hook the server registers so the Orleans runtime can resolve permission requests (interactive WebSocket prompt + persisted grants) without referencing the server
 - `Constitution` — Declarative output rules (PII detection, harm prevention, domain rules)
 - `IAuditLog` — Full audit trail of all agent actions
 - `PolicyEngine` — Runtime budget/rate-limit enforcement with Block/Warn/Modify actions
 - `HarnessError` — Structured error DU (PermissionDenied, PolicyBlocked, NotReady, etc.)
+
+#### Resource Permissions
+
+The resource-permission system is the resource-level companion to the capability-level `PermissionModel`:
+
+- **Deny-by-default & opt-in** — Enforcement is gated by a master switch in Settings (off by default). When on, file access outside the session workspace and all web access need an allow rule.
+- **Interactive approval** — Unresolved requests (`Ask`) prompt the user live over the per-session WebSocket via the server's `PermissionBroker`. No client or no answer within the timeout fails closed (deny).
+- **Per-session memory** — "Remember for this session" grants are recorded in the `SessionGrain`'s own Orleans-persisted state (`GrantedPermissions`) so they are never re-prompted; "global" grants persist to the cross-session `PermissionStore`; "once" persists nothing.
+- **`PermissionOutcome`** — `{ Decision; RememberForSession }` threaded from broker → `PermissionGate` → grain so the session knows whether to record the grant.
 
 ## Key Concepts
 
@@ -204,7 +216,7 @@ dotnet tool restore
 # Build
 dotnet build
 
-# Run tests (303 tests across 7 projects)
+# Run tests
 dotnet test
 
 # Generate documentation

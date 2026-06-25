@@ -39,13 +39,13 @@ module Annotations =
     /// Overlay a single annotation onto a tool, preserving its name and version. The
     /// original execution is wrapped with the annotation's input/output transforms.
     let applyToTool (a: Annotation) (tool: Tool) : Tool =
-        let wrappedExecute (input: string) : Task<string> =
+        let wrappedExecute (ctx: ToolContext) (input: string) : Task<string> =
             let input' =
                 match a.InputPrefix with
                 | Some p -> p + input
                 | None -> input
             task {
-                let! output = tool.Execute input'
+                let! output = tool.Execute ctx input'
                 return
                     match a.OutputSuffix with
                     | Some s -> output + s

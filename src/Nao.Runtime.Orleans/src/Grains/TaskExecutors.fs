@@ -89,7 +89,7 @@ type ToolTaskExecutor(registry: IWorkspaceRegistry) =
                     | Some def ->
                         let tool = DefinitionBuilder.buildToolWith policy def
                         ctx.Report 0.1 (sprintf "Running %s" toolName)
-                        let! output = tool.Execute input
+                        let! output = tool.InvokeAsync(ToolContext.current (), input)
                         ctx.Report 1.0 "Completed"
                         return { Summary = output; ResultFileIds = [] }
             }

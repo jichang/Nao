@@ -67,7 +67,7 @@ module ToolProtocol =
                     match tools |> List.tryFind (fun t -> t.Name = n && VersionRef.matches ver t.Version) with
                     | Some tool ->
                         try
-                            let! result = tool.Execute input
+                            let! result = tool.InvokeAsync(ToolContext.current (), input)
                             sw.Stop()
                             return
                                 { Success = true

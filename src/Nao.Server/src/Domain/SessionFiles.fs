@@ -137,6 +137,7 @@ module SessionFiles =
                     result.Add
                         { Id = Guid.NewGuid().ToString("N").[..11]
                           Name = name
+                          DisplayName = name
                           MediaType = guessMediaType name
                           Size = size
                           Source = "generated"
@@ -173,6 +174,7 @@ module SessionFiles =
                 let dto =
                     { Id = (match existing with Some d -> d.Id | None -> Guid.NewGuid().ToString("N").[..11])
                       Name = stored
+                      DisplayName = stored
                       MediaType = (if isNull mediaType then "" else mediaType)
                       Size = int64 bytes.Length
                       Source = source
@@ -188,6 +190,44 @@ module SessionFiles =
         /// overwriting it.
         member this.SaveText(name: string, source: string, turnId: string, content: string, ?ensureUnique: bool) : SessionFileDto =
             this.Save(name, "text/plain", source, turnId, System.Text.Encoding.UTF8.GetBytes(content |> Option.ofObj |> Option.defaultValue ""), ?ensureUnique = ensureUnique)
+
+        /// Save a user upload under a content-hash name (a 16-hex prefix of the SHA-256 of the
+        /// bytes, plus the original extension), preserving the original filename as
+        /// `DisplayName`. Two uploads with identical content map to the same stored file
+        /// (dedup), and two different files that share a display name never clobber each other
+        /// because their hashes differ. The model and tools reference the hash `Name`; the UI
+        /// and downloads use `DisplayName`.
+        member _.SaveUpload(displayName: string, turnId: string, bytes: byte[]) : SessionFileDto =
+            lock gate (fun () ->
+                let safeDisplay =
+                    let n = (if String.IsNullOrWhiteSpace displayName then "file" else displayName).Replace('\\', '/').TrimStart('/')
+                    let n = n.Substring(n.LastIndexOf('/') + 1)
+                    if String.IsNullOrWhiteSpace n then "file" else n
+                let ext = Path.GetExtension safeDisplay
+                let hash =
+                    use sha = System.Security.Cryptography.SHA256.Create()
+                    sha.ComputeHash bytes |> Array.take 8 |> Array.map (fun b -> b.ToString("x2")) |> String.concat ""
+                let stored = hash + ext
+                let full = safeResolve stored
+                let existing = index |> Seq.tryFind (fun d -> String.Equals(d.Name, stored, StringComparison.OrdinalIgnoreCase))
+                match existing with
+                | Some d when File.Exists full -> d
+                | _ ->
+                    Directory.CreateDirectory(Path.GetDirectoryName full) |> ignore
+                    File.WriteAllBytes(full, bytes)
+                    let dto =
+                        { Id = (match existing with Some d -> d.Id | None -> Guid.NewGuid().ToString("N").[..11])
+                          Name = stored
+                          DisplayName = safeDisplay
+                          MediaType = guessMediaType safeDisplay
+                          Size = int64 bytes.Length
+                          Source = "upload"
+                          TurnId = (if isNull turnId then "" else turnId)
+                          CreatedAt = (match existing with Some d -> d.CreatedAt | None -> DateTimeOffset.UtcNow) }
+                    existing |> Option.iter (fun d -> index.Remove d |> ignore)
+                    index.Add dto
+                    persist ()
+                    dto)
 
         /// All stored files, newest first (reconciled with the files folder).
         member _.List() : SessionFileDto list =

@@ -80,7 +80,7 @@ module EmbeddedServer =
         do! socket.SendAsync(ArraySegment(bytes), WebSocketMessageType.Text, true, CancellationToken.None)
     }
 
-    let private handleWsMessage (socket: WebSocket) (grainFactory: IGrainFactory) (sessionId: string) (msg: WsRequest) = task {
+    let private handleWsMessage (send: WsResponse -> Task) (grainFactory: IGrainFactory) (sessionId: string) (msg: WsRequest) = task {
         let session = grainFactory.GetGrain<ISessionGrain>(sessionId)
         try
             match msg.Type with
@@ -103,25 +103,32 @@ module EmbeddedServer =
                 // review or download them, and so the agent can read them on demand with the
                 // read_file tool. The attachment content is deliberately NOT placed into the
                 // prompt — the agent reads a file only when it actually needs the contents.
-                // Each upload is stored under a unique name so two attachments sharing a name
-                // don't clobber each other; we tell the agent the actual stored names.
-                let attachmentNames =
+                // Each upload is stored under a content-hash name so two attachments sharing a
+                // display name don't clobber each other (and identical content dedups); we map
+                // the user's original name to the stored hash name for the agent.
+                let saved =
                     if attachments.Length = 0 then [||]
                     else
                         let store = SessionFiles.forKey sessionId
                         attachments
                         |> Array.map (fun a ->
                             try
-                                let saved = store.SaveText(a.Name, "upload", "", (if isNull a.Content then "" else a.Content), ensureUnique = true)
-                                saved.Name
-                            with _ -> a.Name)
+                                let bytes = System.Text.Encoding.UTF8.GetBytes(if isNull a.Content then "" else a.Content)
+                                let dto = store.SaveUpload(a.Name, "", bytes)
+                                (a.Name, dto.Name)
+                            with _ -> (a.Name, a.Name))
+                // The transcript chips show the original (display) names the user attached.
+                let attachmentNames = saved |> Array.map fst
                 let llmInput =
                     if attachments.Length = 0 then text
                     else
-                        let names = attachmentNames |> String.concat ", "
+                        let mapping =
+                            saved
+                            |> Array.map (fun (display, stored) -> sprintf "\"%s\" as %s" display stored)
+                            |> String.concat "; "
                         let note =
-                            sprintf "[The user attached %d file(s), saved to the workspace: %s. The contents are not shown here — use the read_file tool with a file's name to read it, but only if you actually need its contents.]"
-                                attachments.Length names
+                            sprintf "[The user attached %d file(s). Each is stored under a unique name — reference it by that stored name when using the read_file or convert_document tools: %s. The contents are not shown here — read a file only if you actually need its contents.]"
+                                attachments.Length mapping
                         if String.IsNullOrWhiteSpace text then note else text + "\n\n" + note
 
                 // Run the turn while streaming the in-progress steps to the client, so the UI
@@ -141,9 +148,9 @@ module EmbeddedServer =
                                 |> Array.map (fun s ->
                                     { TurnStepDto.Kind = s.Kind; Title = s.Title; Input = s.Input; Output = s.Output })
                             let payload = JsonSerializer.Serialize({| steps = dtos |}, jsonOptions)
-                            do! sendWs socket { Type = WsResponseType.Event; Payload = payload }
+                            do! send { Type = WsResponseType.Event; Payload = payload }
                 let! response = processTask
-                do! sendWs socket { Type = WsResponseType.Done; Payload = response }
+                do! send { Type = WsResponseType.Done; Payload = response }
 
             | WsRequestType.Info ->
                 let! info = session.GetInfoAsync()
@@ -151,36 +158,57 @@ module EmbeddedServer =
                     {| sessionId = info.SessionId; agentName = info.AgentName
                        workspaceKey = info.WorkspaceKey; activeConversation = info.ActiveConversation
                        isActive = info.IsActive; createdAt = info.CreatedAt; lastActiveAt = info.LastActiveAt |}, jsonOptions)
-                do! sendWs socket { Type = WsResponseType.Info; Payload = payload }
+                do! send { Type = WsResponseType.Info; Payload = payload }
 
             | WsRequestType.History ->
                 let! history = session.GetHistoryAsync()
                 let dtos = history |> Array.map messageToDto
                 let payload = JsonSerializer.Serialize(dtos, jsonOptions)
-                do! sendWs socket { Type = WsResponseType.History; Payload = payload }
+                do! send { Type = WsResponseType.History; Payload = payload }
 
             | WsRequestType.Clear ->
                 do! session.ClearHistoryAsync()
-                do! sendWs socket { Type = WsResponseType.Done; Payload = "History cleared" }
+                do! send { Type = WsResponseType.Done; Payload = "History cleared" }
 
             | WsRequestType.Conversations ->
                 let! convs = session.ListConversationsAsync()
                 let payload = JsonSerializer.Serialize(convs, jsonOptions)
-                do! sendWs socket { Type = WsResponseType.Conversations; Payload = payload }
+                do! send { Type = WsResponseType.Conversations; Payload = payload }
 
             | WsRequestType.Switch ->
                 do! session.SwitchConversationAsync(msg.Payload)
-                do! sendWs socket { Type = WsResponseType.Done; Payload = sprintf "Switched to: %s" msg.Payload }
+                do! send { Type = WsResponseType.Done; Payload = sprintf "Switched to: %s" msg.Payload }
+
+            | WsRequestType.PermissionResponse ->
+                // The user's answer to a permission prompt: hand it to the broker, which
+                // resumes the parked tool call awaiting this decision. No reply frame.
+                PermissionBroker.resolve msg.Payload
 
             | _ ->
-                do! sendWs socket { Type = WsResponseType.Error; Payload = "Unknown request type" }
+                do! send { Type = WsResponseType.Error; Payload = "Unknown request type" }
         with ex ->
-            do! sendWs socket { Type = WsResponseType.Error; Payload = ex.Message }
+            do! send { Type = WsResponseType.Error; Payload = ex.Message }
     }
 
     let private handleWebSocket (ctx: HttpContext) (grainFactory: IGrainFactory) (sessionId: string) = task {
         let! socket = ctx.WebSockets.AcceptWebSocketAsync()
         let buffer = Array.zeroCreate<byte> 8192
+
+        // A turn can stream step events while, concurrently, a tool's permission prompt is
+        // pushed to the client — so serialize every write through one lock (WebSocket forbids
+        // concurrent sends).
+        let sendLock = new SemaphoreSlim(1, 1)
+        let send (resp: WsResponse) : Task =
+            (task {
+                do! sendLock.WaitAsync()
+                try do! sendWs socket resp
+                finally sendLock.Release() |> ignore
+            }) :> Task
+
+        // Register this session's channel so the permission broker can prompt its user, and
+        // make sure tool calls parked on a prompt fail closed once the socket goes away.
+        PermissionBroker.registerSession sessionId (fun payload ->
+            send { Type = WsResponseType.PermissionRequest; Payload = payload })
 
         try
             let mutable running = true
@@ -201,11 +229,26 @@ module EmbeddedServer =
                     let json = Encoding.UTF8.GetString(segments.ToArray())
                     try
                         let msg = JsonSerializer.Deserialize<WsRequest>(json, jsonOptions)
-                        do! handleWsMessage socket grainFactory sessionId msg
+                        match msg.Type with
+                        | WsRequestType.PermissionResponse ->
+                            // Fast, non-blocking: just resume the parked tool call.
+                            PermissionBroker.resolve msg.Payload
+                        | _ ->
+                            // Run the request WITHOUT awaiting it here, so the receive loop stays
+                            // free to read a permission reply that a tool inside this very turn is
+                            // waiting for. Errors are reported back over the socket.
+                            (task {
+                                try do! handleWsMessage send grainFactory sessionId msg
+                                with ex -> do! send { Type = WsResponseType.Error; Payload = ex.Message }
+                             })
+                            |> ignore
                     with ex ->
-                        do! sendWs socket { Type = WsResponseType.Error; Payload = sprintf "Invalid message: %s" ex.Message }
+                        do! send { Type = WsResponseType.Error; Payload = sprintf "Invalid message: %s" ex.Message }
         with
         | :? WebSocketException -> ()
+
+        PermissionBroker.unregisterSession sessionId
+        sendLock.Dispose()
     }
 
     let mutable private host: WebApplication option = None
@@ -700,7 +743,7 @@ module EmbeddedServer =
                     match store.TryOpen fileId with
                     | Some(dto, bytes) ->
                         let mt = if String.IsNullOrWhiteSpace dto.MediaType then "application/octet-stream" else dto.MediaType
-                        return Results.File(bytes, mt, dto.Name)
+                        return Results.File(bytes, mt, dto.DisplayName)
                     | None -> return Results.NotFound()
                 })) |> ignore
 
@@ -734,7 +777,7 @@ module EmbeddedServer =
                 // The knowledge base is NOT injected into every message. It is exposed only
                 // through the search_knowledge tool, which the agent invokes on demand (after
                 // asking the user) to consult files the user explicitly uploaded.
-                AssistantTools.knowledgeSearch <- Some(fun query topK -> knowledge.Retrieve query topK)
+                KnowledgeTools.knowledgeSearch <- Some(fun query topK -> knowledge.Retrieve query topK)
 
                 app.MapGet("/api/knowledge", Func<HttpContext, _>(fun _ctx -> task {
                     return Results.Ok(knowledge.Files())

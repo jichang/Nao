@@ -2,21 +2,6 @@ namespace Nao.Agents
 
 open System
 
-/// Describes a single parameter of a tool
-type ToolParameter =
-    { /// Parameter name
-      Name: string
-      /// Human-readable description
-      Description: string
-      /// Type hint (e.g. "string", "int", "object", "array")
-      Type: string
-      /// Whether this parameter is required
-      Required: bool
-      /// Default value if not provided
-      Default: string option
-      /// Example values for documentation
-      Examples: string list }
-
 /// Rich schema definition for a tool, extending the basic Tool type
 type ToolSchema =
     { /// Unique tool name
@@ -60,7 +45,10 @@ module ToolSchema =
         { Name = tool.Name
           Description = tool.Description
           Category = None
-          Parameters = [ { Name = "input"; Description = "Tool input"; Type = "string"; Required = true; Default = None; Examples = [] } ]
+          Parameters =
+            match tool.Schema with
+            | [] -> [ { Name = "input"; Description = "Tool input"; Type = "string"; Required = true; Default = None; Examples = [] } ]
+            | declared -> declared
           ReturnDescription = None
           Examples = []
           IsSideEffectFree = false

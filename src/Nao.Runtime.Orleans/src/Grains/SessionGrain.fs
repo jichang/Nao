@@ -51,6 +51,16 @@ type ConversationContext() =
     [<Id(2u)>] member val CreatedAt: DateTimeOffset = DateTimeOffset.MinValue with get, set
     [<Id(3u)>] member val AgentName: string = "" with get, set
 
+/// A resource-access grant the user approved for the lifetime of this session. Stored in the
+/// session grain's own state (Orleans-persisted) so each session tracks its own permissions
+/// and never re-prompts for something it already approved.
+[<GenerateSerializer>]
+type PermissionGrantRecord() =
+    /// Resource class: "file", "web", or "tool".
+    [<Id(0u)>] member val Kind: string = "" with get, set
+    /// Match pattern: a file path, a web host, or a tool name.
+    [<Id(1u)>] member val Pattern: string = "" with get, set
+
 /// Persistent state for a session grain
 [<GenerateSerializer>]
 type SessionGrainState() =
@@ -59,6 +69,8 @@ type SessionGrainState() =
     [<Id(2u)>] member val Memories: ResizeArray<MemoryRecord> = ResizeArray() with get, set
     /// Async tasks launched by this session (snapshots pushed from each task grain).
     [<Id(3u)>] member val Tasks: ResizeArray<TaskRef> = ResizeArray() with get, set
+    /// Resource-access grants the user approved for this session ("remember for session").
+    [<Id(4u)>] member val GrantedPermissions: ResizeArray<PermissionGrantRecord> = ResizeArray() with get, set
 
 /// Options for starting or reconfiguring a session
 [<GenerateSerializer>]
@@ -287,6 +299,22 @@ type SessionGrain
                          Timestamp = now; TurnId = turnId
                          Steps = stepRecords |> List.toArray; Attachments = [||] } |]
                 do! conversationStore.AppendAsync grainKey convName persisted
+
+                // Persist each sub-agent delegation as a nested child conversation, so the
+                // delegated work is browsable beneath its parent rather than only inlined as a
+                // step. One child conversation per delegation (uniquely keyed by turn + index).
+                let agentSteps = steps |> List.filter (fun s -> s.Kind = "agent")
+                let mutable idx = 0
+                for s in agentSteps do
+                    idx <- idx + 1
+                    let title = if String.IsNullOrWhiteSpace s.Title then "agent" else s.Title
+                    let childName = sprintf "%s/%s-%s-%d" convName title turnId idx
+                    let childMsgs =
+                        [| { PersistedMessage.Role = "User"; Content = s.Input
+                             Timestamp = now; TurnId = turnId; Steps = [||]; Attachments = [||] }
+                           { PersistedMessage.Role = "Assistant"; Content = s.Output
+                             Timestamp = now; TurnId = turnId; Steps = [||]; Attachments = [||] } |]
+                    do! conversationStore.AppendAsync grainKey childName childMsgs
         }
 
     // ─── Async task tracking ───
@@ -337,10 +365,10 @@ type SessionGrain
                     // provider, prefixing recent conversation history so the prompt has the
                     // context the user is referring to (mirrors async-agent input handling).
                     let basePromptTool = DefinitionBuilder.buildPromptTool provider def prompt
-                    let execute (input: string) =
+                    let execute (ctx: ToolContext) (input: string) =
                         let contextual =
                             ConversationContextRender.withHistory 8 (activeConversation().Messages) input
-                        basePromptTool.Execute contextual
+                        basePromptTool.Execute ctx contextual
                     { basePromptTool with Execute = execute }
                 | ExecutableTool (_, _, isAsync) ->
                     // Executable tool: build it inline; async tools additionally spawn a
@@ -535,6 +563,70 @@ type SessionGrain
                       task {
                           let! taskRef = spawnTaskAsync spec.Kind spec.Title (spec.Params |> Map.toList) turnId
                           return taskRef.TaskId } }
+            // Build this session's permission context: tools request resource access through
+            // it. We answer from the session's OWN granted permissions (held in this grain's
+            // state) first, then fall back to the server-registered interactive prompt. A
+            // grant the user chose to remember for the session is recorded into this grain's
+            // state so the session never re-prompts for it.
+            let grants = persistentState.State.GrantedPermissions
+            let grantRules () : PermissionRule list =
+                grants
+                |> Seq.map (fun g ->
+                    let kind =
+                        match g.Kind with
+                        | "file" -> ResourceKind.File
+                        | "web" -> ResourceKind.Web
+                        | _ -> ResourceKind.Tool
+                    { Id = ""
+                      Kind = kind
+                      Pattern = g.Pattern
+                      Operations = []
+                      Decision = PermissionDecision.Allow
+                      Scope = RuleScope.Session sessionKey
+                      CreatedAt = DateTimeOffset.UtcNow })
+                |> List.ofSeq
+            // Does a stored grant pattern of this kind cover a resource pattern? Uses the
+            // same matching the evaluator does, so redundant or overlapping grants (e.g.
+            // granting "/a" then "/a/b") collapse instead of letting the list grow unbounded.
+            let covers (kind: string) (broader: string) (narrower: string) =
+                match kind with
+                | "file" -> ResourcePermission.pathMatches broader narrower
+                | "web" -> ResourcePermission.hostMatches broader narrower
+                | _ -> String.Equals(broader, narrower, StringComparison.OrdinalIgnoreCase)
+            let recordGrant (access: ResourceAccess) =
+                let kind, pattern =
+                    match access with
+                    | ResourceAccess.File(_, path) -> "file", path
+                    | ResourceAccess.Web(_, url) -> "web", (ResourcePermission.hostOf url |> Option.defaultValue url)
+                    | ResourceAccess.ToolCall name -> "tool", name
+                // Skip when a broader (or equal) existing grant already covers this resource.
+                if not (grants |> Seq.exists (fun g -> g.Kind = kind && covers kind g.Pattern pattern)) then
+                    // Drop any narrower existing grants this broader one subsumes, then add it.
+                    let subsumed =
+                        grants
+                        |> Seq.filter (fun g -> g.Kind = kind && covers kind pattern g.Pattern)
+                        |> Seq.toList
+                    for g in subsumed do
+                        grants.Remove g |> ignore
+                    grants.Add(PermissionGrantRecord(Kind = kind, Pattern = pattern))
+            let requestPermission (access: ResourceAccess) (reason: string) : Task<bool> =
+                task {
+                    // grantRules are all session-scoped for this key; filter through `applicable`
+                    // so the scope-agnostic evaluator only ever sees rules that apply here.
+                    let applicable = ResourcePermission.applicable sessionKey (grantRules ())
+                    if ResourcePermission.evaluateWith PermissionDecision.Deny applicable access = PermissionDecision.Allow then
+                        return true
+                    else
+                        match PermissionGate.Prompt with
+                        | None -> return true // no permission system wired → allow
+                        | Some prompt ->
+                            let! outcome = prompt sessionKey access reason
+                            if outcome.Decision = PermissionDecision.Allow && outcome.RememberForSession then
+                                recordGrant access
+                                try do! persistentState.WriteStateAsync() with _ -> ()
+                            return outcome.Decision = PermissionDecision.Allow
+                }
+            ToolContext.set { SessionKey = sessionKey; RequestPermission = requestPermission }
             try
                 let! agentOpt = createAgentAsync workspace agentName agentVersion tools (recorder :> IAgentEventSink)
                 match agentOpt with
@@ -569,6 +661,7 @@ type SessionGrain
             finally
                 currentRecorder <- None
                 SessionExecution.clear ()
+                ToolContext.clear ()
         }
     // ─── Activation ───
 

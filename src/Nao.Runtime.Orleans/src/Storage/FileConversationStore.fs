@@ -14,6 +14,13 @@ open System.Threading.Tasks
 ///         {conversationName}.jsonl — one JSON object per line (append-friendly)
 ///         {conversationName}.meta.json — conversation-level metadata
 ///
+/// Conversation names may be hierarchical, using '/' to denote a parent → child
+/// relationship (a child conversation is one started by another, e.g. a sub-agent
+/// delegation). Each level nests under its own `conversations/` folder, so a child
+/// "parent/child" is stored at:
+///   {sessionId}/conversations/parent/conversations/child.jsonl
+/// alongside the parent's {sessionId}/conversations/parent.jsonl.
+///
 /// {baseDir} is the shared `sessions/` root, so each session's conversations nest
 /// alongside its files, observability and feedback under sessions/<sessionId>/.
 /// Session IDs containing '/' are flattened to '_' for filesystem safety; the mapping
@@ -31,14 +38,39 @@ type FileConversationStore(baseDir: string) =
     let sessionDir (sessionId: string) =
         Path.Combine(baseDir, sanitize sessionId, "conversations")
 
+    /// Split a (possibly hierarchical) conversation name into sanitized path segments.
+    let convSegments (conversationName: string) =
+        let segs =
+            (if isNull conversationName then "" else conversationName).Split('/')
+            |> Array.filter (fun s -> not (String.IsNullOrWhiteSpace s))
+            |> Array.map sanitize
+        if segs.Length = 0 then [| "default" |] else segs
+
+    /// Build the on-disk path for a conversation, interleaving a `conversations/` folder
+    /// between each hierarchy level; the final segment carries the given extension.
+    let convPath (sessionId: string) (conversationName: string) (ext: string) =
+        let segs = convSegments conversationName
+        let parts = ResizeArray<string>()
+        parts.Add(sessionDir sessionId)
+        for i in 0 .. segs.Length - 1 do
+            if i > 0 then parts.Add("conversations")
+            parts.Add(if i = segs.Length - 1 then segs.[i] + ext else segs.[i])
+        Path.Combine(parts.ToArray())
+
     let conversationFile (sessionId: string) (conversationName: string) =
-        Path.Combine(sessionDir sessionId, sprintf "%s.jsonl" (sanitize conversationName))
+        convPath sessionId conversationName ".jsonl"
 
     let metaFile (sessionId: string) (conversationName: string) =
-        Path.Combine(sessionDir sessionId, sprintf "%s.meta.json" (sanitize conversationName))
+        convPath sessionId conversationName ".meta.json"
 
-    let ensureDir (sessionId: string) =
-        let dir = sessionDir sessionId
+    /// The folder that holds a conversation's own child conversations (if any).
+    let childContainerDir (sessionId: string) (conversationName: string) =
+        let file = conversationFile sessionId conversationName
+        let segs = convSegments conversationName
+        Path.Combine(Path.GetDirectoryName file, segs.[segs.Length - 1])
+
+    let ensureDir (sessionId: string) (conversationName: string) =
+        let dir = Path.GetDirectoryName(conversationFile sessionId conversationName)
         if not (Directory.Exists dir) then
             Directory.CreateDirectory(dir) |> ignore
         dir
@@ -65,7 +97,7 @@ type FileConversationStore(baseDir: string) =
             task {
                 if messages.Length = 0 then return ()
                 else
-                    ensureDir sessionId |> ignore
+                    ensureDir sessionId conversationName |> ignore
                     let path = conversationFile sessionId conversationName
                     let lines =
                         messages
@@ -95,7 +127,7 @@ type FileConversationStore(baseDir: string) =
 
         member _.SaveAsync (sessionId: string) (conversationName: string) (messages: PersistedMessage array) =
             task {
-                ensureDir sessionId |> ignore
+                ensureDir sessionId conversationName |> ignore
                 let path = conversationFile sessionId conversationName
                 let lines = messages |> Array.map serializeMessage
                 do! File.WriteAllLinesAsync(path, lines)
@@ -128,8 +160,10 @@ type FileConversationStore(baseDir: string) =
             task {
                 let dir = sessionDir sessionId
                 if Directory.Exists dir then
+                    // Recurse so nested child conversations (sub-agent delegations) are listed
+                    // too; each meta carries its full hierarchical ConversationName.
                     return
-                        Directory.GetFiles(dir, "*.meta.json")
+                        Directory.GetFiles(dir, "*.meta.json", SearchOption.AllDirectories)
                         |> Array.choose readMeta
                 else
                     return Array.empty
@@ -154,6 +188,9 @@ type FileConversationStore(baseDir: string) =
                 if File.Exists path then File.Delete(path)
                 let meta = metaFile sessionId conversationName
                 if File.Exists meta then File.Delete(meta)
+                // Also remove any child conversations started by this one.
+                let children = childContainerDir sessionId conversationName
+                if Directory.Exists children then Directory.Delete(children, recursive = true)
             }
 
         member _.DeleteSessionAsync(sessionId: string) =

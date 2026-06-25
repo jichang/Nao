@@ -100,7 +100,7 @@ type AnnotationsTests() =
                     InputPrefix = Some "PRE:"
                     OutputSuffix = Some ":POST" }
             let overlaid = Annotations.applyToTool ann tool
-            let! out = overlaid.Execute "x"
+            let! out = overlaid.Execute ToolContext.allowAll "x"
             Assert.AreEqual("echo:PRE:x:POST", out)
         }).GetAwaiter().GetResult()
 

@@ -16,7 +16,7 @@ The framework implements the **ETCLOVG** taxonomy from "Agent Harness Engineerin
 | **L** — Lifecycle | State-machine lifecycle, pipeline stages | `AgentLifecycle`, `LifecyclePipeline`, `RetryPolicy` |
 | **O** — Observability | Distributed tracing, metrics, resilience | `ITracer`, `IMetricsCollector`, `CircuitBreaker` |
 | **V** — Verification | Readiness checks, execution traces, regression | `IReadinessCheck`, `ExecutionTrace`, `IJudge` |
-| **G** — Governance | Permissions, constitution, audit, policies | `PermissionModel`, `Constitution`, `PolicyEngine` |
+| **G** — Governance | Permissions, resource access, constitution, audit, policies | `PermissionModel`, `ResourceAccess`, `ToolContext`, `Constitution`, `PolicyEngine` |
 
 ## Features
 
@@ -33,6 +33,7 @@ The framework implements the **ETCLOVG** taxonomy from "Agent Harness Engineerin
 - **Execution Journal** — Immutable log of all tool executions; supports bulk revert of revertible operations
 - **Pluggable Tool Execution** — Tools run as processes, HTTP calls, or custom executors (gRPC, MCP, etc.)
 - **Governance** — Constitution rules, permission models, audit logging, and runtime policy enforcement
+- **Resource Permissions** — Deny-by-default file/web access with interactive, per-session approval prompts; tools declare the permissions they need and can request access dynamically through a `ToolContext`, with grants remembered per session or globally
 - **Observability** — Distributed tracing (OpenTelemetry-style), cost metrics, circuit breakers, retries
 - **Verification** — Readiness gates, execution trace capture, LLM judges, regression detection
 - **Evaluation** — Test case framework with multiple evaluators, LLM judges, and dataset-level reports
@@ -367,6 +368,60 @@ let engine = PolicyEngine.create [
     PolicyEngine.rateLimitPolicy "tool_call" 60
 ]
 let result = engine.Evaluate(PolicyContext.FromExecutionContext agentId "execute" input ctx)
+```
+
+**Resource Permissions** — Fine-grained, *resource-level* approval that complements the capability-level `PermissionModel`. Where `PermissionModel` asks "may this agent use tool X?", `ResourceAccess` asks "may this run touch THIS path or THIS url?". Access is **deny-by-default** (opt-in via Settings) and unresolved requests prompt the user live.
+
+```fsharp
+// A sensitive action + the specific resource it targets
+type ResourceAccess =
+    | File of operation: string * path: string   // "read"/"write"/"delete"/"list"
+    | Web of operation: string * url: string      // HTTP method or "fetch"
+    | ToolCall of toolName: string
+```
+
+The pure `ResourcePermission` engine evaluates an access against granted rules with `Deny > Allow > Ask` precedence (no IO — the testable core):
+
+```fsharp
+let decision = ResourcePermission.evaluateWith PermissionDecision.Deny rules access
+// PermissionDecision.Allow | Deny | Ask
+```
+
+Tools are permission-aware through a `ToolContext` passed to `Execute`. A tool can declare the static `Permissions` it needs (auto-requested before each run) and/or request access dynamically mid-execution once it knows what resource its input targets:
+
+```fsharp
+// Declared up-front: auto-requested by InvokeAsync before Execute runs
+let fetcher =
+    Tool.Create("fetch", "Download a page",
+        [ ResourceAccess.Web("GET", "https://example.com") ],
+        fun ctx input -> task { ... })
+
+// Or requested dynamically from inside Execute
+let writer =
+    Tool.Create("save", "Write a file", [],
+        fun ctx input -> task {
+            let! ok = ctx.RequestPermission (ResourceAccess.File("write", path)) "Save the report."
+            if ok then return! doWrite input else return "[denied]"
+        })
+
+// In tests/library code with no permission system wired:
+let! result = tool.InvokeAsync(ToolContext.allowAll, input)
+```
+
+The pieces fit together so the runtime layer never has to reference the server:
+
+- **`PermissionGate.Prompt`** — a process-wide hook in `Nao.Agents` that the server registers at startup. The grain calls it to resolve a request against the real decision logic (settings, persisted grants, live prompt) it cannot otherwise see.
+- **`PermissionBroker`** (server) — when a request resolves to `Ask`, the broker ships a `PermissionRequestDto` over the session's WebSocket, parks the call, and resumes on the user's reply. No client or no answer within the timeout **fails closed** (deny).
+- **Per-session grants** — when the user picks "remember for this session", the `SessionGrain` records the grant in its own Orleans-persisted state (`GrantedPermissions`) and never re-prompts for it; "global" grants persist to the cross-session `PermissionStore`; "once" persists nothing.
+- **`PermissionOutcome`** — `{ Decision; RememberForSession }`, the value threaded from broker → gate → grain so the session knows whether to record the grant.
+
+Settings expose a master switch (off by default) plus global allowlists:
+
+```fsharp
+{ PermissionSettings.Default with
+    Enabled = true
+    AllowedWebDomains = [ "example.com" ]   // matches subdomains too
+    AllowedFilePaths = [ "/home/me/project" ] }
 ```
 
 ### Observability (O)

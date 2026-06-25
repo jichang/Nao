@@ -193,7 +193,7 @@ type WorkspaceResolutionTests() =
         let ws = TestWorkspace.empty |> TestWorkspace.withBuiltTool myTool
         let found = ws.Tools |> List.tryFind (fun t -> t.Name = "greet")
         Assert.IsTrue(found.IsSome)
-        let result = found.Value.Execute("World").Result
+        let result = (found.Value.Execute ToolContext.allowAll "World").Result
         Assert.AreEqual("Hello World", result)
 
 [<TestClass>]

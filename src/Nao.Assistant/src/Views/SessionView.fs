@@ -525,13 +525,14 @@ module SessionView =
                         if t.Status = AsyncTasks.Status.Completed && not (String.IsNullOrEmpty t.ResultFileId) then
                             let name =
                                 files |> List.tryFind (fun f -> f.Id = t.ResultFileId)
-                                |> Option.map (fun f -> f.Name) |> Option.defaultValue t.Title
+                                |> Option.map (fun f -> f.DisplayName) |> Option.defaultValue t.Title
                             dispatch (DownloadFile(t.ResultFileId, name))
                         else dispatch ToggleFilesPanel
                     chip "\u2699" (sprintf "%s — %s" t.Title label) brush onClick)
             let fileChips =
                 genFiles
-                |> List.map (fun f -> chip "\U0001F4C4" f.Name Theme.accent (fun () -> dispatch (DownloadFile(f.Id, f.Name))))
+                |> List.map (fun f ->
+                    chip "\U0001F4C4" f.DisplayName Theme.accent (fun () -> dispatch (DownloadFile(f.Id, f.DisplayName))))
             if taskChips.IsEmpty && fileChips.IsEmpty then []
             else
                 [ WrapPanel.create [
@@ -552,7 +553,7 @@ module SessionView =
                             Grid.column 0
                             StackPanel.children [
                                 TextBlock.create [
-                                    TextBlock.text (sprintf "\U0001F4C4 %s" f.Name)
+                                    TextBlock.text (sprintf "\U0001F4C4 %s" f.DisplayName)
                                     TextBlock.fontSize 12.0
                                     TextBlock.foreground Theme.textPrimary
                                     TextBlock.textTrimming TextTrimming.CharacterEllipsis
@@ -569,7 +570,7 @@ module SessionView =
                             Button.content (Localization.current ()).Download
                             Button.fontSize 11.0
                             Button.verticalAlignment VerticalAlignment.Center
-                            Button.onClick (fun _ -> dispatch (DownloadFile(f.Id, f.Name)))
+                            Button.onClick (fun _ -> dispatch (DownloadFile(f.Id, f.DisplayName)))
                         ]
                     ]
                 ]

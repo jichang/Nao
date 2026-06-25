@@ -2,7 +2,9 @@ namespace Nao.Assistant
 
 open System
 open System.Threading.Tasks
+open Avalonia
 open Avalonia.Controls
+open Avalonia.Controls.ApplicationLifetimes
 open Avalonia.FuncUI
 open Avalonia.FuncUI.DSL
 open Avalonia.Layout
@@ -46,6 +48,65 @@ module Shell =
         | SettingsMsg of SettingsView.Msg
         | BuilderMsg of BuilderView.Msg
 
+    /// Show a modal approval prompt for a server-pushed permission request and reply over the
+    /// same WebSocket. Closing without choosing denies (fail-closed). Runs on the UI thread.
+    let private showPermissionPrompt (client: NaoClient) (req: PermissionRequestDto) =
+        Dispatcher.UIThread.Post(fun () ->
+            let t = Localization.current ()
+            let owner =
+                match Application.Current.ApplicationLifetime with
+                | :? IClassicDesktopStyleApplicationLifetime as d -> d.MainWindow
+                | _ -> null
+
+            let dialog = Window()
+            dialog.Title <- t.PermissionPromptTitle
+            dialog.Width <- 480.0
+            dialog.SizeToContent <- SizeToContent.Height
+            dialog.WindowStartupLocation <- WindowStartupLocation.CenterOwner
+            dialog.CanResize <- false
+
+            let mutable answered = false
+            let respond (decision: string) (scope: string) =
+                answered <- true
+                client.SendPermissionResponseAsync(req.RequestId, decision, scope) |> ignore
+                dialog.Close()
+
+            let panel = StackPanel(Margin = Thickness 20.0, Spacing = 10.0)
+
+            let header = TextBlock(Text = t.PermissionPromptTitle, FontWeight = FontWeight.Bold, FontSize = 15.0)
+            let reason = TextBlock(Text = req.Reason, TextWrapping = TextWrapping.Wrap)
+            let resource =
+                let label = if String.IsNullOrEmpty req.Operation then req.Resource else sprintf "%s — %s" (req.Operation.ToUpperInvariant()) req.Resource
+                TextBlock(Text = label, TextWrapping = TextWrapping.Wrap, FontFamily = FontFamily("monospace"), Foreground = SolidColorBrush(Color.Parse "#A1A1AA"))
+
+            let buttons = StackPanel(Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Spacing = 8.0, Margin = Thickness(0.0, 8.0, 0.0, 0.0))
+
+            let denyBtn = Button(Content = t.PermissionDeny)
+            denyBtn.Click.Add(fun _ -> respond "deny" "")
+            let onceBtn = Button(Content = t.PermissionAllowOnce)
+            onceBtn.Click.Add(fun _ -> respond "allow" "once")
+            let sessionBtn = Button(Content = t.PermissionAllowSession)
+            sessionBtn.Click.Add(fun _ -> respond "allow" "session")
+            let globalBtn = Button(Content = t.PermissionAllowGlobal)
+            globalBtn.Click.Add(fun _ -> respond "allow" "global")
+
+            buttons.Children.Add denyBtn
+            buttons.Children.Add onceBtn
+            buttons.Children.Add sessionBtn
+            buttons.Children.Add globalBtn
+
+            panel.Children.Add header
+            panel.Children.Add reason
+            panel.Children.Add resource
+            panel.Children.Add buttons
+            dialog.Content <- panel
+
+            dialog.Closed.Add(fun _ ->
+                if not answered then client.SendPermissionResponseAsync(req.RequestId, "deny", "") |> ignore)
+
+            if isNull owner then dialog.Show()
+            else dialog.ShowDialog(owner) |> ignore)
+
     let private startupCmd (settings: AppSettings) : Cmd<ShellMsg> =
         [ fun dispatch ->
             Task.Run<unit>(Func<Task<unit>>(fun () ->
@@ -53,6 +114,13 @@ module Shell =
                     try
                         let serverUrl = EmbeddedServer.start settings
                         let client = new NaoClient(serverUrl)
+                        // Permission prompts arrive over the same WebSocket as chat. Handle them
+                        // from a standing subscription (chat's own handlers ignore them) so a tool
+                        // blocked mid-turn can ask the user and resume on their answer.
+                        client.OnMessage.Add(fun evt ->
+                            match evt with
+                            | NaoEvent.PermissionRequest req -> showPermissionPrompt client req
+                            | _ -> ())
                         let! entries = client.ListSessionsAsync()
                         let restored =
                             if entries.Length > 0 then

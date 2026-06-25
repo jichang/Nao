@@ -67,6 +67,28 @@ type ServerSettings =
           AuthEmail = ""
           AuthToken = "" }
 
+/// Resource-permission master switch and the user's global allowlists. When enabled, tools
+/// and agents must have an allow rule to touch a web URL or a file outside the session
+/// workspace (deny-by-default). These lists are the simple global config managed in
+/// Settings; cross-session "global" grants live in the SQLite PermissionStore, while
+/// per-session "remember for this session" grants live in the SessionGrain's own state.
+[<CLIMutable>]
+type PermissionSettings =
+    { /// Master switch. When false, no permission checks are enforced (legacy behavior).
+      [<JsonPropertyName("enabled")>]
+      Enabled: bool
+      /// Web hosts allowed for every session, e.g. "example.com" (matches subdomains too).
+      [<JsonPropertyName("allowedWebDomains")>]
+      AllowedWebDomains: string list
+      /// Absolute file-path prefixes allowed for every session.
+      [<JsonPropertyName("allowedFilePaths")>]
+      AllowedFilePaths: string list }
+
+    static member Default =
+        { Enabled = false
+          AllowedWebDomains = []
+          AllowedFilePaths = [] }
+
 [<CLIMutable>]
 type AppSettings =
     { [<JsonPropertyName("provider")>]
@@ -75,6 +97,8 @@ type AppSettings =
       Orchestrator: OrchestratorSettings
       [<JsonPropertyName("server")>]
       Server: ServerSettings
+      [<JsonPropertyName("permissions")>]
+      Permissions: PermissionSettings
       [<JsonPropertyName("workspacePath")>]
       WorkspacePath: string
       [<JsonPropertyName("theme")>]
@@ -86,6 +110,7 @@ type AppSettings =
         { Provider = ProviderSettings.Default
           Orchestrator = OrchestratorSettings.Default
           Server = ServerSettings.Default
+          Permissions = PermissionSettings.Default
           WorkspacePath = ""
           Theme = "Dark"
           Language = "en" }
@@ -118,7 +143,8 @@ module AppSettingsStore =
                 { loaded with
                     Provider = if obj.ReferenceEquals(loaded.Provider, null) then ProviderSettings.Default else loaded.Provider
                     Orchestrator = if obj.ReferenceEquals(loaded.Orchestrator, null) then OrchestratorSettings.Default else loaded.Orchestrator
-                    Server = if obj.ReferenceEquals(loaded.Server, null) then ServerSettings.Default else loaded.Server }
+                    Server = if obj.ReferenceEquals(loaded.Server, null) then ServerSettings.Default else loaded.Server
+                    Permissions = if obj.ReferenceEquals(loaded.Permissions, null) then PermissionSettings.Default else loaded.Permissions }
             with _ ->
                 AppSettings.Default
         else

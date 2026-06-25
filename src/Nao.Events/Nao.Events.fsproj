@@ -3,7 +3,18 @@
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <!-- Use the explicit FSharp.Core below instead of the SDK's bundled implicit one,
+         so it matches the version pulled transitively via Nao.Feedback and avoids an
+         MSB3277 assembly conflict. -->
+    <DisableImplicitFSharpCoreReference>true</DisableImplicitFSharpCoreReference>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Match the FSharp.Core version pulled transitively via Nao.Feedback (paket's
+         FSharp.SystemTextJson) so referencing it doesn't trigger an NU1605 downgrade
+         against the SDK's implicit FSharp.Core. -->
+    <PackageReference Include="FSharp.Core" Version="10.1.301" />
+  </ItemGroup>
 
   <ItemGroup>
     <!-- Event envelope, domain events, the dispatch bus + in-memory implementation -->

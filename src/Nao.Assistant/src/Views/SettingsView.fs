@@ -268,6 +268,59 @@ module SettingsView =
             FormControls.hint t.WorkspaceHint
         ]
 
+    /// Resource permissions: a master switch plus the global allowlists. When enforcement
+    /// is on, tools/agents may only reach the web domains and file paths listed here (one
+    /// per line); everything else is denied. Lists are stored as string lists, edited as
+    /// newline-separated text.
+    let private permissionsSection (dispatch: Msg -> unit) (s: AppSettings) : IView =
+        let t = Localization.current ()
+        let change f = dispatch (SettingsChanged (f s))
+        let linesToList (v: string) =
+            v.Replace("\r\n", "\n").Split('\n')
+            |> Array.map (fun x -> x.Trim())
+            |> Array.filter (fun x -> x <> "")
+            |> Array.toList
+        FormControls.section t.Permissions [
+            FormControls.row t.PermissionsEnabled 160.0 [
+                ComboBox.create [
+                    // Bind by INDEX (0 = Off, 1 = On) so a language switch — which
+                    // re-localizes the labels — does not reset the selection.
+                    ComboBox.dataItems [ t.PermissionsOff; t.PermissionsOn ]
+                    ComboBox.selectedIndex (if s.Permissions.Enabled then 1 else 0)
+                    ComboBox.width 160.0
+                    ComboBox.onSelectedIndexChanged (fun idx ->
+                        let enabled = idx = 1
+                        if enabled <> s.Permissions.Enabled then
+                            change (fun s -> { s with Permissions = { s.Permissions with Enabled = enabled } }))
+                ]
+            ]
+            FormControls.row t.PermissionsAllowedDomains 160.0 [
+                TextBox.create [
+                    TextBox.text (String.concat "\n" s.Permissions.AllowedWebDomains)
+                    TextBox.width 320.0
+                    TextBox.minHeight 70.0
+                    TextBox.acceptsReturn true
+                    TextBox.textWrapping TextWrapping.Wrap
+                    TextBox.watermark "example.com"
+                    TextBox.onTextChanged (fun v ->
+                        change (fun s -> { s with Permissions = { s.Permissions with AllowedWebDomains = linesToList v } }))
+                ]
+            ]
+            FormControls.row t.PermissionsAllowedPaths 160.0 [
+                TextBox.create [
+                    TextBox.text (String.concat "\n" s.Permissions.AllowedFilePaths)
+                    TextBox.width 320.0
+                    TextBox.minHeight 70.0
+                    TextBox.acceptsReturn true
+                    TextBox.textWrapping TextWrapping.Wrap
+                    TextBox.watermark "/home/me/project"
+                    TextBox.onTextChanged (fun v ->
+                        change (fun s -> { s with Permissions = { s.Permissions with AllowedFilePaths = linesToList v } }))
+                ]
+            ]
+            FormControls.hint t.PermissionsHint
+        ]
+
     /// Footer row: status message on the left, Save button on the right.
     let private footer (dispatch: Msg -> unit) (model: SettingsState) : IView =
         DockPanel.create [
@@ -304,6 +357,7 @@ module SettingsView =
                         serverSection dispatch s
                         orchestratorSection dispatch s
                         workspaceSection dispatch s
+                        permissionsSection dispatch s
                         footer dispatch model
                     ]
                 ]

@@ -362,7 +362,7 @@ type EtclovgObservabilityTests() =
         let toolSpan = tracer.StartSpan orchestratorSpan "tool.invoke.get_stock_price"
         tracer.SetAttributes toolSpan (Map.ofList ["tool.input", "AAPL"])
         // Simulate tool execution
-        let toolResult = EtclovgDemoTools.stockPrice.Execute("AAPL").Result
+        let toolResult = (EtclovgDemoTools.stockPrice.Execute ToolContext.allowAll "AAPL").Result
         tracer.AddEvent toolSpan "tool-result" (Map.ofList ["output", toolResult])
         tracer.EndSpan toolSpan SpanStatus.Ok
 

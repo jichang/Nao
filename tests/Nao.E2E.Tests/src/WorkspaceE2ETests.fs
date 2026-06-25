@@ -363,7 +363,7 @@ type WorkspaceE2ETests() =
     [<TestMethod>]
     member _.CodeTool_CreateFolder_WorksAndVerifies() =
         let tool = FileSystemTools.createFolder
-        let output = tool.Execute("test-verify-folder").Result
+        let output = (tool.Execute ToolContext.allowAll "test-verify-folder").Result
         Assert.IsTrue(output.Contains("\"created\""), sprintf "Unexpected output: %s" output)
 
         // Verify should pass (directory exists)
@@ -383,10 +383,10 @@ type WorkspaceE2ETests() =
     [<TestMethod>]
     member _.CodeTool_WriteFile_WorksAndVerifies() =
         // Create parent dir first
-        FileSystemTools.createFolder.Execute("write-test-dir").Result |> ignore
+        (FileSystemTools.createFolder.Execute ToolContext.allowAll "write-test-dir").Result |> ignore
 
         let tool = FileSystemTools.writeFile
-        let output = tool.Execute("write-test-dir/hello.txt|Hello World").Result
+        let output = (tool.Execute ToolContext.allowAll "write-test-dir/hello.txt|Hello World").Result
         Assert.IsTrue(output.Contains("\"written\""))
 
         // Verify
@@ -406,11 +406,11 @@ type WorkspaceE2ETests() =
     [<TestMethod>]
     member _.CodeTool_ListFolder_ReturnsEntries() =
         // Setup: create folder with some files
-        FileSystemTools.createFolder.Execute("list-test-dir").Result |> ignore
-        FileSystemTools.writeFile.Execute("list-test-dir/a.txt|aaa").Result |> ignore
-        FileSystemTools.writeFile.Execute("list-test-dir/b.txt|bbb").Result |> ignore
+        (FileSystemTools.createFolder.Execute ToolContext.allowAll "list-test-dir").Result |> ignore
+        (FileSystemTools.writeFile.Execute ToolContext.allowAll "list-test-dir/a.txt|aaa").Result |> ignore
+        (FileSystemTools.writeFile.Execute ToolContext.allowAll "list-test-dir/b.txt|bbb").Result |> ignore
 
-        let output = FileSystemTools.listFolder.Execute("list-test-dir").Result
+        let output = (FileSystemTools.listFolder.Execute ToolContext.allowAll "list-test-dir").Result
         Assert.IsTrue(output.Contains("a.txt"), sprintf "Should list a.txt: %s" output)
         Assert.IsTrue(output.Contains("b.txt"), sprintf "Should list b.txt: %s" output)
 
@@ -424,13 +424,13 @@ type WorkspaceE2ETests() =
 
         // Execute and record
         let tool = FileSystemTools.createFolder
-        let output1 = tool.Execute("journal-dir-1").Result
+        let output1 = (tool.Execute ToolContext.allowAll "journal-dir-1").Result
         journal.RecordAsync(
             { ToolName = tool.Name; Input = "journal-dir-1"; Output = output1
               ContentMeta = tool.OutputContentType; ExecutedAt = DateTimeOffset.UtcNow
               Reverted = false; Metadata = Map.empty }).Wait()
 
-        let output2 = tool.Execute("journal-dir-2").Result
+        let output2 = (tool.Execute ToolContext.allowAll "journal-dir-2").Result
         journal.RecordAsync(
             { ToolName = tool.Name; Input = "journal-dir-2"; Output = output2
               ContentMeta = tool.OutputContentType; ExecutedAt = DateTimeOffset.UtcNow
@@ -459,12 +459,12 @@ type WorkspaceE2ETests() =
         let journal = InMemoryExecutionJournal() :> IExecutionJournal
         let tool = FileSystemTools.createFolder
 
-        tool.Execute("revert-first").Result |> ignore
+        (tool.Execute ToolContext.allowAll "revert-first").Result |> ignore
         journal.RecordAsync(
             { ToolName = tool.Name; Input = "revert-first"; Output = ""; ContentMeta = tool.OutputContentType
               ExecutedAt = DateTimeOffset.UtcNow; Reverted = false; Metadata = Map.empty }).Wait()
 
-        tool.Execute("revert-second").Result |> ignore
+        (tool.Execute ToolContext.allowAll "revert-second").Result |> ignore
         journal.RecordAsync(
             { ToolName = tool.Name; Input = "revert-second"; Output = ""; ContentMeta = tool.OutputContentType
               ExecutedAt = DateTimeOffset.UtcNow.AddSeconds(1.0); Reverted = false; Metadata = Map.empty }).Wait()
@@ -522,9 +522,9 @@ type WorkspaceE2ETests() =
         // Wrap the create_folder tool to auto-record to journal
         let recordingCreateFolder =
             { FileSystemTools.createFolder with
-                Execute = fun input ->
+                Execute = fun ctx input ->
                     task {
-                        let! output = FileSystemTools.createFolder.Execute(input)
+                        let! output = FileSystemTools.createFolder.Execute ctx input
                         do! journal.RecordAsync(
                             { ToolName = "create_folder"; Input = input; Output = output
                               ContentMeta = FileSystemTools.createFolder.OutputContentType
@@ -534,9 +534,9 @@ type WorkspaceE2ETests() =
 
         let recordingWriteFile =
             { FileSystemTools.writeFile with
-                Execute = fun input ->
+                Execute = fun ctx input ->
                     task {
-                        let! output = FileSystemTools.writeFile.Execute(input)
+                        let! output = FileSystemTools.writeFile.Execute ctx input
                         do! journal.RecordAsync(
                             { ToolName = "write_file"; Input = input; Output = output
                               ContentMeta = FileSystemTools.writeFile.OutputContentType

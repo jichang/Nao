@@ -40,6 +40,98 @@ module ToolProvenance =
     let code (sourceName: string) : ToolProvenance =
         { Kind = "code"; Location = None; Member = Some sourceName }
 
+/// Runtime context handed to a tool's Execute so it can request approval for sensitive
+/// resource access dynamically — based on its own input or intermediate results — and know
+/// which session it is running in. The runtime builds one per session/turn; library and
+/// test code can use `ToolContext.allowAll`.
+type ToolContext =
+    { /// The session this execution belongs to ("userId/sessionId"); "" when unscoped.
+      SessionKey: string
+      /// Request approval to access a resource, with a human-readable reason. Returns true
+      /// when allowed. The runtime answers from already-granted session/global rules or by
+      /// prompting the user live.
+      RequestPermission: ResourceAccess -> string -> Task<bool> }
+
+/// Helpers for the tool execution context, including the ambient context that flows with the
+/// current async operation so framework call sites can supply it without threading it by hand.
+[<RequireQualifiedAccess>]
+module ToolContext =
+    /// Permissive context used when no permission system is wired (tests, library use).
+    let allowAll: ToolContext =
+        { SessionKey = ""
+          RequestPermission = fun _ _ -> Task.FromResult true }
+
+    let private ambient = System.Threading.AsyncLocal<ToolContext>()
+
+    /// The context flowing on the current async path, or `allowAll` if none was set.
+    let current () : ToolContext =
+        match box ambient.Value with
+        | null -> allowAll
+        | _ -> ambient.Value
+
+    /// Bind a context for the current async scope (used by the runtime per turn).
+    let set (ctx: ToolContext) = ambient.Value <- ctx
+
+    /// Drop the ambient context.
+    let clear () = ambient.Value <- Unchecked.defaultof<ToolContext>
+
+/// The result of resolving a permission request: the decision plus whether the user asked to
+/// remember the grant for the rest of the session (so the session can record it in its own
+/// state rather than re-prompting).
+type PermissionOutcome =
+    { Decision: PermissionDecision
+      RememberForSession: bool }
+
+/// A process-wide hook the server registers so the runtime layer (which cannot reference the
+/// server) can resolve permission requests against the real decision logic — settings,
+/// persisted grants, and the interactive prompt. When unset, access is allowed (no
+/// permission system present, e.g. in tests).
+[<RequireQualifiedAccess>]
+module PermissionGate =
+    /// (sessionKey, access, reason) -> outcome. Set by the server at startup.
+    let mutable Prompt: (string -> ResourceAccess -> string -> Task<PermissionOutcome>) option = None
+
+/// Canonical, structured refusal handed back to the model whenever a resource access is
+/// denied. Centralizing it here keeps every enforcement point (a tool's own declared
+/// permissions, the runtime context, the server guard) emitting the same machine-readable
+/// shape — `{ error, kind, resource, message, hint? }` — so agents can relay denials
+/// consistently. The optional hint lets the server add UI-specific guidance.
+[<RequireQualifiedAccess>]
+module PermissionDenied =
+    let private kindAndResource (access: ResourceAccess) : string * string =
+        match access with
+        | ResourceAccess.Web(_, url) -> "web", url
+        | ResourceAccess.File(_, path) -> "file", path
+        | ResourceAccess.ToolCall name -> "tool", name
+
+    /// Build the structured refusal JSON for a denied access, optionally with a remediation
+    /// hint (e.g. how to grant the access in Settings).
+    let format (access: ResourceAccess) (hint: string option) : string =
+        let kind, resource = kindAndResource access
+        let message = sprintf "Permission denied: access to %s was not granted." resource
+        match hint with
+        | Some h ->
+            System.Text.Json.JsonSerializer.Serialize
+                {| error = "permission_denied"; kind = kind; resource = resource; message = message; hint = h |}
+        | None ->
+            System.Text.Json.JsonSerializer.Serialize
+                {| error = "permission_denied"; kind = kind; resource = resource; message = message |}
+
+/// Describes a single parameter a tool accepts in its JSON input object.
+type ToolParameter =
+    { /// Parameter name (the JSON object key)
+      Name: string
+      /// Human-readable description of the parameter
+      Description: string
+      /// Type hint (e.g. "string", "int", "object", "array")
+      Type: string
+      /// Whether this parameter is required
+      Required: bool
+      /// Default value applied when the parameter is omitted, if any
+      Default: string option
+      /// Example values for documentation / few-shot prompting
+      Examples: string list }
+
 /// A tool that an agent can invoke to perform actions or retrieve information.
 /// Supports optional capabilities: content-type declaration, verify, and revert.
 type Tool =
@@ -49,8 +141,15 @@ type Tool =
       Description: string
       /// Optional version identifier (e.g. "1.0"). None = unversioned; matches any requested version.
       Version: string option
-      /// Execute the tool with a string input and return the result
-      Execute: string -> Task<string>
+      /// Schema describing the named parameters this tool accepts in its JSON input object.
+      /// Empty means the tool takes no parameters (or a single free-form string input).
+      Schema: ToolParameter list
+      /// Execute the tool with its context (for dynamic permission requests) and a string
+      /// input, returning the result.
+      Execute: ToolContext -> string -> Task<string>
+      /// Static resource permissions this tool declares it needs. The runtime requests these
+      /// through the context before each execution; a denied one short-circuits the call.
+      Permissions: ResourceAccess list
       /// Declared content type of the tool's output (framework carries, does not interpret)
       OutputContentType: ContentMeta
       /// Verify the output is correct given the input. Returns Ok or Error with reason.
@@ -60,16 +159,50 @@ type Tool =
       /// Where this tool came from (used by the feedback/adjust system to target patches).
       Provenance: ToolProvenance option }
 
-    /// Create a simple tool with just name, description, and execute (text/plain, no revert)
-    static member Create(name, description, execute) =
+    /// Create a simple tool with just name, description, and execute (text/plain, no revert).
+    /// The execute function ignores the context; use the 4-argument overload for tools that
+    /// request permission dynamically or declare static permissions.
+    static member Create(name: string, description: string, execute: string -> Task<string>) =
         { Name = name
           Description = description
           Version = None
-          Execute = execute
+          Schema = []
+          Execute = (fun _ctx input -> execute input)
+          Permissions = []
           OutputContentType = ContentMeta.Text
           Verify = None
           Revert = None
           Provenance = None }
+
+    /// Create a tool that receives its execution context (to request permission dynamically)
+    /// and declares the static permissions it needs (auto-requested before each run).
+    static member Create(name: string, description: string, permissions: ResourceAccess list, execute: ToolContext -> string -> Task<string>) =
+        { Name = name
+          Description = description
+          Version = None
+          Schema = []
+          Execute = execute
+          Permissions = permissions
+          OutputContentType = ContentMeta.Text
+          Verify = None
+          Revert = None
+          Provenance = None }
+
+    /// Run the tool: request each declared static permission through the context first, then
+    /// execute. A denied declared permission short-circuits with a refusal message instead of
+    /// running the tool.
+    member this.InvokeAsync(ctx: ToolContext, input: string) : Task<string> =
+        task {
+            let mutable denied = None
+            for access in this.Permissions do
+                if Option.isNone denied then
+                    let! ok = ctx.RequestPermission access (sprintf "Tool '%s' requires this access." this.Name)
+                    if not ok then denied <- Some access
+            match denied with
+            | Some access ->
+                return PermissionDenied.format access None
+            | None -> return! this.Execute ctx input
+        }
 
     /// Whether this tool declares revert capability
     member this.CanRevert = this.Revert.IsSome

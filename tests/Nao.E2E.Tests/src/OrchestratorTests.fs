@@ -18,7 +18,7 @@ type WeatherAgent() =
         member _.State = state
         member _.RunAsync(input: string) =
             task {
-                let! result = tool.Execute input
+                let! result = tool.Execute ToolContext.allowAll input
                 let conv = state.Conversation @ [
                     { Role = User; Content = input }
                     { Role = Assistant; Content = result }
@@ -28,7 +28,7 @@ type WeatherAgent() =
             }
         member _.HandleMessageAsync(msg: AgentMessage) =
             task {
-                let! result = tool.Execute msg.Content
+                let! result = tool.Execute ToolContext.allowAll msg.Content
                 return Some (AgentMessage.create id msg.From result)
             }
 
@@ -55,7 +55,7 @@ type MathAgent() =
         member _.RunAsync(input: string) =
             task {
                 let expr = extractExpression input
-                let! result = tool.Execute expr
+                let! result = tool.Execute ToolContext.allowAll expr
                 let conv = state.Conversation @ [
                     { Role = User; Content = input }
                     { Role = Assistant; Content = result }
@@ -66,7 +66,7 @@ type MathAgent() =
         member _.HandleMessageAsync(msg: AgentMessage) =
             task {
                 let expr = extractExpression msg.Content
-                let! result = tool.Execute expr
+                let! result = tool.Execute ToolContext.allowAll expr
                 return Some (AgentMessage.create id msg.From result)
             }
 
@@ -81,7 +81,7 @@ type GreetingAgent() =
         member _.State = state
         member _.RunAsync(input: string) =
             task {
-                let! result = tool.Execute input
+                let! result = tool.Execute ToolContext.allowAll input
                 let conv = state.Conversation @ [
                     { Role = User; Content = input }
                     { Role = Assistant; Content = result }
@@ -91,7 +91,7 @@ type GreetingAgent() =
             }
         member _.HandleMessageAsync(msg: AgentMessage) =
             task {
-                let! result = tool.Execute msg.Content
+                let! result = tool.Execute ToolContext.allowAll msg.Content
                 return Some (AgentMessage.create id msg.From result)
             }
 

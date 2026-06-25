@@ -41,7 +41,7 @@ type DemoAgent(provider: ILlmProvider, tools: Tool list, prompt: Prompt) =
         | Some (toolName, args) ->
             match AgentHelpers.findTool tools toolName with
             | Some tool ->
-                let toolResult = (tool.Execute args).Result
+                let toolResult = (tool.Execute ToolContext.allowAll args).Result
                 let toolMsg = { Role = User; Content = "tool_result: " + toolResult }
                 let conv3 = conv2 @ [toolMsg]
                 let finalResult = (provider.CompleteAsync conv3 CompletionOptions.Default).Result

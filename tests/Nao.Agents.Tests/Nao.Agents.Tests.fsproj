@@ -24,8 +24,11 @@
     <Compile Include="src/ObservabilityTests.fs" />
     <Compile Include="src/VerificationTests.fs" />
     <Compile Include="src/GovernanceTests.fs" />
+    <Compile Include="src/ResourcePermissionTests.fs" />
+    <Compile Include="src/ToolPermissionTests.fs" />
     <Compile Include="src/EtclovgHarnessTests.fs" />
     <Compile Include="src/DelegationHookTests.fs" />
+    <Compile Include="src/ActionBlockParseTests.fs" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\Nao.Agents\Nao.Agents.fsproj" />

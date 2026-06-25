@@ -8,6 +8,9 @@
   <ItemGroup>
     <!-- Core types -->
     <Compile Include="src/Core/AgentState.fs" />
+    <!-- Resource-permission types are referenced by the Tool abstraction (ToolContext /
+         declared permissions), so they must be compiled before Tool.fs. -->
+    <Compile Include="src/Governance/ResourcePermission.fs" />
     <Compile Include="src/Core/Tool.fs" />
     <Compile Include="src/Core/AgentAction.fs" />
     <Compile Include="src/Prompts/PromptExample.fs" />

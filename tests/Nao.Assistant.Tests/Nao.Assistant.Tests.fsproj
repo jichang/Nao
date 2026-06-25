@@ -18,6 +18,8 @@
     <Compile Include="src/LocalizationTests.fs" />
     <Compile Include="src/AssistantFlowTests.fs" />
     <Compile Include="src/ConvertDocumentTests.fs" />
+    <Compile Include="src/PermissionBrokerTests.fs" />
+    <Compile Include="src/ToolPermissionClassifyTests.fs" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\Nao.Agents\Nao.Agents.fsproj" />

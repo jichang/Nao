@@ -97,19 +97,19 @@ type EndToEndToolTests () =
 
     [<TestMethod>]
     member _.WeatherToolReturnsData () =
-        let result = DemoTools.getWeather.Execute("London").Result
+        let result = (DemoTools.getWeather.Execute ToolContext.allowAll "London").Result
         Assert.IsTrue(result.Contains("18°C"))
         Assert.IsTrue(result.Contains("London"))
 
     [<TestMethod>]
     member _.CalculatorEvaluatesExpressions () =
-        Assert.AreEqual("4", DemoTools.calculator.Execute("2 + 2").Result)
-        Assert.AreEqual("21", DemoTools.calculator.Execute("3 * 7").Result)
-        Assert.AreEqual("5", DemoTools.calculator.Execute("10 / 2").Result)
+        Assert.AreEqual("4", (DemoTools.calculator.Execute ToolContext.allowAll "2 + 2").Result)
+        Assert.AreEqual("21", (DemoTools.calculator.Execute ToolContext.allowAll "3 * 7").Result)
+        Assert.AreEqual("5", (DemoTools.calculator.Execute ToolContext.allowAll "10 / 2").Result)
 
     [<TestMethod>]
     member _.GreeterGeneratesGreeting () =
-        let result = DemoTools.greeter.Execute("Alice").Result
+        let result = (DemoTools.greeter.Execute ToolContext.allowAll "Alice").Result
         Assert.IsTrue(result.Contains("Alice"))
         Assert.IsTrue(result.Contains("Hello"))
 

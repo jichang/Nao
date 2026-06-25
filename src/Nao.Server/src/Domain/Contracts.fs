@@ -63,6 +63,40 @@ type StepsEventDto =
     { [<JsonPropertyName("steps")>]
       Steps: TurnStepDto[] }
 
+/// Pushed server -> client when a tool/agent needs the user to approve access to a specific
+/// resource (a file path, a web URL, or a named tool). The client shows an approval prompt
+/// and replies with a `PermissionResponseDto` carrying the same `RequestId`. This is how the
+/// permission system runs entirely over the existing per-session WebSocket.
+[<CLIMutable>]
+type PermissionRequestDto =
+    { /// Correlation id — the reply must echo it so the server can resume the waiting call.
+      [<JsonPropertyName("requestId")>]
+      RequestId: string
+      /// "file" | "web" | "tool".
+      [<JsonPropertyName("kind")>]
+      Kind: string
+      /// The operation being attempted ("read", "write", "delete", "GET", "fetch", ...).
+      [<JsonPropertyName("operation")>]
+      Operation: string
+      /// The concrete resource: an absolute path, a URL, or a tool name.
+      [<JsonPropertyName("resource")>]
+      Resource: string
+      /// Human-readable explanation of why access is being requested.
+      [<JsonPropertyName("reason")>]
+      Reason: string }
+
+/// The user's answer to a `PermissionRequestDto`, sent client -> server.
+[<CLIMutable>]
+type PermissionResponseDto =
+    { [<JsonPropertyName("requestId")>]
+      RequestId: string
+      /// "allow" | "deny".
+      [<JsonPropertyName("decision")>]
+      Decision: string
+      /// How long to remember an allow: "once" | "session" | "global". Ignored for deny.
+      [<JsonPropertyName("scope")>]
+      Scope: string }
+
 [<CLIMutable>]
 type MessageDto =
     { [<JsonPropertyName("role")>]
@@ -218,6 +252,11 @@ type SessionFileDto =
       Id: string
       [<JsonPropertyName("name")>]
       Name: string
+      /// Human-friendly name shown in the UI (the original upload filename). Uploads are
+      /// stored on disk under a content-hash `Name`; `DisplayName` preserves what the user
+      /// (and download) should see. For generated files this equals `Name`.
+      [<JsonPropertyName("displayName")>]
+      DisplayName: string
       [<JsonPropertyName("mediaType")>]
       MediaType: string
       [<JsonPropertyName("size")>]
@@ -330,6 +369,9 @@ module WsRequestType =
     let Conversations = "conversations"
     [<Literal>]
     let Switch = "switch"
+    /// Client's reply to a server permission prompt (payload: PermissionResponseDto).
+    [<Literal>]
+    let PermissionResponse = "permission_response"
 
 /// Known response type constants
 [<RequireQualifiedAccess>]
@@ -348,3 +390,6 @@ module WsResponseType =
     let Error = "error"
     [<Literal>]
     let Event = "event"
+    /// Server asks the user to approve a resource access (payload: PermissionRequestDto).
+    [<Literal>]
+    let PermissionRequest = "permission_request"
