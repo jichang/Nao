@@ -40,8 +40,8 @@ module ExecutionEnvironment =
             try
                 return! env.ExecuteAsync linkedCtx agent input
             with
-            | :? OperationCanceledException ->
-                return Error LimitExceeded.Duration
             | :? TaskCanceledException ->
+                return Error LimitExceeded.Duration
+            | :? OperationCanceledException ->
                 return Error LimitExceeded.Duration
         }

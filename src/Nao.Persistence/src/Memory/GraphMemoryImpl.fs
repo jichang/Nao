@@ -58,7 +58,7 @@ type InMemoryGraphMemory(?relationExtractor: string -> Task<GraphRelation list>)
             task { return () }
 
         member _.QueryAsync(query: GraphQuery) =
-            task {
+            let result =
                 match query with
                 | GraphQuery.ByEntity entity ->
                     let rels =
@@ -74,18 +74,18 @@ type InMemoryGraphMemory(?relationExtractor: string -> Task<GraphRelation list>)
                             match nodes.TryGetValue(id) with
                             | true, n -> Some n
                             | _ -> None)
-                    return { Nodes = foundNodes; Relations = rels; PathLength = None }
+                    { Nodes = foundNodes; Relations = rels; PathLength = None }
 
                 | GraphQuery.ByPredicate predicate ->
                     let rels =
                         getRelations ()
                         |> List.filter (fun r -> r.Predicate = predicate)
-                    return { Nodes = []; Relations = rels; PathLength = None }
+                    { Nodes = []; Relations = rels; PathLength = None }
 
                 | GraphQuery.Path (from', to', maxHops) ->
                     let paths = findPaths from' to' maxHops
                     match paths with
-                    | [] -> return { Nodes = []; Relations = []; PathLength = None }
+                    | [] -> { Nodes = []; Relations = []; PathLength = None }
                     | shortest :: _ ->
                         let pathNodes =
                             shortest
@@ -93,7 +93,7 @@ type InMemoryGraphMemory(?relationExtractor: string -> Task<GraphRelation list>)
                                 match nodes.TryGetValue(id) with
                                 | true, n -> Some n
                                 | _ -> None)
-                        return { Nodes = pathNodes; Relations = []; PathLength = Some (shortest.Length - 1) }
+                        { Nodes = pathNodes; Relations = []; PathLength = Some (shortest.Length - 1) }
 
                 | GraphQuery.ByProperties filters ->
                     let matching =
@@ -104,7 +104,7 @@ type InMemoryGraphMemory(?relationExtractor: string -> Task<GraphRelation list>)
                                 | Some pv -> pv.Contains(v, StringComparison.OrdinalIgnoreCase)
                                 | None -> false))
                         |> Seq.toList
-                    return { Nodes = matching; Relations = []; PathLength = None }
+                    { Nodes = matching; Relations = []; PathLength = None }
 
                 | GraphQuery.Neighborhood (entity, hops) ->
                     let rec collect (frontier: Set<string>) (visited: Set<string>) (depth: int) =
@@ -129,8 +129,8 @@ type InMemoryGraphMemory(?relationExtractor: string -> Task<GraphRelation list>)
                         getRelations ()
                         |> List.filter (fun r ->
                             neighborhood.Contains r.Subject && neighborhood.Contains r.Object)
-                    return { Nodes = foundNodes; Relations = rels; PathLength = None }
-            }
+                    { Nodes = foundNodes; Relations = rels; PathLength = None }
+            Task.FromResult result
 
         member _.RemoveNodeAsync(nodeId: string) =
             nodes.TryRemove(nodeId) |> ignore

@@ -260,7 +260,7 @@ module SettingsView =
                 TextBox.create [
                     TextBox.text s.WorkspacePath
                     TextBox.width 350.0
-                    TextBox.watermark t.WorkspaceWatermark
+                    TextBox.placeHolderText t.WorkspaceWatermark
                     TextBox.onTextChanged (fun v ->
                         dispatch (SettingsChanged { s with WorkspacePath = v }))
                 ]
@@ -301,7 +301,7 @@ module SettingsView =
                     TextBox.minHeight 70.0
                     TextBox.acceptsReturn true
                     TextBox.textWrapping TextWrapping.Wrap
-                    TextBox.watermark "example.com"
+                    TextBox.placeHolderText "example.com"
                     TextBox.onTextChanged (fun v ->
                         change (fun s -> { s with Permissions = { s.Permissions with AllowedWebDomains = linesToList v } }))
                 ]
@@ -313,7 +313,7 @@ module SettingsView =
                     TextBox.minHeight 70.0
                     TextBox.acceptsReturn true
                     TextBox.textWrapping TextWrapping.Wrap
-                    TextBox.watermark "/home/me/project"
+                    TextBox.placeHolderText "/home/me/project"
                     TextBox.onTextChanged (fun v ->
                         change (fun s -> { s with Permissions = { s.Permissions with AllowedFilePaths = linesToList v } }))
                 ]

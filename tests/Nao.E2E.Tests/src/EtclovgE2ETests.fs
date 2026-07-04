@@ -806,7 +806,7 @@ type EtclovgFullIntegrationTests() =
         // Complete E2E: Orchestrator agent routed through ETCLOVG harness
         let provider = EtclovgMockProvider()
         let tools = [ EtclovgDemoTools.stockPrice; EtclovgDemoTools.searchDocs ]
-        let orchestrator = Orchestrator.create (provider :> ILlmProvider) tools [] :> IAgent
+        let orchestrator = Orchestrator.create (provider :> ILlmProvider) tools []
         let agentId = orchestrator.Id
 
         let tracer = InMemory.tracer ()

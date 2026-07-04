@@ -143,7 +143,7 @@ type ResilienceTests() =
                 attempts <- attempts + 1
                 if attempts < 3 then failwith "transient"
                 return "success"
-            } :> Task<string>
+            }
         let result = (Resilience.executeAsync config None execute "x").Result
         match result with
         | Ok v -> Assert.AreEqual("success", v)

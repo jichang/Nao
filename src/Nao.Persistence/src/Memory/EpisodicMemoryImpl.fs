@@ -35,6 +35,22 @@ type InMemoryEpisodicMemory(?embeddingProvider: IEmbeddingProvider) =
             }
 
         member _.QueryAsync(query: EpisodeQuery) =
+            let collectRelated episodeId maxHops =
+                let rec collect (ids: Set<string>) (visited: Set<string>) (depth: int) =
+                    if depth >= maxHops then visited
+                    else
+                        let neighbors =
+                            ids
+                            |> Set.toList
+                            |> List.collect (fun id ->
+                                match episodes.TryGetValue(id) with
+                                | true, ep -> ep.LinkedEpisodes
+                                | _ -> [])
+                            |> List.filter (fun id -> not (visited.Contains id))
+                            |> Set.ofList
+                        collect neighbors (Set.union visited neighbors) (depth + 1)
+                collect (Set.singleton episodeId) (Set.singleton episodeId) 0
+
             task {
                 match query with
                 | EpisodeQuery.BySimilarity (description, topK) ->
@@ -76,20 +92,7 @@ type InMemoryEpisodicMemory(?embeddingProvider: IEmbeddingProvider) =
                         |> Seq.toList
 
                 | EpisodeQuery.Related (episodeId, maxHops) ->
-                    let rec collect (ids: Set<string>) (visited: Set<string>) (depth: int) =
-                        if depth >= maxHops then visited
-                        else
-                            let neighbors =
-                                ids
-                                |> Set.toList
-                                |> List.collect (fun id ->
-                                    match episodes.TryGetValue(id) with
-                                    | true, ep -> ep.LinkedEpisodes
-                                    | _ -> [])
-                                |> List.filter (fun id -> not (visited.Contains id))
-                                |> Set.ofList
-                            collect neighbors (Set.union visited neighbors) (depth + 1)
-                    let related = collect (Set.singleton episodeId) (Set.singleton episodeId) 0
+                    let related = collectRelated episodeId maxHops
                     return
                         related
                         |> Set.toList
@@ -117,18 +120,19 @@ type InMemoryEpisodicMemory(?embeddingProvider: IEmbeddingProvider) =
             task { return () }
 
         member _.GetChainAsync(episodeId: string) =
+            let rec walk (id: string) (visited: Set<string>) (acc: Episode list) =
+                if visited.Contains id then acc
+                else
+                    match episodes.TryGetValue(id) with
+                    | true, ep ->
+                        let newVisited = visited.Add id
+                        let mutable result = ep :: acc
+                        for linkedId in ep.LinkedEpisodes do
+                            result <- walk linkedId newVisited result
+                        result
+                    | _ -> acc
+
             task {
-                let rec walk (id: string) (visited: Set<string>) (acc: Episode list) =
-                    if visited.Contains id then acc
-                    else
-                        match episodes.TryGetValue(id) with
-                        | true, ep ->
-                            let newVisited = visited.Add id
-                            let mutable result = ep :: acc
-                            for linkedId in ep.LinkedEpisodes do
-                                result <- walk linkedId newVisited result
-                            result
-                        | _ -> acc
                 return walk episodeId Set.empty [] |> List.sortBy (fun ep -> ep.Timestamp)
             }
 

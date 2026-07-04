@@ -1,6 +1,7 @@
 <Project>
   <PropertyGroup>
     <NoWarn>$(NoWarn);NU1510</NoWarn>
+    <FSharpCoreImplicitPackageVersion>10.1.301</FSharpCoreImplicitPackageVersion>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <RepositoryUrl>https://github.com/jichang/Nao</RepositoryUrl>
     <FsDocsLicenseLink>https://github.com/jichang/Nao/blob/main/LICENSE</FsDocsLicenseLink>

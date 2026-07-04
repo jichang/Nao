@@ -333,7 +333,7 @@ module BuilderView =
                         ]
                         TextBox.create [
                             TextBox.text reqValue
-                            TextBox.watermark watermark
+                            TextBox.placeHolderText watermark
                             TextBox.acceptsReturn true
                             TextBox.minHeight 70.0
                             TextBox.textWrapping TextWrapping.Wrap

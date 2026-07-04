@@ -49,10 +49,10 @@ The framework implements the **ETCLOVG** taxonomy from "Agent Harness Engineerin
 ```
 Nao.slnx
 ├── src/
-│   ├── Nao.Core/                # Core types: Message, Role, ContentMeta, ILlmProvider
-│   ├── Nao.Agents/              # Agent framework (ETCLOVG architecture)
+│   ├── Nao.Agents/              # Agent framework (core types + ETCLOVG architecture)
 │   │   ├── Shared/              # Cross-layer types (RetryPolicy)
-│   │   ├── Core/                # IAgent, AgentId, AgentState, Tool (verify/revert), AgentAction
+│   │   ├── Llm/                 # Message, Role, ContentMeta, ILlmProvider, completion types
+│   │   ├── Core/                # IAgent, AgentId, Tool (verify/revert), AgentAction
 │   │   ├── Prompts/             # Prompt, PromptExample, OutputFormat
 │   │   ├── Messaging/           # AgentMessage for inter-agent communication
 │   │   ├── Logging/             # LogLevel, LogEntry, AgentLogger
@@ -66,23 +66,27 @@ Nao.slnx
 │   │   ├── Governance/          # [G] Permission, Constitution, AuditLog, PolicyEngine
 │   │   └── Harness/             # EtclovgHarness (integrates all layers)
 │   ├── Nao.Eval/               # Evaluation framework: test cases, evaluators, LLM judge
+│   ├── Nao.Persistence/         # Persistence and memory store implementations
 │   ├── Nao.Loader/             # Workspace loader: JSON defs, multi-mode execution, plugins
 │   ├── Nao.Providers/          # LLM provider implementations
 │   ├── Nao.Runtime.Orleans/    # Distributed runtime (grains, workspaces, groups)
 │   │   ├── Workspace/           # WorkspaceRegistry (multi-tenant workspace isolation)
 │   │   └── Grains/              # SessionGrain, SessionDirectory, GroupDirectory
+│   ├── Nao.Runtime.Orleans.Codegen/ # Orleans source-generation support
 │   ├── Nao.Documents/          # Unified document model + format converters (NuGet-backed)
-│   └── Nao.Assistant/          # Avalonia.FuncUI desktop chat app (embedded server + UI)
-│       ├── Domain/              # Contracts, AppSettings (theme/language persistence)
-│       ├── Server/              # Embedded ASP.NET Core + Orleans host, WS streaming
-│       ├── Client/              # NaoClient WebSocket client
-│       ├── Components/          # Theme, Localization, reusable FuncUI controls
-│       └── Views/               # Shell, SessionView, SettingsView, BuilderView
+│   ├── Nao.Server/             # ASP.NET Core + Orleans server, session API, tools, agents
+│   ├── Nao.Assistant/          # Avalonia.FuncUI desktop chat app (embedded server + UI)
+│   │   ├── Domain/              # Contracts, AppSettings (theme/language persistence)
+│   │   ├── Server/              # Embedded ASP.NET Core + Orleans host, WS streaming
+│   │   ├── Client/              # NaoClient WebSocket client
+│   │   ├── Components/          # Theme, Localization, reusable FuncUI controls
+│   │   └── Views/               # Shell, SessionView, SettingsView, BuilderView
+│   └── Nao.Assistant.Evaluation/ # Standard app that evaluates Nao.Server document workflows
 └── tests/
-    ├── Nao.Core.Tests/
     ├── Nao.Agents.Tests/        # Unit tests for all ETCLOVG layers
     ├── Nao.Eval.Tests/
     ├── Nao.Loader.Tests/
+    ├── Nao.Persistence.Tests/
     ├── Nao.Providers.Tests/
     ├── Nao.Runtime.Orleans.Tests/
     ├── Nao.Documents.Tests/
@@ -105,10 +109,14 @@ dotnet tool restore
 dotnet paket install
 
 # Build
-dotnet build
+dotnet build Nao.slnx
 
 # Run tests
-dotnet test
+dotnet test Nao.slnx
+
+# Run the server evaluation app (requires a local Ollama model by default)
+./scripts/start-local-llm.sh qwen2.5:3b
+dotnet run --project src/Nao.Assistant.Evaluation/Nao.Assistant.Evaluation.fsproj
 ```
 
 ## Architecture

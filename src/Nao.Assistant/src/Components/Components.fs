@@ -40,7 +40,7 @@ module Components =
         : IView =
         TextBox.create [
             TextBox.text value
-            TextBox.watermark placeholder
+            TextBox.placeHolderText placeholder
             TextBox.acceptsReturn true
             TextBox.textWrapping TextWrapping.Wrap
             TextBox.minHeight minHeight

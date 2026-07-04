@@ -21,7 +21,7 @@ module ProviderFactory =
         | LlamaCpp config ->
             new OpenAICompatibleProvider("llama.cpp", config.BaseUrl, config.Model, None) :> ILlmProvider
         | Ollama config ->
-            OllamaProvider(config) :> ILlmProvider
+            new OllamaProvider(config) :> ILlmProvider
         | Anthropic _config ->
             { new ILlmProvider with
                 member _.Name = "Anthropic"

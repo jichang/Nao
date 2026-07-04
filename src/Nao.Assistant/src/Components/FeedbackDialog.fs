@@ -66,7 +66,7 @@ module FeedbackDialog =
                                 ]
                                 TextBox.create [
                                     TextBox.text props.Comment
-                                    TextBox.watermark t.FeedbackCommentPlaceholder
+                                    TextBox.placeHolderText t.FeedbackCommentPlaceholder
                                     TextBox.acceptsReturn true
                                     TextBox.textWrapping TextWrapping.Wrap
                                     TextBox.height 96.0
