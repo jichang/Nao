@@ -2,6 +2,7 @@ namespace Nao.Agents.Tests
 
 open Microsoft.VisualStudio.TestTools.UnitTesting
 open Nao.Agents
+open Nao.Persistence
 
 [<TestClass>]
 type SemanticMemoryTests() =

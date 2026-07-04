@@ -3,7 +3,7 @@ namespace Nao.Agents
 open System
 open System.Diagnostics
 open System.Threading.Tasks
-open Nao.Core
+open Nao.Agents
 
 /// Pluggable observability + governance services that a host (Orleans silo, ASP.NET
 /// app, test fixture, ...) injects into the harness. Each capability is optional so a
@@ -69,8 +69,10 @@ type EtclovgConfig =
       Constitution: Constitution option
       AuditLog: IAuditLog option
       PolicyEngine: PolicyEngine option
-      /// Event sink for all events
-      EventSink: IAgentEventSink }
+      /// Durable event bus turn-progress signals are published to
+      Bus: IEventBus
+      /// Scope identifying the turn whose progress signals are published (ActionId = turnId)
+      Scope: EventScope }
 
     static member Default =
         { Execution = SandboxConfig.Default
@@ -88,7 +90,8 @@ type EtclovgConfig =
           Constitution = None
           AuditLog = None
           PolicyEngine = None
-          EventSink = AgentEventSink.none }
+          Bus = EventBus.none
+          Scope = EventScope.Empty }
 
     static member WithObservability (tracer: ITracer) (metrics: IMetricsCollector) =
         { EtclovgConfig.Default with Tracer = Some tracer; Metrics = Some metrics }
@@ -145,7 +148,6 @@ module EtclovgHarness =
     let runAsync (config: EtclovgConfig) (agent: IAgent) (input: string) : Task<EtclovgResult> =
         task {
             let execCtx = ExecutionContext.Create config.Execution
-            let emit = config.EventSink.Emit
             let mutable trace = Verification.startTrace agent.Id input
             let mutable policyViolations = []
             let mutable constitutionViolations = []
@@ -189,7 +191,6 @@ module EtclovgHarness =
 
             match readiness with
             | ReadinessResult.NotReady reasons ->
-                emit (AgentEvent.Log (LogLevel.Warning, "harness", sprintf "Readiness check failed: %s" (reasons |> String.concat "; "), Map.empty))
                 return failResult (HarnessError.NotReady reasons) execCtx.Usage trace policyViolations [] None 0
             | ReadinessResult.Ready ->
 
@@ -348,7 +349,7 @@ module EtclovgHarness =
                     tracer.EndSpan s SpanStatus.Ok
                 | _ -> ()
 
-                emit (AgentEvent.Completed response)
+                config.Bus.PublishAsync(NaoEvent.TurnProgress(config.Scope, ProgressSignal.AnswerProduced response)) |> ignore
 
                 return
                     { Response = Some response

@@ -3,6 +3,7 @@ namespace Nao.Agents.Tests
 open System
 open Microsoft.VisualStudio.TestTools.UnitTesting
 open Nao.Agents
+open Nao.Persistence
 
 [<TestClass>]
 type MemoryStoreTests() =

@@ -6,6 +6,7 @@ open System.Threading
 open System.Threading.Tasks
 open Orleans
 open Orleans.Runtime
+open Nao.Runtime.Orleans
 
 /// Grain that owns and runs a single async task. Key = "userId/sessionId/taskId".
 ///
@@ -22,6 +23,7 @@ type SessionTaskGrain
     (
         [<PersistentState("taskState", "sessionStore")>] state: IPersistentState<SessionTaskState>,
         executors: IEnumerable<ITaskExecutor>,
+        taskStore: ITaskStore,
         grainFactory: IGrainFactory
     ) =
     inherit Grain()
@@ -51,6 +53,41 @@ type SessionTaskGrain
         try (parent().UpdateTaskStatusAsync(toRef())) |> ignore
         with _ -> ()
 
+    /// Externalized, grain-independent snapshot for the on-disk task store.
+    let toRecord () : TaskRecord =
+        { TaskId = state.State.TaskId
+          Sequence = 0
+          ParentKey = state.State.ParentKey
+          Kind = state.State.Kind
+          Title = state.State.Title
+          ParamsJson = state.State.ParamsJson
+          Status = state.State.Status
+          Progress = state.State.Progress
+          Message = state.State.Message
+          SubSessionKey = state.State.SubSessionKey
+          ResultSummary = state.State.ResultSummary
+          ResultFileIds = List.ofSeq state.State.ResultFileIds
+          Error = state.State.Error
+          TurnId = state.State.TurnId
+          CreatedAt = state.State.CreatedAt
+          StartedAt = state.State.StartedAt
+          CompletedAt = state.State.CompletedAt
+          CancelRequested = state.State.CancelRequested }
+
+    /// Fire-and-forget mirror of the task's authoritative state to the on-disk store, keyed by
+    /// the parent session so it lands under sessions/<parentKey>/tasks/. Best-effort: tracking
+    /// must never block or fail the task itself.
+    let persistRecord () =
+        try
+            if not (String.IsNullOrEmpty state.State.ParentKey) then
+                taskStore.SaveAsync state.State.ParentKey (toRecord ()) |> ignore
+        with _ -> ()
+
+    /// Push the current snapshot to both the parent grain and the on-disk task store.
+    let publish () =
+        pushToParent ()
+        persistRecord ()
+
     /// Execute the task body once. Safe to call repeatedly (guarded by `inFlight`).
     let runCore () : Task =
         task {
@@ -61,12 +98,12 @@ type SessionTaskGrain
                 if state.State.StartedAt = DateTimeOffset.MinValue then
                     state.State.StartedAt <- DateTimeOffset.UtcNow
                 do! state.WriteStateAsync()
-                pushToParent ()
+                publish ()
 
                 let report (p: float) (m: string) =
                     state.State.Progress <- max 0.0 (min 1.0 p)
                     state.State.Message <- m
-                    pushToParent ()
+                    publish ()
 
                 try
                     if state.State.CancelRequested then
@@ -99,7 +136,7 @@ type SessionTaskGrain
 
                 state.State.CompletedAt <- DateTimeOffset.UtcNow
                 do! state.WriteStateAsync()
-                pushToParent ()
+                publish ()
             finally
                 inFlight <- false
         }
@@ -130,6 +167,7 @@ type SessionTaskGrain
                 do! state.WriteStateAsync()
                 // Dispatch the work without awaiting so the caller returns immediately.
                 grainFactory.GetGrain<ISessionTaskGrain>(key).RunAsync() |> ignore
+                publish ()
                 return toRef ()
             }
 
@@ -143,5 +181,5 @@ type SessionTaskGrain
             state.State.CancelRequested <- true
             if state.State.Status = "pending" then
                 state.State.Status <- "cancelled"
-            pushToParent ()
+            publish ()
             Task.CompletedTask

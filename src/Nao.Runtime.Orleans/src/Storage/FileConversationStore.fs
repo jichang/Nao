@@ -9,162 +9,130 @@ open System.Threading.Tasks
 /// File-based conversation store.
 /// Layout:
 ///   {baseDir}/
-///     {sessionId}/
+///     {sessionDir}/
+///       conversations.json                  — index: every conversation's metadata
 ///       conversations/
-///         {conversationName}.jsonl — one JSON object per line (append-friendly)
-///         {conversationName}.meta.json — conversation-level metadata
+///         {conversationId}/
+///           messages.json                   — the full message history (JSON array)
+///           meta.json                       — conversation-level metadata
 ///
-/// Conversation names may be hierarchical, using '/' to denote a parent → child
-/// relationship (a child conversation is one started by another, e.g. a sub-agent
-/// delegation). Each level nests under its own `conversations/` folder, so a child
-/// "parent/child" is stored at:
-///   {sessionId}/conversations/parent/conversations/child.jsonl
-/// alongside the parent's {sessionId}/conversations/parent.jsonl.
+/// A conversation's id is its (possibly hierarchical) name flattened to a single safe
+/// folder name, so sub-agent delegations — named "parent/child-turn-n" — each get their
+/// own folder listed in the index rather than nesting physically. The full name is kept in
+/// each meta's `ConversationName`.
 ///
-/// {baseDir} is the shared `sessions/` root, so each session's conversations nest
-/// alongside its files, observability and feedback under sessions/<sessionId>/.
-/// Session IDs containing '/' are flattened to '_' for filesystem safety; the mapping
-/// matches Nao.Assistant's SessionFiles so all four data folders share one parent.
+/// {baseDir} is the shared `sessions/` root and paths resolve through `SessionPaths.sessionDir`,
+/// so a session's conversations nest alongside its tasks, files, observability and feedback
+/// under one folder, and a task-spawned sub-session's conversations nest beneath that task.
 type FileConversationStore(baseDir: string) =
 
     let jsonOptions =
-        let opts = JsonSerializerOptions(WriteIndented = false)
+        let opts = JsonSerializerOptions(WriteIndented = true)
         opts.DefaultIgnoreCondition <- JsonIgnoreCondition.WhenWritingNull
         opts
 
-    let sanitize (id: string) =
-        id |> String.map (fun c -> if Char.IsLetterOrDigit c || c = '-' || c = '_' then c else '_')
+    let gate = obj ()
 
-    let sessionDir (sessionId: string) =
-        Path.Combine(baseDir, sanitize sessionId, "conversations")
+    let sessionDir (sessionId: string) = SessionPaths.sessionDir baseDir sessionId
+    let conversationsDir (sessionId: string) = Path.Combine(sessionDir sessionId, "conversations")
+    let indexPath (sessionId: string) = Path.Combine(sessionDir sessionId, "conversations.json")
 
-    /// Split a (possibly hierarchical) conversation name into sanitized path segments.
-    let convSegments (conversationName: string) =
-        let segs =
-            (if isNull conversationName then "" else conversationName).Split('/')
-            |> Array.filter (fun s -> not (String.IsNullOrWhiteSpace s))
-            |> Array.map sanitize
-        if segs.Length = 0 then [| "default" |] else segs
+    /// Flatten a (possibly hierarchical) conversation name to a single folder id.
+    let conversationId (conversationName: string) =
+        let id = SessionPaths.sanitizeSegment conversationName
+        if String.IsNullOrWhiteSpace id then "default" else id
 
-    /// Build the on-disk path for a conversation, interleaving a `conversations/` folder
-    /// between each hierarchy level; the final segment carries the given extension.
-    let convPath (sessionId: string) (conversationName: string) (ext: string) =
-        let segs = convSegments conversationName
-        let parts = ResizeArray<string>()
-        parts.Add(sessionDir sessionId)
-        for i in 0 .. segs.Length - 1 do
-            if i > 0 then parts.Add("conversations")
-            parts.Add(if i = segs.Length - 1 then segs.[i] + ext else segs.[i])
-        Path.Combine(parts.ToArray())
+    let conversationDir (sessionId: string) (conversationName: string) =
+        Path.Combine(conversationsDir sessionId, conversationId conversationName)
 
-    let conversationFile (sessionId: string) (conversationName: string) =
-        convPath sessionId conversationName ".jsonl"
+    let messagesFile (sessionId: string) (conversationName: string) =
+        Path.Combine(conversationDir sessionId conversationName, "messages.json")
 
     let metaFile (sessionId: string) (conversationName: string) =
-        convPath sessionId conversationName ".meta.json"
+        Path.Combine(conversationDir sessionId conversationName, "meta.json")
 
-    /// The folder that holds a conversation's own child conversations (if any).
-    let childContainerDir (sessionId: string) (conversationName: string) =
-        let file = conversationFile sessionId conversationName
-        let segs = convSegments conversationName
-        Path.Combine(Path.GetDirectoryName file, segs.[segs.Length - 1])
+    let readMessages (sessionId: string) (conversationName: string) : PersistedMessage array =
+        let path = messagesFile sessionId conversationName
+        if File.Exists path then
+            try
+                match JsonSerializer.Deserialize<PersistedMessage array>(File.ReadAllText path, jsonOptions) with
+                | null -> [||]
+                | arr -> arr
+            with _ -> [||]
+        else [||]
 
-    let ensureDir (sessionId: string) (conversationName: string) =
-        let dir = Path.GetDirectoryName(conversationFile sessionId conversationName)
-        if not (Directory.Exists dir) then
-            Directory.CreateDirectory(dir) |> ignore
-        dir
-
-    let serializeMessage (msg: PersistedMessage) =
-        JsonSerializer.Serialize(msg, jsonOptions)
-
-    let deserializeMessage (line: string) =
-        JsonSerializer.Deserialize<PersistedMessage>(line, jsonOptions)
-
-    let writeMeta (sessionId: string) (conversationName: string) (meta: ConversationMeta) =
-        let path = metaFile sessionId conversationName
-        let json = JsonSerializer.Serialize(meta, jsonOptions)
-        File.WriteAllText(path, json)
+    let writeMessages (sessionId: string) (conversationName: string) (messages: PersistedMessage array) =
+        Directory.CreateDirectory(conversationDir sessionId conversationName) |> ignore
+        File.WriteAllText(messagesFile sessionId conversationName, JsonSerializer.Serialize(messages, jsonOptions))
 
     let readMeta (path: string) =
-        try
-            let json = File.ReadAllText(path)
-            Some (JsonSerializer.Deserialize<ConversationMeta>(json, jsonOptions))
+        try Some(JsonSerializer.Deserialize<ConversationMeta>(File.ReadAllText path, jsonOptions))
         with _ -> None
+
+    /// Rebuild the session-level conversations.json index from the per-conversation metas.
+    let rebuildIndex (sessionId: string) =
+        let dir = conversationsDir sessionId
+        let metas =
+            if Directory.Exists dir then
+                Directory.GetDirectories(dir)
+                |> Array.choose (fun d ->
+                    let m = Path.Combine(d, "meta.json")
+                    if File.Exists m then readMeta m else None)
+                |> Array.sortBy (fun m -> m.CreatedAt)
+            else [||]
+        Directory.CreateDirectory(sessionDir sessionId) |> ignore
+        File.WriteAllText(indexPath sessionId, JsonSerializer.Serialize(metas, jsonOptions))
+
+    /// Write a conversation's meta.json (preserving its original CreatedAt) and refresh the index.
+    let writeMeta (sessionId: string) (conversationName: string) (messageCount: int) =
+        let metaPath = metaFile sessionId conversationName
+        let existing = if File.Exists metaPath then readMeta metaPath else None
+        let now = DateTimeOffset.UtcNow
+        let meta =
+            match existing with
+            | Some m -> { m with LastMessageAt = now; MessageCount = messageCount }
+            | None ->
+                { SessionId = sessionId
+                  ConversationName = conversationName
+                  AgentName = ""
+                  CreatedAt = now
+                  LastMessageAt = now
+                  MessageCount = messageCount }
+        Directory.CreateDirectory(conversationDir sessionId conversationName) |> ignore
+        File.WriteAllText(metaPath, JsonSerializer.Serialize(meta, jsonOptions))
+        rebuildIndex sessionId
 
     interface IConversationStore with
         member _.AppendAsync (sessionId: string) (conversationName: string) (messages: PersistedMessage array) =
             task {
                 if messages.Length = 0 then return ()
                 else
-                    ensureDir sessionId conversationName |> ignore
-                    let path = conversationFile sessionId conversationName
-                    let lines =
-                        messages
-                        |> Array.map serializeMessage
-                    do! File.AppendAllLinesAsync(path, lines)
-
-                    // Update metadata
-                    let existing = metaFile sessionId conversationName |> readMeta
-                    let now = DateTimeOffset.UtcNow
-                    let lineCount =
-                        if File.Exists path then File.ReadAllLines(path).Length else messages.Length
-                    let meta =
-                        match existing with
-                        | Some m ->
-                            { m with
-                                LastMessageAt = now
-                                MessageCount = lineCount }
-                        | None ->
-                            { SessionId = sessionId
-                              ConversationName = conversationName
-                              AgentName = ""
-                              CreatedAt = now
-                              LastMessageAt = now
-                              MessageCount = lineCount }
-                    writeMeta sessionId conversationName meta
+                    lock gate (fun () ->
+                        let merged = Array.append (readMessages sessionId conversationName) messages
+                        writeMessages sessionId conversationName merged
+                        writeMeta sessionId conversationName merged.Length)
             }
 
         member _.SaveAsync (sessionId: string) (conversationName: string) (messages: PersistedMessage array) =
             task {
-                ensureDir sessionId conversationName |> ignore
-                let path = conversationFile sessionId conversationName
-                let lines = messages |> Array.map serializeMessage
-                do! File.WriteAllLinesAsync(path, lines)
-
-                let now = DateTimeOffset.UtcNow
-                let meta =
-                    { SessionId = sessionId
-                      ConversationName = conversationName
-                      AgentName = ""
-                      CreatedAt = now
-                      LastMessageAt = now
-                      MessageCount = messages.Length }
-                writeMeta sessionId conversationName meta
+                lock gate (fun () ->
+                    writeMessages sessionId conversationName messages
+                    writeMeta sessionId conversationName messages.Length)
             }
 
         member _.LoadAsync (sessionId: string) (conversationName: string) =
-            task {
-                let path = conversationFile sessionId conversationName
-                if File.Exists path then
-                    let! lines = File.ReadAllLinesAsync(path)
-                    return
-                        lines
-                        |> Array.filter (fun l -> not (String.IsNullOrWhiteSpace l))
-                        |> Array.map deserializeMessage
-                else
-                    return Array.empty
-            }
+            task { return readMessages sessionId conversationName }
 
         member _.ListConversationsAsync(sessionId: string) =
             task {
-                let dir = sessionDir sessionId
-                if Directory.Exists dir then
-                    // Recurse so nested child conversations (sub-agent delegations) are listed
-                    // too; each meta carries its full hierarchical ConversationName.
+                let path = indexPath sessionId
+                if File.Exists path then
                     return
-                        Directory.GetFiles(dir, "*.meta.json", SearchOption.AllDirectories)
-                        |> Array.choose readMeta
+                        (try
+                            match JsonSerializer.Deserialize<ConversationMeta array>(File.ReadAllText path, jsonOptions) with
+                            | null -> [||]
+                            | arr -> arr
+                         with _ -> [||])
                 else
                     return Array.empty
             }
@@ -174,9 +142,11 @@ type FileConversationStore(baseDir: string) =
                 if Directory.Exists baseDir then
                     return
                         Directory.GetDirectories(baseDir)
-                        // Only sessions that actually hold a conversation; a folder may exist
-                        // for files/observability before a first message is ever sent.
-                        |> Array.filter (fun d -> Directory.Exists(Path.Combine(d, "conversations")))
+                        // Only top-level sessions that actually hold a conversation; a folder may
+                        // exist for files/observability before a first message is ever sent.
+                        |> Array.filter (fun d ->
+                            File.Exists(Path.Combine(d, "conversations.json"))
+                            || Directory.Exists(Path.Combine(d, "conversations")))
                         |> Array.map Path.GetFileName
                 else
                     return Array.empty
@@ -184,20 +154,16 @@ type FileConversationStore(baseDir: string) =
 
         member _.DeleteConversationAsync (sessionId: string) (conversationName: string) =
             task {
-                let path = conversationFile sessionId conversationName
-                if File.Exists path then File.Delete(path)
-                let meta = metaFile sessionId conversationName
-                if File.Exists meta then File.Delete(meta)
-                // Also remove any child conversations started by this one.
-                let children = childContainerDir sessionId conversationName
-                if Directory.Exists children then Directory.Delete(children, recursive = true)
+                lock gate (fun () ->
+                    let dir = conversationDir sessionId conversationName
+                    if Directory.Exists dir then Directory.Delete(dir, recursive = true)
+                    rebuildIndex sessionId)
             }
 
         member _.DeleteSessionAsync(sessionId: string) =
             task {
-                // Remove the entire session folder (conversations, files, observability and
-                // feedback) so deleting a session leaves nothing behind under sessions/<key>/.
-                let dir = Path.Combine(baseDir, sanitize sessionId)
-                if Directory.Exists dir then
-                    Directory.Delete(dir, recursive = true)
+                // Remove the entire session folder (conversations, tasks, files, observability
+                // and feedback) so deleting a session leaves nothing behind under sessions/<key>/.
+                let dir = sessionDir sessionId
+                if Directory.Exists dir then Directory.Delete(dir, recursive = true)
             }

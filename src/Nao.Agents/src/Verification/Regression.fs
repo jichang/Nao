@@ -42,30 +42,6 @@ type ITraceStore =
     /// Get all traces for an agent
     abstract member GetTracesAsync: AgentId -> limit: int -> Task<ExecutionTrace list>
 
-/// In-memory trace store for testing
-type InMemoryTraceStore() =
-    let traces = System.Collections.Concurrent.ConcurrentDictionary<Guid, ExecutionTrace>()
-
-    interface ITraceStore with
-        member _.SaveAsync(trace: ExecutionTrace) =
-            traces.[trace.Id] <- trace
-            Task.FromResult()
-
-        member _.GetBaselineAsync (agentId: AgentId) (_taskPattern: string) =
-            traces.Values
-            |> Seq.filter (fun t -> t.AgentId = agentId && t.Success)
-            |> Seq.sortByDescending (fun t -> t.StartedAt)
-            |> Seq.tryHead
-            |> Task.FromResult
-
-        member _.GetTracesAsync (agentId: AgentId) (limit: int) =
-            traces.Values
-            |> Seq.filter (fun t -> t.AgentId = agentId)
-            |> Seq.sortByDescending (fun t -> t.StartedAt)
-            |> Seq.truncate limit
-            |> Seq.toList
-            |> Task.FromResult
-
 module Regression =
 
     /// Compare current trace against a baseline to detect regressions

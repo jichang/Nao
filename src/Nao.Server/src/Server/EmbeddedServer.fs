@@ -19,13 +19,13 @@ open Microsoft.Extensions.Logging
 open Orleans
 open Orleans.Configuration
 open Orleans.Hosting
-open Nao.Core
+open Nao.Agents
 open Nao.Agents
 open Nao.Loader
 open Nao.Providers
 open Nao.Persistence
-open Nao.Feedback
-open Nao.Events
+open Nao.Agents
+open Nao.Agents
 open Nao.Runtime.Orleans
 open Nao.Runtime.Orleans.Grains
 
@@ -127,7 +127,7 @@ module EmbeddedServer =
                             |> Array.map (fun (display, stored) -> sprintf "\"%s\" as %s" display stored)
                             |> String.concat "; "
                         let note =
-                            sprintf "[The user attached %d file(s). Each is stored under a unique name — reference it by that stored name when using the read_file or convert_document tools: %s. The contents are not shown here — read a file only if you actually need its contents.]"
+                            sprintf "[The user attached %d file(s). Each is stored under a unique name — reference it by that stored name when using the convert_document tool: %s.]"
                                 attachments.Length mapping
                         if String.IsNullOrWhiteSpace text then note else text + "\n\n" + note
 
@@ -254,15 +254,6 @@ module EmbeddedServer =
     let mutable private host: WebApplication option = None
     let mutable private cts: CancellationTokenSource option = None
 
-    /// Mutable handler for tool confirmation requests.
-    /// The UI layer sets this to show a popup dialog.
-    let mutable confirmationHandler: ToolConfirmationRequest -> unit =
-        fun req -> req.Completion.TrySetResult(true) |> ignore
-
-    /// Set the handler that will be called when the orchestrator needs tool confirmation.
-    let setConfirmationHandler (handler: ToolConfirmationRequest -> unit) =
-        confirmationHandler <- handler
-
     // ─────────────────────────────────────────────────────────────────────────
     // Feedback / suggestion enhancement loop — shared, Orleans-independent core.
     //
@@ -282,70 +273,6 @@ module EmbeddedServer =
     let reloadWorkspaceAt (workspaceRoot: string) (registry: IWorkspaceRegistry) =
         registry.Register(WorkspaceId.defaultId, loadMergedWorkspace workspaceRoot)
 
-    /// Build a CANDIDATE workspace from all Confirmed suggestions: the proposed
-    /// improvement overlays are baked into a fresh copy of the workspace and
-    /// registered under the "candidate" key, so the user can start a test session
-    /// against the enhanced tools/agents without touching the live "default" one.
-    let buildCandidateAt (workspaceRoot: string) (feedback: FeedbackService) (registry: IWorkspaceRegistry) =
-        task {
-            let! confirmed = feedback.GetSuggestionsByStatusAsync SuggestionStatus.Confirmed
-            let anns = confirmed |> List.choose (fun s -> s.ProposedAnnotation)
-            let toolAnns = anns |> List.filter (fun a -> a.Kind = AnnotationKind.Tool)
-            let agentAnns = anns |> List.filter (fun a -> a.Kind = AnnotationKind.Agent)
-            let workspace = WorkspaceLoader.loadWorkspace workspaceRoot
-            let mergedTools = workspace.Tools @ AssistantTools.allTools
-            let candidate =
-                { workspace with
-                    Tools = Annotations.applyToolAnnotations toolAnns mergedTools
-                    AgentDefs = workspace.AgentDefs |> List.map (Annotations.applyAgentAnnotations agentAnns) }
-            registry.Register(WorkspaceId.create "candidate", candidate)
-            return confirmed
-        }
-
-    /// Upgrade the live system from all Confirmed suggestions: bake each improvement
-    /// into the canonical workspace definition (rewriting the JSON file when the
-    /// target is JSON-sourced, otherwise persisting a durable live annotation as a
-    /// fallback), mark the suggestion Applied, reload "default", and drop the
-    /// candidate. This is the irreversible "make it permanent" step.
-    let upgradeCandidateAt (workspaceRoot: string) (feedback: FeedbackService) (registry: IWorkspaceRegistry) =
-        task {
-            let! confirmed = feedback.GetSuggestionsByStatusAsync SuggestionStatus.Confirmed
-            let live = registry.TryGet WorkspaceId.defaultId
-            let results = ResizeArray<{| target: string; kind: string; persisted: string; detail: string |}>()
-            for s in confirmed do
-                match s.ProposedAnnotation with
-                | None -> ()
-                | Some ann ->
-                    let prov =
-                        match ann.Provenance with
-                        | Some p -> Some p
-                        | None ->
-                            match s.Kind, live with
-                            | AnnotationKind.Agent, Some w ->
-                                w.AgentDefs |> List.tryFind (fun d -> d.Name = s.TargetName) |> Option.bind (fun d -> d.Provenance)
-                            | AnnotationKind.Tool, Some w ->
-                                w.ToolDefs |> List.tryFind (fun d -> d.Name = s.TargetName) |> Option.bind (fun d -> d.Provenance)
-                            | _ -> None
-                    let rewrite =
-                        match s.Kind with
-                        | AnnotationKind.Tool -> Annotations.rewriteToolDefinition prov [ ann ]
-                        | AnnotationKind.Agent -> Annotations.rewriteAgentDefinition prov [ ann ]
-                    let kindLabel = match s.Kind with AnnotationKind.Tool -> "tool" | AnnotationKind.Agent -> "agent"
-                    match rewrite with
-                    | Ok path ->
-                        let! _ = feedback.MarkSuggestionAppliedAsync s.Id
-                        results.Add({| target = s.TargetName; kind = kindLabel; persisted = "file"; detail = path |})
-                    | Error e ->
-                        // Fallback: persist as a live annotation overlay so the
-                        // improvement still sticks even without a JSON source file.
-                        let! _ = feedback.AddAnnotationAsync ann
-                        let! _ = feedback.MarkSuggestionAppliedAsync s.Id
-                        results.Add({| target = s.TargetName; kind = kindLabel; persisted = "annotation"; detail = e |})
-            reloadWorkspaceAt workspaceRoot registry
-            registry.Remove(WorkspaceId.create "candidate") |> ignore
-            return List.ofSeq results
-        }
-
     /// Persist a user-supplied tool/agent JSON definition into the workspace and
     /// reload so it becomes resolvable. Returns the written file path.
     let registerDefinitionAt (workspaceRoot: string) (subdir: string) (req: RegisterDefinitionRequest) (registry: IWorkspaceRegistry) =
@@ -361,15 +288,6 @@ module EmbeddedServer =
             reloadWorkspaceAt workspaceRoot registry
             Ok path
 
-    let private parseKind (s: string) : AnnotationKind option =
-        match (s |> Option.ofObj |> Option.defaultValue "").Trim().ToLowerInvariant() with
-        | "tool" -> Some AnnotationKind.Tool
-        | "agent" -> Some AnnotationKind.Agent
-        | _ -> None
-
-    let private strOpt (s: string) = if String.IsNullOrWhiteSpace s then None else Some s
-    let private jsonResult (value: 'a) = Results.Content(FeedbackJson.serializeIndented value, "application/json")
-
     /// Register the services the enhancement endpoints depend on. Used by the
     /// standalone test host; the production `start` registers richer variants.
     let registerEnhancementServices (services: IServiceCollection) (workspaceRoot: string) (feedbackDir: string) =
@@ -377,104 +295,12 @@ module EmbeddedServer =
             let registry = WorkspaceRegistry()
             registry.Register(WorkspaceId.defaultId, loadMergedWorkspace workspaceRoot)
             registry :> IWorkspaceRegistry) |> ignore
-        services.AddSingleton<FeedbackService>(fun _ -> FeedbackService.File feedbackDir) |> ignore
+        services.AddSingleton<FeedbackService>(fun _ -> FeedbackDb.file feedbackDir) |> ignore
 
-    /// Map all feedback / annotation / version / suggestion / candidate / register
-    /// endpoints onto the given app. Shared by the production server and the test host.
+    /// Map the register endpoints onto the given app. Shared by the production server
+    /// and the test host. Feedback is recorded elsewhere; nothing here mutates tools/agents.
     let mapEnhancementEndpoints (app: WebApplication) (workspaceRoot: string) =
-        let reloadWorkspace (registry: IWorkspaceRegistry) = reloadWorkspaceAt workspaceRoot registry
-        let buildCandidate (feedback: FeedbackService) (registry: IWorkspaceRegistry) = buildCandidateAt workspaceRoot feedback registry
-        let upgradeCandidate (feedback: FeedbackService) (registry: IWorkspaceRegistry) = upgradeCandidateAt workspaceRoot feedback registry
         let registerDefinition (subdir: string) (req: RegisterDefinitionRequest) (registry: IWorkspaceRegistry) = registerDefinitionAt workspaceRoot subdir req registry
-
-        // ─── Annotations: persistent runtime overlays on tools/agents ───
-
-        app.MapGet("/api/annotations", Func<FeedbackService, _>(fun feedback -> task {
-            let! annotations = feedback.ListAnnotationsAsync()
-            return jsonResult annotations
-        })) |> ignore
-
-        app.MapPost("/api/annotations", Func<HttpContext, FeedbackService, _>(fun ctx feedback -> task {
-            let! req = ctx.Request.ReadFromJsonAsync<AnnotationRequest>()
-            match parseKind req.Kind with
-            | None -> return Results.BadRequest({| error = "kind must be 'tool' or 'agent'" |})
-            | Some kind ->
-                let baseAnn =
-                    match kind with
-                    | AnnotationKind.Tool -> Annotation.ForTool req.TargetName
-                    | AnnotationKind.Agent -> Annotation.ForAgent req.TargetName
-                let annotation =
-                    { baseAnn with
-                        BaseVersion = strOpt req.BaseVersion
-                        DescriptionOverride = strOpt req.DescriptionOverride
-                        DescriptionAppend = strOpt req.DescriptionAppend
-                        InputPrefix = strOpt req.InputPrefix
-                        OutputSuffix = strOpt req.OutputSuffix
-                        GuidanceAppend = strOpt req.GuidanceAppend
-                        Reason = strOpt req.Reason }
-                let! stored = feedback.AddAnnotationAsync annotation
-                return jsonResult stored
-        })) |> ignore
-
-        app.MapPost("/api/annotations/{id}/status", Func<HttpContext, FeedbackService, string, _>(fun ctx feedback id -> task {
-            let! req = ctx.Request.ReadFromJsonAsync<AnnotationStatusRequest>()
-            match Guid.TryParse id with
-            | false, _ -> return Results.BadRequest({| error = "invalid annotation id" |})
-            | true, guid ->
-                let status =
-                    match (req.Status |> Option.ofObj |> Option.defaultValue "").Trim().ToLowerInvariant() with
-                    | "disabled" | "off" -> AnnotationStatus.Disabled
-                    | _ -> AnnotationStatus.Active
-                let! ok = feedback.SetAnnotationStatusAsync(guid, status)
-                return (if ok then Results.Ok({| updated = true |}) else Results.NotFound())
-        })) |> ignore
-
-        app.MapDelete("/api/annotations/{id}", Func<FeedbackService, string, _>(fun feedback id -> task {
-            match Guid.TryParse id with
-            | false, _ -> return Results.BadRequest({| error = "invalid annotation id" |})
-            | true, guid ->
-                let! ok = feedback.DropAnnotationAsync guid
-                return (if ok then Results.Ok({| dropped = true |}) else Results.NotFound())
-        })) |> ignore
-
-        // ─── Versions: reviewed Draft → Active → Deprecated lifecycle ───
-
-        app.MapGet("/api/versions", Func<FeedbackService, _>(fun feedback -> task {
-            let! versions = feedback.ListVersionsAsync()
-            return jsonResult versions
-        })) |> ignore
-
-        app.MapPost("/api/versions/promote", Func<HttpContext, FeedbackService, IWorkspaceRegistry, _>(fun ctx feedback registry -> task {
-            let! req = ctx.Request.ReadFromJsonAsync<PromoteVersionRequest>()
-            match parseKind req.Kind with
-            | None -> return Results.BadRequest({| error = "kind must be 'tool' or 'agent'" |})
-            | Some kind ->
-                let! version =
-                    match strOpt req.Version with
-                    | Some v -> feedback.PromoteAsync(kind, req.TargetName, version = v)
-                    | None -> feedback.PromoteAsync(kind, req.TargetName)
-                // Materialised definition (if any) becomes resolvable after reload.
-                if version.Location.IsSome then reloadWorkspace registry
-                return jsonResult version
-        })) |> ignore
-
-        app.MapPost("/api/versions/{id}/confirm", Func<HttpContext, FeedbackService, IWorkspaceRegistry, string, _>(fun ctx feedback registry id -> task {
-            let! req = ctx.Request.ReadFromJsonAsync<ConfirmVersionRequest>()
-            match Guid.TryParse id with
-            | false, _ -> return Results.BadRequest({| error = "invalid version id" |})
-            | true, guid ->
-                let! ok = feedback.ConfirmVersionAsync(guid, req.ReplaceLegacy)
-                if ok then reloadWorkspace registry
-                return (if ok then Results.Ok({| confirmed = true |}) else Results.NotFound())
-        })) |> ignore
-
-        app.MapPost("/api/versions/{id}/deprecate", Func<FeedbackService, string, _>(fun feedback id -> task {
-            match Guid.TryParse id with
-            | false, _ -> return Results.BadRequest({| error = "invalid version id" |})
-            | true, guid ->
-                let! ok = feedback.DeprecateVersionAsync guid
-                return (if ok then Results.Ok({| deprecated = true |}) else Results.NotFound())
-        })) |> ignore
 
         // ─── Register user-supplied tools / agents ───
 
@@ -490,51 +316,6 @@ module EmbeddedServer =
             match registerDefinition "agents" req registry with
             | Ok path -> return Results.Ok({| registered = true; path = path |})
             | Error e -> return Results.BadRequest({| error = e |})
-        })) |> ignore
-
-        // ─── Cross-session suggestions (review-gated enhancement pipeline) ───
-
-        app.MapGet("/api/suggestions", Func<FeedbackService, _>(fun feedback -> task {
-            let! suggestions = feedback.ListSuggestionsAsync()
-            return jsonResult suggestions
-        })) |> ignore
-
-        // "Enhance the system": aggregate ALL feedback (explicit + implicit) across
-        // every session into review-gated improvement suggestions.
-        app.MapPost("/api/suggestions/generate", Func<FeedbackService, _>(fun feedback -> task {
-            let! generated = feedback.GenerateSuggestionsAsync()
-            return jsonResult generated
-        })) |> ignore
-
-        app.MapPost("/api/suggestions/{id}/confirm", Func<FeedbackService, string, _>(fun feedback id -> task {
-            match Guid.TryParse id with
-            | false, _ -> return Results.BadRequest({| error = "invalid suggestion id" |})
-            | true, guid ->
-                let! ok = feedback.ConfirmSuggestionAsync guid
-                return (if ok then Results.Ok({| confirmed = true |}) else Results.NotFound())
-        })) |> ignore
-
-        app.MapPost("/api/suggestions/{id}/reject", Func<FeedbackService, string, _>(fun feedback id -> task {
-            match Guid.TryParse id with
-            | false, _ -> return Results.BadRequest({| error = "invalid suggestion id" |})
-            | true, guid ->
-                let! ok = feedback.RejectSuggestionAsync guid
-                return (if ok then Results.Ok({| rejected = true |}) else Results.NotFound())
-        })) |> ignore
-
-        // ─── Candidate workspace: test confirmed improvements, then upgrade ───
-
-        // Build a sandbox workspace ("candidate") from all confirmed suggestions so the
-        // user can start a test session against it (WorkspaceKey = "candidate").
-        app.MapPost("/api/candidate/build", Func<FeedbackService, IWorkspaceRegistry, _>(fun feedback registry -> task {
-            let! confirmed = buildCandidate feedback registry
-            return Results.Ok({| workspaceKey = "candidate"; improvements = List.length confirmed |})
-        })) |> ignore
-
-        // Promote the confirmed improvements into the live system permanently.
-        app.MapPost("/api/candidate/upgrade", Func<FeedbackService, IWorkspaceRegistry, _>(fun feedback registry -> task {
-            let! results = upgradeCandidate feedback registry
-            return Results.Ok({| upgraded = List.length results; results = results |})
         })) |> ignore
 
     /// Start a standalone host exposing ONLY the enhancement-loop endpoints
@@ -605,16 +386,17 @@ module EmbeddedServer =
                     registry :> IWorkspaceRegistry) |> ignore
 
                 builder.Services.AddSingleton<IOrchestratorFactory>(fun _ ->
-                    AssistantOrchestratorFactory(fun req -> confirmationHandler req) :> IOrchestratorFactory) |> ignore
+                    DefaultOrchestratorFactory() :> IOrchestratorFactory) |> ignore
 
                 // All per-session data lives under .nao-data/sessions/<key>/ so everything
                 // about one conversation — its messages, files, observability traces and
                 // feedback — sits in a single folder, keyed by the sanitized grain key.
                 let sessionsRoot = Path.Combine(Database.dataDir, "sessions")
 
-                // Single event bus shared by every storage strategy. Producers (the grain,
-                // the agent harness) publish domain events; strategies subscribe / wrap and
-                // decide where data lands — swapping a strategy never touches a producer.
+                // Single event bus shared by every storage consumer. Producers (the grain,
+                // the agent harness) publish domain events; consumers subscribe / wrap and
+                // persist them, choosing the folder from the event's session key — so a
+                // producer never decides where data lands.
                 let eventBus = InMemoryEventBus() :> IEventBus
 
                 // Conversation history persistence — the file store writes to
@@ -626,36 +408,41 @@ module EmbeddedServer =
                     PublishingConversationStore(eventBus, FileConversationStore(sessionsRoot))
                     :> IConversationStore) |> ignore
 
-                // Observability storage via the event bus. The session strategy wraps a
+                // Externalized task tracking — each async task grain mirrors its authoritative
+                // state to sessions/<key>/tasks.json (+ tasks/<id>/meta.json) so the full task
+                // history is readable straight from disk without activating a grain. A task's
+                // folder also holds the sub-session it spawns under tasks/<id>/sessions/.
+                builder.Services.AddSingleton<ITaskStore>(fun _ ->
+                    FileTaskStore(sessionsRoot) :> ITaskStore) |> ignore
+
+                // Observability storage via the event bus. ObservabilityServices wraps a
                 // PER-SESSION backing bundle rooted at sessions/<key>/observability/ in a
                 // PublishingHarnessServices tee: every span/metric/journal/trace/audit WRITE
                 // is broadcast as an ObservabilityCaptured event while reads (regression
-                // baselines, revert history) still hit the real backing store. Swap it for
-                // CategoryObservabilityStrategy to share one folder — ZERO producer changes.
-                let observabilityStrategy : IObservabilityStorageStrategy =
-                    SessionObservabilityStrategy(eventBus, fun key ->
+                // baselines, revert history) still hit the real backing store. Where the data
+                // lands is the backing factory (the store-level swap point).
+                let observability =
+                    ObservabilityServices(eventBus, fun key ->
                         let dir = Path.Combine(SessionFiles.sessionDir key, "observability")
                         Persistence.harnessServices (PersistenceMode.File dir))
-                builder.Services.AddSingleton<Func<string, IHarnessServices>>(fun _ ->
-                    Func<string, IHarnessServices>(fun key -> observabilityStrategy.ServicesFor key)) |> ignore
+                builder.Services.AddSingleton<Func<string, string, IHarnessServices>>(fun _ ->
+                    Func<string, string, IHarnessServices>(fun key turnId -> observability.ServicesFor(key, turnId))) |> ignore
 
-                // Feedback storage via the event bus. The session strategy is BOTH the
+                // Feedback storage via the event bus. FeedbackEventConsumer is BOTH the
                 // consumer (persists published TurnCompleted / ImplicitFeedbackCaptured events
                 // under sessions/<key>/feedback/) AND the read/command side the grain queries.
-                // Swap it for CategoryFeedbackStrategy to change the layout with ZERO producer
-                // changes — that is the whole point of routing through events.
-                let feedbackStrategy : IFeedbackStorageStrategy =
-                    SessionFeedbackStrategy(fun key -> Path.Combine(SessionFiles.sessionDir key, "feedback"))
-                eventBus.Subscribe(feedbackStrategy :> IEventConsumer)
+                // The backing FeedbackService is the store-level swap point (File today).
+                let feedbackConsumer =
+                    FeedbackEventConsumer(fun key -> Path.Combine(SessionFiles.sessionDir key, "feedback"))
+                eventBus.Subscribe(feedbackConsumer :> IEventConsumer)
                 builder.Services.AddSingleton<IEventBus>(eventBus) |> ignore
                 builder.Services.AddSingleton<Func<string, FeedbackService>>(fun _ ->
-                    Func<string, FeedbackService>(fun key -> feedbackStrategy.FeedbackFor key)) |> ignore
+                    Func<string, FeedbackService>(fun key -> feedbackConsumer.FeedbackFor key)) |> ignore
 
-                // Global feedback registry backing the management/enhancement HTTP endpoints
-                // (/api/annotations, /api/versions, /api/suggestions, /api/candidate).
+                // Global feedback registry backing the feedback recording + register endpoints.
                 let feedbackDir = Path.Combine(Database.dataDir, "feedback")
                 builder.Services.AddSingleton<FeedbackService>(fun _ ->
-                    FeedbackService.File feedbackDir) |> ignore
+                    FeedbackDb.file feedbackDir) |> ignore
 
                 // Async-task executors — matched by Kind on the SessionTaskGrain. Agent tasks
                 // drive a sub-session (e.g. the async converter agent runs its whole harness there).
@@ -768,16 +555,11 @@ module EmbeddedServer =
                     return Results.Ok(dtos)
                 })) |> ignore
 
-                // Feedback / annotation / version / suggestion / candidate / register
-                // endpoints — shared with the standalone enhancement test host.
+                // Register endpoints — shared with the standalone enhancement test host.
                 mapEnhancementEndpoints app workspaceRoot
 
                 // ─── Workspace knowledge base (RAG) ───
                 let knowledge = Knowledge.KnowledgeStore(workspaceRoot)
-                // The knowledge base is NOT injected into every message. It is exposed only
-                // through the search_knowledge tool, which the agent invokes on demand (after
-                // asking the user) to consult files the user explicitly uploaded.
-                KnowledgeTools.knowledgeSearch <- Some(fun query topK -> knowledge.Retrieve query topK)
 
                 app.MapGet("/api/knowledge", Func<HttpContext, _>(fun _ctx -> task {
                     return Results.Ok(knowledge.Files())

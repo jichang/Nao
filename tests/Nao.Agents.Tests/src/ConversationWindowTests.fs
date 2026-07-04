@@ -1,7 +1,7 @@
 namespace Nao.Agents.Tests
 
 open Microsoft.VisualStudio.TestTools.UnitTesting
-open Nao.Core
+open Nao.Agents
 open Nao.Agents
 
 [<TestClass>]

@@ -13,6 +13,7 @@
   <ItemGroup>
     <Compile Include="src/MSTestSettings.fs" />
     <Compile Include="src/Test1.fs" />
+    <Compile Include="src/LlmTypeTests.fs" />
     <Compile Include="src/ConversationWindowTests.fs" />
     <Compile Include="src/MemoryStoreTests.fs" />
     <Compile Include="src/SummarizerTests.fs" />
@@ -29,9 +30,15 @@
     <Compile Include="src/EtclovgHarnessTests.fs" />
     <Compile Include="src/DelegationHookTests.fs" />
     <Compile Include="src/ActionBlockParseTests.fs" />
+    <Compile Include="src/EventBusTests.fs" />
+    <Compile Include="src/ObservabilityStorageTests.fs" />
+    <Compile Include="src/InMemoryStores.fs" />
+    <Compile Include="src/FeedbackTests.fs" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\Nao.Agents\Nao.Agents.fsproj" />
+    <ProjectReference Include="..\..\src\Nao.Loader\Nao.Loader.fsproj" />
+    <ProjectReference Include="..\..\src\Nao.Persistence\Nao.Persistence.fsproj" />
   </ItemGroup>
   <Import Project="..\..\.paket\Paket.Restore.targets" />
 </Project>

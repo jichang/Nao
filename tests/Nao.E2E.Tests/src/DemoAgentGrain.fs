@@ -1,7 +1,7 @@
 namespace Nao.E2E.Tests
 
 open System.Threading.Tasks
-open Nao.Core
+open Nao.Agents
 open Nao.Agents
 open Nao.Runtime.Orleans.Grains
 
@@ -26,12 +26,11 @@ module internal AgentHelpers =
 /// the agent executes the tool and feeds the result back to the LLM.
 type DemoAgent(provider: ILlmProvider, tools: Tool list, prompt: Prompt) =
     let id = { Name = "demo-agent"; Description = "A demo agent for E2E testing" }
-    let mutable state = AgentState.Empty
 
     member private _.RunCore(input: string) : Task<string> =
         let systemMsg = { Role = System; Content = Prompt.render prompt }
         let userMsg = { Role = User; Content = input }
-        let conv1 = state.Conversation @ [systemMsg; userMsg]
+        let conv1 = [systemMsg; userMsg]
 
         let result = (provider.CompleteAsync conv1 CompletionOptions.Default).Result
         let assistantMsg = { Role = Assistant; Content = result.Content }
@@ -45,19 +44,14 @@ type DemoAgent(provider: ILlmProvider, tools: Tool list, prompt: Prompt) =
                 let toolMsg = { Role = User; Content = "tool_result: " + toolResult }
                 let conv3 = conv2 @ [toolMsg]
                 let finalResult = (provider.CompleteAsync conv3 CompletionOptions.Default).Result
-                let conv4 = conv3 @ [{ Role = Assistant; Content = finalResult.Content }]
-                state <- { state with Conversation = conv4 }
                 Task.FromResult(finalResult.Content)
             | None ->
-                state <- { state with Conversation = conv2 }
                 Task.FromResult("Unknown tool: " + toolName)
         | None ->
-            state <- { state with Conversation = conv2 }
             Task.FromResult(result.Content)
 
     interface IAgent with
         member _.Id = id
-        member _.State = state
         member this.RunAsync(input: string) = this.RunCore(input)
         member this.HandleMessageAsync(msg: AgentMessage) =
             let response = this.RunCore(msg.Content).Result

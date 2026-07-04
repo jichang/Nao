@@ -6,17 +6,15 @@ open System.Threading.Tasks
 open Microsoft.VisualStudio.TestTools.UnitTesting
 open Nao.Loader
 open Nao.Agents
-open Nao.Core
+open Nao.Agents
 open Nao.Eval
 
 /// A test agent that can be discovered via reflection
 type DiscoverableTestAgent() =
     let id = { Name = "discoverable-agent"; Description = "found by reflection" }
-    let mutable state = AgentState.Empty
 
     interface IAgent with
         member _.Id = id
-        member _.State = state
         member _.RunAsync(input: string) =
             Task.FromResult(sprintf "discovered: %s" input)
         member _.HandleMessageAsync(msg: AgentMessage) =

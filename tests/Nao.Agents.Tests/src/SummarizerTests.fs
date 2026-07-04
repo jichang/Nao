@@ -2,7 +2,7 @@ namespace Nao.Agents.Tests
 
 open System.Threading.Tasks
 open Microsoft.VisualStudio.TestTools.UnitTesting
-open Nao.Core
+open Nao.Agents
 open Nao.Agents
 
 /// A mock LLM provider that returns predictable summaries

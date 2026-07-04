@@ -14,11 +14,11 @@ type ToolPermissionClassifyTests() =
     member _.ConvertDocument_IsNotStaticallyClassified() =
         // convert_document confirms its exact source/target dynamically inside the tool, so the
         // static guard must not also classify (and double-prompt for) it.
-        Assert.AreEqual(0, List.length (ToolPermissions.classifyAll "convert_document" """{"source":"report.md","target":"pdf"}"""))
+        Assert.AreEqual(0, List.length (ToolPermissions.classifyAll ToolContext.allowAll "convert_document" """{"source":"report.md","target":"pdf"}"""))
 
     [<TestMethod>]
     member _.SingleResourceTool_StillYieldsOneAccess() =
-        let accesses = ToolPermissions.classifyAll "read_file" """{"path":"notes.txt"}"""
+        let accesses = ToolPermissions.classifyAll ToolContext.allowAll "read_file" """{"path":"notes.txt"}"""
         Assert.AreEqual(1, List.length accesses)
         match accesses.[0] with
         | ResourceAccess.File("read", path) -> StringAssert.EndsWith(path.Replace('\\', '/'), "notes.txt")
@@ -26,4 +26,4 @@ type ToolPermissionClassifyTests() =
 
     [<TestMethod>]
     member _.UnknownTool_YieldsNoAccess() =
-        Assert.AreEqual(0, List.length (ToolPermissions.classifyAll "calculator" "1+1"))
+        Assert.AreEqual(0, List.length (ToolPermissions.classifyAll ToolContext.allowAll "calculator" "1+1"))

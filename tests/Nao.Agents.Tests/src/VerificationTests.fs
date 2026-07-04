@@ -4,6 +4,7 @@ open System
 open System.Threading.Tasks
 open Microsoft.VisualStudio.TestTools.UnitTesting
 open Nao.Agents
+open Nao.Persistence
 
 [<TestClass>]
 type VerificationTests() =

@@ -3,7 +3,7 @@ namespace Nao.Assistant
 open System
 open System.IO
 open System.Text.Json
-open Nao.Core
+open Nao.Agents
 open Nao.Agents
 
 /// Shared infrastructure for the built-in assistant tools: the per-session working
@@ -23,22 +23,26 @@ module ToolInfra =
             | _ -> Path.Combine(Environment.CurrentDirectory, ".nao-data")
         Path.Combine(dataDir, "workspace")
 
-    /// The directory all file tools operate in. File storage is unified on the current
-    /// session's files folder — the same place uploads and generated files live and the UI
-    /// lists — so a user's attachments and a tool's output share one location. Falls back to
-    /// the shared workspace when there is no active session. The directory is ensured.
-    let currentWorkDir () =
+    /// The files directory for a given files key — the same place uploads and generated
+    /// files live and the UI lists. Falls back to the shared workspace when the key is empty.
+    /// The directory is ensured.
+    let workDirForKey (filesKey: string) =
         let dir =
-            match SessionExecution.current () with
-            | Some scope -> (SessionFiles.forKey scope.FilesKey).FilesDir
-            | None -> globalWorkDir
+            if String.IsNullOrEmpty filesKey then globalWorkDir
+            else (SessionFiles.forKey filesKey).FilesDir
         Directory.CreateDirectory dir |> ignore
         dir
 
+    /// The directory all file tools operate in. File storage is unified on the current
+    /// session's files folder — so a user's attachments and a tool's output share one
+    /// location — resolved from the tool context's files key. The directory is ensured.
+    let currentWorkDir (ctx: ToolContext) =
+        workDirForKey ctx.FilesKey
+
     /// Resolve a user-supplied relative path inside the current working directory,
     /// preventing traversal outside it via "..".
-    let resolvePath (input: string) =
-        let root = currentWorkDir ()
+    let resolvePath (ctx: ToolContext) (input: string) =
+        let root = currentWorkDir ctx
         let cleaned = input.Trim().Replace("\\", "/").TrimStart('/')
         let full = Path.GetFullPath(Path.Combine(root, cleaned))
         let rootFull = Path.GetFullPath(root)

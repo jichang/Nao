@@ -51,37 +51,7 @@ type IAuditLog =
     /// Get a count of denied actions for an agent
     abstract member GetDeniedCountAsync: AgentId -> since: DateTimeOffset -> Task<int>
 
-/// In-memory audit log for testing
-type InMemoryAuditLog() =
-    let entries = System.Collections.Concurrent.ConcurrentBag<AuditEntry>()
-
-    interface IAuditLog with
-        member _.RecordAsync(entry: AuditEntry) =
-            entries.Add(entry)
-            Task.FromResult()
-
-        member _.QueryAsync (agentId: AgentId) (since: DateTimeOffset) =
-            entries
-            |> Seq.filter (fun e -> e.AgentId = agentId && e.Timestamp >= since)
-            |> Seq.sortByDescending (fun e -> e.Timestamp)
-            |> Seq.toList
-            |> Task.FromResult
-
-        member _.QueryByExecutionAsync(executionId: Guid) =
-            entries
-            |> Seq.filter (fun e -> e.ExecutionId = Some executionId)
-            |> Seq.sortBy (fun e -> e.Timestamp)
-            |> Seq.toList
-            |> Task.FromResult
-
-        member _.GetDeniedCountAsync (agentId: AgentId) (since: DateTimeOffset) =
-            entries
-            |> Seq.filter (fun e -> e.AgentId = agentId && e.Timestamp >= since && not e.Permitted)
-            |> Seq.length
-            |> Task.FromResult
-
 module AuditLog =
-    let inMemory () : IAuditLog = InMemoryAuditLog() :> IAuditLog
 
     /// Create an audit entry for a tool invocation
     let toolInvocation (agentId: AgentId) (toolName: string) (input: string) (output: string) (permitted: bool) (level: PermissionLevel) (execId: Guid option) : AuditEntry =

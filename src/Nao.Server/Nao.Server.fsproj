@@ -13,14 +13,8 @@
     <Compile Include="src/Domain/AsyncTasks.fs" />
     <Compile Include="src/Domain/PermissionStore.fs" />
     <Compile Include="src/Domain/PermissionBroker.fs" />
-    <Compile Include="src/Server/AssistantOrchestrator.fs" />
     <Compile Include="src/Server/ProviderHealth.fs" />
     <Compile Include="src/Server/Tools/ToolInfra.fs" />
-    <Compile Include="src/Server/Tools/FileTools.fs" />
-    <Compile Include="src/Server/Tools/SearchTools.fs" />
-    <Compile Include="src/Server/Tools/WebTools.fs" />
-    <Compile Include="src/Server/Tools/UtilityTools.fs" />
-    <Compile Include="src/Server/Tools/KnowledgeTools.fs" />
     <Compile Include="src/Server/Tools/ToolPermissions.fs" />
     <Compile Include="src/Server/Tools/DocumentTools.fs" />
     <Compile Include="src/Server/AssistantTools.fs" />
@@ -34,14 +28,11 @@
     <Content Include=".nao/**/*" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="..\Nao.Core\Nao.Core.fsproj" />
     <ProjectReference Include="..\Nao.Agents\Nao.Agents.fsproj" />
     <ProjectReference Include="..\Nao.Loader\Nao.Loader.fsproj" />
     <ProjectReference Include="..\Nao.Documents\Nao.Documents.fsproj" />
     <ProjectReference Include="..\Nao.Providers\Nao.Providers.fsproj" />
     <ProjectReference Include="..\Nao.Persistence\Nao.Persistence.fsproj" />
-    <ProjectReference Include="..\Nao.Feedback\Nao.Feedback.fsproj" />
-    <ProjectReference Include="..\Nao.Events\Nao.Events.fsproj" />
     <ProjectReference Include="..\Nao.Runtime.Orleans\Nao.Runtime.Orleans.fsproj" />
     <ProjectReference Include="..\Nao.Runtime.Orleans.Codegen\Nao.Runtime.Orleans.Codegen.csproj" />
   </ItemGroup>

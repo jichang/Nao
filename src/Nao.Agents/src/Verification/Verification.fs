@@ -2,7 +2,7 @@ namespace Nao.Agents
 
 open System
 open System.Threading.Tasks
-open Nao.Core
+open Nao.Agents
 
 /// Readiness check result
 [<RequireQualifiedAccess>]
@@ -159,8 +159,15 @@ module Verification =
     /// Ground a task by having the agent reformulate its understanding
     let groundTaskAsync (provider: ILlmProvider) (options: CompletionOptions) (taskDescription: string) : Task<TaskGrounding> =
         task {
+            let system =
+                Prompt.render
+                    { Prompt.Empty with
+                        Objective = "Analyze the following task and reformulate your understanding of it."
+                        OutputFormat =
+                            OutputFormat.Custom "Respond with:\n1. Your understanding of what needs to be done\n2. Key success criteria (one per line, prefixed with '- ')\n3. Required capabilities\n4. Estimated complexity (1-10)" }
+
             let prompt =
-                [ { Role = System; Content = "Analyze the following task. Respond with:\n1. Your understanding of what needs to be done\n2. Key success criteria (one per line, prefixed with '- ')\n3. Required capabilities\n4. Estimated complexity (1-10)" }
+                [ { Role = System; Content = system }
                   { Role = User; Content = taskDescription } ]
 
             let! result = provider.CompleteAsync prompt options
@@ -190,8 +197,15 @@ type LlmJudge(provider: ILlmProvider, options: CompletionOptions, criteria: stri
 
                 let criteriaStr = criteria |> List.map (sprintf "- %s") |> String.concat "\n"
 
+                let system =
+                    Prompt.render
+                        { Prompt.Empty with
+                            Role = "You are a quality judge."
+                            Objective = "Evaluate the following agent execution trace against these criteria:\n" + criteriaStr
+                            OutputFormat = OutputFormat.Custom "Respond with PASS, FAIL, or PARTIAL(score) followed by an explanation." }
+
                 let prompt =
-                    [ { Role = System; Content = sprintf "You are a quality judge. Evaluate the following agent execution trace against these criteria:\n%s\n\nRespond with PASS, FAIL, or PARTIAL(score) followed by an explanation." criteriaStr }
+                    [ { Role = System; Content = system }
                       { Role = User; Content = sprintf "Task: %s\nOutput: %s\nSteps:\n%s" trace.Input (trace.Output |> Option.defaultValue "N/A") traceDescription } ]
 
                 let! result = provider.CompleteAsync prompt options

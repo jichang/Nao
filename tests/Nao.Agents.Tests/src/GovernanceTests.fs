@@ -4,6 +4,7 @@ open System
 open System.Threading.Tasks
 open Microsoft.VisualStudio.TestTools.UnitTesting
 open Nao.Agents
+open Nao.Persistence
 
 [<TestClass>]
 type PermissionTests() =
@@ -141,7 +142,7 @@ type AuditLogTests() =
 
     [<TestMethod>]
     member _.RecordAndQuery() =
-        let audit = AuditLog.inMemory ()
+        let audit = InMemory.auditLog ()
         let entry = AuditLog.toolInvocation agentId "search" "query" "results" true PermissionLevel.Allow None
         audit.RecordAsync(entry).Wait()
         let results = (audit.QueryAsync agentId (DateTimeOffset.UtcNow.AddHours(-1.0))).Result
@@ -150,7 +151,7 @@ type AuditLogTests() =
 
     [<TestMethod>]
     member _.QueryByExecutionFiltersCorrectly() =
-        let audit = AuditLog.inMemory ()
+        let audit = InMemory.auditLog ()
         let execId = Guid.NewGuid()
         let entry1 = AuditLog.llmCall agentId "gpt-4" (Some execId)
         let entry2 = AuditLog.llmCall agentId "gpt-4" (Some (Guid.NewGuid()))
@@ -161,7 +162,7 @@ type AuditLogTests() =
 
     [<TestMethod>]
     member _.GetDeniedCountFiltersDenied() =
-        let audit = AuditLog.inMemory ()
+        let audit = InMemory.auditLog ()
         let permitted = AuditLog.toolInvocation agentId "t1" "" "" true PermissionLevel.Allow None
         let denied = { AuditLog.toolInvocation agentId "t2" "" "" false PermissionLevel.Deny None with Permitted = false }
         audit.RecordAsync(permitted).Wait()

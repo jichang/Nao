@@ -1,6 +1,6 @@
 namespace Nao.Agents
 
-open Nao.Core
+open Nao.Agents
 
 /// Strategy for managing conversation history length
 type WindowStrategy =

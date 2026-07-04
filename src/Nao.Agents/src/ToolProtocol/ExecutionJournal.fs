@@ -2,7 +2,7 @@ namespace Nao.Agents
 
 open System
 open System.Threading.Tasks
-open Nao.Core
+open Nao.Agents
 
 /// A record of a single tool execution (immutable, for journaling)
 type ExecutionRecord =
@@ -32,33 +32,6 @@ type IExecutionJournal =
     abstract member GetRevertibleAsync: unit -> Task<ExecutionRecord list>
     /// Mark an execution as reverted
     abstract member MarkRevertedAsync: ExecutionRecord -> Task
-
-/// In-memory execution journal (default implementation)
-type InMemoryExecutionJournal() =
-    let entries = System.Collections.Generic.List<ExecutionRecord>()
-
-    interface IExecutionJournal with
-        member _.RecordAsync(record: ExecutionRecord) =
-            lock entries (fun () -> entries.Insert(0, record))
-            Task.CompletedTask
-
-        member _.GetHistoryAsync() =
-            lock entries (fun () -> entries |> Seq.toList)
-            |> Task.FromResult
-
-        member _.GetRevertibleAsync() =
-            lock entries (fun () ->
-                entries |> Seq.filter (fun e -> not e.Reverted) |> Seq.toList)
-            |> Task.FromResult
-
-        member _.MarkRevertedAsync(record: ExecutionRecord) =
-            lock entries (fun () ->
-                let idx = entries |> Seq.tryFindIndex (fun e ->
-                    e.ToolName = record.ToolName && e.ExecutedAt = record.ExecutedAt)
-                match idx with
-                | Some i -> entries.[i] <- { entries.[i] with Reverted = true }
-                | None -> ())
-            Task.CompletedTask
 
 /// Orchestrates reverting tool executions in reverse order
 module ExecutionJournal =

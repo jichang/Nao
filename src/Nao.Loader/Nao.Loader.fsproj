@@ -5,15 +5,14 @@
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="src/LoaderTypes.fs" />
-    <Compile Include="src/JsonRead.fs" />
-    <Compile Include="src/JsonSource.fs" />
-    <Compile Include="src/AssemblySource.fs" />
-    <Compile Include="src/DefinitionBuilder.fs" />
-    <Compile Include="src/WorkspaceLoader.fs" />
+    <Compile Include="src/Core/LoaderTypes.fs" />
+    <Compile Include="src/Sources/JsonRead.fs" />
+    <Compile Include="src/Sources/JsonSource.fs" />
+    <Compile Include="src/Sources/AssemblySource.fs" />
+    <Compile Include="src/Building/DefinitionBuilder.fs" />
+    <Compile Include="src/Building/WorkspaceLoader.fs" />
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="..\Nao.Core\Nao.Core.fsproj" />
     <ProjectReference Include="..\Nao.Agents\Nao.Agents.fsproj" />
     <ProjectReference Include="..\Nao.Eval\Nao.Eval.fsproj" />
   </ItemGroup>

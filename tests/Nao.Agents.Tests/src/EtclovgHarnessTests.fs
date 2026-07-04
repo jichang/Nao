@@ -4,7 +4,8 @@ open System
 open System.Threading.Tasks
 open Microsoft.VisualStudio.TestTools.UnitTesting
 open Nao.Agents
-open Nao.Core
+open Nao.Persistence
+open Nao.Agents
 
 [<TestClass>]
 type EtclovgHarnessTests() =
@@ -13,7 +14,6 @@ type EtclovgHarnessTests() =
         let id = { Name = "test-agent"; Description = "test" }
         { new IAgent with
             member _.Id = id
-            member _.State = AgentState.Empty
             member _.RunAsync(_input) = Task.FromResult response
             member _.HandleMessageAsync(_msg) = Task.FromResult None }
 
@@ -103,7 +103,7 @@ type EtclovgHarnessTests() =
     [<TestMethod>]
     member _.MetricsCollectedDuringExecution() =
         let agent = makeAgent "done"
-        let metrics = MetricsCollector.inMemory ()
+        let metrics = InMemory.metrics ()
         let config = { EtclovgConfig.Default with Metrics = Some metrics }
         let result = (EtclovgHarness.runAsync config agent "test").Result
         Assert.IsTrue(result.Success)
@@ -125,7 +125,7 @@ type EtclovgHarnessTests() =
     [<TestMethod>]
     member _.AuditLogRecordsEntry() =
         let agent = makeAgent "ok"
-        let audit = AuditLog.inMemory ()
+        let audit = InMemory.auditLog ()
         let config = { EtclovgConfig.Default with AuditLog = Some audit }
         let result = (EtclovgHarness.runAsync config agent "test").Result
         Assert.IsTrue(result.Success)
@@ -137,10 +137,10 @@ type EtclovgHarnessTests() =
     [<TestMethod>]
     member _.AllLayersWorkTogether() =
         let agent = makeAgent "safe response"
-        let metrics = MetricsCollector.inMemory ()
-        let tracer = Tracer.inMemory ()
+        let metrics = InMemory.metrics ()
+        let tracer = InMemory.tracer ()
         let store = InMemoryTraceStore() :> ITraceStore
-        let audit = AuditLog.inMemory ()
+        let audit = InMemory.auditLog ()
         let constitution = Constitution.empty "basic" |> Constitution.addRule Constitution.noHarmRule
         let agentId = { Name = "test-agent"; Description = "test" }
         let perms = PermissionModel.Permissive agentId |> PermissionModel.grant "execute" PermissionLevel.Allow
@@ -158,8 +158,7 @@ type EtclovgHarnessTests() =
                 Constitution = Some constitution
                 Permissions = Some perms
                 ReadinessChecks = [ passCheck ]
-                Lifecycle = [ PassthroughHook() :> ILifecycleHook ]
-                EventSink = AgentEventSink.none }
+                Lifecycle = [ PassthroughHook() :> ILifecycleHook ] }
 
         let result = (EtclovgHarness.runAsync config agent "hello").Result
         Assert.IsTrue(result.Success)

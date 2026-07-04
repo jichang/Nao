@@ -23,18 +23,11 @@ module SessionFiles =
             | _ -> Path.Combine(Environment.CurrentDirectory, ".nao-data")
         Path.Combine(dataDir, "sessions")
 
-    /// Make a session key (e.g. "dev/75f1ff2b") safe to use as a folder name. The same
-    /// mapping is mirrored by FileConversationStore so a session's conversations, files,
-    /// observability and feedback all nest under the SAME sessions/<key>/ folder.
-    let private sanitize (key: string) =
-        key
-        |> Seq.map (fun c -> if Char.IsLetterOrDigit c || c = '-' || c = '_' then c else '_')
-        |> Seq.toArray
-        |> String
-
-    /// Absolute path to a session's data folder: <data>/sessions/<sanitized key>.
-    /// Conversations, files, observability and feedback for the session all nest here.
-    let sessionDir (key: string) = Path.Combine(baseRoot, sanitize key)
+    /// Absolute path to a session's data folder under <data>/sessions/. Conversations,
+    /// tasks, files, observability and feedback for the session all nest here, and a
+    /// task-spawned sub-session nests beneath its task — the layout is owned by the shared
+    /// `SessionPaths` resolver so every storage subsystem agrees on one folder per session.
+    let sessionDir (key: string) = Nao.Runtime.Orleans.SessionPaths.sessionDir baseRoot key
 
     /// File store scoped to a single session (grain key "userId/sessionId").
     type SessionFileStore internal (sessionKey: string) =

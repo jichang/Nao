@@ -3,7 +3,8 @@ namespace Nao.Agents
 open System
 open System.Text.Json
 open System.Threading.Tasks
-open Nao.Core
+open Json.Schema
+open Nao.Agents
 
 /// Memory management configuration for the orchestrator
 type OrchestratorMemoryConfig =
@@ -39,12 +40,17 @@ type OrchestratorConfig =
       Options: CompletionOptions
       /// Maximum tool/agent invocation rounds before forcing a response
       MaxRounds: int
-      /// Event sink for logging, progress, and conversation tracking
-      EventSink: IAgentEventSink
+      /// Durable event bus the orchestrator publishes turn-progress signals to
+      Bus: IEventBus
+      /// Scope identifying the turn whose progress signals are published (ActionId = turnId)
+      Scope: EventScope
       /// Memory management configuration
       Memory: OrchestratorMemoryConfig
       /// Custom instructions appended to the system prompt (replaces default action format instructions when set)
-      Instructions: string option }
+      Instructions: string option
+      /// The session/turn execution context threaded into tool invocations and async
+      /// delegation. Defaults to `ToolContext.allowAll` for library/test use.
+      Context: ToolContext }
 
 /// Factory interface for creating orchestrator instances via DI.
 /// Register a custom implementation to control how orchestrators are built from workspace definitions.
@@ -59,21 +65,9 @@ type IOrchestratorFactory =
 [<AbstractClass>]
 type OrchestratorBase(config: OrchestratorConfig) =
     let id = { Name = "orchestrator"; Description = "Routes requests to tools and sub-agents" }
-    let mutable state = AgentState.Empty
 
-    let emit event = config.EventSink.Emit event
-
-    let applyWindowAsync (conversation: Conversation) : Task<Conversation> =
-        task {
-            let! afterSummary =
-                match config.Memory.Summarization with
-                | Some summarizationConfig -> Summarizer.applyAsync summarizationConfig conversation
-                | Option.None -> Task.FromResult conversation
-            return
-                match config.Memory.WindowStrategy with
-                | Some strategy -> ConversationWindow.apply strategy afterSummary
-                | Option.None -> afterSummary
-        }
+    let report (signal: ProgressSignal) =
+        config.Bus.PublishAsync(NaoEvent.TurnProgress(config.Scope, signal)) |> ignore
 
     let getMemoryContext () : Task<string> =
         task {
@@ -166,8 +160,16 @@ type OrchestratorBase(config: OrchestratorConfig) =
         match getValue "type" |> Option.orElse (getValue "action") with
         | Some kind ->
             match kind.ToLowerInvariant() with
-            | "tool" | "tool-invoke" | "invoke-tool" -> name |> Option.map (fun n -> InvokeTool (n, args))
-            | "delegate" | "agent-delegate" | "delegate-agent" -> name |> Option.map (fun n -> DelegateToAgent (n, args))
+            | "tool" | "tool-invoke" | "invoke-tool" ->
+                name
+                |> Option.map (fun n ->
+                    if isKnownAgent n && not (isKnownTool n) then DelegateToAgent (n, args)
+                    else InvokeTool (n, args))
+            | "delegate" | "agent-delegate" | "delegate-agent" ->
+                name
+                |> Option.map (fun n ->
+                    if isKnownTool n && not (isKnownAgent n) then InvokeTool (n, args)
+                    else DelegateToAgent (n, args))
             | _ when isKnownTool kind -> Some (InvokeTool (kind, args))
             | _ when isKnownAgent kind -> Some (DelegateToAgent (kind, args))
             | _ ->
@@ -194,20 +196,124 @@ type OrchestratorBase(config: OrchestratorConfig) =
             if closeIdx < 0 then Some (text.Substring(startIdx).Trim())
             else Some (text.Substring(startIdx, closeIdx - startIdx).Trim())
 
+    let actionBlockSchema =
+        [ "{"
+          "\"$schema\":\"https://json-schema.org/draft/2020-12/schema\","
+          "\"$defs\":{"
+          "\"action\":{"
+          "\"type\":\"object\","
+          "\"required\":[\"type\",\"name\"],"
+          "\"properties\":{"
+          "\"type\":{\"type\":\"string\",\"minLength\":1},"
+          "\"name\":{\"type\":\"string\",\"minLength\":1},"
+          "\"params\":true,"
+          "\"input\":true"
+          "},"
+          "\"additionalProperties\":true"
+          "}"
+          "},"
+          "\"oneOf\":["
+          "{\"type\":\"object\",\"required\":[\"actions\"],\"properties\":{\"actions\":{\"type\":\"array\",\"minItems\":1,\"items\":{\"$ref\":\"#/$defs/action\"}}},\"additionalProperties\":true},"
+          "{\"type\":\"array\",\"minItems\":1,\"items\":{\"$ref\":\"#/$defs/action\"}},"
+          "{\"$ref\":\"#/$defs/action\"}"
+          "]"
+          "}" ]
+        |> String.concat ""
+        |> JsonSchema.FromText
+
+    let schemaValidationOptions () =
+        let options = EvaluationOptions.From(EvaluationOptions.Default)
+        options.OutputFormat <- OutputFormat.List
+        options
+
+    let formatJsonException (ex: JsonException) =
+        let location =
+            match ex.LineNumber.HasValue, ex.BytePositionInLine.HasValue with
+            | true, true -> sprintf "line %d, byte %d" ex.LineNumber.Value ex.BytePositionInLine.Value
+            | true, false -> sprintf "line %d" ex.LineNumber.Value
+            | _ -> "unknown location"
+        let path = if String.IsNullOrWhiteSpace ex.Path then "$" else ex.Path
+        sprintf "JSON syntax error at %s, path %s: %s" location path ex.Message
+
+    let formatSchemaErrors (results: EvaluationResults) =
+        results.ToList()
+        let errors =
+            seq {
+                let nodes =
+                    seq {
+                        yield results
+                        if not (isNull (box results.Details)) then
+                            yield! results.Details
+                    }
+                for node in nodes do
+                    if not node.IsValid && not (isNull (box node.Errors)) then
+                        for error in node.Errors do
+                            yield sprintf "at %O: %s" node.InstanceLocation error.Value
+            }
+            |> Seq.truncate 5
+            |> Seq.toList
+        if List.isEmpty errors then "JSON does not match the action schema."
+        else String.concat "; " errors
+
+    let validateActionBlockPayload (json: string) : string option =
+        try
+            use doc = JsonDocument.Parse(json)
+            let results = actionBlockSchema.Evaluate(doc.RootElement, schemaValidationOptions())
+            if results.IsValid then None
+            else Some (sprintf "JSON schema validation failed: %s" (formatSchemaErrors results))
+        with
+        | :? JsonException as ex -> Some (formatJsonException ex)
+        | ex -> Some (sprintf "JSON action block validation failed: %s" ex.Message)
+
+    let parseActionsFromRoot (root: JsonElement) : AgentAction list =
+        match root.ValueKind with
+        | JsonValueKind.Array ->
+            [ for el in root.EnumerateArray() -> parseActionElement el ] |> List.choose (fun a -> a)
+        | _ ->
+            match root.TryGetProperty("actions") with
+            | true, arr when arr.ValueKind = JsonValueKind.Array ->
+                [ for el in arr.EnumerateArray() -> parseActionElement el ] |> List.choose (fun a -> a)
+            | _ -> parseActionElement root |> Option.toList
+
     // Parse a planner JSON payload (either { "actions": [...] } or a bare action object)
     // into actions, tolerating surrounding prose/stray braces. Returns [] when nothing
-    // valid is found — used both to extract actions and to detect a malformed block.
+    // valid is found. This fallback is intentionally forgiving for legacy bare JSON.
     let parseActionsFromJson (json: string) : AgentAction list =
         extractJsonObjects json
         |> List.collect (fun obj ->
             try
                 use doc = JsonDocument.Parse(obj)
-                let root = doc.RootElement
-                match root.TryGetProperty("actions") with
-                | true, arr when arr.ValueKind = JsonValueKind.Array ->
-                    [ for el in arr.EnumerateArray() -> parseActionElement el ] |> List.choose (fun a -> a)
-                | _ -> parseActionElement root |> Option.toList
+                parseActionsFromRoot doc.RootElement
             with _ -> [])
+
+    // Explicit fenced action blocks are stricter than the legacy fallback: the payload must
+    // be complete JSON, match the action schema, and every action element must resolve.
+    // Invalid blocks are reported back to the model for repair rather than silently fixed.
+    let tryParseStrictActionBlock (json: string) : AgentAction list option =
+        let parseStrict (payload: string) =
+            match validateActionBlockPayload payload with
+            | Some _ -> None
+            | None ->
+                try
+                    use doc = JsonDocument.Parse(payload)
+                    let root = doc.RootElement
+                    let strictElements (arr: JsonElement) =
+                        let elements = [ for el in arr.EnumerateArray() -> el ]
+                        let parsed = elements |> List.choose parseActionElement
+                        if List.isEmpty elements || parsed.Length <> elements.Length then None else Some parsed
+
+                    match root.ValueKind with
+                    | JsonValueKind.Array -> strictElements root
+                    | _ ->
+                        match root.TryGetProperty("actions") with
+                        | true, arr when arr.ValueKind = JsonValueKind.Array -> strictElements arr
+                        | _ ->
+                            match parseActionElement root with
+                            | Some action -> Some [ action ]
+                            | None -> None
+                with _ -> None
+
+        parseStrict json
 
     /// The orchestrator configuration.
     member _.Config = config
@@ -253,7 +359,7 @@ type OrchestratorBase(config: OrchestratorConfig) =
         match extractActionBlock content with
         | Some inner ->
             // The model explicitly tagged an action block — parse only its payload.
-            parseActionsFromJson inner
+            tryParseStrictActionBlock inner |> Option.defaultValue []
         | None ->
             // Backward-compatible fallback: accept a bare JSON action object/array even
             // without the fence (legacy planners and scripted tests).
@@ -266,14 +372,25 @@ type OrchestratorBase(config: OrchestratorConfig) =
     member this.DefaultTryParseAction(content: string) : AgentAction option =
         this.DefaultTryParseActions(content) |> List.tryHead
 
+    /// Returns a concrete syntax/schema/semantic validation error for a tagged action
+    /// block, or None when the response has no block or the block is executable.
+    member _.TryGetActionBlockValidationError(content: string) : string option =
+        match extractActionBlock content with
+        | Some inner ->
+            match validateActionBlockPayload inner with
+            | Some error -> Some error
+            | None ->
+                match tryParseStrictActionBlock inner with
+                | Some _ -> None
+                | None -> Some "The action JSON matched the schema but did not resolve to known executable actions. Check each action's type, name, and params."
+        | None -> None
+
     /// True when the response contains a tagged `application/json+nao` action block whose
     /// payload is NOT well-formed (or yields no valid action). Lets the run loop ask the
     /// model to repair the block instead of silently dropping the action or echoing the
     /// broken JSON to the user. A response with no action block is never "malformed".
-    member _.HasMalformedActionBlock(content: string) : bool =
-        match extractActionBlock content with
-        | Some inner -> List.isEmpty (parseActionsFromJson inner)
-        | None -> false
+    member this.HasMalformedActionBlock(content: string) : bool =
+        this.TryGetActionBlockValidationError(content).IsSome
 
     /// Override to customize the system prompt generation.
     abstract member BuildSystemPrompt: unit -> string
@@ -297,10 +414,31 @@ type OrchestratorBase(config: OrchestratorConfig) =
                 yield sprintf "# Available Agents\n%s" agentDescriptions ]
             |> String.concat "\n\n"
 
+        let hasTool name = config.Tools |> List.exists (fun t -> t.Name = name)
+        let hasAgent name = config.SubAgents |> List.exists (fun a -> a.Id.Name = name)
+
+        let examples =
+            [ if hasTool "write_file" && hasTool "convert_document" then
+                yield
+                    String.concat "\n"
+                        [ "Example — write a file then convert it with a tool:"
+                          "```application/json+nao"
+                          "{\"actions\":[{\"type\":\"tool\",\"name\":\"write_file\",\"params\":{\"path\":\"README.md\",\"content\":\"# Title\"}},{\"type\":\"tool\",\"name\":\"convert_document\",\"params\":{\"source\":\"README.md\",\"target\":\"pdf\"}}]}"
+                          "```" ]
+              if hasAgent "converter" then
+                yield
+                    String.concat "\n"
+                        [ "Example — for \"Convert README.md to PDF and HTML\" (delegate ONCE; the specialist produces both):"
+                          "```application/json+nao"
+                          "{\"actions\":[{\"type\":\"delegate\",\"name\":\"converter\",\"params\":\"Convert README.md to PDF and HTML\"}]}"
+                          "```" ] ]
+            |> String.concat "\n\n"
+
         let instructions =
             match config.Instructions with
             | Some custom -> custom
-            | None -> """
+            | None ->
+                sprintf """
 # Action Format
 To use a tool or sub-agent, reply with EXACTLY ONE fenced code block whose info string is `application/json+nao`. The block holds a single JSON object listing every step, in order. Put the action JSON ONLY inside this block:
 
@@ -315,19 +453,14 @@ Rules:
 - For a "tool", "params" is a JSON object with the tool's named arguments (see each tool's description for its fields), e.g. {"path":"notes.txt","content":"hello"}. For a "delegate", "params" is the input string for the sub-agent.
 - The block's JSON must be strictly valid: every brace and bracket balanced, no trailing text. If told it was malformed, re-send a corrected block.
 - The steps execute in order and their results are fed back to you for the next round.
+- Use ONLY tools listed in Available Tools and ONLY agents listed in Available Agents.
+- Never delegate to yourself.
 - Prefer delegating to a specialist sub-agent over invoking a tool when both could accomplish the task.
 
-Example — write a file then convert it:
-```application/json+nao
-{"actions":[{"type":"tool","name":"write_file","params":{"path":"README.md","content":"# Title"}},{"type":"tool","name":"convert_document","params":{"source":"README.md","target":"pdf"}}]}
-```
-
-Example — for "Convert README.md to PDF and HTML" (delegate ONCE; the specialist produces both):
-```application/json+nao
-{"actions":[{"type":"delegate","name":"converter","params":"Convert README.md to PDF and HTML"}]}
-```
+%s
 
 When you can answer the user directly, reply in plain text with NO action block. Only emit the block to invoke a tool or delegate. If the user requests a specific output format (JSON, XML, CSV, Markdown, YAML), encode your final answer in that format as plain text (still no action block)."""
+                    examples
 
         sprintf "%s\n\n%s\n%s" basePrompt capabilities instructions
 
@@ -352,7 +485,28 @@ When you can answer the user directly, reply in plain text with NO action block.
     /// the delegation was handed off to a background task and the orchestrator should reply
     /// with a token instead of blocking. Return None to fall back to in-process delegation.
     abstract member TryHandleDelegationAsync: agentName: string * input: string -> Task<string option>
-    default _.TryHandleDelegationAsync(_, _) = Task.FromResult None
+    default _.TryHandleDelegationAsync(agentName, input) =
+        task {
+            let ctx = config.Context
+            let canDelegate = config.SubAgents |> List.exists (fun a -> a.Id.Name = agentName)
+            if canDelegate && ctx.AsyncAgents.Contains agentName then
+                let spec: SessionExecution.TaskSpec =
+                    { Kind = "agent"
+                      Title = sprintf "%s agent" agentName
+                      Params = Map [ "agent", agentName; "input", input ] }
+                let! taskId = ctx.SpawnTask spec
+                if String.IsNullOrEmpty taskId then
+                    // No async task host available — fall back to in-process delegation.
+                    return None
+                else
+                    return
+                        Some(
+                            sprintf
+                                "Started a background **%s** task (`%s`). I've handed the work off to that specialist and you can keep chatting — track its status or download the result from the task tag when it finishes."
+                                agentName taskId
+                        )
+            else return None
+        }
 
     /// Override to add custom logic after an agent round completes.
     abstract member OnRoundComplete: round: int * content: string -> unit
@@ -364,10 +518,10 @@ When you can answer the user directly, reply in plain text with NO action block.
             let systemContent = this.BuildSystemPrompt() + memoryContext
             let systemMsg = { Role = System; Content = systemContent }
             let userMsg = { Role = User; Content = input }
-            emit (AgentEvent.MessageAdded (User, input))
 
-            let! windowedHistory = applyWindowAsync state.Conversation
-            let mutable conversation = windowedHistory @ [ systemMsg; userMsg ]
+            // Stateless per call: the orchestrator holds no cross-turn history. Callers thread
+            // prior conversation into `input`; continuity is owned by the store/event path.
+            let mutable conversation = [ systemMsg; userMsg ]
             let mutable rounds = 0
             let mutable finalAnswer = ""
             let mutable finished = false
@@ -375,27 +529,29 @@ When you can answer the user directly, reply in plain text with NO action block.
             let maxRepairAttempts = 2
 
             while not finished && rounds < config.MaxRounds do
-                emit (AgentEvent.Thinking (rounds + 1))
-                let! result = config.Provider.CompleteAsync conversation config.Options
+                let! result =
+                    LlmProvider.streamAsync config.Provider conversation config.Options (fun _ -> ())
                 let mutable working = result.Content
                 conversation <- conversation @ [ { Role = Assistant; Content = working } ]
-                emit (AgentEvent.MessageAdded (Assistant, working))
+                report (ReasoningAdded working)
 
                 // Validate-and-repair: if the model emitted a tagged action block that is
                 // not well-formed JSON, ask it to re-send a corrected block (bounded) before
                 // we decide. This keeps a broken action from being silently dropped or shown
                 // to the user as the final answer, without consuming the tool/round budget.
-                while this.HasMalformedActionBlock(working) && repairAttempts < maxRepairAttempts do
+                let mutable actionBlockValidationError = this.TryGetActionBlockValidationError(working)
+                while actionBlockValidationError.IsSome && repairAttempts < maxRepairAttempts do
                     repairAttempts <- repairAttempts + 1
-                    emit (AgentEvent.RoundError (sprintf "Malformed action block; requesting correction (%d/%d)." repairAttempts maxRepairAttempts))
+                    let validationGuidance = actionBlockValidationError.Value
                     let fixMsg =
                         { Role = User
-                          Content = "[System]: Your previous message contained an ```application/json+nao``` action block, but its JSON was not well-formed. Re-send ONLY that block as a single strictly-valid JSON object — every brace and bracket balanced, no trailing text — e.g. ```application/json+nao\n{\"actions\":[{\"type\":\"tool\",\"name\":\"<tool>\",\"params\":\"<input>\"}]}\n```. If you no longer need a tool, reply in plain text with no block." }
+                          Content = sprintf "[System]: Your previous message contained an invalid ```application/json+nao``` action block. Validation error: %s. Re-send ONLY that block as a single strictly-valid JSON object matching this shape: {\"actions\":[{\"type\":\"tool\",\"name\":\"<tool>\",\"params\":{}}]}. Every brace and bracket must be balanced, each action needs type and name, and there must be no trailing text. If you no longer need a tool, reply in plain text with no block." validationGuidance }
                     conversation <- conversation @ [ fixMsg ]
                     let! fixResult = config.Provider.CompleteAsync conversation config.Options
                     working <- fixResult.Content
                     conversation <- conversation @ [ { Role = Assistant; Content = working } ]
-                    emit (AgentEvent.MessageAdded (Assistant, working))
+                    report (ReasoningAdded working)
+                    actionBlockValidationError <- this.TryGetActionBlockValidationError(working)
 
                 let! parsedActions = this.TryParseActionsAsync(working)
                 if List.isEmpty parsedActions then
@@ -409,13 +565,13 @@ When you can answer the user directly, reply in plain text with NO action block.
                         if not finished then
                             match action with
                             | InvokeTool (toolName, toolInput) ->
-                                emit (AgentEvent.InvokingTool (toolName, toolInput))
+                                report (ToolInvoked (toolName, toolInput))
                                 // O: record the tool invocation (name + parameters + context) as a span.
                                 let toolSpan = this.StartToolSpan toolName toolInput (rounds + 1)
                                 match config.Tools |> List.tryFind (fun t -> t.Name = toolName) with
                                 | Some tool ->
-                                    let! toolResult = tool.InvokeAsync(ToolContext.current (), toolInput)
-                                    emit (AgentEvent.ToolResult (toolName, toolResult))
+                                    let! toolResult = tool.InvokeAsync(config.Context, toolInput)
+                                    report (ToolCompleted (toolName, toolResult))
                                     this.OnToolResult(toolName, toolInput, toolResult)
                                     let! verifyMsg =
                                         match tool.Verify with
@@ -425,7 +581,6 @@ When you can answer the user directly, reply in plain text with NO action block.
                                                 match vr with
                                                 | Ok () -> return None
                                                 | Error reason ->
-                                                    emit (AgentEvent.ToolVerifyFailed (toolName, reason))
                                                     return Some (sprintf "[Verification Failed for %s]: %s. Please retry or choose a different approach." toolName reason)
                                             }
                                         | None -> Task.FromResult None
@@ -442,33 +597,36 @@ When you can answer the user directly, reply in plain text with NO action block.
                                         this.EndToolSpan toolSpan SpanStatus.Ok resultAttrs
                                 | None ->
                                     let err = sprintf "Tool '%s' not found. Available tools: %s" toolName (config.Tools |> List.map (fun t -> t.Name) |> String.concat ", ")
-                                    emit (AgentEvent.RoundError err)
                                     let errMsg = { Role = User; Content = sprintf "[Error]: %s" err }
                                     conversation <- conversation @ [ errMsg ]
                                     this.EndToolSpan toolSpan (SpanStatus.Error err) Map.empty
 
                             | DelegateToAgent (agentName, agentInput) ->
-                                emit (AgentEvent.DelegatingToAgent (agentName, agentInput))
-                                let! handled = this.TryHandleDelegationAsync(agentName, agentInput)
-                                match handled with
-                                | Some tokenAnswer ->
-                                    // The delegation was handed off (e.g. to a background task); reply with
-                                    // the token immediately instead of running the sub-agent inline.
-                                    emit (AgentEvent.AgentResult (agentName, tokenAnswer))
-                                    finalAnswer <- tokenAnswer
-                                    finished <- true
-                                | None ->
-                                    match config.SubAgents |> List.tryFind (fun a -> a.Id.Name = agentName) with
-                                    | Some agent ->
-                                        let! agentResult = agent.RunAsync agentInput
-                                        emit (AgentEvent.AgentResult (agentName, agentResult))
-                                        let resultMsg = { Role = User; Content = sprintf "[Agent Result from %s]: %s" agentName agentResult }
-                                        conversation <- conversation @ [ resultMsg ]
+                                if String.Equals(agentName, id.Name, StringComparison.OrdinalIgnoreCase) then
+                                    let err = sprintf "Agent '%s' cannot delegate to itself." agentName
+                                    let errMsg = { Role = User; Content = sprintf "[Error]: %s" err }
+                                    conversation <- conversation @ [ errMsg ]
+                                else
+                                    report (SubAgentInvoked (agentName, agentInput))
+                                    let! handled = this.TryHandleDelegationAsync(agentName, agentInput)
+                                    match handled with
+                                    | Some tokenAnswer ->
+                                        // The delegation was handed off (e.g. to a background task); reply with
+                                        // the token immediately instead of running the sub-agent inline.
+                                        report (SubAgentCompleted (agentName, tokenAnswer))
+                                        finalAnswer <- tokenAnswer
+                                        finished <- true
                                     | None ->
-                                        let err = sprintf "Agent '%s' not found. Available agents: %s" agentName (config.SubAgents |> List.map (fun a -> a.Id.Name) |> String.concat ", ")
-                                        emit (AgentEvent.RoundError err)
-                                        let errMsg = { Role = User; Content = sprintf "[Error]: %s" err }
-                                        conversation <- conversation @ [ errMsg ]
+                                        match config.SubAgents |> List.tryFind (fun a -> a.Id.Name = agentName) with
+                                        | Some agent ->
+                                            let! agentResult = agent.RunAsync agentInput
+                                            report (SubAgentCompleted (agentName, agentResult))
+                                            let resultMsg = { Role = User; Content = sprintf "[Agent Result from %s]: %s" agentName agentResult }
+                                            conversation <- conversation @ [ resultMsg ]
+                                        | None ->
+                                            let err = sprintf "Agent '%s' not found. Available agents: %s" agentName (config.SubAgents |> List.map (fun a -> a.Id.Name) |> String.concat ", ")
+                                            let errMsg = { Role = User; Content = sprintf "[Error]: %s" err }
+                                            conversation <- conversation @ [ errMsg ]
 
                             | Think _ | Respond _ -> ()
 
@@ -476,24 +634,18 @@ When you can answer the user directly, reply in plain text with NO action block.
                 rounds <- rounds + 1
 
             if not finished then
-                emit (AgentEvent.MaxRoundsReached config.MaxRounds)
                 let forceMsg = { Role = User; Content = "[System]: Maximum rounds reached. Please provide your final answer now." }
                 conversation <- conversation @ [ forceMsg ]
                 let! result = config.Provider.CompleteAsync conversation config.Options
                 finalAnswer <- result.Content
                 conversation <- conversation @ [ { Role = Assistant; Content = result.Content } ]
 
-            emit (AgentEvent.Completed finalAnswer)
-            let historyMessages =
-                conversation
-                |> List.filter (fun m -> m.Role <> System)
-            state <- { state with Conversation = historyMessages }
+            report (AnswerProduced finalAnswer)
             return finalAnswer
         }
 
     interface IAgent with
         member _.Id = id
-        member _.State = state
         member this.RunAsync(input: string) = this.RunCore(input)
         member this.HandleMessageAsync(msg: AgentMessage) =
             task {
@@ -528,9 +680,11 @@ module Orchestrator =
               Prompt = prompt
               Options = { CompletionOptions.Default with Temperature = 0.1 }
               MaxRounds = 5
-              EventSink = AgentEventSink.none
+              Bus = EventBus.none
+              Scope = EventScope.Empty
               Memory = OrchestratorMemoryConfig.None
-              Instructions = None }
+              Instructions = None
+              Context = ToolContext.allowAll }
 
         Orchestrator(config) :> IAgent
 

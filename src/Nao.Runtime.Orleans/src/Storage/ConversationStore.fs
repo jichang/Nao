@@ -2,7 +2,7 @@ namespace Nao.Runtime.Orleans
 
 open System
 open System.Threading.Tasks
-open Nao.Core
+open Nao.Agents
 open Orleans
 
 /// A single step in the process an agent ran to produce a turn's answer

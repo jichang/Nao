@@ -3,7 +3,8 @@ namespace Nao.E2E.Tests
 open System
 open System.Threading.Tasks
 open Microsoft.VisualStudio.TestTools.UnitTesting
-open Nao.Core
+open Nao.Agents
+open Nao.Persistence
 open Nao.Agents
 
 // =============================================================================
@@ -92,7 +93,6 @@ type EtclovgExecutionTests() =
     let makeAgent response : IAgent =
         { new IAgent with
             member _.Id = { Name = "bounded-agent"; Description = "Agent with resource bounds" }
-            member _.State = AgentState.Empty
             member _.RunAsync(_) = Task.FromResult response
             member _.HandleMessageAsync(_) = Task.FromResult None }
 
@@ -348,7 +348,7 @@ type EtclovgObservabilityTests() =
 
     [<TestMethod>]
     member _.DistributedTracingAcrossAgentCalls() =
-        let tracer = Tracer.inMemory ()
+        let tracer = InMemory.tracer ()
 
         // Root span: user request arrives
         let rootSpan = tracer.StartTrace("user-request")
@@ -381,7 +381,7 @@ type EtclovgObservabilityTests() =
 
     [<TestMethod>]
     member _.MetricsTrackCostAndLatency() =
-        let metrics = MetricsCollector.inMemory ()
+        let metrics = InMemory.metrics ()
 
         // Simulate a multi-step agent execution
         metrics.RecordLlmCall 500 200 150L    // First LLM call: routing decision
@@ -601,7 +601,7 @@ type EtclovgGovernanceTests() =
 
     [<TestMethod>]
     member _.AuditLogTracksAllActions() =
-        let audit = AuditLog.inMemory ()
+        let audit = InMemory.auditLog ()
         let execId = Guid.NewGuid()
 
         // Record a sequence of actions
@@ -649,7 +649,6 @@ type EtclovgFullIntegrationTests() =
     let makeAgent response : IAgent =
         { new IAgent with
             member _.Id = { Name = "full-demo-agent"; Description = "Full ETCLOVG demo" }
-            member _.State = AgentState.Empty
             member _.RunAsync(_) = Task.FromResult response
             member _.HandleMessageAsync(_) = Task.FromResult None }
 
@@ -667,8 +666,8 @@ type EtclovgFullIntegrationTests() =
         let _protocol = ToolProtocol.fromTools [ EtclovgDemoTools.stockPrice; EtclovgDemoTools.searchDocs ]
 
         // O: Observability
-        let tracer = Tracer.inMemory ()
-        let metrics = MetricsCollector.inMemory ()
+        let tracer = InMemory.tracer ()
+        let metrics = InMemory.metrics ()
 
         // V: Verification
         let traceStore = InMemoryTraceStore() :> ITraceStore
@@ -682,7 +681,7 @@ type EtclovgFullIntegrationTests() =
         let constitution =
             Constitution.empty "safety"
             |> Constitution.addRule Constitution.noPrivateDataRule
-        let audit = AuditLog.inMemory ()
+        let audit = InMemory.auditLog ()
         let policyEngine = PolicyEngine.create [ PolicyEngine.costBudgetPolicy 10.0m ]
 
         // L: Lifecycle hooks
@@ -705,7 +704,8 @@ type EtclovgFullIntegrationTests() =
               Constitution = Some constitution
               AuditLog = Some audit
               PolicyEngine = Some policyEngine
-              EventSink = AgentEventSink.none }
+              Bus = EventBus.none
+              Scope = EventScope.Empty }
 
         // Execute
         let agent = makeAgent "The current AAPL price is $189.45 based on latest market data."
@@ -748,7 +748,7 @@ type EtclovgFullIntegrationTests() =
                 Constitution = Some (
                     Constitution.empty "safety"
                     |> Constitution.addRule Constitution.noPrivateDataRule)
-                AuditLog = Some (AuditLog.inMemory ())
+                AuditLog = Some (InMemory.auditLog ())
                 Lifecycle = [ PassthroughHook() :> ILifecycleHook ] }
 
         let result = (EtclovgHarness.runAsync config agent "How do I get help?").Result
@@ -809,10 +809,10 @@ type EtclovgFullIntegrationTests() =
         let orchestrator = Orchestrator.create (provider :> ILlmProvider) tools [] :> IAgent
         let agentId = orchestrator.Id
 
-        let tracer = Tracer.inMemory ()
-        let metrics = MetricsCollector.inMemory ()
+        let tracer = InMemory.tracer ()
+        let metrics = InMemory.metrics ()
         let traceStore = InMemoryTraceStore() :> ITraceStore
-        let audit = AuditLog.inMemory ()
+        let audit = InMemory.auditLog ()
 
         let config =
             { EtclovgConfig.Default with
@@ -824,8 +824,7 @@ type EtclovgFullIntegrationTests() =
                 Permissions = Some (PermissionModel.Permissive agentId)
                 Constitution = Some (Constitution.empty "basic" |> Constitution.addRule Constitution.noHarmRule)
                 PolicyEngine = Some (PolicyEngine.create [ PolicyEngine.costBudgetPolicy 100.0m ])
-                Lifecycle = [ PassthroughHook() :> ILifecycleHook ]
-                EventSink = AgentEventSink.none }
+                Lifecycle = [ PassthroughHook() :> ILifecycleHook ] }
 
         let result = (EtclovgHarness.runAsync config orchestrator "What is the stock price of AAPL?").Result
 

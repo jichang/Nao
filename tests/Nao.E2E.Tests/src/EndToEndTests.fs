@@ -1,7 +1,7 @@
 namespace Nao.E2E.Tests
 
 open Microsoft.VisualStudio.TestTools.UnitTesting
-open Nao.Core
+open Nao.Agents
 open Nao.Agents
 open Nao.Runtime.Orleans.Grains
 
@@ -39,21 +39,6 @@ type EndToEndAgentTests () =
         Assert.IsTrue(result.Contains("4"), sprintf "Expected '4', got: %s" result)
 
     [<TestMethod>]
-    member _.AgentMaintainsConversationState () =
-        let agent = createAgent ()
-        let _ = agent.RunAsync("Hello there").Result
-        // After running, state should contain messages
-        Assert.IsTrue(agent.State.Conversation.Length > 0)
-
-    [<TestMethod>]
-    member _.AgentHandlesMultiTurnConversation () =
-        let agent = createAgent ()
-        let _ = agent.RunAsync("What is the weather in Paris?").Result
-        let conversationLength = agent.State.Conversation.Length
-        // Should have system + user + assistant + toolResult + finalAssistant
-        Assert.IsTrue(conversationLength >= 4, sprintf "Expected >= 4 messages, got %d" conversationLength)
-
-    [<TestMethod>]
     member _.AgentHandlesMessageFromAnotherAgent () =
         let agent = createAgent ()
         let sender = { Name = "coordinator"; Description = "orchestrator" }
@@ -88,9 +73,10 @@ type EndToEndWorkspaceTests () =
     member _.EachAgentInstanceIsIsolated () =
         let a1 = DemoWorkspace.createAgent ()
         let a2 = DemoWorkspace.createAgent ()
-        let _ = a1.RunAsync("hello").Result
-        Assert.IsTrue(a1.State.Conversation.Length > 0)
-        Assert.AreEqual(0, a2.State.Conversation.Length)
+        let r1 = a1.RunAsync("hello").Result
+        // Agents are stateless per call; distinct instances run independently.
+        Assert.IsTrue(r1.Length > 0)
+        Assert.IsFalse(System.Object.ReferenceEquals(a1, a2))
 
 [<TestClass>]
 type EndToEndToolTests () =

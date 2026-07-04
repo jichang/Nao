@@ -2,7 +2,7 @@ namespace Nao.Agents
 
 open System
 open System.Threading.Tasks
-open Nao.Core
+open Nao.Agents
 
 /// Strategy for consolidating memories
 [<RequireQualifiedAccess>]

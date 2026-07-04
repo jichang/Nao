@@ -23,9 +23,9 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\Nao.Agents\Nao.Agents.fsproj" />
-    <ProjectReference Include="..\..\src\Nao.Feedback\Nao.Feedback.fsproj" />
     <ProjectReference Include="..\..\src\Nao.Server\Nao.Server.fsproj" />
     <ProjectReference Include="..\..\src\Nao.Assistant\Nao.Assistant.fsproj" />
+    <ProjectReference Include="..\..\src\Nao.Persistence\Nao.Persistence.fsproj" />
   </ItemGroup>
   <Import Project="..\..\.paket\Paket.Restore.targets" />
 </Project>

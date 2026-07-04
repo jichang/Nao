@@ -28,14 +28,11 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Nao.Server\Nao.Server.fsproj" />
-    <ProjectReference Include="..\Nao.Core\Nao.Core.fsproj" />
     <ProjectReference Include="..\Nao.Agents\Nao.Agents.fsproj" />
     <ProjectReference Include="..\Nao.Loader\Nao.Loader.fsproj" />
     <ProjectReference Include="..\Nao.Documents\Nao.Documents.fsproj" />
     <ProjectReference Include="..\Nao.Providers\Nao.Providers.fsproj" />
     <ProjectReference Include="..\Nao.Persistence\Nao.Persistence.fsproj" />
-    <ProjectReference Include="..\Nao.Feedback\Nao.Feedback.fsproj" />
-    <ProjectReference Include="..\Nao.Events\Nao.Events.fsproj" />
     <ProjectReference Include="..\Nao.Runtime.Orleans\Nao.Runtime.Orleans.fsproj" />
     <ProjectReference Include="..\Nao.Runtime.Orleans.Codegen\Nao.Runtime.Orleans.Codegen.csproj" />
   </ItemGroup>

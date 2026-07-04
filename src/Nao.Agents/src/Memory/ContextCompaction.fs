@@ -2,7 +2,7 @@ namespace Nao.Agents
 
 open System
 open System.Threading.Tasks
-open Nao.Core
+open Nao.Agents
 
 /// Strategy for compacting context when it exceeds budget
 [<RequireQualifiedAccess>]
@@ -31,6 +31,12 @@ type CompactionResult =
 
 /// Advanced context management beyond simple windowing
 module ContextCompaction =
+
+    let private compactionPrompt =
+        Prompt.render
+            { Prompt.Empty with
+                Objective = "Summarize the following conversation concisely."
+                Constraints = [ "Preserve key facts, decisions, and action items." ] }
 
     /// Estimate token count for a message (rough heuristic: ~4 chars per token)
     let estimateTokens (msg: Message) : int =
@@ -74,7 +80,7 @@ module ContextCompaction =
                 |> String.concat "\n"
 
             let prompt =
-                [ { Role = System; Content = "Summarize the following conversation concisely, preserving key facts, decisions, and action items." }
+                [ { Role = System; Content = compactionPrompt }
                   { Role = User; Content = content } ]
 
             let! result = provider.CompleteAsync prompt options

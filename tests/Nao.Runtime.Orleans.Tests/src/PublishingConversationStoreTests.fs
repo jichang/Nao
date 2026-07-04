@@ -4,7 +4,8 @@ open System
 open System.IO
 open System.Threading.Tasks
 open Microsoft.VisualStudio.TestTools.UnitTesting
-open Nao.Events
+open Nao.Agents
+open Nao.Persistence
 open Nao.Runtime.Orleans
 
 /// Records the events published to the bus.

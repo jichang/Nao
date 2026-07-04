@@ -3,7 +3,7 @@ namespace Nao.Assistant
 open System
 open System.IO
 open System.Threading.Tasks
-open Nao.Core
+open Nao.Agents
 open Nao.Agents
 
 /// Resource-permission enforcement for the built-in tools. Tools are the single seam through
@@ -36,42 +36,38 @@ module ToolPermissions =
         (s.AllowedWebDomains |> List.map (mk ResourceKind.Web))
         @ (s.AllowedFilePaths |> List.map (mk ResourceKind.File))
 
-    /// Set while a sensitive tool authorizes its OWN specific resources at runtime (via
-    /// `requestConfirmedAsync`) and read by `decide` through the async call chain, so the
-    /// in-sandbox default becomes "ask" instead of "allow" for that request only.
-    let private forceConfirm = System.Threading.AsyncLocal<bool>()
 
     /// Map a known built-in tool invocation to the resource it would touch. Unknown
     /// tools return None and are not guarded (their resource semantics are opaque). Tool
     /// inputs are JSON objects, so we read the relevant field from the parsed args.
-    let classify (name: string) (input: string) : ResourceAccess option =
+    let classify (ctx: ToolContext) (name: string) (input: string) : ResourceAccess option =
         let a = parseArgs input
         match name with
         | "web_fetch" -> Some(ResourceAccess.Web("fetch", (a.StringOrRaw "url").Trim()))
         | "http_request" ->
             let methodStr = (a.StringOr("method", "GET")).Trim().ToUpperInvariant()
             Some(ResourceAccess.Web(methodStr, (a.StringOrRaw "url").Trim()))
-        | "read_file" -> Some(ResourceAccess.File("read", resolvePath (a.StringOrRaw "path")))
-        | "write_file" -> Some(ResourceAccess.File("write", resolvePath (a.StringOrRaw "path")))
-        | "create_folder" -> Some(ResourceAccess.File("write", resolvePath (a.StringOrRaw "path")))
-        | "delete" -> Some(ResourceAccess.File("delete", resolvePath (a.StringOrRaw "path")))
+        | "read_file" -> Some(ResourceAccess.File("read", resolvePath ctx (a.StringOrRaw "path")))
+        | "write_file" -> Some(ResourceAccess.File("write", resolvePath ctx (a.StringOrRaw "path")))
+        | "create_folder" -> Some(ResourceAccess.File("write", resolvePath ctx (a.StringOrRaw "path")))
+        | "delete" -> Some(ResourceAccess.File("delete", resolvePath ctx (a.StringOrRaw "path")))
         | "list_folder" ->
             let rel = a.StringOrRaw "path"
-            let path = if String.IsNullOrWhiteSpace rel then currentWorkDir () else resolvePath rel
+            let path = if String.IsNullOrWhiteSpace rel then currentWorkDir ctx else resolvePath ctx rel
             Some(ResourceAccess.File("read", path))
         | "search_files" ->
             let sub = a.StringOr("path", "")
-            let path = if String.IsNullOrWhiteSpace sub then currentWorkDir () else resolvePath sub
+            let path = if String.IsNullOrWhiteSpace sub then currentWorkDir ctx else resolvePath ctx sub
             Some(ResourceAccess.File("read", path))
-        | "find_files" -> Some(ResourceAccess.File("read", currentWorkDir ()))
+        | "find_files" -> Some(ResourceAccess.File("read", currentWorkDir ctx))
         | _ -> None
 
     /// Map a built-in tool invocation to EVERY resource it would touch. Most tools touch a
     /// single resource (`classify`). Tools that need to authorize specific resources they only
     /// discover at runtime (e.g. `convert_document`'s exact source and target paths) request
     /// those themselves via `requestConfirmedAsync` and so are NOT statically classified here.
-    let classifyAll (name: string) (input: string) : ResourceAccess list =
-        classify name input |> Option.toList
+    let classifyAll (ctx: ToolContext) (name: string) (input: string) : ResourceAccess list =
+        classify ctx name input |> Option.toList
 
     let private isUnder (root: string) (path: string) =
         let norm (s: string) = Path.GetFullPath(s).Replace('\\', '/').TrimEnd('/')
@@ -82,8 +78,9 @@ module ToolPermissions =
     /// Evaluate the static rules for an access request. The "default when nothing matches" is
     /// `Ask` for resources outside the allowlist/sandbox, so the async layer can prompt the
     /// user live; explicit deny rules still short-circuit to `Deny` and in-sandbox file access
-    /// stays `Allow`.
-    let decide (access: ResourceAccess) : PermissionDecision =
+    /// stays `Allow` unless `forceConfirm` is set (the caller wants to confirm this specific
+    /// resource even though it is inside the sandbox).
+    let decide (sessionKey: string) (forceConfirm: bool) (access: ResourceAccess) : PermissionDecision =
         let s = settings ()
         if not s.Enabled then
             PermissionDecision.Allow
@@ -94,8 +91,8 @@ module ToolPermissions =
             match access with
             | ResourceAccess.File(_, path) ->
                 let dft =
-                    if forceConfirm.Value then PermissionDecision.Ask
-                    elif isUnder (currentWorkDir ()) path then PermissionDecision.Allow
+                    if forceConfirm then PermissionDecision.Ask
+                    elif isUnder (workDirForKey sessionKey) path then PermissionDecision.Allow
                     else PermissionDecision.Ask
                 ResourcePermission.evaluateWith dft rules access
             | ResourceAccess.Web _ -> ResourcePermission.evaluateWith PermissionDecision.Ask rules access
@@ -108,26 +105,20 @@ module ToolPermissions =
         | ResourceAccess.File(op, path) -> sprintf "The assistant wants %s access to %s." op path
         | ResourceAccess.ToolCall name -> sprintf "The assistant wants to run the tool '%s'." name
 
-    let private sessionKeyNow () =
-        match SessionExecution.current () with
-        | Some sc -> sc.SessionKey
-        | None -> ""
-
     /// Resolve a permission request against the static rules (settings, sandbox, persisted
     /// grants) and, when the outcome is `Ask` (nothing pre-approved or pre-denied), prompt
     /// the user live over the WebSocket and await their answer. Returns the decision plus
     /// whether the user asked to remember the grant for the session. This is registered as
     /// the process-wide `PermissionGate.Prompt` so the session grain (which cannot
     /// reference the server) can resolve its tools' permission requests through it.
-    let promptOutcome (sessionKey: string) (access: ResourceAccess) (reason: string) : Task<PermissionOutcome> =
+    let promptOutcome (sessionKey: string) (access: ResourceAccess) (reason: string) (forceConfirm: bool) : Task<PermissionOutcome> =
         task {
-            match decide access with
+            match decide sessionKey forceConfirm access with
             | PermissionDecision.Allow -> return { Decision = PermissionDecision.Allow; RememberForSession = false }
             | PermissionDecision.Deny -> return { Decision = PermissionDecision.Deny; RememberForSession = false }
             | PermissionDecision.Ask ->
                 let r = if String.IsNullOrWhiteSpace reason then reasonFor access else reason
-                let key = if String.IsNullOrEmpty sessionKey then sessionKeyNow () else sessionKey
-                return! PermissionBroker.requestAsync key access r
+                return! PermissionBroker.requestAsync sessionKey access r
         }
 
     /// Structured refusal handed back to the model when access is denied. It names the
@@ -151,11 +142,11 @@ module ToolPermissions =
             Execute =
                 fun ctx input ->
                     task {
-                        let accesses = classifyAll tool.Name input
+                        let accesses = classifyAll ctx tool.Name input
                         let mutable denied = None
                         for access in accesses do
                             if Option.isNone denied then
-                                let! ok = ctx.RequestPermission access (reasonFor access)
+                                let! ok = ctx.RequestPermission access (reasonFor access) false
                                 if not ok then denied <- Some access
                         match denied with
                         | Some access -> return denyResult access
@@ -171,16 +162,12 @@ module ToolPermissions =
     /// live over the WebSocket when the access isn't already allowed/denied by a rule, and
     /// returns true only if access is granted. Use this from custom tools that decide what
     /// they need at runtime rather than from a fixed input shape.
-    let requestPermissionAsync (access: ResourceAccess) (reason: string) : Task<bool> =
-        (ToolContext.current ()).RequestPermission access reason
+    let requestPermissionAsync (ctx: ToolContext) (access: ResourceAccess) (reason: string) : Task<bool> =
+        ctx.RequestPermission access reason false
 
     /// Like `requestPermissionAsync` but forces an interactive prompt even for paths inside
     /// the workspace sandbox (which are otherwise auto-allowed). Sensitive tools use this to
     /// confirm the SPECIFIC source/target resources they touch. A persisted or session grant
     /// still suppresses repeat prompts, and the global master switch (settings) still applies.
-    let requestConfirmedAsync (access: ResourceAccess) (reason: string) : Task<bool> =
-        task {
-            forceConfirm.Value <- true
-            try return! (ToolContext.current ()).RequestPermission access reason
-            finally forceConfirm.Value <- false
-        }
+    let requestConfirmedAsync (ctx: ToolContext) (access: ResourceAccess) (reason: string) : Task<bool> =
+        ctx.RequestPermission access reason true

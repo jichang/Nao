@@ -2,7 +2,7 @@ namespace Nao.E2E.Tests
 
 open System.Threading.Tasks
 open Microsoft.VisualStudio.TestTools.UnitTesting
-open Nao.Core
+open Nao.Agents
 open Nao.Agents
 
 // --- Specialized sub-agents for orchestration demos ---
@@ -10,20 +10,13 @@ open Nao.Agents
 /// A weather-specialist agent that only handles weather queries
 type WeatherAgent() =
     let id = { Name = "weather-agent"; Description = "Handles weather queries" }
-    let mutable state = AgentState.Empty
     let tool = DemoTools.getWeather
 
     interface IAgent with
         member _.Id = id
-        member _.State = state
         member _.RunAsync(input: string) =
             task {
                 let! result = tool.Execute ToolContext.allowAll input
-                let conv = state.Conversation @ [
-                    { Role = User; Content = input }
-                    { Role = Assistant; Content = result }
-                ]
-                state <- { state with Conversation = conv }
                 return result
             }
         member _.HandleMessageAsync(msg: AgentMessage) =
@@ -35,7 +28,6 @@ type WeatherAgent() =
 /// A math-specialist agent that only handles calculations
 type MathAgent() =
     let id = { Name = "math-agent"; Description = "Handles math calculations" }
-    let mutable state = AgentState.Empty
     let tool = DemoTools.calculator
 
     /// Extract a math expression from natural language input
@@ -51,16 +43,10 @@ type MathAgent() =
 
     interface IAgent with
         member _.Id = id
-        member _.State = state
         member _.RunAsync(input: string) =
             task {
                 let expr = extractExpression input
                 let! result = tool.Execute ToolContext.allowAll expr
-                let conv = state.Conversation @ [
-                    { Role = User; Content = input }
-                    { Role = Assistant; Content = result }
-                ]
-                state <- { state with Conversation = conv }
                 return result
             }
         member _.HandleMessageAsync(msg: AgentMessage) =
@@ -73,20 +59,13 @@ type MathAgent() =
 /// A greeting-specialist agent
 type GreetingAgent() =
     let id = { Name = "greeting-agent"; Description = "Handles greetings and introductions" }
-    let mutable state = AgentState.Empty
     let tool = DemoTools.greeter
 
     interface IAgent with
         member _.Id = id
-        member _.State = state
         member _.RunAsync(input: string) =
             task {
                 let! result = tool.Execute ToolContext.allowAll input
-                let conv = state.Conversation @ [
-                    { Role = User; Content = input }
-                    { Role = Assistant; Content = result }
-                ]
-                state <- { state with Conversation = conv }
                 return result
             }
         member _.HandleMessageAsync(msg: AgentMessage) =
@@ -98,19 +77,11 @@ type GreetingAgent() =
 /// A summarizer agent that reformats input into a summary
 type SummarizerAgent() =
     let id = { Name = "summarizer"; Description = "Summarizes and reformats text" }
-    let mutable state = AgentState.Empty
 
     interface IAgent with
         member _.Id = id
-        member _.State = state
         member _.RunAsync(input: string) =
             let summary = sprintf "Summary: %s" (input.Substring(0, min 50 input.Length))
-            let conv =
-                state.Conversation @ [
-                    { Role = User; Content = input }
-                    { Role = Assistant; Content = summary }
-                ]
-            state <- { state with Conversation = conv }
             Task.FromResult(summary)
         member _.HandleMessageAsync(msg: AgentMessage) =
             let summary = sprintf "Summary: %s" (msg.Content.Substring(0, min 50 msg.Content.Length))
@@ -120,11 +91,9 @@ type SummarizerAgent() =
 /// Simulates the "general agent that accepts user input and decides what to do" pattern.
 type OrchestratorRoutingAgent() =
     let id = { Name = "orchestrator"; Description = "Routes requests to the appropriate specialist" }
-    let mutable state = AgentState.Empty
 
     interface IAgent with
         member _.Id = id
-        member _.State = state
         member _.RunAsync(input: string) =
             // The orchestrator's job: analyze input and return the name of the best sub-agent
             let agentName =
@@ -136,12 +105,6 @@ type OrchestratorRoutingAgent() =
                     "greeting-agent"
                 else
                     "weather-agent" // default fallback
-            let conv =
-                state.Conversation @ [
-                    { Role = User; Content = input }
-                    { Role = Assistant; Content = agentName }
-                ]
-            state <- { state with Conversation = conv }
             Task.FromResult(agentName)
         member _.HandleMessageAsync(msg: AgentMessage) =
             Task.FromResult(None)

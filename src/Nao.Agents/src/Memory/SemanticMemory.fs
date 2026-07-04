@@ -2,7 +2,7 @@ namespace Nao.Agents
 
 open System
 open System.Threading.Tasks
-open Nao.Core
+open Nao.Agents
 
 /// A memory entry with an embedding vector for semantic retrieval
 type SemanticEntry =
@@ -46,83 +46,3 @@ module SemanticSimilarity =
                 normB <- normB + bi * bi
             if normA = 0.0 || normB = 0.0 then 0.0
             else dot / (sqrt normA * sqrt normB)
-
-/// In-memory semantic memory implementation
-type InMemorySemanticMemory(embeddingProvider: IEmbeddingProvider) =
-    let store = System.Collections.Concurrent.ConcurrentDictionary<string, SemanticEntry list>()
-
-    let agentKey (agentId: AgentId) = agentId.Name
-
-    interface ISemanticMemory with
-        member _.StoreAsync (agentId: AgentId) (key: string) (content: string) =
-            task {
-                let! embedding = embeddingProvider.EmbedAsync content
-                let entry =
-                    { Key = key
-                      Content = content
-                      Embedding = embedding
-                      Timestamp = DateTimeOffset.UtcNow
-                      Tags = [] }
-                let storeKey = agentKey agentId
-                store.AddOrUpdate(
-                    storeKey,
-                    [ entry ],
-                    fun _ existing ->
-                        let filtered = existing |> List.filter (fun e -> e.Key <> key)
-                        entry :: filtered)
-                |> ignore
-            }
-
-        member _.RetrieveAsync (agentId: AgentId) (query: string) (topK: int) =
-            task {
-                let! queryEmbedding = embeddingProvider.EmbedAsync query
-                let storeKey = agentKey agentId
-                match store.TryGetValue(storeKey) with
-                | true, entries ->
-                    return
-                        entries
-                        |> List.map (fun e -> (e, SemanticSimilarity.cosineSimilarity queryEmbedding e.Embedding))
-                        |> List.sortByDescending snd
-                        |> List.truncate topK
-                        |> List.map fst
-                | false, _ -> return []
-            }
-
-        member _.RemoveAsync (agentId: AgentId) (key: string) =
-            let storeKey = agentKey agentId
-            match store.TryGetValue(storeKey) with
-            | true, entries ->
-                store.[storeKey] <- entries |> List.filter (fun e -> e.Key <> key)
-            | false, _ -> ()
-            task { return () }
-
-/// A simple bag-of-words embedding provider for testing (no external dependencies)
-type SimpleEmbeddingProvider() =
-    let vocabulary = System.Collections.Concurrent.ConcurrentDictionary<string, int>()
-    let mutable nextIndex = 0
-
-    let getIndex (word: string) =
-        vocabulary.GetOrAdd(word, fun _ ->
-            let idx = nextIndex
-            nextIndex <- nextIndex + 1
-            idx)
-
-    interface IEmbeddingProvider with
-        member _.EmbedAsync (text: string) =
-            let words =
-                text.ToLowerInvariant().Split([| ' '; '.'; ','; '!'; '?'; '\n'; '\r'; '\t' |], StringSplitOptions.RemoveEmptyEntries)
-            // Build a sparse vector using word frequencies
-            let wordCounts = System.Collections.Generic.Dictionary<int, float>()
-            for word in words do
-                let idx = getIndex word
-                match wordCounts.TryGetValue(idx) with
-                | true, count -> wordCounts.[idx] <- count + 1.0
-                | false, _ -> wordCounts.[idx] <- 1.0
-
-            // Create a dense vector up to current vocabulary size
-            let size = max nextIndex 1
-            let vector = Array.zeroCreate<float> size
-            for kvp in wordCounts do
-                if kvp.Key < size then
-                    vector.[kvp.Key] <- kvp.Value
-            Task.FromResult(vector)

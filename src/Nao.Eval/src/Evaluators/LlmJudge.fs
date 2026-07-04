@@ -2,7 +2,7 @@ namespace Nao.Eval.Evaluators
 
 open System.Text.Json
 open System.Threading.Tasks
-open Nao.Core
+open Nao.Agents
 open Nao.Eval
 
 /// Configuration for the LLM-as-judge evaluator
@@ -77,8 +77,13 @@ Where score is a number on the scale described above."""
         member _.EvaluateAsync (case: EvalCase) (actual: string) =
             task {
                 let prompt = buildPrompt case actual
+                let system =
+                    Prompt.render
+                        { Prompt.Empty with
+                            Role = "You are a precise evaluation judge."
+                            OutputFormat = OutputFormat.Json None }
                 let conversation = [
-                    { Role = System; Content = "You are a precise evaluation judge. Always respond with valid JSON." }
+                    { Role = System; Content = system }
                     { Role = User; Content = prompt }
                 ]
                 let! result = config.Provider.CompleteAsync conversation config.Options

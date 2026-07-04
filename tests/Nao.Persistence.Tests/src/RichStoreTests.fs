@@ -4,7 +4,7 @@ open System
 open System.IO
 open Microsoft.VisualStudio.TestTools.UnitTesting
 open Microsoft.Data.Sqlite
-open Nao.Core
+open Nao.Agents
 open Nao.Agents
 open Nao.Persistence
 

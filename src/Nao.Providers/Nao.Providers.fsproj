@@ -11,14 +11,14 @@
     <Compile Include="src/Configs/OllamaConfig.fs" />
     <Compile Include="src/Configs/VllmConfig.fs" />
     <Compile Include="src/Configs/LlamaCppConfig.fs" />
-    <Compile Include="src/OllamaProvider.fs" />
-    <Compile Include="src/OpenAICompatibleProvider.fs" />
-    <Compile Include="src/ProviderType.fs" />
-    <Compile Include="src/ProviderFactory.fs" />
+    <Compile Include="src/Providers/OllamaProvider.fs" />
+    <Compile Include="src/Providers/OpenAICompatibleProvider.fs" />
+    <Compile Include="src/Factory/ProviderType.fs" />
+    <Compile Include="src/Factory/ProviderFactory.fs" />
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Nao.Core\Nao.Core.fsproj" />
+    <ProjectReference Include="..\Nao.Agents\Nao.Agents.fsproj" />
   </ItemGroup>
 
 </Project>

@@ -15,11 +15,12 @@ type ToolPermissionTests() =
     let recordingCtx (sessionKey: string) (answer: bool) =
         let asked = ResizeArray<ResourceAccess>()
         let ctx =
-            { SessionKey = sessionKey
-              RequestPermission =
-                fun access _reason ->
-                    asked.Add access
-                    Task.FromResult answer }
+            { ToolContext.allowAll with
+                SessionKey = sessionKey
+                RequestPermission =
+                    fun access _reason _force ->
+                        asked.Add access
+                        Task.FromResult answer }
         ctx, asked
 
     [<TestMethod>]
@@ -67,11 +68,12 @@ type ToolPermissionTests() =
         // Two declared permissions; the first is denied so the second is never requested.
         let asked = ResizeArray<ResourceAccess>()
         let ctx =
-            { SessionKey = ""
-              RequestPermission =
-                fun access _ ->
-                    asked.Add access
-                    Task.FromResult false }
+            { ToolContext.allowAll with
+                SessionKey = ""
+                RequestPermission =
+                    fun access _ _ ->
+                        asked.Add access
+                        Task.FromResult false }
         let tool =
             Tool.Create(
                 "multi",
@@ -97,7 +99,7 @@ type ToolPermissionTests() =
         // No static permissions; the tool asks dynamically once it knows its target.
         let tool =
             Tool.Create("dyn", "dynamic", [], fun ctx input -> task {
-                let! ok = ctx.RequestPermission (ResourceAccess.File("write", input)) "save"
+                let! ok = ctx.RequestPermission (ResourceAccess.File("write", input)) "save" false
                 return (if ok then "wrote" else "blocked") })
         let allowCtx, _ = recordingCtx "" true
         let denyCtx, _ = recordingCtx "" false

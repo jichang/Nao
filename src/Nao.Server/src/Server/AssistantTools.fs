@@ -18,11 +18,7 @@ module AssistantTools =
     let requestPermissionAsync = ToolPermissions.requestPermissionAsync
 
     let allTools =
-        [ FileTools.createFolder; FileTools.writeFile; FileTools.readFile; FileTools.listFolder; FileTools.delete
-          UtilityTools.dateTime; UtilityTools.calculator
-          WebTools.httpRequest; WebTools.webFetch
-          SearchTools.searchFiles; SearchTools.findFiles
-          KnowledgeTools.searchKnowledge; DocumentTools.convertDocument ]
+        [ DocumentTools.convertDocument ]
         // Enforce resource permissions first, then clamp every tool result so no tool
         // (current or future) can flood the conversation regardless of its output size.
         |> List.map (fun tool ->

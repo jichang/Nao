@@ -52,7 +52,7 @@ module DocumentTools =
         { Tool.Create("convert_document",
             "Convert a workspace document from one format to another via the unified document model. Input: JSON {\"source\":\"file path/name\",\"target\":\"README.pdf\" or a bare format \"pdf\"|\"docx\"|\"html\"|\"xlsx\"|\"pptx\"|\"md\"|\"txt\"}. When 'target' is a bare format the output is named after the source. Reads .md/.markdown, .txt, .html and .docx; writes those plus .pdf, .xlsx and .pptx.",
             [],
-            fun _ctx input -> task {
+            fun ctx input -> task {
                 try
                     let a = parseArgs input
                     let sourceRaw = (a.StringOr("source", "")).Trim()
@@ -60,7 +60,7 @@ module DocumentTools =
                     if String.IsNullOrWhiteSpace sourceRaw || String.IsNullOrWhiteSpace targetRaw then
                         return json {| error = "Expected JSON {\"source\":\"...\",\"target\":\"...\"} (target is a filename or a format like 'pdf')" |}
                     else
-                        let sourcePath = resolvePath sourceRaw
+                        let sourcePath = resolvePath ctx sourceRaw
                         if not (File.Exists sourcePath) then
                             return json {| error = sprintf "Source not found: %s" sourceRaw |}
                         else
@@ -68,7 +68,7 @@ module DocumentTools =
                             | None ->
                                 return json {| error = sprintf "Unsupported target format: %s" targetRaw |}
                             | Some targetName ->
-                                let targetPath = resolvePath targetName
+                                let targetPath = resolvePath ctx targetName
                                 let srcMt = mediaTypeForExt (Path.GetExtension sourcePath)
                                 let tgtMt = mediaTypeForExt (Path.GetExtension targetPath)
                                 match srcMt, tgtMt with
@@ -83,13 +83,13 @@ module DocumentTools =
                                     let readAccess = ResourceAccess.File("read", sourcePath)
                                     let writeAccess = ResourceAccess.File("write", targetPath)
                                     let! okRead =
-                                        ToolPermissions.requestConfirmedAsync readAccess
+                                        ToolPermissions.requestConfirmedAsync ctx readAccess
                                             (sprintf "Convert document: read the source file '%s'." sourceRaw)
                                     if not okRead then
                                         return PermissionDenied.format readAccess None
                                     else
                                         let! okWrite =
-                                            ToolPermissions.requestConfirmedAsync writeAccess
+                                            ToolPermissions.requestConfirmedAsync ctx writeAccess
                                                 (sprintf "Convert document: write the converted output '%s'." targetName)
                                         if not okWrite then
                                             return PermissionDenied.format writeAccess None

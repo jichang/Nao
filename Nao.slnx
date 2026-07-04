@@ -1,12 +1,10 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/Nao.Agents/Nao.Agents.fsproj" />
-    <Project Path="src/Nao.Core/Nao.Core.fsproj" />
     <Project Path="src/Nao.Assistant/Nao.Assistant.fsproj" />
+    <Project Path="src/Nao.Assistant.Evaluation/Nao.Assistant.Evaluation.fsproj" />
     <Project Path="src/Nao.Documents/Nao.Documents.fsproj" />
     <Project Path="src/Nao.Eval/Nao.Eval.fsproj" />
-    <Project Path="src/Nao.Events/Nao.Events.fsproj" />
-    <Project Path="src/Nao.Feedback/Nao.Feedback.fsproj" />
     <Project Path="src/Nao.Loader/Nao.Loader.fsproj" />
     <Project Path="src/Nao.Persistence/Nao.Persistence.fsproj" />
     <Project Path="src/Nao.Providers/Nao.Providers.fsproj" />
@@ -17,12 +15,9 @@
   <Folder Name="/tests/">
     <Project Path="tests/Nao.Agents.Tests/Nao.Agents.Tests.fsproj" />
     <Project Path="tests/Nao.Assistant.Tests/Nao.Assistant.Tests.fsproj" />
-    <Project Path="tests/Nao.Core.Tests/Nao.Core.Tests.fsproj" />
     <Project Path="tests/Nao.Documents.Tests/Nao.Documents.Tests.fsproj" />
     <Project Path="tests/Nao.E2E.Tests/Nao.E2E.Tests.fsproj" />
     <Project Path="tests/Nao.Eval.Tests/Nao.Eval.Tests.fsproj" />
-    <Project Path="tests/Nao.Events.Tests/Nao.Events.Tests.fsproj" />
-    <Project Path="tests/Nao.Feedback.Tests/Nao.Feedback.Tests.fsproj" />
     <Project Path="tests/Nao.Loader.Tests/Nao.Loader.Tests.fsproj" />
     <Project Path="tests/Nao.Persistence.Tests/Nao.Persistence.Tests.fsproj" />
     <Project Path="tests/Nao.Providers.Tests/Nao.Providers.Tests.fsproj" />

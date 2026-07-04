@@ -19,12 +19,12 @@ open Microsoft.Extensions.Logging
 open Orleans
 open Orleans.Configuration
 open Orleans.Hosting
-open Nao.Core
+open Nao.Agents
 open Nao.Agents
 open Nao.Loader
 open Nao.Providers
 open Nao.Persistence
-open Nao.Feedback
+open Nao.Agents
 open Nao.Runtime.Orleans
 open Nao.Runtime.Orleans.Grains
 

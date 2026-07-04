@@ -85,70 +85,7 @@ type IMetricsCollector =
     /// Calculate cost using a cost model
     abstract member EstimateCost: CostModel -> decimal
 
-/// In-memory metrics collector
-type InMemoryMetricsCollector() =
-    let llmLatencies = ResizeArray<int64>()
-    let mutable inputTokens = 0
-    let mutable outputTokens = 0
-    let mutable llmCalls = 0
-    let mutable toolCalls = 0
-    let mutable llmWaitMs = 0L
-    let mutable toolExecMs = 0L
-    let startTime = DateTimeOffset.UtcNow
-
-    interface IMetricsCollector with
-        member _.RecordLlmCall (inTokens: int) (outTokens: int) (latencyMs: int64) =
-            llmCalls <- llmCalls + 1
-            inputTokens <- inputTokens + inTokens
-            outputTokens <- outputTokens + outTokens
-            llmLatencies.Add(latencyMs)
-            llmWaitMs <- llmWaitMs + latencyMs
-
-        member _.RecordToolCall (_toolName: string) (durationMs: int64) (_success: bool) =
-            toolCalls <- toolCalls + 1
-            toolExecMs <- toolExecMs + durationMs
-
-        member _.RecordMetric(_point: MetricPoint) = ()
-
-        member _.GetMetrics() =
-            let sortedLatencies = llmLatencies |> Seq.sort |> Seq.toArray
-            let avgLatency =
-                if sortedLatencies.Length > 0 then
-                    sortedLatencies |> Array.averageBy float
-                else 0.0
-            let p95Latency =
-                if sortedLatencies.Length > 0 then
-                    let idx = int (float sortedLatencies.Length * 0.95)
-                    float sortedLatencies.[min idx (sortedLatencies.Length - 1)]
-                else 0.0
-
-            let duration = DateTimeOffset.UtcNow - startTime
-            let usage : ResourceUsage =
-                { LlmCalls = llmCalls
-                  TotalTokens = inputTokens + outputTokens
-                  ToolCalls = toolCalls
-                  EstimatedCostUsd = 0m
-                  ElapsedTime = duration }
-
-            { Usage = usage
-              TotalLlmCalls = llmCalls
-              TotalInputTokens = inputTokens
-              TotalOutputTokens = outputTokens
-              TotalCostUsd = 0m
-              TotalToolCalls = toolCalls
-              AvgLatencyMs = avgLatency
-              P95LatencyMs = p95Latency
-              TotalDuration = duration
-              LlmWaitTime = TimeSpan.FromMilliseconds(float llmWaitMs)
-              ToolExecutionTime = TimeSpan.FromMilliseconds(float toolExecMs) }
-
-        member _.EstimateCost(model: CostModel) =
-            let inCost = decimal inputTokens / 1000m * model.InputCostPer1K
-            let outCost = decimal outputTokens / 1000m * model.OutputCostPer1K
-            inCost + outCost
-
 module MetricsCollector =
-    let inMemory () : IMetricsCollector = InMemoryMetricsCollector() :> IMetricsCollector
 
     /// Well-known cost models
     let gpt4o = { Provider = "OpenAI"; Model = "gpt-4o"; InputCostPer1K = 0.0025m; OutputCostPer1K = 0.01m }

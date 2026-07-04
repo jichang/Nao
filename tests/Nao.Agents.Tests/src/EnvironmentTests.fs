@@ -106,7 +106,6 @@ type ExecutionEnvironmentTests() =
         let id = { Name = "test"; Description = "test agent" }
         { new IAgent with
             member _.Id = id
-            member _.State = AgentState.Empty
             member _.RunAsync(_input) = Task.FromResult response
             member _.HandleMessageAsync(_msg) = Task.FromResult None }
 

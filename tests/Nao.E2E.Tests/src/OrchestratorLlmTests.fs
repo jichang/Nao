@@ -4,7 +4,7 @@ open System
 open System.Net.Http
 open System.Threading.Tasks
 open Microsoft.VisualStudio.TestTools.UnitTesting
-open Nao.Core
+open Nao.Agents
 open Nao.Agents
 open Nao.Providers
 
@@ -118,15 +118,6 @@ type OrchestratorWithLocalLlmTests() =
             sprintf "Expected natural response, not JSON action: %s" result)
 
     [<TestMethod>]
-    member _.OrchestratorMaintainsConversationState() =
-        shouldSkip ()
-        let provider = LocalLlm.createProvider()
-        let orchestrator = Orchestrator.create provider tools []
-        let _ = (orchestrator.RunAsync "What is the capital of Japan?").Result
-        // After running, state should contain conversation messages
-        Assert.IsTrue(orchestrator.State.Conversation.Length >= 2)
-
-    [<TestMethod>]
     member _.OrchestratorDelegatesToSubAgent() =
         shouldSkip ()
         let provider = LocalLlm.createProvider()
@@ -135,7 +126,6 @@ type OrchestratorWithLocalLlmTests() =
         let specialist =
             { new IAgent with
                 member _.Id = { Name = "poetry-agent"; Description = "Writes short poems on any topic" }
-                member _.State = AgentState.Empty
                 member _.RunAsync(input: string) =
                     Task.FromResult(sprintf "Roses are red, violets are blue, %s is great, and so are you." input)
                 member _.HandleMessageAsync(_msg: AgentMessage) = Task.FromResult(None) }
@@ -189,7 +179,6 @@ type OrchestratorWithMockProviderTests() =
     let poetryAgent =
         { new IAgent with
             member _.Id = { Name = "poetry-agent"; Description = "Writes poems" }
-            member _.State = AgentState.Empty
             member _.RunAsync(input: string) =
                 Task.FromResult(sprintf "A poem about %s: roses are red..." input)
             member _.HandleMessageAsync(_msg: AgentMessage) = Task.FromResult(None) }
@@ -255,9 +244,11 @@ type OrchestratorWithMockProviderTests() =
               Prompt = Prompt.Empty
               Options = CompletionOptions.Default
               MaxRounds = 3
-              EventSink = AgentEventSink.none
+              Bus = EventBus.none
+              Scope = EventScope.Empty
               Memory = OrchestratorMemoryConfig.None
-              Instructions = None }
+              Instructions = None
+              Context = ToolContext.allowAll }
 
         let orchestrator = Orchestrator.createWithConfig config
         let result = (orchestrator.RunAsync "Loop me").Result

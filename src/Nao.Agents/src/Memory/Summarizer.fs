@@ -1,7 +1,7 @@
 namespace Nao.Agents
 
 open System.Threading.Tasks
-open Nao.Core
+open Nao.Agents
 
 /// Configuration for conversation summarization
 type SummarizationConfig =
@@ -23,7 +23,12 @@ type SummarizationConfig =
 module Summarizer =
 
     let private summaryPrompt =
-        "Summarize the following conversation concisely. Preserve key facts, decisions, and context that would be needed to continue the conversation. Be brief."
+        Prompt.render
+            { Prompt.Empty with
+                Objective = "Summarize the following conversation concisely."
+                Constraints =
+                    [ "Preserve key facts, decisions, and context needed to continue the conversation."
+                      "Be brief." ] }
 
     /// Summarize a list of messages into a single condensed message
     let summarizeAsync (provider: ILlmProvider) (options: CompletionOptions) (messages: Conversation) : Task<Message> =

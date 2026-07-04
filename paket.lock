@@ -64,9 +64,21 @@ NUGET
     HarfBuzzSharp.NativeAssets.macOS (8.3.1.5) - restriction: || (&& (>= net10.0) (< net9.0-windows10.0.19041.0)) (&& (< net10.0) (>= net9.0) (< net9.0-windows10.0.19041.0)) (>= net10.0-macos) (&& (>= net462) (>= net8.0)) (&& (< net6.0) (>= net8.0)) (&& (>= net8.0) (< net9.0)) (&& (>= net8.0) (< netstandard2.1)) (>= net9.0-macos)
     HarfBuzzSharp.NativeAssets.WebAssembly (8.3.1.5) - restriction: >= net8.0
     HarfBuzzSharp.NativeAssets.Win32 (8.3.1.5) - restriction: || (&& (>= net10.0) (< net9.0-windows10.0.19041.0)) (&& (< net10.0) (>= net9.0) (< net9.0-windows10.0.19041.0)) (&& (< net10.0) (>= net9.0-windows10.0.19041.0)) (>= net10.0-windows10.0.19041.0) (&& (>= net462) (>= net8.0)) (&& (< net6.0) (>= net8.0)) (&& (>= net8.0) (< net9.0)) (&& (>= net8.0) (< netstandard2.1))
-    Humanizer.Core (3.0.10) - restriction: >= net8.0
+    Humanizer.Core (3.0.10) - restriction: >= netstandard2.0
+      System.Collections.Immutable (>= 9.0.10) - restriction: || (>= net48) (&& (< net8.0) (>= netstandard2.0))
+      System.ComponentModel.Annotations (>= 5.0) - restriction: || (>= net48) (&& (< net8.0) (>= netstandard2.0))
+      System.Memory (>= 4.6.3) - restriction: || (>= net48) (&& (< net8.0) (>= netstandard2.0))
     Irihi.Avalonia.Shared (0.4) - restriction: >= net8.0
       Avalonia (>= 12.0) - restriction: >= net8.0
+    Json.More.Net (3.0.1) - restriction: >= netstandard2.0
+      System.Collections.Immutable (>= 10.0.5) - restriction: && (< net8.0) (>= netstandard2.0)
+      System.Text.Json (>= 10.0.5) - restriction: && (< net8.0) (>= netstandard2.0)
+    JsonPointer.Net (7.0.1) - restriction: >= netstandard2.0
+      Humanizer.Core (>= 2.14.1) - restriction: && (>= net8.0) (< net9.0)
+      Humanizer.Core (>= 3.0.10) - restriction: || (&& (< net8.0) (>= netstandard2.0)) (>= net9.0)
+      Json.More.Net (>= 3.0.1) - restriction: >= netstandard2.0
+    JsonSchema.Net (9.2.2)
+      JsonPointer.Net (>= 7.0.1) - restriction: >= netstandard2.0
     MicroCom.Runtime (0.11.6) - restriction: >= net8.0
     Microsoft.AspNetCore.Connections.Abstractions (10.0.9) - restriction: >= net8.0
       Microsoft.Bcl.AsyncInterfaces (>= 10.0.9) - restriction: || (&& (< net10.0) (>= netstandard2.1)) (>= net462) (&& (>= netstandard2.0) (< netstandard2.1))
@@ -684,7 +696,8 @@ NUGET
     SQLitePCLRaw.provider.e_sqlite3 (3.0.3) - restriction: >= netstandard2.0
       SQLitePCLRaw.core (>= 3.0.3) - restriction: >= netstandard2.0
     System.Buffers (4.6.1) - restriction: || (&& (>= net462) (>= netstandard2.0)) (&& (< net8.0) (>= netstandard2.0)) (&& (< netcoreapp2.1) (>= netstandard2.0) (< netstandard2.1))
-    System.Collections.Immutable (10.0.9) - restriction: || (&& (>= net462) (>= net8.0)) (&& (>= net8.0) (< net9.0))
+    System.Collections.Immutable (10.0.9) - restriction: || (&& (>= net462) (>= net8.0)) (&& (>= net8.0) (< net9.0)) (&& (< net8.0) (>= netstandard2.0))
+    System.ComponentModel.Annotations (5.0) - restriction: || (>= net48) (&& (< net8.0) (>= netstandard2.0))
     System.Composition (10.0.9) - restriction: >= net8.0
       System.Composition.AttributedModel (>= 10.0.9) - restriction: || (>= net462) (>= netstandard2.0)
       System.Composition.Convention (>= 10.0.9) - restriction: || (>= net462) (>= netstandard2.0)

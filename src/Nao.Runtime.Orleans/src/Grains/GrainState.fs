@@ -2,7 +2,7 @@ namespace Nao.Runtime.Orleans.Grains
 
 open System
 open Orleans
-open Nao.Core
+open Nao.Agents
 open Nao.Agents
 open Nao.Runtime.Orleans
 

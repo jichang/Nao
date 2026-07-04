@@ -2,7 +2,7 @@ namespace Nao.Agents
 
 open System
 open System.Threading.Tasks
-open Nao.Core
+open Nao.Agents
 
 /// Context provided to a tool's Revert function so it can undo its effects
 type RevertContext =
@@ -40,40 +40,45 @@ module ToolProvenance =
     let code (sourceName: string) : ToolProvenance =
         { Kind = "code"; Location = None; Member = Some sourceName }
 
-/// Runtime context handed to a tool's Execute so it can request approval for sensitive
-/// resource access dynamically — based on its own input or intermediate results — and know
-/// which session it is running in. The runtime builds one per session/turn; library and
-/// test code can use `ToolContext.allowAll`.
+/// Runtime context handed to a tool's Execute (and to the orchestrator) so it can request
+/// approval for sensitive resource access dynamically — based on its own input or
+/// intermediate results — locate the session's file folder, and launch background work.
+/// The runtime builds one per session/turn and threads it explicitly; library and test code
+/// can use `ToolContext.allowAll`.
 type ToolContext =
     { /// The session this execution belongs to ("userId/sessionId"); "" when unscoped.
       SessionKey: string
-      /// Request approval to access a resource, with a human-readable reason. Returns true
-      /// when allowed. The runtime answers from already-granted session/global rules or by
-      /// prompting the user live.
-      RequestPermission: ResourceAccess -> string -> Task<bool> }
+      /// Session key whose file folder backs file operations in this context. Usually the
+      /// same as SessionKey, but a task sub-session points this at its parent session so the
+      /// user's attachments and the files the task generates share one folder.
+      FilesKey: string
+      /// Names of agents flagged async. When the orchestrator delegates to one of these, it
+      /// spawns a background task (a sub-session) instead of running it inline.
+      AsyncAgents: Set<string>
+      /// Id of the turn currently being processed ("" when none).
+      TurnId: string
+      /// Launch a background task owned by this session, returning its task id. The default
+      /// is a no-op signalling "no async task host available" by returning an empty id.
+      SpawnTask: SessionExecution.TaskSpec -> Task<string>
+      /// Request approval to access a resource, with a human-readable reason. The final
+      /// argument forces an interactive prompt even for resources that would otherwise be
+      /// auto-allowed (e.g. paths inside the workspace sandbox); already-granted rules still
+      /// suppress the prompt. Returns true when allowed. The runtime answers from
+      /// already-granted session/global rules or by prompting the user live.
+      RequestPermission: ResourceAccess -> string -> bool -> Task<bool> }
 
-/// Helpers for the tool execution context, including the ambient context that flows with the
-/// current async operation so framework call sites can supply it without threading it by hand.
+/// Helpers for the tool execution context.
 [<RequireQualifiedAccess>]
 module ToolContext =
-    /// Permissive context used when no permission system is wired (tests, library use).
+    /// Permissive, unscoped context used when no permission/session system is wired (tests,
+    /// library use). SpawnTask returns an empty id, meaning "no async task host available".
     let allowAll: ToolContext =
         { SessionKey = ""
-          RequestPermission = fun _ _ -> Task.FromResult true }
-
-    let private ambient = System.Threading.AsyncLocal<ToolContext>()
-
-    /// The context flowing on the current async path, or `allowAll` if none was set.
-    let current () : ToolContext =
-        match box ambient.Value with
-        | null -> allowAll
-        | _ -> ambient.Value
-
-    /// Bind a context for the current async scope (used by the runtime per turn).
-    let set (ctx: ToolContext) = ambient.Value <- ctx
-
-    /// Drop the ambient context.
-    let clear () = ambient.Value <- Unchecked.defaultof<ToolContext>
+          FilesKey = ""
+          AsyncAgents = Set.empty
+          TurnId = ""
+          SpawnTask = fun _ -> Task.FromResult ""
+          RequestPermission = fun _ _ _ -> Task.FromResult true }
 
 /// The result of resolving a permission request: the decision plus whether the user asked to
 /// remember the grant for the rest of the session (so the session can record it in its own
@@ -88,8 +93,8 @@ type PermissionOutcome =
 /// permission system present, e.g. in tests).
 [<RequireQualifiedAccess>]
 module PermissionGate =
-    /// (sessionKey, access, reason) -> outcome. Set by the server at startup.
-    let mutable Prompt: (string -> ResourceAccess -> string -> Task<PermissionOutcome>) option = None
+    /// (sessionKey, access, reason, forceConfirm) -> outcome. Set by the server at startup.
+    let mutable Prompt: (string -> ResourceAccess -> string -> bool -> Task<PermissionOutcome>) option = None
 
 /// Canonical, structured refusal handed back to the model whenever a resource access is
 /// denied. Centralizing it here keeps every enforcement point (a tool's own declared
@@ -196,7 +201,7 @@ type Tool =
             let mutable denied = None
             for access in this.Permissions do
                 if Option.isNone denied then
-                    let! ok = ctx.RequestPermission access (sprintf "Tool '%s' requires this access." this.Name)
+                    let! ok = ctx.RequestPermission access (sprintf "Tool '%s' requires this access." this.Name) false
                     if not ok then denied <- Some access
             match denied with
             | Some access ->

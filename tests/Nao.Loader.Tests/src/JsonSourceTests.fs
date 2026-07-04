@@ -5,7 +5,7 @@ open System.IO
 open Microsoft.VisualStudio.TestTools.UnitTesting
 open Nao.Loader
 open Nao.Agents
-open Nao.Core
+open Nao.Agents
 
 [<TestClass>]
 type JsonSourceTests() =

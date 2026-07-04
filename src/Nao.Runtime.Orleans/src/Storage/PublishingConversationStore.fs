@@ -2,8 +2,8 @@ namespace Nao.Runtime.Orleans
 
 open System
 open System.Threading.Tasks
-open Nao.Core
-open Nao.Events
+open Nao.Agents
+open Nao.Agents
 
 /// Tee conversation store: every WRITE is persisted to the wrapped backing store (so history
 /// reads stay correct) and ALSO published to the bus as a `ConversationCaptured` event, so the
@@ -22,18 +22,17 @@ type PublishingConversationStore(bus: IEventBus, inner: IConversationStore) =
           Steps =
             m.Steps
             |> Array.map (fun s ->
-                { Kind = s.Kind; Title = s.Title; Input = s.Input; Output = s.Output })
+                ({ Kind = s.Kind; Title = s.Title; Input = s.Input; Output = s.Output } : ConversationStep))
             |> Array.toList
           Attachments = m.Attachments |> Array.toList }
 
-    /// Build the event scope for a conversation write. The action id prefers the turn id
-    /// carried by the messages (falling back to the ambient session scope) so each write is
-    /// attributed to the turn that produced it.
+    /// Build the event scope for a conversation write. The action id is the turn id carried
+    /// by the messages (empty when none) so each write is attributed to the turn that
+    /// produced it.
     let buildScope (sessionId: string) (conversationName: string) (messages: PersistedMessage array) : EventScope =
         let turnId =
             messages
             |> Array.tryPick (fun m -> if String.IsNullOrEmpty m.TurnId then None else Some m.TurnId)
-            |> Option.orElseWith (fun () -> SessionExecution.current () |> Option.map (fun s -> s.TurnId))
             |> Option.defaultValue ""
         let userId, sid =
             match sessionId.IndexOf('/') with

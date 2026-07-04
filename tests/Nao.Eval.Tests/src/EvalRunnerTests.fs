@@ -12,7 +12,6 @@ type EchoAgent(prefix: string) =
 
     interface IAgent with
         member _.Id = id
-        member _.State = AgentState.Empty
         member _.RunAsync(input: string) =
             Task.FromResult(sprintf "%s: %s" prefix input)
         member _.HandleMessageAsync(_msg: AgentMessage) =
@@ -24,7 +23,6 @@ type FixedAgent(response: string) =
 
     interface IAgent with
         member _.Id = id
-        member _.State = AgentState.Empty
         member _.RunAsync(_input: string) = Task.FromResult(response)
         member _.HandleMessageAsync(_msg: AgentMessage) = Task.FromResult(None)
 

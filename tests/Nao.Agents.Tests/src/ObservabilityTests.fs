@@ -4,13 +4,14 @@ open System
 open System.Threading.Tasks
 open Microsoft.VisualStudio.TestTools.UnitTesting
 open Nao.Agents
+open Nao.Persistence
 
 [<TestClass>]
 type TraceTests() =
 
     [<TestMethod>]
     member _.StartTraceCreatesRootSpan() =
-        let tracer = Tracer.inMemory ()
+        let tracer = InMemory.tracer ()
         let span = tracer.StartTrace("test-op")
         Assert.AreEqual("test-op", span.OperationName)
         Assert.IsTrue(span.ParentSpanId.IsNone)
@@ -18,7 +19,7 @@ type TraceTests() =
 
     [<TestMethod>]
     member _.StartSpanCreatesChild() =
-        let tracer = Tracer.inMemory ()
+        let tracer = InMemory.tracer ()
         let root = tracer.StartTrace("root")
         let child = tracer.StartSpan root "child-op"
         Assert.AreEqual("child-op", child.OperationName)
@@ -27,7 +28,7 @@ type TraceTests() =
 
     [<TestMethod>]
     member _.EndSpanSetsEndTimeAndStatus() =
-        let tracer = Tracer.inMemory ()
+        let tracer = InMemory.tracer ()
         let span = tracer.StartTrace("op")
         tracer.EndSpan span SpanStatus.Ok
         let traces = tracer.GetTrace(span.TraceId)
@@ -37,7 +38,7 @@ type TraceTests() =
 
     [<TestMethod>]
     member _.EndSpanWithError() =
-        let tracer = Tracer.inMemory ()
+        let tracer = InMemory.tracer ()
         let span = tracer.StartTrace("op")
         tracer.EndSpan span (SpanStatus.Error "failed")
         let traces = tracer.GetTrace(span.TraceId)
@@ -47,7 +48,7 @@ type TraceTests() =
 
     [<TestMethod>]
     member _.AddEventAppendsToSpan() =
-        let tracer = Tracer.inMemory ()
+        let tracer = InMemory.tracer ()
         let span = tracer.StartTrace("op")
         tracer.AddEvent span "something-happened" (Map.ofList ["key", "value"])
         let traces = tracer.GetTrace(span.TraceId)
@@ -56,7 +57,7 @@ type TraceTests() =
 
     [<TestMethod>]
     member _.SetAttributesMergesWithExisting() =
-        let tracer = Tracer.inMemory ()
+        let tracer = InMemory.tracer ()
         let span = tracer.StartTrace("op")
         tracer.SetAttributes span (Map.ofList ["env", "test"])
         // After first SetAttributes, get the updated span from the store
@@ -68,7 +69,7 @@ type TraceTests() =
 
     [<TestMethod>]
     member _.GetTraceReturnsAllSpansForTrace() =
-        let tracer = Tracer.inMemory ()
+        let tracer = InMemory.tracer ()
         let root = tracer.StartTrace("root")
         let _child1 = tracer.StartSpan root "child1"
         let _child2 = tracer.StartSpan root "child2"
@@ -80,7 +81,7 @@ type MetricsTests() =
 
     [<TestMethod>]
     member _.RecordLlmCallTracksTokensAndCalls() =
-        let collector = MetricsCollector.inMemory ()
+        let collector = InMemory.metrics ()
         collector.RecordLlmCall 100 50 200L
         collector.RecordLlmCall 200 100 300L
         let metrics = collector.GetMetrics()
@@ -90,7 +91,7 @@ type MetricsTests() =
 
     [<TestMethod>]
     member _.RecordToolCallTracksCount() =
-        let collector = MetricsCollector.inMemory ()
+        let collector = InMemory.metrics ()
         collector.RecordToolCall "search" 50L true
         collector.RecordToolCall "calc" 30L false
         let metrics = collector.GetMetrics()
@@ -98,7 +99,7 @@ type MetricsTests() =
 
     [<TestMethod>]
     member _.AvgLatencyCalculatedCorrectly() =
-        let collector = MetricsCollector.inMemory ()
+        let collector = InMemory.metrics ()
         collector.RecordLlmCall 100 50 100L
         collector.RecordLlmCall 100 50 300L
         let metrics = collector.GetMetrics()
@@ -106,7 +107,7 @@ type MetricsTests() =
 
     [<TestMethod>]
     member _.EstimateCostUsesModel() =
-        let collector = MetricsCollector.inMemory ()
+        let collector = InMemory.metrics ()
         collector.RecordLlmCall 1000 500 100L
         let cost = collector.EstimateCost MetricsCollector.gpt4o
         // 1000 input tokens * 0.0025/1K + 500 output tokens * 0.01/1K = 0.0025 + 0.005 = 0.0075
@@ -114,7 +115,7 @@ type MetricsTests() =
 
     [<TestMethod>]
     member _.ZeroMetricsOnFreshCollector() =
-        let collector = MetricsCollector.inMemory ()
+        let collector = InMemory.metrics ()
         let metrics = collector.GetMetrics()
         Assert.AreEqual(0, metrics.TotalLlmCalls)
         Assert.AreEqual(0, metrics.TotalInputTokens)

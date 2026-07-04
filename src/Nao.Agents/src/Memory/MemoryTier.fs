@@ -2,7 +2,7 @@ namespace Nao.Agents
 
 open System
 open System.Threading.Tasks
-open Nao.Core
+open Nao.Agents
 
 /// Three-tier memory model: Short-term (active context), Mid-term (session), Long-term (persistent)
 [<RequireQualifiedAccess>]

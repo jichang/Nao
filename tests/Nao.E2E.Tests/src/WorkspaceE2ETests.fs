@@ -4,7 +4,8 @@ open System
 open System.IO
 open System.Threading.Tasks
 open Microsoft.VisualStudio.TestTools.UnitTesting
-open Nao.Core
+open Nao.Agents
+open Nao.Persistence
 open Nao.Agents
 open Nao.Loader
 
@@ -495,9 +496,11 @@ type WorkspaceE2ETests() =
               Prompt = Prompt.Empty
               Options = CompletionOptions.Default
               MaxRounds = 10
-              EventSink = AgentEventSink.none
+              Bus = EventBus.none
+              Scope = EventScope.Empty
               Memory = OrchestratorMemoryConfig.None
-              Instructions = None }
+              Instructions = None
+              Context = ToolContext.allowAll }
 
         let agent = Orchestrator.createWithConfig config
         let response = agent.RunAsync("Create a project folder with a README file").Result
@@ -554,9 +557,11 @@ type WorkspaceE2ETests() =
               Prompt = Prompt.Empty
               Options = CompletionOptions.Default
               MaxRounds = 10
-              EventSink = AgentEventSink.none
+              Bus = EventBus.none
+              Scope = EventScope.Empty
               Memory = OrchestratorMemoryConfig.None
-              Instructions = None }
+              Instructions = None
+              Context = ToolContext.allowAll }
 
         let agent = Orchestrator.createWithConfig orchestratorConfig
         agent.RunAsync("Create a project folder with README").Result |> ignore
@@ -603,9 +608,11 @@ type WorkspaceE2ETests() =
               Prompt = Prompt.Empty
               Options = CompletionOptions.Default
               MaxRounds = 8
-              EventSink = AgentEventSink.none
+              Bus = EventBus.none
+              Scope = EventScope.Empty
               Memory = OrchestratorMemoryConfig.None
-              Instructions = None }
+              Instructions = None
+              Context = ToolContext.allowAll }
 
         let agent = Orchestrator.createWithConfig config
         let response = agent.RunAsync("Use the echo tool and then create a folder").Result

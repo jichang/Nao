@@ -4,7 +4,7 @@ open System
 open System.Threading.Tasks
 open Microsoft.VisualStudio.TestTools.UnitTesting
 open Nao.Agents
-open Nao.Core
+open Nao.Agents
 
 [<TestClass>]
 type ContextCompactionTests() =

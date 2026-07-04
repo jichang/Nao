@@ -6,9 +6,11 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="src/Workspace/WorkspaceRegistry.fs" />
+    <Compile Include="src/Storage/SessionPaths.fs" />
     <Compile Include="src/Storage/ConversationStore.fs" />
     <Compile Include="src/Storage/FileConversationStore.fs" />
     <Compile Include="src/Storage/PublishingConversationStore.fs" />
+    <Compile Include="src/Storage/TaskStore.fs" />
     <Compile Include="src/Grains/GrainState.fs" />
     <Compile Include="src/Grains/TaskTypes.fs" />
     <Compile Include="src/Grains/SessionDirectoryGrain.fs" />
@@ -19,8 +21,6 @@
   <ItemGroup>
     <ProjectReference Include="..\Nao.Agents\Nao.Agents.fsproj" />
     <ProjectReference Include="..\Nao.Loader\Nao.Loader.fsproj" />
-    <ProjectReference Include="..\Nao.Feedback\Nao.Feedback.fsproj" />
-    <ProjectReference Include="..\Nao.Events\Nao.Events.fsproj" />
   </ItemGroup>
   <Import Project="..\..\.paket\Paket.Restore.targets" />
 </Project>

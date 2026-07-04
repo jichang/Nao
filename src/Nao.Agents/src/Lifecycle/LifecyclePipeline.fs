@@ -2,7 +2,7 @@ namespace Nao.Agents
 
 open System
 open System.Threading.Tasks
-open Nao.Core
+open Nao.Agents
 
 /// Defines a stage in a lifecycle pipeline (issue-to-deployment style)
 type PipelineStage =

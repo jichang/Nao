@@ -1,7 +1,7 @@
 namespace Nao.E2E.Tests
 
 open System.Threading.Tasks
-open Nao.Core
+open Nao.Agents
 
 /// A local in-memory LLM provider for E2E testing.
 /// Routes prompts to simple pattern-matched responses,

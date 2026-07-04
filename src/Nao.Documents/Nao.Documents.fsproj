@@ -13,20 +13,20 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Compile Include="src/Geometry.fs" />
-    <Compile Include="src/Resources.fs" />
-    <Compile Include="src/Styling.fs" />
-    <Compile Include="src/Layout.fs" />
-    <Compile Include="src/Content.fs" />
-    <Compile Include="src/Document.fs" />
-    <Compile Include="src/Conversion.fs" />
-    <Compile Include="src/Registry.fs" />
-    <Compile Include="src/PlainText.fs" />
-    <Compile Include="src/Markdown.fs" />
-    <Compile Include="src/Html.fs" />
-    <Compile Include="src/Pdf.fs" />
-    <Compile Include="src/OpenXml.fs" />
-    <Compile Include="src/Formats.fs" />
+    <Compile Include="src/Model/Geometry.fs" />
+    <Compile Include="src/Model/Resources.fs" />
+    <Compile Include="src/Model/Styling.fs" />
+    <Compile Include="src/Model/Layout.fs" />
+    <Compile Include="src/Model/Content.fs" />
+    <Compile Include="src/Model/Document.fs" />
+    <Compile Include="src/Conversion/Conversion.fs" />
+    <Compile Include="src/Conversion/Registry.fs" />
+    <Compile Include="src/Formats/PlainText.fs" />
+    <Compile Include="src/Formats/Markdown.fs" />
+    <Compile Include="src/Formats/Html.fs" />
+    <Compile Include="src/Formats/Pdf.fs" />
+    <Compile Include="src/Formats/OpenXml.fs" />
+    <Compile Include="src/Formats/Formats.fs" />
   </ItemGroup>
 
 </Project>

@@ -18,8 +18,8 @@ type SessionStartRequest =
       WorkspaceKey: string }
 
     static member Default =
-        { AgentName = "nao-assistant"
-          ToolNames = [ "create_folder"; "write_file"; "read_file"; "list_folder"; "delete"; "get_datetime"; "calculator"; "http_request"; "web_fetch"; "search_files"; "find_files"; "convert_document" ]
+        { AgentName = "document"
+          ToolNames = [ "convert_document" ]
           WorkspaceKey = "default" }
 
 [<CLIMutable>]
@@ -140,50 +140,6 @@ type FeedbackRequest =
       Sentiment: string
       [<JsonPropertyName("comment")>]
       Comment: string }
-
-/// Manually create an annotation (runtime overlay) for a tool or agent.
-[<CLIMutable>]
-type AnnotationRequest =
-    { [<JsonPropertyName("kind")>]
-      Kind: string                       // "tool" | "agent"
-      [<JsonPropertyName("targetName")>]
-      TargetName: string
-      [<JsonPropertyName("baseVersion")>]
-      BaseVersion: string                // "" = base/unversioned
-      [<JsonPropertyName("descriptionOverride")>]
-      DescriptionOverride: string
-      [<JsonPropertyName("descriptionAppend")>]
-      DescriptionAppend: string
-      [<JsonPropertyName("inputPrefix")>]
-      InputPrefix: string
-      [<JsonPropertyName("outputSuffix")>]
-      OutputSuffix: string
-      [<JsonPropertyName("guidanceAppend")>]
-      GuidanceAppend: string
-      [<JsonPropertyName("reason")>]
-      Reason: string }
-
-/// Change an annotation's status.
-[<CLIMutable>]
-type AnnotationStatusRequest =
-    { [<JsonPropertyName("status")>]
-      Status: string }                   // "active" | "disabled"
-
-/// Promote a target's annotations into a new Draft version.
-[<CLIMutable>]
-type PromoteVersionRequest =
-    { [<JsonPropertyName("kind")>]
-      Kind: string                       // "tool" | "agent"
-      [<JsonPropertyName("targetName")>]
-      TargetName: string
-      [<JsonPropertyName("version")>]
-      Version: string }                  // "" = auto-increment
-
-/// Confirm a Draft version (optionally replacing the legacy version).
-[<CLIMutable>]
-type ConfirmVersionRequest =
-    { [<JsonPropertyName("replaceLegacy")>]
-      ReplaceLegacy: bool }
 
 /// Register a user-supplied tool or agent definition. `definition` is the raw JSON
 /// of the definition (same schema the workspace loader reads from `.nao`).

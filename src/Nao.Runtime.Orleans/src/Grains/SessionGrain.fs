@@ -5,11 +5,11 @@ open System.Text.Json
 open System.Threading.Tasks
 open Orleans
 open Orleans.Runtime
-open Nao.Core
+open Nao.Agents
 open Nao.Agents
 open Nao.Loader
-open Nao.Feedback
-open Nao.Events
+open Nao.Agents
+open Nao.Agents
 open Nao.Runtime.Orleans
 
 // Allow the Orleans C# codegen project to access internal F# DU backing fields.
@@ -188,7 +188,7 @@ type SessionGrain
         provider: ILlmProvider,
         orchestratorFactory: IOrchestratorFactory,
         conversationStore: IConversationStore,
-        harnessServicesFactory: Func<string, IHarnessServices>,
+        harnessServicesFactory: Func<string, string, IHarnessServices>,
         feedbackFactory: Func<string, FeedbackService>,
         eventBus: IEventBus,
         grainFactory: IGrainFactory
@@ -200,9 +200,9 @@ type SessionGrain
     /// through `recorder.Steps`, which is internally lock-protected.
     let mutable currentRecorder : TurnRecorder option = None
 
-    /// Per-session services, resolved once from the grain key in OnActivateAsync so this
-    /// session's observability traces and feedback are written under sessions/<key>/.
-    let mutable harnessServices : IHarnessServices = HarnessServices.none
+    /// Per-session feedback store, resolved once from the grain key in OnActivateAsync so
+    /// this session's annotations are written under sessions/<key>/. Observability services
+    /// are built per turn (so each signal carries its turn id) in ProcessWithContextAsync.
     let mutable feedback : FeedbackService = Unchecked.defaultof<FeedbackService>
 
     // ─── Workspace resolution ───
@@ -222,7 +222,7 @@ type SessionGrain
             actionId, sessionKey,
             ?parentKey = (if String.IsNullOrEmpty info.ParentKey then None else Some info.ParentKey))
 
-    let buildHarnessConfig (workspace: WorkspaceDefinitions) (tools: Tool list) (eventSink: IAgentEventSink) : EtclovgConfig =
+    let buildHarnessConfig (workspace: WorkspaceDefinitions) (tools: Tool list) (scope: EventScope) (services: IHarnessServices) : EtclovgConfig =
         let constitution = DefinitionBuilder.buildMergedConstitution workspace.ConstitutionDefs
         let toolProtocol =
             if tools.Length > 0 then
@@ -233,8 +233,9 @@ type SessionGrain
             { EtclovgConfig.Default with
                 Constitution = constitution
                 ToolProtocol = toolProtocol
-                EventSink = eventSink }
-        baseConfig.WithServices(harnessServices)
+                Bus = eventBus
+                Scope = scope }
+        baseConfig.WithServices(services)
 
     // ─── Key parsing ───
 
@@ -398,28 +399,90 @@ type SessionGrain
     let agentExists (workspace: WorkspaceDefinitions) (name: string) (version: string option) : bool =
         (findAgentDef workspace name version).IsSome || (findBuiltAgent workspace name version).IsSome
 
-    /// Build an agent, overlaying any active agent annotations onto the resolved
-    /// definitions (the agent and its sub-agents) before construction. Annotations are
-    /// runtime overlays — dropping them restores the legacy agent definition.
-    /// `eventSink` receives the orchestrator's execution events (rounds, tool calls,
-    /// delegations) so the turn's whole process can be recorded.
-    let createAgentAsync (workspace: WorkspaceDefinitions) (name: string) (version: string option) (tools: Tool list) (eventSink: IAgentEventSink) : Task<IAgent option> =
+    /// Save a fact into this session's persisted memory, replacing any entry with the same key.
+    let saveMemory (key: string) (value: string) =
+        let record = MemoryRecord()
+        record.Key <- key
+        record.Value <- value
+        record.Timestamp <- DateTimeOffset.UtcNow
+        match persistentState.State.Memories |> Seq.tryFindIndex (fun m -> m.Key = key) with
+        | Some idx -> persistentState.State.Memories.[idx] <- record
+        | None -> persistentState.State.Memories.Add(record)
+
+    /// IMemoryStore backed by this session's grain state. Per-session scope: the AgentId is
+    /// ignored so every agent in the session shares the same persisted memories.
+    let sessionMemoryStore =
+        { new IMemoryStore with
+            member _.SaveAsync _ entry =
+                task {
+                    saveMemory entry.Key entry.Value
+                    do! persistentState.WriteStateAsync()
+                }
+            member _.RecallAsync _ prefix =
+                persistentState.State.Memories
+                |> Seq.filter (fun m -> m.Key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                |> Seq.map GrainStateMapping.toMemoryEntry
+                |> List.ofSeq
+                |> Task.FromResult
+            member _.RecallAllAsync _ =
+                persistentState.State.Memories
+                |> Seq.map GrainStateMapping.toMemoryEntry
+                |> List.ofSeq
+                |> Task.FromResult
+            member _.ForgetAsync _ key =
+                task {
+                    match persistentState.State.Memories |> Seq.tryFindIndex (fun m -> m.Key = key) with
+                    | Some idx -> persistentState.State.Memories.RemoveAt idx
+                    | None -> ()
+                    do! persistentState.WriteStateAsync()
+                }
+            member _.ClearAsync _ =
+                task {
+                    persistentState.State.Memories.Clear()
+                    do! persistentState.WriteStateAsync()
+                } }
+
+    let sessionMemoryConfig = { OrchestratorMemoryConfig.None with MemoryStore = Some sessionMemoryStore }
+
+    /// Built-in tool the agent calls to remember a fact across turns of this session. Input
+    /// is "key=value" (or plain text, stored under an auto-generated key).
+    let sessionMemoryTool =
+        Tool.Create(
+            "remember",
+            "Save a fact to long-term session memory so it can be recalled in later turns. Input: \"key=value\".",
+            fun input ->
+                task {
+                    let key, value =
+                        match input.IndexOf '=' with
+                        | i when i > 0 -> input.Substring(0, i).Trim(), input.Substring(i + 1).Trim()
+                        | _ -> sprintf "note-%d" DateTimeOffset.UtcNow.Ticks, input.Trim()
+                    saveMemory key value
+                    do! persistentState.WriteStateAsync()
+                    return sprintf "Remembered '%s'." key
+                })
+
+    /// Build an agent from the resolved definitions (the agent and its sub-agents).
+    /// Definitions are used exactly as loaded — feedback annotations are an offline-upgrade
+    /// input and are never applied at runtime.
+    /// The agent publishes its execution progress (rounds, tool calls, delegations) onto the
+    /// durable event bus tagged with `scope`, so the turn's whole process can be recorded.
+    let createAgentAsync (workspace: WorkspaceDefinitions) (name: string) (version: string option) (tools: Tool list) (scope: EventScope) (context: ToolContext) : Task<IAgent option> =
         task {
             match findAgentDef workspace name version with
             | Some def ->
-                let! def = feedback.ApplyAgentAnnotationsAsync def
                 let subAgents = ResizeArray<IAgent>()
                 for subName in def.SubAgents do
                     let (subN, subVer) = VersionRef.parse subName
-                    match findAgentDef workspace subN subVer with
-                    | Some subDef ->
-                        let! subDef = feedback.ApplyAgentAnnotationsAsync subDef
-                        subAgents.Add(DefinitionBuilder.buildAgentWithFactory orchestratorFactory provider [] [] eventSink subDef)
-                    | None ->
-                        match findBuiltAgent workspace subN subVer with
-                        | Some a -> subAgents.Add a
-                        | None -> ()
-                return Some (DefinitionBuilder.buildAgentWithFactory orchestratorFactory provider tools (List.ofSeq subAgents) eventSink def)
+                    if not (String.Equals(subN, name, StringComparison.OrdinalIgnoreCase)) then
+                        match findAgentDef workspace subN subVer with
+                        | Some subDef ->
+                            subAgents.Add(DefinitionBuilder.buildAgentWithFactory orchestratorFactory provider [] [] eventBus scope context OrchestratorMemoryConfig.None subDef)
+                        | None ->
+                            match findBuiltAgent workspace subN subVer with
+                            | Some a -> subAgents.Add a
+                            | None -> ()
+                let toolsWithMemory = tools @ [ sessionMemoryTool ]
+                return Some (DefinitionBuilder.buildAgentWithFactory orchestratorFactory provider toolsWithMemory (List.ofSeq subAgents) eventBus scope context sessionMemoryConfig def)
             | None ->
                 return findBuiltAgent workspace name version
         }
@@ -435,39 +498,6 @@ type SessionGrain
             elif not persistentState.State.Info.IsActive then
                 return "[Error] Session is paused. Call ResumeAsync first."
             else
-
-            // Capture any implicit feedback the user expresses about the previous turn
-            // (e.g. "that's wrong", "perfect, thanks"). It is persisted as conversation-
-            // sourced feedback that feeds the cross-session suggestion pipeline, and noted
-            // in session memory so the agent stays aware of it within this conversation.
-            let priorTurnId = persistentState.State.Info.LastTurnId
-            if not (String.IsNullOrEmpty priorTurnId) then
-                let info = persistentState.State.Info
-                match ConversationFeedback.detect displayText with
-                | Some(sentiment, comment) ->
-                    let fb =
-                        { Id = Guid.NewGuid()
-                          TurnId = priorTurnId
-                          SessionId = info.SessionId
-                          UserId = info.UserId
-                          Sentiment = sentiment
-                          Comment = Some comment
-                          CreatedAt = DateTimeOffset.UtcNow
-                          Metadata = Map.empty |> FeedbackSource.stamp FeedbackSource.Conversation }
-                    // The producer only emits — a subscribed storage strategy decides where
-                    // the feedback is persisted (per session, per category, ...).
-                    do! eventBus.PublishAsync(ImplicitFeedbackCaptured(makeScope priorTurnId, fb))
-                    let note =
-                        sprintf "%A feedback on turn %s: %s"
-                            fb.Sentiment priorTurnId (fb.Comment |> Option.defaultValue "")
-                    let record = MemoryRecord()
-                    record.Key <- sprintf "feedback:%s" priorTurnId
-                    record.Value <- note
-                    record.Timestamp <- DateTimeOffset.UtcNow
-                    match persistentState.State.Memories |> Seq.tryFindIndex (fun m -> m.Key = record.Key) with
-                    | Some idx -> persistentState.State.Memories.[idx] <- record
-                    | None -> persistentState.State.Memories.Add(record)
-                | None -> ()
 
             match getWorkspace () with
             | None ->
@@ -522,14 +552,12 @@ type SessionGrain
                     tools |> List.filter (fun t -> allowed.Contains t.Name)
                 | _ -> tools
 
-            // Overlay any active feedback annotations so user-improved tool behaviour
-            // takes effect transparently at load time (dropping them reverts to legacy).
-            let! tools = feedback.ApplyToolAnnotationsAsync tools
-
             let turnId = Guid.NewGuid().ToString("N")
-            // The recorder must exist before the agent is built so it can be wired as the
-            // orchestrator's event sink and capture the whole execution (rounds, tool
-            // calls, delegations) — not just the harness-level Completed event.
+            let turnScope = makeScope turnId
+            // The recorder must exist before the agent is built so it can subscribe to the
+            // event bus and capture this turn's whole execution (rounds, tool calls,
+            // delegations) — not just the harness-level final answer. It filters bus events
+            // by `scope.ActionId = turnId`, so a shared bus never cross-talks between turns.
             let recorder =
                 TurnRecorder.forTools tools
                     (turnId, info.SessionId, info.UserId, info.WorkspaceKey,
@@ -554,15 +582,6 @@ type SessionGrain
             let filesKey =
                 if info.Kind = "task" && not (String.IsNullOrEmpty info.ParentKey) then info.ParentKey
                 else sessionKey
-            SessionExecution.set
-                { SessionKey = sessionKey
-                  FilesKey = filesKey
-                  AsyncAgents = asyncAgentNames
-                  TurnId = turnId
-                  SpawnTask = fun spec ->
-                      task {
-                          let! taskRef = spawnTaskAsync spec.Kind spec.Title (spec.Params |> Map.toList) turnId
-                          return taskRef.TaskId } }
             // Build this session's permission context: tools request resource access through
             // it. We answer from the session's OWN granted permissions (held in this grain's
             // state) first, then fall back to the server-registered interactive prompt. A
@@ -609,7 +628,7 @@ type SessionGrain
                     for g in subsumed do
                         grants.Remove g |> ignore
                     grants.Add(PermissionGrantRecord(Kind = kind, Pattern = pattern))
-            let requestPermission (access: ResourceAccess) (reason: string) : Task<bool> =
+            let requestPermission (access: ResourceAccess) (reason: string) (forceConfirm: bool) : Task<bool> =
                 task {
                     // grantRules are all session-scoped for this key; filter through `applicable`
                     // so the scope-agnostic evaluator only ever sees rules that apply here.
@@ -620,20 +639,39 @@ type SessionGrain
                         match PermissionGate.Prompt with
                         | None -> return true // no permission system wired → allow
                         | Some prompt ->
-                            let! outcome = prompt sessionKey access reason
+                            let! outcome = prompt sessionKey access reason forceConfirm
                             if outcome.Decision = PermissionDecision.Allow && outcome.RememberForSession then
                                 recordGrant access
                                 try do! persistentState.WriteStateAsync() with _ -> ()
                             return outcome.Decision = PermissionDecision.Allow
                 }
-            ToolContext.set { SessionKey = sessionKey; RequestPermission = requestPermission }
+            // Flow the session/turn identity explicitly into tools and the orchestrator via
+            // this context: tools resolve files under FilesKey, request resource access through
+            // RequestPermission, and SpawnTask lets a tool/delegation launch a grain-backed
+            // background task from inside the harness without re-entering this (primary) grain.
+            let delegableAsyncAgents =
+                if info.Kind = "task" then Set.empty else asyncAgentNames
+
+            let toolContext : ToolContext =
+                { SessionKey = sessionKey
+                  FilesKey = filesKey
+                  AsyncAgents = delegableAsyncAgents
+                  TurnId = turnId
+                  SpawnTask = fun spec ->
+                      task {
+                          let! taskRef = spawnTaskAsync spec.Kind spec.Title (spec.Params |> Map.toList) turnId
+                          return taskRef.TaskId }
+                  RequestPermission = requestPermission }
             try
-                let! agentOpt = createAgentAsync workspace agentName agentVersion tools (recorder :> IAgentEventSink)
+                // Subscribe the recorder for this turn's progress signals; detached in finally.
+                eventBus.Subscribe(recorder :> IEventConsumer)
+                let! agentOpt = createAgentAsync workspace agentName agentVersion tools turnScope toolContext
                 match agentOpt with
                 | None ->
                     return sprintf "[Error] Agent '%s' not found in workspace '%s'" agentName persistentState.State.Info.WorkspaceKey
                 | Some agent ->
-                    let harnessConfig = buildHarnessConfig workspace tools (recorder :> IAgentEventSink)
+                    let harnessServices = harnessServicesFactory.Invoke(sessionKey, turnId)
+                    let harnessConfig = buildHarnessConfig workspace tools turnScope harnessServices
                     let! result = EtclovgHarness.runAsync harnessConfig agent llmInput
 
                     match result.Success, result.Response with
@@ -659,9 +697,8 @@ type SessionGrain
                             | None -> result.Error |> Option.defaultValue "[Error] Unknown harness failure"
                         return errorMsg
             finally
+                eventBus.Unsubscribe(recorder :> IEventConsumer)
                 currentRecorder <- None
-                SessionExecution.clear ()
-                ToolContext.clear ()
         }
     // ─── Activation ───
 
@@ -669,7 +706,6 @@ type SessionGrain
     /// key ("userId/sessionId") so each session writes them under its own sessions/<key>/.
     override this.OnActivateAsync(cancellationToken: System.Threading.CancellationToken) : Task =
         let key = this.GetPrimaryKeyString()
-        harnessServices <- harnessServicesFactory.Invoke key
         feedback <- feedbackFactory.Invoke key
         base.OnActivateAsync(cancellationToken)
 
@@ -756,8 +792,8 @@ type SessionGrain
                           Comment = if String.IsNullOrWhiteSpace comment then None else Some comment
                           CreatedAt = DateTimeOffset.UtcNow
                           Metadata = Map.empty }
-                    let! proposals = feedback.SubmitFeedbackAsync fb
-                    return proposals |> List.map (fun p -> p.Rationale) |> List.toArray
+                    do! feedback.SubmitFeedbackAsync fb
+                    return [||]
             }
 
         member _.SwitchWorkspaceAsync(workspaceKey: string) : Task<bool> =
@@ -844,16 +880,7 @@ type SessionGrain
 
         member _.SaveMemoryAsync(key: string, value: string) : Task =
             task {
-                let record = MemoryRecord()
-                record.Key <- key
-                record.Value <- value
-                record.Timestamp <- DateTimeOffset.UtcNow
-                let existing =
-                    persistentState.State.Memories
-                    |> Seq.tryFindIndex (fun m -> m.Key = key)
-                match existing with
-                | Some idx -> persistentState.State.Memories.[idx] <- record
-                | None -> persistentState.State.Memories.Add(record)
+                saveMemory key value
                 do! persistentState.WriteStateAsync()
             }
 
