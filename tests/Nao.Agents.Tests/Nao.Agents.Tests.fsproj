@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <Using Include="Microsoft.VisualStudio.TestTools.UnitTesting" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="src/MSTestSettings.fs" />
+    <Compile Include="src/Test1.fs" />
+    <Compile Include="src/LlmTypeTests.fs" />
+    <Compile Include="src/ConversationWindowTests.fs" />
+    <Compile Include="src/MemoryStoreTests.fs" />
+    <Compile Include="src/SummarizerTests.fs" />
+    <Compile Include="src/SemanticMemoryTests.fs" />
+    <Compile Include="src/EnvironmentTests.fs" />
+    <Compile Include="src/ToolProtocolTests.fs" />
+    <Compile Include="src/ContextCompactionTests.fs" />
+    <Compile Include="src/LifecycleTests.fs" />
+    <Compile Include="src/ObservabilityTests.fs" />
+    <Compile Include="src/VerificationTests.fs" />
+    <Compile Include="src/GovernanceTests.fs" />
+    <Compile Include="src/ResourcePermissionTests.fs" />
+    <Compile Include="src/ToolPermissionTests.fs" />
+    <Compile Include="src/EtclovgHarnessTests.fs" />
+    <Compile Include="src/DelegationHookTests.fs" />
+    <Compile Include="src/ActionBlockParseTests.fs" />
+    <Compile Include="src/EventBusTests.fs" />
+    <Compile Include="src/ObservabilityServicesTests.fs" />
+    <Compile Include="src/InMemoryStores.fs" />
+    <Compile Include="src/FeedbackTests.fs" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Nao.Agents\Nao.Agents.fsproj" />
+    <ProjectReference Include="..\..\src\Nao.Persistence\Nao.Persistence.fsproj" />
+    <ProjectReference Include="..\..\..\Assistant\Nao.Assistant.Server\Nao.Assistant.Server.fsproj" />
+  </ItemGroup>
+  <Import Project="..\..\.paket\Paket.Restore.targets" />
+</Project>

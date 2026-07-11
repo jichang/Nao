@@ -1,0 +1,91 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- LLM / message primitives (formerly Nao.Core) -->
+    <Compile Include="src/Llm/SessionExecution.fs" />
+    <Compile Include="src/Llm/Role.fs" />
+    <Compile Include="src/Llm/ContentMeta.fs" />
+    <Compile Include="src/Llm/Message.fs" />
+    <Compile Include="src/Llm/CompletionOptions.fs" />
+    <Compile Include="src/Llm/CompletionResult.fs" />
+    <Compile Include="src/Llm/ILlmProvider.fs" />
+    <!-- Resource-permission types are referenced by the Tool abstraction (ToolContext /
+         declared permissions), so they must be compiled before Tool.fs. -->
+    <Compile Include="src/Governance/ResourcePermission.fs" />
+    <Compile Include="src/Core/AgentId.fs" />
+    <Compile Include="src/Core/Tool.fs" />
+    <Compile Include="src/Core/AgentAction.fs" />
+    <Compile Include="src/Core/AgentMessage.fs" />
+    <Compile Include="src/Core/IAgent.fs" />
+    <Compile Include="src/Core/RetryPolicy.fs" />
+    <Compile Include="src/Prompts/PromptExample.fs" />
+    <Compile Include="src/Prompts/OutputFormat.fs" />
+    <Compile Include="src/Prompts/Prompt.fs" />
+    <Compile Include="src/Logging/LogLevel.fs" />
+    <!-- E: Execution Environment & Sandbox -->
+    <Compile Include="src/Environment/ResourceLimits.fs" />
+    <Compile Include="src/Environment/Sandbox.fs" />
+    <Compile Include="src/Environment/ExecutionEnvironment.fs" />
+    <!-- T: Tool Interface & Protocol -->
+    <Compile Include="src/ToolProtocol/ToolSchema.fs" />
+    <Compile Include="src/ToolProtocol/ToolProtocol.fs" />
+    <Compile Include="src/ToolProtocol/ExecutionJournal.fs" />
+    <Compile Include="src/ToolProtocol/ToolRouter.fs" />
+    <Compile Include="src/ToolProtocol/McpTransport.fs" />
+    <Compile Include="src/ToolProtocol/ToolComposition.fs" />
+    <!-- C: Context & Memory Management -->
+    <Compile Include="src/Memory/ConversationWindow.fs" />
+    <Compile Include="src/Memory/MemoryStore.fs" />
+    <Compile Include="src/Memory/Summarizer.fs" />
+    <Compile Include="src/Memory/SemanticMemory.fs" />
+    <Compile Include="src/Memory/MemoryTier.fs" />
+    <Compile Include="src/Memory/GraphMemory.fs" />
+    <Compile Include="src/Memory/EpisodicMemory.fs" />
+    <Compile Include="src/Memory/WorkingMemory.fs" />
+    <Compile Include="src/Memory/MemoryConsolidation.fs" />
+    <Compile Include="src/Memory/ContextCompaction.fs" />
+    <!-- T: Tool Discovery (depends on Memory types) -->
+    <Compile Include="src/ToolProtocol/ToolDiscovery.fs" />
+    <!-- L: Lifecycle & Orchestration -->
+    <Compile Include="src/Lifecycle/Lifecycle.fs" />
+    <Compile Include="src/Lifecycle/LifecyclePipeline.fs" />
+    <Compile Include="src/Orchestration/Router.fs" />
+    <Compile Include="src/Orchestration/Pipeline.fs" />
+    <Compile Include="src/Orchestration/AgentGroup.fs" />
+    <!-- Trace types are referenced by the orchestrator (per-tool spans), so they must
+         be compiled before it. -->
+    <Compile Include="src/Observability/Trace.fs" />
+    <!-- The orchestrator/harness publish turn progress onto the durable event bus, so the
+         event envelope (Events.fs) and every type it aggregates must compile before them. -->
+    <Compile Include="src/Observability/Metrics.fs" />
+    <Compile Include="src/Verification/Verification.fs" />
+    <Compile Include="src/Governance/Permission.fs" />
+    <Compile Include="src/Governance/AuditLog.fs" />
+    <Compile Include="src/Events/TurnRecords.fs" />
+    <Compile Include="src/Feedback/FeedbackTypes.fs" />
+    <Compile Include="src/Events/Events.fs" />
+    <Compile Include="src/Events/TurnRecorder.fs" />
+    <Compile Include="src/Orchestration/Orchestrator.fs" />
+    <!-- O: Observability & Operations -->
+    <Compile Include="src/Observability/Resilience.fs" />
+    <!-- V: Verification & Evaluation -->
+    <Compile Include="src/Verification/Regression.fs" />
+    <!-- G: Governance & Security -->
+    <Compile Include="src/Governance/Constitution.fs" />
+    <Compile Include="src/Governance/PolicyEngine.fs" />
+    <!-- Harness (integrates all layers) -->
+    <Compile Include="src/Harness/HarnessResult.fs" />
+    <Compile Include="src/Harness/EtclovgHarness.fs" />
+    <!-- Feedback loop: types, stores (interfaces + file impls), analysis, service facade
+         (formerly Nao.Feedback) -->
+    <Compile Include="src/Feedback/Stores.fs" />
+    <Compile Include="src/Feedback/FeedbackService.fs" />
+    <!-- Observability service adapters that publish harness writes onto the event bus. -->
+    <Compile Include="src/Observability/ObservabilityServices.fs" />
+  </ItemGroup>
+  <Import Project="..\..\.paket\Paket.Restore.targets" />
+</Project>

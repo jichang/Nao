@@ -1,0 +1,20 @@
+.paket
+paket-files
+
+bin
+Bin
+obj
+Obj
+debug
+Debug
+.fake
+
+TestResults
+
+# Generated documentation output
+.fsdocs
+site
+
+# Demo app runtime data (SQLite db, conversations, observability)
+.nao-data
+artifacts

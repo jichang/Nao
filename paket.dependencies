@@ -1,0 +1,27 @@
+source https://api.nuget.org/v3/index.json
+
+storage: none
+
+nuget JsonSchema.Net
+nuget Microsoft.Orleans.Sdk
+nuget Microsoft.Orleans.Server
+nuget Microsoft.Orleans.Client
+nuget Microsoft.Orleans.Persistence.AdoNet
+nuget Microsoft.Data.Sqlite
+nuget FSharp.SystemTextJson
+nuget YamlDotNet
+nuget SignedByte.Documents
+nuget Avalonia
+nuget Avalonia.Desktop
+nuget Avalonia.Themes.Fluent
+nuget Semi.Avalonia 12.0.3
+nuget Avalonia.FuncUI 2.0.0-preview1
+nuget Avalonia.FuncUI.Elmish
+nuget Tmds.DBus.Protocol 0.92.0
+
+group Test
+  source https://api.nuget.org/v3/index.json
+  storage: none
+
+  nuget MSTest
+  nuget Microsoft.Orleans.TestingHost

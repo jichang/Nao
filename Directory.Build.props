@@ -1,0 +1,18 @@
+<Project>
+  <PropertyGroup>
+    <NoWarn>$(NoWarn);NU1510</NoWarn>
+    <FSharpCoreImplicitPackageVersion>10.1.301</FSharpCoreImplicitPackageVersion>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <RepositoryUrl>https://github.com/jichang/Nao</RepositoryUrl>
+    <FsDocsLicenseLink>https://github.com/jichang/Nao/blob/main/LICENSE</FsDocsLicenseLink>
+    <FsDocsReleaseNotesLink>https://github.com/jichang/Nao/blob/main/CHANGELOG.md</FsDocsReleaseNotesLink>
+    <!-- NuGet packaging -->
+    <PackageId>$(MSBuildProjectName)</PackageId>
+    <Version>0.2.0</Version>
+    <Authors>jichang</Authors>
+    <Description>Nao AI Agent Framework</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/jichang/Nao</PackageProjectUrl>
+    <IsPackable>true</IsPackable>
+  </PropertyGroup>
+</Project>

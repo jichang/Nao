@@ -1,0 +1,16 @@
+<Solution>
+  <Folder Name="/src/Framework/">
+    <Project Path="src/Nao.Agents/Nao.Agents.fsproj" />
+    <Project Path="src/Nao.Eval/Nao.Eval.fsproj" />
+    <Project Path="src/Nao.Persistence/Nao.Persistence.fsproj" />
+    <Project Path="src/Nao.Providers/Nao.Providers.fsproj" />
+    <Project Path="src/Nao.Runtime.Orleans/Nao.Runtime.Orleans.fsproj" />
+    <Project Path="src/Nao.Runtime.Orleans.Codegen/Nao.Runtime.Orleans.Codegen.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Nao.Eval.Tests/Nao.Eval.Tests.fsproj" />
+    <Project Path="tests/Nao.Persistence.Tests/Nao.Persistence.Tests.fsproj" />
+    <Project Path="tests/Nao.Providers.Tests/Nao.Providers.Tests.fsproj" />
+    <Project Path="tests/Nao.Runtime.Orleans.Tests/Nao.Runtime.Orleans.Tests.fsproj" />
+  </Folder>
+</Solution>

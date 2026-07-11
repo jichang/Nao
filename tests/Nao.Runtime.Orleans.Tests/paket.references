@@ -1,0 +1,3 @@
+group Test
+MSTest
+Microsoft.Orleans.TestingHost

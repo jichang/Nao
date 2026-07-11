@@ -1,0 +1,50 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Unified provider-agnostic ADO.NET infrastructure -->
+    <Compile Include="src/Infrastructure/Ado.fs" />
+    <!-- Shared serialization / DTO codecs -->
+    <Compile Include="src/Infrastructure/Serialization.fs" />
+    <!-- Event-sourced persistence infrastructure -->
+    <Compile Include="src/Infrastructure/EventStore.fs" />
+    <!-- Normalized interface implementations (ADO.NET + FileSystem) -->
+    <Compile Include="src/Memory/MemoryStore.fs" />
+    <Compile Include="src/Observability/ExecutionJournal.fs" />
+    <Compile Include="src/Memory/SemanticMemory.fs" />
+    <Compile Include="src/Observability/AuditLog.fs" />
+    <!-- In-memory reference implementations (moved out of Nao.Agents) -->
+    <Compile Include="src/Memory/EpisodicMemoryImpl.fs" />
+    <Compile Include="src/Memory/GraphMemoryImpl.fs" />
+    <Compile Include="src/Memory/TieredMemoryImpl.fs" />
+    <Compile Include="src/Memory/WorkingMemoryImpl.fs" />
+    <Compile Include="src/Tools/ToolDiscoveryImpl.fs" />
+    <!-- Event-sourced implementations of the richer stores -->
+    <Compile Include="src/Memory/EpisodicMemory.fs" />
+    <Compile Include="src/Memory/GraphMemory.fs" />
+    <Compile Include="src/Memory/TieredMemory.fs" />
+    <Compile Include="src/Memory/WorkingMemory.fs" />
+    <Compile Include="src/Tools/ToolDiscovery.fs" />
+    <Compile Include="src/Observability/Observability.fs" />
+    <!-- Backend selection + host-injectable service bundle -->
+    <Compile Include="src/Composition/Registration.fs" />
+    <!-- ADO.NET-backed feedback stores + backend factories -->
+    <Compile Include="src/Feedback/FeedbackStores.fs" />
+    <!-- In-memory event bus + feedback event consumer (moved out of Nao.Agents) -->
+    <Compile Include="src/Events/EventBus.fs" />
+    <Compile Include="src/Feedback/FeedbackEventConsumer.fs" />
+    <!-- Consolidated in-memory facade -->
+    <Compile Include="src/Composition/InMemory.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Nao.Agents\Nao.Agents.fsproj" />
+  </ItemGroup>
+
+  <Import Project="..\..\.paket\Paket.Restore.targets" />
+
+</Project>
