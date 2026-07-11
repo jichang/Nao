@@ -55,25 +55,3 @@ jobs:
               --skip-duplicate
           done
 
-      - name: Publish Assistant Desktop
-        run: |
-          for rid in win-x64 linux-x64 osx-x64 osx-arm64; do
-            dotnet publish ../Assistant/Nao.Assistant.Desktop/Nao.Assistant.Desktop.fsproj -c Release \
-              -r $rid --self-contained -o ./release/Nao.Assistant-$rid
-          done
-
-      - name: Archive release binaries
-        run: |
-          cd release
-          for dir in */; do
-            name="${dir%/}"
-            tar -czf "${name}.tar.gz" "$dir"
-          done
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          name: Release ${{ github.ref_name }}
-          files: release/*.tar.gz
-          generate_release_notes: true

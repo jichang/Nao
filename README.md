@@ -41,7 +41,6 @@ The framework implements the **ETCLOVG** taxonomy from "Agent Harness Engineerin
 - **Compiled Workspace Registration** — Customer-defined .NET agents and tools are registered explicitly through `WorkspaceRegistry`
 - **Multi-Workspace Runtime** — Multiple isolated compiled workspaces within a single Orleans silo
 - **Group Directory** — Organizational multi-tenancy: groups own sessions, members, and default workspaces
-- **Desktop Assistant** — Avalonia.FuncUI chat app with an embedded ASP.NET Core + Orleans server: real-time execution-trace streaming, dark/light theme switching, and a localizable UI
 - **F# First** — Immutable records, discriminated unions, and functional composition throughout
 
 ## Project Structure
@@ -70,23 +69,13 @@ Nao.slnx
 │   ├── Nao.Runtime.Orleans/    # Distributed runtime (grains, workspaces, groups)
 │   │   ├── Workspace/           # WorkspaceRegistry (multi-tenant workspace isolation)
 │   │   └── Grains/              # SessionGrain, SessionDirectory, GroupDirectory
-│   ├── Nao.Runtime.Orleans.Codegen/ # Orleans source-generation support
-│   ├── Nao.Assistant.Server/   # Application server: ASP.NET Core + Orleans, API, tools, agents
-│   ├── Nao.Assistant.Desktop/  # Avalonia.FuncUI desktop chat app (embedded server + UI)
-│   │   ├── Domain/              # Contracts, AppSettings (theme/language persistence)
-│   │   ├── Server/              # Embedded ASP.NET Core + Orleans host, WS streaming
-│   │   ├── Client/              # NaoClient WebSocket client
-│   │   ├── Components/          # Theme, Localization, reusable FuncUI controls
-│   │   └── Views/               # Shell, SessionView, SettingsView, BuilderView
-│   └── Nao.Assistant.Server.Evaluation/ # Standard app that evaluates server workflows
+│   └── Nao.Runtime.Orleans.Codegen/ # Orleans source-generation support
 └── tests/
     ├── Nao.Agents.Tests/        # Unit tests for all ETCLOVG layers
     ├── Nao.Eval.Tests/
     ├── Nao.Persistence.Tests/
     ├── Nao.Providers.Tests/
-    ├── Nao.Runtime.Orleans.Tests/
-    ├── Nao.Assistant.Tests/
-    └── Nao.E2E.Tests/           # End-to-end: orchestration + full ETCLOVG harness demos
+    └── Nao.Runtime.Orleans.Tests/
 ```
 
 ## Prerequisites
@@ -109,9 +98,6 @@ dotnet build Nao.slnx
 # Run tests
 dotnet test Nao.slnx
 
-# Run the server evaluation app (requires a local Ollama model by default)
-./scripts/start-local-llm.sh qwen2.5:3b
-dotnet run --project ../Assistant/Nao.Assistant.Server.Evaluation/Nao.Assistant.Server.Evaluation.fsproj
 ```
 
 ## Architecture
@@ -211,9 +197,9 @@ let history = AgentGroup.runAsync "Analyze this data" group
 
 ### Custom Orchestrators
 
-`OrchestratorBase` is an abstract template: it owns the run loop — calling the LLM, logging the round's reasoning, tracing each step, appending the assistant's message, executing tools/delegations, and producing the final answer. A concrete orchestrator only fills in *how to prompt* and *how to parse*. Because the base makes the LLM call, **logs and traces are captured no matter how you implement your orchestrator** — a custom subclass cannot accidentally drop them.
+`OrchestratorBase` is an abstract template: it owns the run loop — calling the LLM, logging the round's reasoning, tracing each step, appending the model's message, executing tools and delegations, and producing the final answer. A concrete orchestrator only fills in *how to prompt* and *how to parse*. Because the base makes the LLM call, **logs and traces are captured no matter how you implement your orchestrator** — a custom subclass cannot accidentally drop them.
 
-The framework ships one concrete implementation, `NaoOrchestrator` (in `Nao.Agents`), which uses the `application/json+nao` action-block protocol. Agents and tools are compiled .NET registrations; the runtime does not load code or definitions dynamically.
+The framework provides `OrchestratorBase` as an extensible execution template. Hosts supply the prompt format, action parser, agents, and tools as compiled .NET registrations; the runtime does not load code or definitions dynamically.
 
 ```fsharp
 type MyOrchestrator(config: OrchestratorConfig) =
@@ -224,7 +210,7 @@ type MyOrchestrator(config: OrchestratorConfig) =
     // prepend your system prompt and inject anything you need.
     override this.GenerateReasoningPrompt(conversation) =
         task {
-            let system = { Role = System; Content = "You are a domain assistant. Use <tool> tags." }
+            let system = { Role = System; Content = "You are a domain agent. Use <tool> tags." }
             return system :: conversation
         }
 
@@ -427,10 +413,10 @@ let writer =
 let! result = tool.InvokeAsync(ToolContext.allowAll, input)
 ```
 
-The pieces fit together so the runtime layer never has to reference the server:
+The pieces fit together so the runtime layer stays independent of host-specific decision and transport logic:
 
-- **`PermissionGate.Prompt`** — a process-wide hook in `Nao.Agents` that the server registers at startup. The grain calls it to resolve a request against the real decision logic (settings, persisted grants, live prompt) it cannot otherwise see.
-- **`PermissionBroker`** (server) — when a request resolves to `Ask`, the broker ships a `PermissionRequestDto` over the session's WebSocket, parks the call, and resumes on the user's reply. No client or no answer within the timeout **fails closed** (deny).
+- **`PermissionGate.Prompt`** — a process-wide hook in `Nao.Agents` that a host registers at startup. The grain calls it to resolve a request against host-provided decision logic.
+- **Host permission broker** — when a request resolves to `Ask`, a host can route the request through its own transport and approval flow. No client or no answer within the timeout **fails closed** (deny).
 - **Per-session grants** — when the user picks "remember for this session", the `SessionGrain` records the grant in its own Orleans-persisted state (`GrantedPermissions`) and never re-prompts for it; "global" grants persist to the cross-session `PermissionStore`; "once" persists nothing.
 - **`PermissionOutcome`** — `{ Decision; RememberForSession }`, the value threaded from broker → gate → grain so the session knows whether to record the grant.
 
@@ -529,7 +515,7 @@ let registry = WorkspaceRegistry.fromWorkspaces [
 ]
 
 // Sessions resolve agents/tools from their workspace
-let options = { AgentName = "assistant"; WorkspaceKey = "team-a"; GroupId = Some "org-1"; ToolNames = [] }
+let options = { AgentName = "coordinator"; WorkspaceKey = "team-a"; GroupId = Some "org-1"; ToolNames = [] }
 sessionGrain.StartAsync(options)
 
 // Switch workspace at runtime without losing conversation
@@ -559,35 +545,6 @@ let prompt =
         Examples = [ { Input = "Q1 revenue?"; Output = "$2.3B"; Explanation = None } ]
         OutputFormat = Json (Some """{"summary": "...", "trend": "..."}""") }
 ```
-
-## Desktop Assistant
-
-`Nao.Assistant.Desktop` is a cross-platform desktop chat client built with [Avalonia](https://avaloniaui.net/) and [Avalonia.FuncUI](https://github.com/fsprojects/Avalonia.FuncUI), styled with [Semi.Avalonia](https://github.com/irihitech/Semi.Avalonia). It hosts an **embedded ASP.NET Core + Orleans server** in-process, so a single executable provides both the runtime and the UI.
-
-```bash
-dotnet run --project ../Assistant/Nao.Assistant.Desktop/Nao.Assistant.Desktop.fsproj
-```
-
-Highlights:
-
-- **Live execution trace** — As a turn runs, the assistant streams what it is doing (reasoning, tool calls, sub-agent steps) over a WebSocket and renders the process *above* the final answer in real time, instead of hiding it behind a "details" toggle.
-- **Unified per-session workspace** — Each conversation gets its own folder on disk under the app data directory (`<NAO_DATA_DIR or ./.nao-data>/sessions/<session>/files`). This single directory is the working directory shared by uploaded attachments, tool output, and generated files: every file tool (`read_file`, `write_file`, `list_folder`, `search_files`, `find_files`, `convert_document`) operates inside it, isolated per conversation. The file listing the UI shows is a *reconciled view* over the folder — files a tool writes directly appear as download chips automatically, and deleted files drop out. Paths are confined to the session folder (traversal-guarded).
-- **Event-driven storage** — The system never decides *where* observability/feedback data lands. Producers (the `SessionGrain`) publish domain events (`TurnCompleted`, `ImplicitFeedbackCaptured`) carrying an `EventScope` of ids (user, session, conversation, action, parent), and a subscribed consumer in `Nao.Events` persists them. `FeedbackEventConsumer` files feedback under `sessions/<session>/feedback/` via a `rootFor` function; pointing that function at one shared folder (or swapping the backing `FeedbackService` for a database) moves everything with **zero producer changes**. Reads and the synchronous *submit-feedback* command stay a separate query path (CQRS), so a failing consumer never breaks a turn.
-- **Observability over the same bus** — The agent harness's fine-grained observability sinks (traces, metrics, tool/LLM timings, the execution journal, regression traces, and governance audit) also flow through the bus. The harness is handed a `PublishingHarnessServices` *tee* from `ObservabilityServices`: every span/metric/journal/trace/audit **write** is broadcast as an `ObservabilityCaptured` event (each stamped with the producing turn's `EventScope`, including the per-turn action id threaded explicitly into the per-turn observability services) while **reads** — regression baselines, revert history — still hit the real backing store so behaviour is unchanged. `ObservabilityServices` files everything under `sessions/<session>/observability/` via its backing factory; pointing that factory at a shared folder or another store needs **zero producer changes** and no grain edits.
-- **Conversations over the same bus** — Transcript persistence completes the event-driven trio. The `SessionGrain` still writes through plain `IConversationStore`, but that store is a `PublishingConversationStore` *tee*: every append/save/delete is persisted to the backing `FileConversationStore` (so history **reads** stay correct) **and** broadcast as a `ConversationCaptured` event carrying transport-neutral message payloads and the turn's `EventScope`. Swapping the backing store for a database or cloud transcript store needs **zero producer changes**, and any subscriber can persist or forward the transcript stream independently.
-- **Compiled agent composition** — A host supplies each agent's tool and sub-agent dependencies in code. A tool like `convert_document` can be registered only with a specialist agent, so the top-level assistant cannot invoke it directly.
-- **Explicit workspace composition** — The host decides which orchestrator, specialist agents, tools, and constitutions belong to each workspace at startup.
-- **YAML workflow planning** — The orchestrator is steered toward a formal YAML workflow DSL instead of ad-hoc prose/action JSON. Executable plans are emitted as `application/vnd.nao.workflow+yaml` fenced blocks with `nao: workflow/v1`, `status: planned`, and ordered `steps` that invoke tools, delegate to agents, trigger tasks, or encode direct specialist replies with `respond`. The workflow is parsed and validated before execution; invalid plans go through the repair loop rather than leaking to the user.
-- **Prefer-agent delegation** — When both a specialist sub-agent and a raw tool could accomplish a task, the assistant is instructed to delegate to the purpose-built agent rather than call the tool itself.
-- **Background work** — Compiled tools can use `ToolContext.SpawnTask` to launch background work in a task sub-session that shares the originating conversation's workspace folder.
-- **Document conversion tool** — The server's document tools use the configured document conversion dependencies and are registered as ordinary compiled `Tool` values; applications can replace or extend them with their own implementations.
-- **Attachments read on demand** — Uploaded files are saved to the session folder rather than inlined into the prompt; the model is told their names and reads them with `read_file` only when it actually needs the contents, keeping large files out of the conversation. Two uploads that share a name don't clobber each other — the later one is stored under a disambiguated name like `report (1).pdf`, and the model is told the actual stored name.
-- **Opt-in knowledge base** — User-uploaded knowledge documents are *not* injected into every turn. They are searchable only through the explicit `search_knowledge` tool, and agents are instructed to ask permission before using it.
-- **Theme switching** — Dark and light themes are selectable from Settings, applied instantly via centralized design tokens, and persisted across launches.
-- **Localizable UI** — UI strings flow through a central `Localization` table and ship in 10 languages (English, 简体中文, हिन्दी, Español, Français, العربية, Português, Русский, 日本語, Deutsch), selectable from Settings and applied live.
-- **Persisted preferences** — Theme, language, provider, orchestrator, and workspace settings are stored in `AppSettings` and reloaded on startup.
-
-LLM turns can run well beyond Orleans' default 30s grain-response timeout, so the embedded host raises the silo/client `ResponseTimeout` accordingly.
 
 ## Package Management
 

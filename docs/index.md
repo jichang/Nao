@@ -10,7 +10,6 @@ Nao is an F# framework for building, orchestrating, and evaluating LLM-powered a
 | [Nao.Providers](reference/nao-providers.html) | LLM provider implementations (Ollama, OpenAI, Anthropic, vLLM, llama.cpp) |
 | [Nao.Eval](reference/nao-eval.html) | Agent evaluation framework — test cases, evaluators, LLM judge, regression |
 | [Nao.Runtime.Orleans](reference/nao-runtime-orleans.html) | Distributed runtime — multi-workspace registry, group directory, session grains |
-| Nao.Assistant.Desktop | Avalonia.FuncUI desktop chat app — embedded ASP.NET Core + Orleans host, live execution-trace streaming, dark/light themes, localizable UI |
 
 ## Architecture
 
@@ -85,12 +84,11 @@ Agent lifecycle state machine and multi-stage pipelines:
 - `LifecyclePipeline` — Multi-stage execution with validation and `RetryPolicy`
 - `Router`, `Pipeline`, `AgentGroup` — Multi-agent orchestration patterns
 - `OrchestratorBase` — Abstract template that owns the run loop; subclasses supply the prompt and parser
-- `NaoOrchestrator` — The framework's concrete orchestrator (`application/json+nao` protocol), in `Nao.Agents`
 - `IOrchestratorFactory` — DI interface to control orchestrator instantiation
 
 #### Custom Orchestrators
 
-`OrchestratorBase` owns the whole run loop — calling the LLM, logging the round's reasoning, tracing each step, appending the assistant's message, executing tools/delegations, and producing the final answer. A subclass only supplies *how to prompt* and *how to parse*. Because the base makes the LLM call, **logs and traces are captured no matter how the orchestrator is implemented** — a custom subclass cannot accidentally drop them. There is no default `Orchestrator`; consumers use `NaoOrchestrator` or subclass `OrchestratorBase`.
+`OrchestratorBase` owns the whole run loop — calling the LLM, logging the round's reasoning, tracing each step, appending the model's message, executing tools and delegations, and producing the final answer. A subclass only supplies *how to prompt* and *how to parse*. Because the base makes the LLM call, **logs and traces are captured no matter how the orchestrator is implemented** — a custom subclass cannot accidentally drop them. Hosts subclass `OrchestratorBase` or provide their own concrete implementation.
 
 | Member | Kind | Purpose |
 |--------|------|---------|
@@ -130,7 +128,7 @@ Permissions, constitutional rules, audit logging, and runtime policy enforcement
 - `PermissionModel` — Permissive/Restrictive with per-capability grants
 - `ResourceAccess` — Resource-level requests (`File`/`Web`/`ToolCall`) evaluated by the pure `ResourcePermission` engine (`Allow`/`Deny`/`Ask`, deny-by-default)
 - `ToolContext` — Passed to every `Tool.Execute`; lets tools request approval dynamically and carries the session key. Tools can also declare a static `Permissions` list that `InvokeAsync` auto-requests before running
-- `PermissionGate` — Process-wide hook the server registers so the Orleans runtime can resolve permission requests (interactive WebSocket prompt + persisted grants) without referencing the server
+- `PermissionGate` — Process-wide host hook so the Orleans runtime can resolve permission requests without depending on a transport or application
 - `Constitution` — Declarative output rules (PII detection, harm prevention, domain rules)
 - `IAuditLog` — Full audit trail of all agent actions
 - `PolicyEngine` — Runtime budget/rate-limit enforcement with Block/Warn/Modify actions
@@ -141,7 +139,7 @@ Permissions, constitutional rules, audit logging, and runtime policy enforcement
 The resource-permission system is the resource-level companion to the capability-level `PermissionModel`:
 
 - **Deny-by-default & opt-in** — Enforcement is gated by a master switch in Settings (off by default). When on, file access outside the session workspace and all web access need an allow rule.
-- **Interactive approval** — Unresolved requests (`Ask`) prompt the user live over the per-session WebSocket via the server's `PermissionBroker`. No client or no answer within the timeout fails closed (deny).
+- **Interactive approval** — Hosts can route unresolved requests (`Ask`) through their own transport and approval mechanism. No client or no answer within the timeout fails closed (deny).
 - **Per-session memory** — "Remember for this session" grants are recorded in the `SessionGrain`'s own Orleans-persisted state (`GrantedPermissions`) so they are never re-prompted; "global" grants persist to the cross-session `PermissionStore`; "once" persists nothing.
 - **`PermissionOutcome`** — `{ Decision; RememberForSession }` threaded from broker → `PermissionGate` → grain so the session knows whether to record the grant.
 
