@@ -13,3 +13,9 @@ type IAgent =
     abstract member RunAsync: string -> Task<string>
     /// Handle an inter-agent message and optionally reply
     abstract member HandleMessageAsync: AgentMessage -> Task<AgentMessage option>
+
+/// Optional runtime context bridge for agents that execute tools.
+/// Hosts use this to supply the per-session file scope and permission callback
+/// after a code-defined agent has been registered in a workspace.
+type IContextualAgent =
+    abstract member SetToolContext: ToolContext -> unit

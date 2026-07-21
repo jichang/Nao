@@ -238,7 +238,7 @@ type OrchestratorWithMockProviderTests() =
                           FinishReason = "stop"
                           TokensUsed = Some 5 }) }
 
-        let config : OrchestratorConfig = { Id = { Name = "orchestrator"; Description = "test orchestrator" }; Provider = loopProvider; Tools = tools; SubAgents = []; Prompt = Prompt.Empty; Options = CompletionOptions.Default; MaxRounds = 3; Bus = EventBus.none; Scope = EventScope.Empty; Memory = OrchestratorMemoryConfig.None; Instructions = None; Context = ToolContext.allowAll }
+        let config : OrchestratorConfig = { Id = { Name = "orchestrator"; Description = "test orchestrator" }; Provider = loopProvider; Tools = tools; SubAgents = []; Prompt = Prompt.Empty; Options = CompletionOptions.Default; MaxRounds = 3; Bus = EventBus.none; Scope = EventScope.Empty; Memory = OrchestratorMemoryConfig.None; Context = ToolContext.allowAll }
 
         let orchestrator = NaoOrchestrator.createWithConfig config
         let result = (orchestrator.RunAsync "Loop me").Result

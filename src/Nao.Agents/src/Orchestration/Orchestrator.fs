@@ -24,13 +24,18 @@ type OrchestratorMemoryConfig =
         { OrchestratorMemoryConfig.None with WindowStrategy = Some strategy }
 
 /// Configuration for the Orchestrator
-type OrchestratorConfig = { Id: AgentId; Provider: ILlmProvider; Tools: Tool list; SubAgents: IAgent list; Prompt: Prompt; Options: CompletionOptions; MaxRounds: int; Bus: IEventBus; Scope: EventScope; Memory: OrchestratorMemoryConfig; Instructions: string option; Context: ToolContext }
+type OrchestratorConfig = { Id: AgentId; Provider: ILlmProvider; Tools: Tool list; SubAgents: IAgent list; Prompt: Prompt; Options: CompletionOptions; MaxRounds: int; Bus: IEventBus; Scope: EventScope; Memory: OrchestratorMemoryConfig; Context: ToolContext }
 
 /// Factory interface for creating orchestrator instances via DI.
 /// Register a custom implementation to control how orchestrators are built from workspace definitions.
 type IOrchestratorFactory =
     /// Create an orchestrator (as IAgent) from the given configuration.
     abstract member Create: OrchestratorConfig -> IAgent
+
+/// Runtime event context supplied by the host after a code-defined agent is selected.
+/// This keeps workspace registration independent from per-session routing and recording.
+type IRuntimeAgentContext =
+    abstract member SetEventContext: IEventBus -> EventScope -> unit
 
 /// The fundamental orchestrator agent.
 /// Accepts user input, uses an LLM to decide which tool or sub-agent to invoke,
@@ -39,9 +44,12 @@ type IOrchestratorFactory =
 [<AbstractClass>]
 type OrchestratorBase(config: OrchestratorConfig) =
     let id = config.Id
+    let mutable toolContext = config.Context
+    let mutable eventBus = config.Bus
+    let mutable eventScope = config.Scope
 
     let report (signal: ProgressSignal) =
-        config.Bus.PublishAsync(NaoEvent.TurnProgress(config.Scope, signal)) |> ignore
+        eventBus.PublishAsync(NaoEvent.TurnProgress(eventScope, signal)) |> ignore
 
     let getMemoryContext () : Task<string> =
         task {
@@ -154,12 +162,6 @@ type OrchestratorBase(config: OrchestratorConfig) =
     abstract member OnToolResult: toolName: string * input: string * result: string -> unit
     default _.OnToolResult(_, _, _) = ()
 
-    /// Override to intercept delegation to a sub-agent before the default in-process call.
-    /// Return a handle when the delegation was handed off to a background task; return None
-    /// to fall back to in-process delegation.
-    abstract member TryHandleDelegationAsync: agentName: string * input: string -> Task<SessionExecution.BackgroundTaskHandle option>
-    default _.TryHandleDelegationAsync(_, _) = Task.FromResult None
-
     /// Override to add custom logic after an agent round completes.
     abstract member OnRoundComplete: round: int * content: string -> unit
     default _.OnRoundComplete(_, _) = ()
@@ -173,8 +175,25 @@ type OrchestratorBase(config: OrchestratorConfig) =
         task {
             let! messages = this.GenerateReasoningPrompt(conversation)
             let roundSpan = this.StartRoundSpan round
+            let startLlmSpan (attempt: int) : (ITracer * Span) option =
+                match this.TraceContext with
+                | Some (tracer, parent) ->
+                    let span = tracer.StartSpan parent "llm.call"
+                    tracer.SetAttributes span (Map.ofList [ "agent.name", id.Name; "round", string round; "attempt", string attempt; "messages.count", string messages.Length ])
+                    Some (tracer, span)
+                | None -> None
+            let endLlmSpan (span: (ITracer * Span) option) (status: SpanStatus) (outputLength: int) (elapsedMs: int64) =
+                match span with
+                | Some (tracer, child) ->
+                    tracer.AddEvent child "llm.response" (Map.ofList [ "output.length", string outputLength; "latency.ms", string elapsedMs ])
+                    tracer.EndSpan child status
+                | None -> ()
             try
+                let llmStarted = Diagnostics.Stopwatch.StartNew()
+                let llmSpan = startLlmSpan 1
                 let! result = LlmProvider.streamAsync config.Provider messages config.Options (fun _ -> ())
+                llmStarted.Stop()
+                endLlmSpan llmSpan SpanStatus.Ok result.Content.Length llmStarted.ElapsedMilliseconds
                 let mutable working = result.Content
                 // Validate-and-repair: ask the model to correct an invalid response (bounded)
                 // before it is parsed. `ValidateResponse` defaults to accepting everything.
@@ -186,7 +205,11 @@ type OrchestratorBase(config: OrchestratorConfig) =
                     repairAttempts <- repairAttempts + 1
                     let fixMsg = { Role = User; Content = this.BuildRepairMessage validationError.Value }
                     convo <- convo @ [ { Role = Assistant; Content = working }; fixMsg ]
+                    let repairStarted = Diagnostics.Stopwatch.StartNew()
+                    let repairSpan = startLlmSpan (repairAttempts + 1)
                     let! fixResult = config.Provider.CompleteAsync convo config.Options
+                    repairStarted.Stop()
+                    endLlmSpan repairSpan SpanStatus.Ok fixResult.Content.Length repairStarted.ElapsedMilliseconds
                     working <- fixResult.Content
                     validationError <- this.ValidateResponse working
                 // Guaranteed logging: the round's reasoning always reaches the event bus here.
@@ -237,7 +260,7 @@ type OrchestratorBase(config: OrchestratorConfig) =
                                 let toolSpan = this.StartToolSpan toolName toolInput (rounds + 1)
                                 match config.Tools |> List.tryFind (fun t -> t.Name = toolName) with
                                 | Some tool ->
-                                    let! toolResult = tool.InvokeAsync(config.Context, toolInput)
+                                    let! toolResult = tool.InvokeAsync(toolContext, toolInput)
                                     report (ToolCompleted (toolName, toolResult))
                                     this.OnToolResult(toolName, toolInput, toolResult)
                                     let! verifyMsg =
@@ -271,24 +294,24 @@ type OrchestratorBase(config: OrchestratorConfig) =
                                     conversation <- conversation @ [ { Role = User; Content = sprintf "[Error]: %s" err } ]
                                 else
                                     report (SubAgentInvoked (agentName, agentInput))
-                                    let! handled = this.TryHandleDelegationAsync(agentName, agentInput)
-                                    match handled with
-                                    | Some handle ->
-                                        // The legacy text response exposes only the stable task id. Clients
-                                        // that need task metadata receive the structured handle at spawn time.
-                                        report (SubAgentCompleted (agentName, handle.TaskId))
-                                        finalAnswer <- handle.TaskId
+                                    match config.SubAgents |> List.tryFind (fun a -> a.Id.Name = agentName) with
+                                    | Some agent ->
+                                        match agent with
+                                        | :? IRuntimeAgentContext as contextual -> contextual.SetEventContext eventBus eventScope
+                                        | _ -> ()
+                                        match agent with
+                                        | :? IContextualAgent as contextual -> contextual.SetToolContext toolContext
+                                        | _ -> ()
+                                        match agent, this.TraceContext with
+                                        | (:? OrchestratorBase as child), Some traceContext -> child.TraceContext <- Some traceContext
+                                        | _ -> ()
+                                        let! agentResult = agent.RunAsync agentInput
+                                        report (SubAgentCompleted (agentName, agentResult))
+                                        finalAnswer <- agentResult
                                         finished <- true
                                     | None ->
-                                        match config.SubAgents |> List.tryFind (fun a -> a.Id.Name = agentName) with
-                                        | Some agent ->
-                                            let! agentResult = agent.RunAsync agentInput
-                                            report (SubAgentCompleted (agentName, agentResult))
-                                            finalAnswer <- agentResult
-                                            finished <- true
-                                        | None ->
-                                            let err = sprintf "Agent '%s' not found. Available agents: %s" agentName (config.SubAgents |> List.map (fun a -> a.Id.Name) |> String.concat ", ")
-                                            conversation <- conversation @ [ { Role = User; Content = sprintf "[Error]: %s" err } ]
+                                        let err = sprintf "Agent '%s' not found. Available agents: %s" agentName (config.SubAgents |> List.map (fun a -> a.Id.Name) |> String.concat ", ")
+                                        conversation <- conversation @ [ { Role = User; Content = sprintf "[Error]: %s" err } ]
 
                             | Respond response ->
                                 finalAnswer <- response
@@ -316,4 +339,12 @@ type OrchestratorBase(config: OrchestratorConfig) =
                 let! response = this.RunCore(msg.Content)
                 return Some (AgentMessage.create id msg.From response)
             }
+
+    interface IContextualAgent with
+        member _.SetToolContext(context: ToolContext) = toolContext <- context
+
+    interface IRuntimeAgentContext with
+        member _.SetEventContext(bus: IEventBus) (scope: EventScope) =
+            eventBus <- bus
+            eventScope <- scope
 

@@ -10,13 +10,9 @@
     <Compile Include="src/Storage/ConversationStore.fs" />
     <Compile Include="src/Storage/FileConversationStore.fs" />
     <Compile Include="src/Storage/PublishingConversationStore.fs" />
-    <Compile Include="src/Storage/TaskStore.fs" />
     <Compile Include="src/Grains/GrainState.fs" />
-    <Compile Include="src/Grains/TaskTypes.fs" />
     <Compile Include="src/Grains/SessionDirectoryGrain.fs" />
     <Compile Include="src/Grains/SessionGrain.fs" />
-    <Compile Include="src/Grains/SessionTaskGrain.fs" />
-    <Compile Include="src/Grains/TaskExecutors.fs" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Nao.Agents\Nao.Agents.fsproj" />

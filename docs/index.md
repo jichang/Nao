@@ -96,7 +96,6 @@ Agent lifecycle state machine and multi-stage pipelines:
 | `ParseActions(response)` | abstract | Parse LLM output into `AgentAction`s (empty = plain final answer) |
 | `ValidateResponse(response)` | virtual | Return a repair error, or `None` to accept (default: accept) |
 | `BuildRepairMessage(error)` | virtual | Corrective instruction sent on a repair round |
-| `TryHandleDelegationAsync(name, input)` | virtual | Intercept delegation (e.g. hand off to a background task) |
 | `OnToolResult(name, input, result)` | virtual | Post-processing hook after a tool executes |
 | `OnRoundComplete(round, content)` | virtual | Hook called after each reasoning round |
 

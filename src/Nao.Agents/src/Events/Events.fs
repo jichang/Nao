@@ -11,7 +11,7 @@ open Nao.Agents
 type EventScope =
     { /// Owning user (grain key prefix).
       UserId: string
-      /// Session id (grain key suffix); for a task sub-session this includes the task id.
+    /// Session id (grain key suffix).
       SessionId: string
       /// Active conversation within the session.
       ConversationId: string
@@ -19,22 +19,19 @@ type EventScope =
       WorkspaceKey: string
       /// The action that produced the event — the turn id.
       ActionId: string
-      /// Parent session key when this is a task sub-session (None for a primary session).
-      ParentKey: string option
-      /// Storage routing key — the full grain key ("userId/sessionId" or ".../taskId").
+            /// Storage routing key — the full grain key ("userId/sessionId").
       SessionKey: string
       /// When the event occurred.
       Timestamp: DateTimeOffset }
 
     static member Create
         (userId: string, sessionId: string, conversationId: string, workspaceKey: string,
-         actionId: string, sessionKey: string, ?parentKey: string) : EventScope =
+         actionId: string, sessionKey: string) : EventScope =
         { UserId = userId
           SessionId = sessionId
           ConversationId = conversationId
           WorkspaceKey = workspaceKey
           ActionId = actionId
-          ParentKey = parentKey
           SessionKey = sessionKey
           Timestamp = DateTimeOffset.UtcNow }
 

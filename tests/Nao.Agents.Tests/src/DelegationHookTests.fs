@@ -5,9 +5,7 @@ open Microsoft.VisualStudio.TestTools.UnitTesting
 open Nao.Agents
 open Nao.Assistant
 
-/// Tests for OrchestratorBase.TryHandleDelegationAsync — the hook that lets a
-/// subclass intercept delegation (e.g. hand it off to a background task) and
-/// reply with a token instead of running the sub-agent in-process.
+/// Tests for in-process delegation and action handling in the orchestrator.
 [<TestClass>]
 type DelegationHookTests() =
 
@@ -28,10 +26,7 @@ type DelegationHookTests() =
             member _.HandleMessageAsync(_msg) = Task.FromResult None }
 
     let makeConfig (provider: ILlmProvider) (subAgents: IAgent list) : OrchestratorConfig =
-                { Id = { Name = "orchestrator"; Description = "test orchestrator" }; Provider = provider; Tools = []; SubAgents = subAgents; Prompt = Prompt.Empty; Options = CompletionOptions.Default; MaxRounds = 5; Bus = EventBus.none; Scope = EventScope.Empty; Memory = OrchestratorMemoryConfig.None; Instructions = None; Context = ToolContext.allowAll }
-
-    let withContext (context: ToolContext) (config: OrchestratorConfig) =
-        { config with Context = context }
+                { Id = { Name = "orchestrator"; Description = "test orchestrator" }; Provider = provider; Tools = []; SubAgents = subAgents; Prompt = Prompt.Empty; Options = CompletionOptions.Default; MaxRounds = 5; Bus = EventBus.none; Scope = EventScope.Empty; Memory = OrchestratorMemoryConfig.None; Context = ToolContext.allowAll }
 
     let delegateJson (agent: string) (input: string) =
         sprintf "{\"action\":\"delegate\",\"name\":\"%s\",\"input\":\"%s\"}" agent input
@@ -40,27 +35,13 @@ type DelegationHookTests() =
         sprintf "{\"type\":\"respond\",\"response\":\"%s\"}" response
 
     [<TestMethod>]
-    member _.HandledDelegationReturnsTokenWithoutRunningSubAgent() =
-        let invoked = ref false
-        let agent = makeAgent "converter" "converted output" invoked
-        let provider = scriptedProvider [ delegateJson "converter" "convert notes.md" ]
-        let config = makeConfig provider [ agent ]
-        let orchestrator =
-            { new NaoOrchestrator(config) with
-                member _.TryHandleDelegationAsync(_agentName, _input) =
-                    Task.FromResult(Some { TaskId = "task-token-123"; Kind = "agent"; Title = "converter agent" }) }
-        let result = (orchestrator :> IAgent).RunAsync("convert this file").Result
-        Assert.AreEqual("task-token-123", result)
-        Assert.IsFalse(invoked.Value, "Sub-agent must NOT run in-process when delegation is handled")
-
-    [<TestMethod>]
     member _.UnhandledDelegationFallsBackToInProcessSubAgent() =
         let invoked = ref false
         let agent = makeAgent "converter" "converted output" invoked
         // Round 1: delegate. The orchestrator returns the specialist output directly.
         let provider = scriptedProvider [ delegateJson "converter" "convert notes.md"; "all done" ]
         let config = makeConfig provider [ agent ]
-        // Default OrchestratorBase returns None from TryHandleDelegationAsync.
+        // Delegation runs synchronously when the configured sub-agent is available.
         let orchestrator = NaoOrchestrator(config)
         let result = (orchestrator :> IAgent).RunAsync("convert this file").Result
         Assert.AreEqual("converted output", result)
@@ -92,63 +73,6 @@ type DelegationHookTests() =
         let result = (NaoOrchestrator(config) :> IAgent).RunAsync("say hello").Result
         Assert.AreEqual("router answer", result)
         Assert.IsFalse(invoked.Value, "Respond actions should remain in the orchestrator")
-
-    [<TestMethod>]
-    member _.DefaultAsyncDelegationSpawnsTaskWithoutRunningSubAgent() =
-        let invoked = ref false
-        let spawned = ref false
-        let agent = makeAgent "converter" "converted output" invoked
-        let provider = scriptedProvider [ delegateJson "converter" "convert notes.md" ]
-        let context =
-            { ToolContext.allowAll with
-                AsyncAgents = Set.singleton "converter"
-                SpawnTask = fun spec ->
-                    spawned.Value <- true
-                    Assert.AreEqual("agent", spec.Kind)
-                    Assert.AreEqual("converter", spec.Params.["agent"])
-                    Assert.AreEqual("convert notes.md", spec.Params.["input"])
-                    Task.FromResult(Some { SessionExecution.BackgroundTaskHandle.TaskId = "task-123"; Kind = "agent"; Title = "converter agent" }) }
-        let config = makeConfig provider [ agent ] |> withContext context
-        let orchestrator = NaoOrchestrator(config)
-        let result = (orchestrator :> IAgent).RunAsync("convert this file").Result
-        StringAssert.Contains(result, "task-123")
-        Assert.IsTrue(spawned.Value, "Async delegation should spawn a background task")
-        Assert.IsFalse(invoked.Value, "Async sub-agent should not run in-process when task spawning succeeds")
-
-    [<TestMethod>]
-    member _.AsyncAgentNameNotInSubAgentsDoesNotSpawnTask() =
-        let spawned = ref false
-        let provider = scriptedProvider [ delegateJson "converter" "convert notes.md" ]
-        let context =
-            { ToolContext.allowAll with
-                AsyncAgents = Set.singleton "converter"
-                SpawnTask = fun _ ->
-                    spawned.Value <- true
-                    Task.FromResult(Some { SessionExecution.BackgroundTaskHandle.TaskId = "task-123"; Kind = "agent"; Title = "converter agent" }) }
-        let config = makeConfig provider [] |> withContext context
-        let orchestrator = NaoOrchestrator(config)
-        let result = (orchestrator :> IAgent).RunAsync("convert this file").Result
-        Assert.AreEqual("done", result)
-        Assert.IsFalse(spawned.Value, "An async agent name must not spawn unless it is configured as a sub-agent")
-
-    [<TestMethod>]
-    member _.SelfDelegationDoesNotSpawnOrInvokeSubAgent() =
-        let invoked = ref false
-        let spawned = ref false
-        let selfAgent = makeAgent "orchestrator" "self output" invoked
-        let provider = scriptedProvider [ delegateJson "orchestrator" "loop"; "done" ]
-        let context =
-            { ToolContext.allowAll with
-                AsyncAgents = Set.singleton "orchestrator"
-                SpawnTask = fun _ ->
-                    spawned.Value <- true
-                    Task.FromResult(Some { TaskId = "task-123"; Kind = "agent"; Title = "orchestrator agent" }) }
-        let config = makeConfig provider [ selfAgent ] |> withContext context
-        let orchestrator = NaoOrchestrator(config)
-        let result = (orchestrator :> IAgent).RunAsync("delegate to yourself").Result
-        Assert.AreEqual("done", result)
-        Assert.IsFalse(spawned.Value, "Self-delegation must not spawn a task")
-        Assert.IsFalse(invoked.Value, "Self-delegation must not invoke the self agent")
 
     [<TestMethod>]
     member _.PromptShowsOnlyCapabilitySpecificConversionExample() =

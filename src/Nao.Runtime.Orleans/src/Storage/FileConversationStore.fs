@@ -22,8 +22,8 @@ open System.Threading.Tasks
 /// each meta's `ConversationName`.
 ///
 /// {baseDir} is the shared `sessions/` root and paths resolve through `SessionPaths.sessionDir`,
-/// so a session's conversations nest alongside its tasks, files, observability and feedback
-/// under one folder, and a task-spawned sub-session's conversations nest beneath that task.
+/// so a session's conversations nest alongside its files, observability and feedback under
+/// one folder.
 type FileConversationStore(baseDir: string) =
 
     let jsonOptions =

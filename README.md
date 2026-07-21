@@ -246,7 +246,6 @@ Members on `OrchestratorBase`:
 | `ParseActions(response)` | abstract | Parse the LLM response into tool/agent actions. |
 | `ValidateResponse(response)` | virtual | Return a repair error, or `None` to accept (default: accept). |
 | `BuildRepairMessage(error)` | virtual | Corrective instruction sent on a repair round. |
-| `TryHandleDelegationAsync(name, input)` | virtual | Intercept delegation (e.g. hand off to a background task). |
 | `OnToolResult(name, input, result)` | virtual | Hook after tool execution. |
 | `OnRoundComplete(round, content)` | virtual | Hook after each reasoning round. |
 

@@ -33,10 +33,10 @@ type ActionBlockParseTests() =
             member _.RunAsync(_input) = Task.FromResult "done"
             member _.HandleMessageAsync(_msg) = Task.FromResult None }
 
-    let orchestrator = NaoOrchestrator({ Id = { Name = "orchestrator"; Description = "test orchestrator" }; Provider = provider; Tools = [ convertTool ]; SubAgents = [ converterAgent ]; Prompt = Prompt.Empty; Options = CompletionOptions.Default; MaxRounds = 5; Bus = EventBus.none; Scope = EventScope.Empty; Memory = OrchestratorMemoryConfig.None; Instructions = None; Context = ToolContext.allowAll })
+    let orchestrator = NaoOrchestrator({ Id = { Name = "orchestrator"; Description = "test orchestrator" }; Provider = provider; Tools = [ convertTool ]; SubAgents = [ converterAgent ]; Prompt = Prompt.Empty; Options = CompletionOptions.Default; MaxRounds = 5; Bus = EventBus.none; Scope = EventScope.Empty; Memory = OrchestratorMemoryConfig.None; Context = ToolContext.allowAll })
 
     let makeOrchestrator provider tools =
-        NaoOrchestrator({ Id = { Name = "orchestrator"; Description = "test orchestrator" }; Provider = provider; Tools = tools; SubAgents = [ converterAgent ]; Prompt = Prompt.Empty; Options = CompletionOptions.Default; MaxRounds = 5; Bus = EventBus.none; Scope = EventScope.Empty; Memory = OrchestratorMemoryConfig.None; Instructions = None; Context = ToolContext.allowAll })
+        NaoOrchestrator({ Id = { Name = "orchestrator"; Description = "test orchestrator" }; Provider = provider; Tools = tools; SubAgents = [ converterAgent ]; Prompt = Prompt.Empty; Options = CompletionOptions.Default; MaxRounds = 5; Bus = EventBus.none; Scope = EventScope.Empty; Memory = OrchestratorMemoryConfig.None; Context = ToolContext.allowAll })
 
     let fence (inner: string) =
         sprintf "```application/json+nao\n%s\n```" inner

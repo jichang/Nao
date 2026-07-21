@@ -17,22 +17,20 @@ type RevertContext =
 
 /// Runtime context handed to a tool's Execute (and to the orchestrator) so it can request
 /// approval for sensitive resource access dynamically — based on its own input or
-/// intermediate results — locate the session's file folder, and launch background work.
+/// intermediate results — and locate the session's file folder.
 /// The runtime builds one per session/turn and threads it explicitly; library and test code
 /// can use `ToolContext.allowAll`.
-type ToolContext = { SessionKey: string; FilesKey: string; AsyncAgents: Set<string>; TurnId: string; SpawnTask: SessionExecution.TaskSpec -> Task<(SessionExecution.BackgroundTaskHandle option)>; RequestPermission: ResourceAccess -> string -> bool -> Task<bool> }
+type ToolContext = { SessionKey: string; FilesKey: string; TurnId: string; RequestPermission: ResourceAccess -> string -> bool -> Task<bool> }
 
 /// Helpers for the tool execution context.
 [<RequireQualifiedAccess>]
 module ToolContext =
-    /// Permissive, unscoped context used when no permission/session system is wired (tests,
-    /// library use). SpawnTask returns None because no async task host is wired.
+        /// Permissive, unscoped context used when no permission/session system is wired (tests,
+        /// library use).
     let allowAll: ToolContext =
         { SessionKey = ""
           FilesKey = ""
-          AsyncAgents = Set.empty
           TurnId = ""
-          SpawnTask = fun _ -> Task.FromResult None
           RequestPermission = fun _ _ _ -> Task.FromResult true }
 
 [<RequireQualifiedAccess>]

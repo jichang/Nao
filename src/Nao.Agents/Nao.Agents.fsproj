@@ -6,7 +6,6 @@
   </PropertyGroup>
   <ItemGroup>
     <!-- LLM / message primitives (formerly Nao.Core) -->
-    <Compile Include="src/Llm/SessionExecution.fs" />
     <Compile Include="src/Llm/Role.fs" />
     <Compile Include="src/Llm/ContentMeta.fs" />
     <Compile Include="src/Llm/Message.fs" />
