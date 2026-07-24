@@ -13,6 +13,7 @@
   <ItemGroup>
     <Compile Include="src/MSTestSettings.fs" />
     <Compile Include="src/Test1.fs" />
+    <Compile Include="src/PromptPatchTests.fs" />
     <Compile Include="src/LlmTypeTests.fs" />
     <Compile Include="src/ConversationWindowTests.fs" />
     <Compile Include="src/MemoryStoreTests.fs" />
