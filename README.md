@@ -100,6 +100,14 @@ dotnet test Nao.slnx
 
 ```
 
+### Git Hooks
+
+Enable the repository pre-commit hook to run the full test suite before every commit:
+
+```bash
+git config core.hooksPath .githooks
+```
+
 ## Architecture
 
 ### ETCLOVG Harness

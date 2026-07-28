@@ -8,7 +8,7 @@ open Nao.Agents
 open Nao.Agents
 open Nao.Persistence
 
-let private agent = { Name = "test-agent"; Description = "A test agent" }
+let private agent = "test-agent"
 
 /// Create a SQLite-backed connection factory over a fresh temp database file.
 let private sqliteFactory () =
@@ -71,7 +71,7 @@ type MemoryStoreTests() =
 
 // ---------------- ExecutionJournal ----------------
 
-let private execRecord tool (at: DateTimeOffset) =
+let private execRecord (tool: string) (at: DateTimeOffset) =
     { ToolName = tool
       Input = "in"
       Output = "out"

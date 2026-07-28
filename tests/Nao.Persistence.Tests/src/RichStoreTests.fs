@@ -8,7 +8,7 @@ open Nao.Agents
 open Nao.Agents
 open Nao.Persistence
 
-let private agent = { Name = "rich-agent"; Description = "A test agent" }
+let private agent = "rich-agent"
 
 let private sqliteFactory () : IDbConnectionFactory =
     let path = Path.Combine(Path.GetTempPath(), sprintf "nao-rich-%s.db" (Guid.NewGuid().ToString("N")))

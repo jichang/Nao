@@ -8,10 +8,14 @@ open Nao.Eval.Evaluators
 
 /// A simple deterministic agent for testing the eval runner
 type EchoAgent(prefix: string) =
-    let id = { Name = "echo"; Description = "Echoes input with a prefix" }
+    let id = "echo"
 
     interface IAgent with
         member _.Id = id
+        member _.Name = "Echo"
+        member _.Description = "Echoes input with a prefix"
+        member _.Capabilities = []
+        member _.Responsibilities = []
         member _.RunAsync(input: string) =
             Task.FromResult(sprintf "%s: %s" prefix input)
         member _.HandleMessageAsync(_msg: AgentMessage) =
@@ -19,10 +23,14 @@ type EchoAgent(prefix: string) =
 
 /// Agent that returns a fixed response regardless of input
 type FixedAgent(response: string) =
-    let id = { Name = "fixed"; Description = "Returns fixed response" }
+    let id = "fixed"
 
     interface IAgent with
         member _.Id = id
+        member _.Name = "Fixed"
+        member _.Description = "Returns fixed response"
+        member _.Capabilities = []
+        member _.Responsibilities = []
         member _.RunAsync(_input: string) = Task.FromResult(response)
         member _.HandleMessageAsync(_msg: AgentMessage) = Task.FromResult(None)
 
