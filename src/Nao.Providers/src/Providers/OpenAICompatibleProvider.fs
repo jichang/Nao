@@ -5,6 +5,7 @@ open System.Net.Http
 open System.Net.Http.Headers
 open System.Text
 open System.Text.Json
+open System.Threading
 open System.Threading.Tasks
 open Nao.Agents
 
@@ -15,6 +16,10 @@ open Nao.Agents
 /// all instead of one near-identical implementation per vendor.
 type OpenAICompatibleProvider(name: string, baseUrl: string, model: string, apiKey: string option) =
     let client = new HttpClient()
+
+    do
+        if String.Equals(Environment.GetEnvironmentVariable("NAO_EVALUATION_UNLIMITED"), "true", StringComparison.OrdinalIgnoreCase) then
+            client.Timeout <- Timeout.InfiniteTimeSpan
 
     do
         match apiKey with

@@ -22,7 +22,7 @@ module Router =
 
     /// Find an agent by name
     let findAgent (name: string) (router: Router) =
-        router.Agents |> List.tryFind (fun a -> a.Id.Name = name)
+        router.Agents |> List.tryFind (fun a -> a.Name = name)
 
     /// Route input to an agent and return its response
     let routeAsync (input: string) (router: Router) : Task<string> =

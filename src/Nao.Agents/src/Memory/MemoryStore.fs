@@ -17,16 +17,16 @@ type MemoryEntry =
 /// Interface for persisting and retrieving agent memories
 type IMemoryStore =
     /// Save a memory entry for an agent
-    abstract member SaveAsync: AgentId -> MemoryEntry -> Task<unit>
+    abstract member SaveAsync: string -> MemoryEntry -> Task<unit>
 
     /// Recall memories by key prefix match
-    abstract member RecallAsync: AgentId -> string -> Task<MemoryEntry list>
+    abstract member RecallAsync: string -> string -> Task<MemoryEntry list>
 
     /// Recall all memories for an agent
-    abstract member RecallAllAsync: AgentId -> Task<MemoryEntry list>
+    abstract member RecallAllAsync: string -> Task<MemoryEntry list>
 
     /// Forget (delete) a memory by key
-    abstract member ForgetAsync: AgentId -> string -> Task<unit>
+    abstract member ForgetAsync: string -> string -> Task<unit>
 
     /// Clear all memories for an agent
-    abstract member ClearAsync: AgentId -> Task<unit>
+    abstract member ClearAsync: string -> Task<unit>

@@ -28,28 +28,10 @@ type IReadinessCheck =
     /// Check name
     abstract member Name: string
     /// Perform the check
-    abstract member CheckAsync: AgentId -> string -> Task<ReadinessResult>
+    abstract member CheckAsync: string -> string -> Task<ReadinessResult>
 
 /// Captures a complete execution trace for offline analysis
-type ExecutionTrace =
-    { /// Unique trace identifier
-      Id: Guid
-      /// Agent that produced this trace
-      AgentId: AgentId
-      /// Original input
-      Input: string
-      /// Final output
-      Output: string option
-      /// All intermediate steps
-      Steps: TraceStep list
-      /// When the trace started
-      StartedAt: DateTimeOffset
-      /// When the trace ended
-      CompletedAt: DateTimeOffset option
-      /// Whether the execution succeeded
-      Success: bool
-      /// Metadata
-      Metadata: Map<string, string> }
+type ExecutionTrace = { Id: Guid; AgentId: string; Input: string; Output: string option; Steps: TraceStep list; StartedAt: DateTimeOffset; CompletedAt: DateTimeOffset option; Success: bool; Metadata: Map<string, string> }
 
 /// A single step in an execution trace
 and TraceStep =
@@ -107,7 +89,7 @@ type IJudge =
 module Verification =
 
     /// Create a new execution trace
-    let startTrace (agentId: AgentId) (input: string) : ExecutionTrace =
+    let startTrace (agentId: string) (input: string) : ExecutionTrace =
         { Id = Guid.NewGuid()
           AgentId = agentId
           Input = input
@@ -144,7 +126,7 @@ module Verification =
             Success = false }
 
     /// Run all readiness checks
-    let checkReadiness (checks: IReadinessCheck list) (agentId: AgentId) (input: string) : Task<ReadinessResult> =
+    let checkReadiness (checks: IReadinessCheck list) (agentId: string) (input: string) : Task<ReadinessResult> =
         task {
             let mutable allReasons = []
             for check in checks do

@@ -8,7 +8,15 @@ open System.Threading.Tasks
 /// and continuity is owned by the store/event path.
 type IAgent =
     /// Unique identifier for this agent
-    abstract member Id: AgentId
+    abstract member Id: string
+    /// Short human-readable name for this agent
+    abstract member Name: string
+    /// Human-readable description of this agent's purpose
+    abstract member Description: string
+    /// Concrete things this agent can do for a caller
+    abstract member Capabilities: string list
+    /// Work this agent owns and is responsible for completing
+    abstract member Responsibilities: string list
     /// Process a user input string and return a response
     abstract member RunAsync: string -> Task<string>
     /// Handle an inter-agent message and optionally reply

@@ -15,7 +15,7 @@ type InMemoryAuditLog() =
             entries.Add(entry)
             Task.FromResult()
 
-        member _.QueryAsync (agentId: AgentId) (since: DateTimeOffset) =
+        member _.QueryAsync (agentId: string) (since: DateTimeOffset) =
             entries
             |> Seq.filter (fun e -> e.AgentId = agentId && e.Timestamp >= since)
             |> Seq.sortByDescending (fun e -> e.Timestamp)
@@ -29,7 +29,7 @@ type InMemoryAuditLog() =
             |> Seq.toList
             |> Task.FromResult
 
-        member _.GetDeniedCountAsync (agentId: AgentId) (since: DateTimeOffset) =
+        member _.GetDeniedCountAsync (agentId: string) (since: DateTimeOffset) =
             entries
             |> Seq.filter (fun e -> e.AgentId = agentId && e.Timestamp >= since && not e.Permitted)
             |> Seq.length
@@ -61,9 +61,7 @@ type AdoAuditLog(factory: IDbConnectionFactory) =
     let mapEntry (r: DbDataReader) : AuditEntry =
         { Id = Guid.Parse(Ado.getString r "audit_id")
           Timestamp = Time.fromIso (Ado.getString r "audit_ts")
-          AgentId =
-            { Name = Ado.getString r "agent_name"
-              Description = Ado.getString r "agent_desc" }
+          AgentId = Ado.getString r "agent_name"
           Action = AuditActionCodec.fromJson (Ado.getString r "action_json")
           Input = Ado.getStringOpt r "audit_input"
           Output = Ado.getStringOpt r "audit_output"
@@ -73,13 +71,13 @@ type AdoAuditLog(factory: IDbConnectionFactory) =
           ExecutionId = Ado.getStringOpt r "execution_id" |> Option.map Guid.Parse
           Metadata = Json.mapFromJson (Ado.getString r "metadata") }
 
-    let queryByAgent (agentId: AgentId) : Task<AuditEntry list> =
+    let queryByAgent (agentId: string) : Task<AuditEntry list> =
         Ado.query
             factory
             "SELECT audit_id, audit_ts, agent_name, agent_desc, action_json, audit_input, audit_output, permitted, \
                 permission_level, violations, execution_id, metadata \
                 FROM nao_audit WHERE agent_name = @a"
-            [ "@a", box agentId.Name ]
+                [ "@a", box agentId ]
             mapEntry
 
     interface IAuditLog with
@@ -94,8 +92,8 @@ type AdoAuditLog(factory: IDbConnectionFactory) =
                             VALUES (@id, @ts, @an, @ad, @ac, @in, @out, @pm, @pl, @vi, @ex, @md)"
                         [ "@id", box (entry.Id.ToString("D"))
                           "@ts", box (Time.toIso entry.Timestamp)
-                          "@an", box entry.AgentId.Name
-                          "@ad", box entry.AgentId.Description
+                          "@an", box entry.AgentId
+                          "@ad", box ""
                           "@ac", box (AuditActionCodec.toJson entry.Action)
                           "@in", (match entry.Input with Some s -> box s | None -> box DBNull.Value)
                           "@out", (match entry.Output with Some s -> box s | None -> box DBNull.Value)
@@ -107,7 +105,7 @@ type AdoAuditLog(factory: IDbConnectionFactory) =
                 return ()
             }
 
-        member _.QueryAsync (agentId: AgentId) (since: DateTimeOffset) =
+        member _.QueryAsync (agentId: string) (since: DateTimeOffset) =
             task {
                 do! ensureAsync ()
                 let! entries = queryByAgent agentId
@@ -131,7 +129,7 @@ type AdoAuditLog(factory: IDbConnectionFactory) =
                 return entries |> List.sortBy (fun e -> e.Timestamp)
             }
 
-        member _.GetDeniedCountAsync (agentId: AgentId) (since: DateTimeOffset) =
+        member _.GetDeniedCountAsync (agentId: string) (since: DateTimeOffset) =
             task {
                 do! ensureAsync ()
                 let! entries = queryByAgent agentId
@@ -153,7 +151,7 @@ type FileAuditLog(baseDir: string) =
         member _.RecordAsync(entry: AuditEntry) =
             task { lock sync (fun () -> save (load () @ [ Dto.toAuditDto entry ])) }
 
-        member _.QueryAsync (agentId: AgentId) (since: DateTimeOffset) =
+        member _.QueryAsync (agentId: string) (since: DateTimeOffset) =
             task {
                 return
                     lock sync (fun () ->
@@ -173,7 +171,7 @@ type FileAuditLog(baseDir: string) =
                         |> List.sortBy (fun e -> e.Timestamp))
             }
 
-        member _.GetDeniedCountAsync (agentId: AgentId) (since: DateTimeOffset) =
+        member _.GetDeniedCountAsync (agentId: string) (since: DateTimeOffset) =
             task {
                 return
                     lock sync (fun () ->

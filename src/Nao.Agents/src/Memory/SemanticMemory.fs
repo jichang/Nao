@@ -20,13 +20,13 @@ type IEmbeddingProvider =
 /// Semantic memory store that uses embeddings for similarity-based retrieval
 type ISemanticMemory =
     /// Store a memory with its embedding
-    abstract member StoreAsync: AgentId -> string -> string -> Task<unit>
+    abstract member StoreAsync: string -> string -> string -> Task<unit>
 
     /// Retrieve the top-k most relevant memories for a query
-    abstract member RetrieveAsync: AgentId -> string -> int -> Task<SemanticEntry list>
+    abstract member RetrieveAsync: string -> string -> int -> Task<SemanticEntry list>
 
     /// Remove a memory by key
-    abstract member RemoveAsync: AgentId -> string -> Task<unit>
+    abstract member RemoveAsync: string -> string -> Task<unit>
 
 module SemanticSimilarity =
 

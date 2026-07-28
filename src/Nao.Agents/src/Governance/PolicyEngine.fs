@@ -27,14 +27,14 @@ and [<RequireQualifiedAccess>] PolicyEnforcement =
 
 /// Context passed to policy evaluation
 and PolicyContext =
-    { AgentId: AgentId
+    { AgentId: string
       Action: string
       Input: string option
       ExecutionId: Guid option
       CurrentUsage: ResourceUsage option }
 
     /// Create a PolicyContext from an ExecutionContext (canonical factory)
-    static member FromExecutionContext (agentId: AgentId) (action: string) (input: string option) (ctx: ExecutionContext) =
+    static member FromExecutionContext (agentId: string) (action: string) (input: string option) (ctx: ExecutionContext) =
         { AgentId = agentId
           Action = action
           Input = input

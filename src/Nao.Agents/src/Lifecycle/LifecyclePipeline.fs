@@ -139,7 +139,7 @@ module LifecyclePipeline =
     /// Create a simple stage from an agent
     let stageFromAgent (name: string) (agent: IAgent) : PipelineStage =
         { Name = name
-          Description = agent.Id.Description
+          Description = agent.Description
           Execute = agent.RunAsync
           Validate = fun _ -> Task.FromResult(Ok ())
           Retry = RetryPolicy.None }

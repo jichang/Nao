@@ -10,7 +10,7 @@ type AuditEntry =
       /// When the action occurred
       Timestamp: DateTimeOffset
       /// Agent that performed the action
-      AgentId: AgentId
+      AgentId: string
       /// What action was taken
       Action: AuditAction
       /// The input/context for the action
@@ -45,16 +45,16 @@ type IAuditLog =
     /// Record an audit entry
     abstract member RecordAsync: AuditEntry -> Task<unit>
     /// Query audit entries for an agent
-    abstract member QueryAsync: AgentId -> since: DateTimeOffset -> Task<AuditEntry list>
+    abstract member QueryAsync: string -> since: DateTimeOffset -> Task<AuditEntry list>
     /// Query all entries for an execution
     abstract member QueryByExecutionAsync: Guid -> Task<AuditEntry list>
     /// Get a count of denied actions for an agent
-    abstract member GetDeniedCountAsync: AgentId -> since: DateTimeOffset -> Task<int>
+    abstract member GetDeniedCountAsync: string -> since: DateTimeOffset -> Task<int>
 
 module AuditLog =
 
     /// Create an audit entry for a tool invocation
-    let toolInvocation (agentId: AgentId) (toolName: string) (input: string) (output: string) (permitted: bool) (level: PermissionLevel) (execId: Guid option) : AuditEntry =
+    let toolInvocation (agentId: string) (toolName: string) (input: string) (output: string) (permitted: bool) (level: PermissionLevel) (execId: Guid option) : AuditEntry =
         { Id = Guid.NewGuid()
           Timestamp = DateTimeOffset.UtcNow
           AgentId = agentId
@@ -68,7 +68,7 @@ module AuditLog =
           Metadata = Map.empty }
 
     /// Create an audit entry for an LLM call
-    let llmCall (agentId: AgentId) (model: string) (execId: Guid option) : AuditEntry =
+    let llmCall (agentId: string) (model: string) (execId: Guid option) : AuditEntry =
         { Id = Guid.NewGuid()
           Timestamp = DateTimeOffset.UtcNow
           AgentId = agentId
@@ -82,7 +82,7 @@ module AuditLog =
           Metadata = Map.empty }
 
     /// Create an audit entry for a constitution check
-    let constitutionCheck (agentId: AgentId) (violations: string list) (execId: Guid option) : AuditEntry =
+    let constitutionCheck (agentId: string) (violations: string list) (execId: Guid option) : AuditEntry =
         { Id = Guid.NewGuid()
           Timestamp = DateTimeOffset.UtcNow
           AgentId = agentId

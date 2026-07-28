@@ -44,8 +44,7 @@ type PermissionScope =
 
 /// The permission model governing an agent's allowed actions
 type PermissionModel =
-    { /// Agent this model applies to
-      AgentId: AgentId
+    { AgentId: string
       /// Explicit permission grants
       Permissions: Permission list
       /// Default permission for unlisted capabilities

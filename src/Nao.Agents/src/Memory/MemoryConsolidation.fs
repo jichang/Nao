@@ -45,7 +45,7 @@ module MemoryConsolidation =
 
     let mergeSimilarAsync
         (store: IMemoryStore)
-        (agentId: AgentId)
+        (agentId: string)
         (threshold: float)
         : Task<int> =
         task {
@@ -86,7 +86,7 @@ module MemoryConsolidation =
 
     let deduplicateAsync
         (store: IMemoryStore)
-        (agentId: AgentId)
+        (agentId: string)
         : Task<int> =
         task {
             let! entries = store.RecallAllAsync agentId
@@ -104,7 +104,7 @@ module MemoryConsolidation =
 
     let importanceDecayAsync
         (store: IMemoryStore)
-        (agentId: AgentId)
+        (agentId: string)
         (decayFactor: float)
         (minAge: TimeSpan)
         : Task<int> =
@@ -140,7 +140,7 @@ module MemoryConsolidation =
         (provider: ILlmProvider)
         (options: CompletionOptions)
         (store: IMemoryStore)
-        (agentId: AgentId)
+        (agentId: string)
         : Task<int> =
         task {
             let! entries = store.RecallAllAsync agentId
@@ -181,7 +181,7 @@ module MemoryConsolidation =
 
     let rec consolidateAsync
         (store: IMemoryStore)
-        (agentId: AgentId)
+        (agentId: string)
         (strategy: ConsolidationStrategy)
         : Task<ConsolidationResult> =
         task {

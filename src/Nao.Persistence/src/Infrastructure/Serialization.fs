@@ -201,8 +201,7 @@ module Dto =
     type AuditEntryDto =
         { Id: Guid
           Timestamp: DateTimeOffset
-          AgentName: string
-          AgentDescription: string
+          AgentId: string
           ActionJson: string
           Input: string
           Output: string
@@ -215,8 +214,7 @@ module Dto =
     let toAuditDto (e: AuditEntry) : AuditEntryDto =
         { Id = e.Id
           Timestamp = e.Timestamp
-          AgentName = e.AgentId.Name
-          AgentDescription = e.AgentId.Description
+          AgentId = e.AgentId
           ActionJson = AuditActionCodec.toJson e.Action
           Input = (match e.Input with Some s -> s | None -> null)
           Output = (match e.Output with Some s -> s | None -> null)
@@ -227,17 +225,7 @@ module Dto =
           Metadata = dictOfMap e.Metadata }
 
     let ofAuditDto (d: AuditEntryDto) : AuditEntry =
-        { Id = d.Id
-          Timestamp = d.Timestamp
-          AgentId = { Name = d.AgentName; Description = d.AgentDescription }
-          Action = AuditActionCodec.fromJson d.ActionJson
-          Input = (if isNull d.Input then None else Some d.Input)
-          Output = (if isNull d.Output then None else Some d.Output)
-          Permitted = d.Permitted
-          PermissionLevel = PermissionLevelCodec.fromString d.PermissionLevel
-          ConstitutionViolations = listOfArray d.ConstitutionViolations
-          ExecutionId = (if isNull d.ExecutionId then None else Some(Guid.Parse d.ExecutionId))
-          Metadata = mapOfDict d.Metadata }
+        { Id = d.Id; Timestamp = d.Timestamp; AgentId = d.AgentId; Action = AuditActionCodec.fromJson d.ActionJson; Input = (if isNull d.Input then None else Some d.Input); Output = (if isNull d.Output then None else Some d.Output); Permitted = d.Permitted; PermissionLevel = PermissionLevelCodec.fromString d.PermissionLevel; ConstitutionViolations = listOfArray d.ConstitutionViolations; ExecutionId = (if isNull d.ExecutionId then None else Some(Guid.Parse d.ExecutionId)); Metadata = mapOfDict d.Metadata }
 
 /// Simple file-backed JSON document helpers (whole-file read/write).
 module FileJson =

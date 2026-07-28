@@ -10,10 +10,10 @@ open Nao.Agents
 type InMemoryStore() =
     let store = System.Collections.Concurrent.ConcurrentDictionary<string, MemoryEntry list>()
 
-    let agentKey (agentId: AgentId) = agentId.Name
+    let agentKey (agentId: string) = agentId
 
     interface IMemoryStore with
-        member _.SaveAsync (agentId: AgentId) (entry: MemoryEntry) =
+        member _.SaveAsync (agentId: string) (entry: MemoryEntry) =
             let key = agentKey agentId
             store.AddOrUpdate(
                 key,
@@ -24,7 +24,7 @@ type InMemoryStore() =
             |> ignore
             task { return () }
 
-        member _.RecallAsync (agentId: AgentId) (queryKey: string) =
+        member _.RecallAsync (agentId: string) (queryKey: string) =
             let key = agentKey agentId
             match store.TryGetValue(key) with
             | true, entries ->
@@ -33,13 +33,13 @@ type InMemoryStore() =
                 |> Task.FromResult
             | false, _ -> Task.FromResult([])
 
-        member _.RecallAllAsync (agentId: AgentId) =
+        member _.RecallAllAsync (agentId: string) =
             let key = agentKey agentId
             match store.TryGetValue(key) with
             | true, entries -> Task.FromResult(entries)
             | false, _ -> Task.FromResult([])
 
-        member _.ForgetAsync (agentId: AgentId) (entryKey: string) =
+        member _.ForgetAsync (agentId: string) (entryKey: string) =
             let key = agentKey agentId
             match store.TryGetValue(key) with
             | true, entries ->
@@ -48,7 +48,7 @@ type InMemoryStore() =
             | false, _ -> ()
             task { return () }
 
-        member _.ClearAsync (agentId: AgentId) =
+        member _.ClearAsync (agentId: string) =
             let key = agentKey agentId
             store.TryRemove(key) |> ignore
             task { return () }
@@ -84,10 +84,10 @@ type AdoMemoryStore(factory: IDbConnectionFactory) =
             mapEntry
 
     interface IMemoryStore with
-        member _.SaveAsync (agentId: AgentId) (entry: MemoryEntry) =
+        member _.SaveAsync (agentId: string) (entry: MemoryEntry) =
             task {
                 do! ensureAsync ()
-                let agent = agentId.Name
+                let agent = agentId
                 do!
                     Ado.executeTransaction
                         factory
@@ -101,37 +101,37 @@ type AdoMemoryStore(factory: IDbConnectionFactory) =
                             "@g", box (Json.tagsToJson entry.Tags) ] ]
             }
 
-        member _.RecallAsync (agentId: AgentId) (query: string) =
+        member _.RecallAsync (agentId: string) (query: string) =
             task {
                 do! ensureAsync ()
-                let! all = loadAll agentId.Name
+                let! all = loadAll agentId
                 return
                     all
                     |> List.filter (fun e -> e.Key.Contains(query, System.StringComparison.OrdinalIgnoreCase))
             }
 
-        member _.RecallAllAsync(agentId: AgentId) =
+        member _.RecallAllAsync(agentId: string) =
             task {
                 do! ensureAsync ()
-                return! loadAll agentId.Name
+                return! loadAll agentId
             }
 
-        member _.ForgetAsync (agentId: AgentId) (key: string) =
+        member _.ForgetAsync (agentId: string) (key: string) =
             task {
                 do! ensureAsync ()
                 let! _ =
                     Ado.executeNonQuery
                         factory
                         "DELETE FROM nao_memory WHERE agent = @a AND mem_key = @k"
-                        [ "@a", box agentId.Name; "@k", box key ]
+                        [ "@a", box agentId; "@k", box key ]
                 return ()
             }
 
-        member _.ClearAsync(agentId: AgentId) =
+        member _.ClearAsync(agentId: string) =
             task {
                 do! ensureAsync ()
                 let! _ =
-                    Ado.executeNonQuery factory "DELETE FROM nao_memory WHERE agent = @a" [ "@a", box agentId.Name ]
+                    Ado.executeNonQuery factory "DELETE FROM nao_memory WHERE agent = @a" [ "@a", box agentId ]
                 return ()
             }
 
@@ -139,24 +139,24 @@ type AdoMemoryStore(factory: IDbConnectionFactory) =
 type FileMemoryStore(baseDir: string) =
     let sync = obj ()
 
-    let agentFile (agentId: AgentId) =
-        Path.Combine(baseDir, sprintf "%s.json" (Sanitize.id agentId.Name))
+    let agentFile (agentId: string) =
+        Path.Combine(baseDir, sprintf "%s.json" (Sanitize.id agentId))
 
-    let load (agentId: AgentId) : Dto.MemoryEntryDto list =
+    let load (agentId: string) : Dto.MemoryEntryDto list =
         FileJson.read<Dto.MemoryEntryDto list> (agentFile agentId) []
 
-    let save (agentId: AgentId) (entries: Dto.MemoryEntryDto list) =
+    let save (agentId: string) (entries: Dto.MemoryEntryDto list) =
         FileJson.write (agentFile agentId) entries
 
     interface IMemoryStore with
-        member _.SaveAsync (agentId: AgentId) (entry: MemoryEntry) =
+        member _.SaveAsync (agentId: string) (entry: MemoryEntry) =
             task {
                 lock sync (fun () ->
                     let existing = load agentId |> List.filter (fun e -> e.Key <> entry.Key)
                     save agentId (Dto.toMemoryDto entry :: existing))
             }
 
-        member _.RecallAsync (agentId: AgentId) (query: string) =
+        member _.RecallAsync (agentId: string) (query: string) =
             task {
                 let result =
                     lock sync (fun () ->
@@ -166,17 +166,17 @@ type FileMemoryStore(baseDir: string) =
                 return result
             }
 
-        member _.RecallAllAsync(agentId: AgentId) =
+        member _.RecallAllAsync(agentId: string) =
             task { return lock sync (fun () -> load agentId |> List.map Dto.ofMemoryDto) }
 
-        member _.ForgetAsync (agentId: AgentId) (key: string) =
+        member _.ForgetAsync (agentId: string) (key: string) =
             task {
                 lock sync (fun () ->
                     let remaining = load agentId |> List.filter (fun e -> e.Key <> key)
                     save agentId remaining)
             }
 
-        member _.ClearAsync(agentId: AgentId) =
+        member _.ClearAsync(agentId: string) =
             task {
                 lock sync (fun () ->
                     let file = agentFile agentId

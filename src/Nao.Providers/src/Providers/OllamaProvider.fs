@@ -4,6 +4,7 @@ open System
 open System.Net.Http
 open System.Text
 open System.Text.Json
+open System.Threading
 open System.Threading.Tasks
 open Nao.Agents
 
@@ -11,6 +12,10 @@ open Nao.Agents
 /// Ollama exposes /v1/chat/completions for chat-style completions.
 type OllamaProvider(config: OllamaConfig) =
     let client = new HttpClient(BaseAddress = Uri(config.BaseUrl))
+
+    do
+        if String.Equals(Environment.GetEnvironmentVariable("NAO_EVALUATION_UNLIMITED"), "true", StringComparison.OrdinalIgnoreCase) then
+            client.Timeout <- Timeout.InfiniteTimeSpan
 
     let roleToString (role: Role) =
         match role with

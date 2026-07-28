@@ -4,8 +4,8 @@ open System
 
 /// A message passed between agents
 type AgentMessage =
-    { From: AgentId
-      To: AgentId option
+    { From: string
+      To: string option
       Content: string
       Timestamp: DateTimeOffset
       Metadata: Map<string, string> }
@@ -13,7 +13,7 @@ type AgentMessage =
 module AgentMessage =
 
     /// Create a directed message from one agent to another
-    let create (from: AgentId) (toAgent: AgentId) (content: string) =
+    let create (from: string) (toAgent: string) (content: string) =
         { From = from
           To = Some toAgent
           Content = content
@@ -21,7 +21,7 @@ module AgentMessage =
           Metadata = Map.empty }
 
     /// Create a broadcast message (no specific recipient)
-    let broadcast (from: AgentId) (content: string) =
+    let broadcast (from: string) (content: string) =
         { From = from
           To = None
           Content = content

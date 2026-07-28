@@ -24,7 +24,7 @@ type OrchestratorMemoryConfig =
         { OrchestratorMemoryConfig.None with WindowStrategy = Some strategy }
 
 /// Configuration for the Orchestrator
-type OrchestratorConfig = { Id: AgentId; Provider: ILlmProvider; Tools: Tool list; SubAgents: IAgent list; Prompt: Prompt; Options: CompletionOptions; MaxRounds: int; Bus: IEventBus; Scope: EventScope; Memory: OrchestratorMemoryConfig; Context: ToolContext }
+type OrchestratorConfig = { Id: string; Name: string; Description: string; Capabilities: string list; Responsibilities: string list; Provider: ILlmProvider; Tools: Tool list; SubAgents: IAgent list; Prompt: Prompt; Options: CompletionOptions; MaxRounds: int; Bus: IEventBus; Scope: EventScope; Memory: OrchestratorMemoryConfig; Context: ToolContext }
 
 /// Factory interface for creating orchestrator instances via DI.
 /// Register a custom implementation to control how orchestrators are built from workspace definitions.
@@ -100,7 +100,7 @@ type OrchestratorBase(config: OrchestratorConfig) =
             tracer.SetAttributes span (Map.ofList
                 [ "tool.name", toolName
                   "tool.input", trimmedInput
-                  "agent.name", id.Name
+                  "agent.name", config.Name
                   "round", string round ])
             Some (tracer, span)
         | None -> None
@@ -121,7 +121,7 @@ type OrchestratorBase(config: OrchestratorConfig) =
         match this.TraceContext with
         | Some (tracer, parent) ->
             let span = tracer.StartSpan parent "agent.plan"
-            tracer.SetAttributes span (Map.ofList [ "agent.name", id.Name; "round", string round ])
+            tracer.SetAttributes span (Map.ofList [ "agent.name", config.Name; "round", string round ])
             Some (tracer, span)
         | None -> None
 
@@ -179,7 +179,7 @@ type OrchestratorBase(config: OrchestratorConfig) =
                 match this.TraceContext with
                 | Some (tracer, parent) ->
                     let span = tracer.StartSpan parent "llm.call"
-                    tracer.SetAttributes span (Map.ofList [ "agent.name", id.Name; "round", string round; "attempt", string attempt; "messages.count", string messages.Length ])
+                    tracer.SetAttributes span (Map.ofList [ "agent.name", config.Name; "round", string round; "attempt", string attempt; "messages.count", string messages.Length ])
                     Some (tracer, span)
                 | None -> None
             let endLlmSpan (span: (ITracer * Span) option) (status: SpanStatus) (outputLength: int) (elapsedMs: int64) =
@@ -289,12 +289,12 @@ type OrchestratorBase(config: OrchestratorConfig) =
                                     this.EndToolSpan toolSpan (SpanStatus.Error err) Map.empty
 
                             | DelegateToAgent (agentName, agentInput) ->
-                                if String.Equals(agentName, id.Name, StringComparison.OrdinalIgnoreCase) then
+                                if String.Equals(agentName, config.Name, StringComparison.OrdinalIgnoreCase) then
                                     let err = sprintf "Agent '%s' cannot delegate to itself." agentName
                                     conversation <- conversation @ [ { Role = User; Content = sprintf "[Error]: %s" err } ]
                                 else
                                     report (SubAgentInvoked (agentName, agentInput))
-                                    match config.SubAgents |> List.tryFind (fun a -> a.Id.Name = agentName) with
+                                    match config.SubAgents |> List.tryFind (fun a -> a.Name = agentName) with
                                     | Some agent ->
                                         match agent with
                                         | :? IRuntimeAgentContext as contextual -> contextual.SetEventContext eventBus eventScope
@@ -310,7 +310,7 @@ type OrchestratorBase(config: OrchestratorConfig) =
                                         finalAnswer <- agentResult
                                         finished <- true
                                     | None ->
-                                        let err = sprintf "Agent '%s' not found. Available agents: %s" agentName (config.SubAgents |> List.map (fun a -> a.Id.Name) |> String.concat ", ")
+                                        let err = sprintf "Agent '%s' not found. Available agents: %s" agentName (config.SubAgents |> List.map (fun a -> a.Name) |> String.concat ", ")
                                         conversation <- conversation @ [ { Role = User; Content = sprintf "[Error]: %s" err } ]
 
                             | Respond response ->
@@ -333,6 +333,10 @@ type OrchestratorBase(config: OrchestratorConfig) =
 
     interface IAgent with
         member _.Id = id
+        member _.Name = config.Name
+        member _.Description = config.Description
+        member _.Capabilities = config.Capabilities
+        member _.Responsibilities = config.Responsibilities
         member this.RunAsync(input: string) = this.RunCore(input)
         member this.HandleMessageAsync(msg: AgentMessage) =
             task {

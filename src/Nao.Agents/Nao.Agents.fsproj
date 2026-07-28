@@ -15,7 +15,6 @@
     <!-- Resource-permission types are referenced by the Tool abstraction (ToolContext /
          declared permissions), so they must be compiled before Tool.fs. -->
     <Compile Include="src/Governance/ResourcePermission.fs" />
-    <Compile Include="src/Core/AgentId.fs" />
     <Compile Include="src/Core/Tool.fs" />
     <Compile Include="src/Core/AgentAction.fs" />
     <Compile Include="src/Core/AgentMessage.fs" />

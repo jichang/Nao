@@ -8,7 +8,7 @@ open Nao.Eval
 /// Adapter: Wraps an IJudge (Verification layer) as an IEvaluator (Eval layer).
 /// This bridges the richer judgement system (criteria scores, suggestions) into
 /// the evaluation framework for dataset-level analysis and regression detection.
-type VerificationJudgeAdapter(judge: IJudge, agentId: AgentId) =
+type VerificationJudgeAdapter(judge: IJudge, agentId: string) =
 
     interface IEvaluator with
         member _.Name = sprintf "judge:%s" judge.Name
@@ -43,5 +43,5 @@ type VerificationJudgeAdapter(judge: IJudge, agentId: AgentId) =
 module VerificationJudge =
 
     /// Create an IEvaluator from an IJudge
-    let fromJudge (judge: IJudge) (agentId: AgentId) : IEvaluator =
+    let fromJudge (judge: IJudge) (agentId: string) : IEvaluator =
         VerificationJudgeAdapter(judge, agentId) :> IEvaluator

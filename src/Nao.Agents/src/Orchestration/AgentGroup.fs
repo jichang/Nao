@@ -42,7 +42,7 @@ module AgentGroup =
         task {
             let history = ResizeArray<AgentMessage>()
 
-            let seedId = { Name = "user"; Description = "Initial input" }
+            let seedId = "user"
             let seed = AgentMessage.broadcast seedId input
             history.Add(seed)
 

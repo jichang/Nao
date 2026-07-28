@@ -130,14 +130,14 @@ type InMemoryTraceStore() =
             traces.[trace.Id] <- trace
             Task.FromResult()
 
-        member _.GetBaselineAsync (agentId: AgentId) (_taskPattern: string) =
+        member _.GetBaselineAsync (agentId: string) (_taskPattern: string) =
             traces.Values
             |> Seq.filter (fun t -> t.AgentId = agentId && t.Success)
             |> Seq.sortByDescending (fun t -> t.StartedAt)
             |> Seq.tryHead
             |> Task.FromResult
 
-        member _.GetTracesAsync (agentId: AgentId) (limit: int) =
+        member _.GetTracesAsync (agentId: string) (limit: int) =
             traces.Values
             |> Seq.filter (fun t -> t.AgentId = agentId)
             |> Seq.sortByDescending (fun t -> t.StartedAt)
@@ -288,10 +288,10 @@ type PersistentTraceStore(store: IEventStore) =
                 store.Append(FSharpJson.serialize (TraceStoreEvent.Save trace))
             }
 
-        member _.GetBaselineAsync (agentId: AgentId) (taskPattern: string) =
+        member _.GetBaselineAsync (agentId: string) (taskPattern: string) =
             inner.GetBaselineAsync agentId taskPattern
 
-        member _.GetTracesAsync (agentId: AgentId) (limit: int) = inner.GetTracesAsync agentId limit
+        member _.GetTracesAsync (agentId: string) (limit: int) = inner.GetTracesAsync agentId limit
 
 /// Factory helpers for trace store persistence.
 module TraceStores =

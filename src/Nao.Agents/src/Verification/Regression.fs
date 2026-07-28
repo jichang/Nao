@@ -38,9 +38,9 @@ type ITraceStore =
     /// Save an execution trace
     abstract member SaveAsync: ExecutionTrace -> Task<unit>
     /// Get the most recent successful trace for an agent + task pattern
-    abstract member GetBaselineAsync: AgentId -> taskPattern: string -> Task<ExecutionTrace option>
+    abstract member GetBaselineAsync: string -> taskPattern: string -> Task<ExecutionTrace option>
     /// Get all traces for an agent
-    abstract member GetTracesAsync: AgentId -> limit: int -> Task<ExecutionTrace list>
+    abstract member GetTracesAsync: string -> limit: int -> Task<ExecutionTrace list>
 
 module Regression =
 

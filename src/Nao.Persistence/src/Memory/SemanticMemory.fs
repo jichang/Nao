@@ -10,10 +10,10 @@ open Nao.Agents
 type InMemorySemanticMemory(embeddingProvider: IEmbeddingProvider) =
     let store = System.Collections.Concurrent.ConcurrentDictionary<string, SemanticEntry list>()
 
-    let agentKey (agentId: AgentId) = agentId.Name
+    let agentKey (agentId: string) = agentId
 
     interface ISemanticMemory with
-        member _.StoreAsync (agentId: AgentId) (key: string) (content: string) =
+        member _.StoreAsync (agentId: string) (key: string) (content: string) =
             task {
                 let! embedding = embeddingProvider.EmbedAsync content
                 let entry =
@@ -32,7 +32,7 @@ type InMemorySemanticMemory(embeddingProvider: IEmbeddingProvider) =
                 |> ignore
             }
 
-        member _.RetrieveAsync (agentId: AgentId) (query: string) (topK: int) =
+        member _.RetrieveAsync (agentId: string) (query: string) (topK: int) =
             task {
                 let! queryEmbedding = embeddingProvider.EmbedAsync query
                 let storeKey = agentKey agentId
@@ -47,7 +47,7 @@ type InMemorySemanticMemory(embeddingProvider: IEmbeddingProvider) =
                 | false, _ -> return []
             }
 
-        member _.RemoveAsync (agentId: AgentId) (key: string) =
+        member _.RemoveAsync (agentId: string) (key: string) =
             let storeKey = agentKey agentId
             match store.TryGetValue(storeKey) with
             | true, entries ->
@@ -112,11 +112,11 @@ type AdoSemanticMemory(embeddingProvider: IEmbeddingProvider, factory: IDbConnec
           Tags = Json.tagsFromJson (Ado.getString r "sem_tags") }
 
     interface ISemanticMemory with
-        member _.StoreAsync (agentId: AgentId) (key: string) (content: string) =
+        member _.StoreAsync (agentId: string) (key: string) (content: string) =
             task {
                 do! ensureAsync ()
                 let! embedding = embeddingProvider.EmbedAsync content
-                let agent = agentId.Name
+                let agent = agentId
                 do!
                     Ado.executeTransaction
                         factory
@@ -132,7 +132,7 @@ type AdoSemanticMemory(embeddingProvider: IEmbeddingProvider, factory: IDbConnec
                             "@g", box (Json.tagsToJson []) ] ]
             }
 
-        member _.RetrieveAsync (agentId: AgentId) (query: string) (topK: int) =
+        member _.RetrieveAsync (agentId: string) (query: string) (topK: int) =
             task {
                 do! ensureAsync ()
                 let! queryEmbedding = embeddingProvider.EmbedAsync query
@@ -140,7 +140,7 @@ type AdoSemanticMemory(embeddingProvider: IEmbeddingProvider, factory: IDbConnec
                     Ado.query
                         factory
                         "SELECT sem_key, sem_content, sem_embedding, sem_ts, sem_tags FROM nao_semantic WHERE agent = @a"
-                        [ "@a", box agentId.Name ]
+                        [ "@a", box agentId ]
                         mapEntry
                 return
                     entries
@@ -150,14 +150,14 @@ type AdoSemanticMemory(embeddingProvider: IEmbeddingProvider, factory: IDbConnec
                     |> List.map fst
             }
 
-        member _.RemoveAsync (agentId: AgentId) (key: string) =
+        member _.RemoveAsync (agentId: string) (key: string) =
             task {
                 do! ensureAsync ()
                 let! _ =
                     Ado.executeNonQuery
                         factory
                         "DELETE FROM nao_semantic WHERE agent = @a AND sem_key = @k"
-                        [ "@a", box agentId.Name; "@k", box key ]
+                        [ "@a", box agentId; "@k", box key ]
                 return ()
             }
 
@@ -165,17 +165,17 @@ type AdoSemanticMemory(embeddingProvider: IEmbeddingProvider, factory: IDbConnec
 type FileSemanticMemory(embeddingProvider: IEmbeddingProvider, baseDir: string) =
     let sync = obj ()
 
-    let agentFile (agentId: AgentId) =
-        Path.Combine(baseDir, sprintf "%s.json" (Sanitize.id agentId.Name))
+    let agentFile (agentId: string) =
+        Path.Combine(baseDir, sprintf "%s.json" (Sanitize.id agentId))
 
-    let load (agentId: AgentId) : Dto.SemanticEntryDto list =
+    let load (agentId: string) : Dto.SemanticEntryDto list =
         FileJson.read<Dto.SemanticEntryDto list> (agentFile agentId) []
 
-    let save (agentId: AgentId) (entries: Dto.SemanticEntryDto list) =
+    let save (agentId: string) (entries: Dto.SemanticEntryDto list) =
         FileJson.write (agentFile agentId) entries
 
     interface ISemanticMemory with
-        member _.StoreAsync (agentId: AgentId) (key: string) (content: string) =
+        member _.StoreAsync (agentId: string) (key: string) (content: string) =
             task {
                 let! embedding = embeddingProvider.EmbedAsync content
                 let entry: SemanticEntry =
@@ -189,7 +189,7 @@ type FileSemanticMemory(embeddingProvider: IEmbeddingProvider, baseDir: string) 
                     save agentId (Dto.toSemanticDto entry :: existing))
             }
 
-        member _.RetrieveAsync (agentId: AgentId) (query: string) (topK: int) =
+        member _.RetrieveAsync (agentId: string) (query: string) (topK: int) =
             task {
                 let! queryEmbedding = embeddingProvider.EmbedAsync query
                 let entries = lock sync (fun () -> load agentId |> List.map Dto.ofSemanticDto)
@@ -201,7 +201,7 @@ type FileSemanticMemory(embeddingProvider: IEmbeddingProvider, baseDir: string) 
                     |> List.map fst
             }
 
-        member _.RemoveAsync (agentId: AgentId) (key: string) =
+        member _.RemoveAsync (agentId: string) (key: string) =
             task {
                 lock sync (fun () ->
                     let remaining = load agentId |> List.filter (fun e -> e.Key <> key)

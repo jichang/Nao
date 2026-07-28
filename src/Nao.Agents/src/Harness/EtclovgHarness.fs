@@ -210,8 +210,8 @@ module EtclovgHarness =
             let rootSpan =
                 config.Tracer
                 |> Option.map (fun t ->
-                    let s = t.StartTrace(sprintf "harness:%s" agent.Id.Name)
-                    t.SetAttributes s (Map.ofList ["agent.name", agent.Id.Name; "input", input; "execution.id", string execCtx.ExecutionId])
+                    let s = t.StartTrace(sprintf "harness:%s" agent.Name)
+                    t.SetAttributes s (Map.ofList ["agent.name", agent.Name; "input", input; "execution.id", string execCtx.ExecutionId])
                     s)
 
             // === T: Tool Protocol — Record available tools in span ===

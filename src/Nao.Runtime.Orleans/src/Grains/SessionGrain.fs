@@ -340,16 +340,14 @@ type SessionGrain
         // Pre-built agents are unversioned (None); only resolvable when no version is requested.
         match version with
         | Some _ -> None
-        | None -> workspace.Agents |> List.tryFind (fun a -> a.Id.Name = name)
+        | None -> workspace.Agents |> List.tryFind (fun a -> a.Name = name)
 
     let agentExists (workspace: WorkspaceDefinitions) (name: string) (version: string option) : bool =
         (findBuiltAgent workspace name version).IsSome
 
     /// Stable external-storage owner for this session. The grain key is immutable even
     /// though the session's selected agent and other runtime settings may change.
-    let memoryOwner () : AgentId =
-        { Name = sprintf "session:%s" (this.GetPrimaryKeyString())
-          Description = "Session memories" }
+    let memoryOwner () = sprintf "session:%s" (this.GetPrimaryKeyString())
 
     let sessionMemoryConfig = { OrchestratorMemoryConfig.None with MemoryStore = Some memoryStore }
 
