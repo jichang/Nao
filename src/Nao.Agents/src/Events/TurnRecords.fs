@@ -48,8 +48,6 @@ type TurnRecord =
       WorkspaceKey: string
       /// Agent that handled the turn.
       AgentName: string
-      /// Agent version that handled the turn, if pinned.
-      AgentVersion: string option
       /// The user's prompt.
       Input: string
       /// The agent's final answer.
@@ -67,7 +65,6 @@ type TurnRecord =
           UserId = ""
           WorkspaceKey = ""
           AgentName = ""
-          AgentVersion = None
           Input = ""
           Output = ""
           ToolCalls = []

@@ -163,12 +163,12 @@ type EtclovgToolProtocolTests() =
         Assert.IsTrue(schemas |> List.exists (fun s -> s.Name = "send_email"))
 
         // Get specific tool
-        let stockTool = (protocol.GetTool "get_stock_price").Result
+        let stockTool = (protocol.GetTool "get_stock_price@1.0").Result
         Assert.IsTrue(stockTool.IsSome)
         Assert.AreEqual("Get the current stock price for a ticker symbol", stockTool.Value.Description)
 
         // Invoke tool through protocol
-        let result = (protocol.InvokeAsync "get_stock_price" "MSFT").Result
+        let result = (protocol.InvokeAsync "get_stock_price@1.0" "MSFT").Result
         Assert.IsTrue(result.Success)
         Assert.IsTrue(result.Output.Contains("420.12"))
         Assert.IsTrue(result.DurationMs >= 0L)
@@ -182,11 +182,11 @@ type EtclovgToolProtocolTests() =
 
         // Should work within the rate limit
         for _ in 1..5 do
-            let result = (protocol.InvokeAsync "get_stock_price" "AAPL").Result
+            let result = (protocol.InvokeAsync "get_stock_price@1.0" "AAPL").Result
             Assert.IsTrue(result.Success)
 
         // 6th call should be blocked
-        let blocked = (protocol.InvokeAsync "get_stock_price" "AAPL").Result
+        let blocked = (protocol.InvokeAsync "get_stock_price@1.0" "AAPL").Result
         Assert.IsFalse(blocked.Success)
         Assert.IsTrue(blocked.Error.Value.Contains("Rate limit"))
 
@@ -469,7 +469,7 @@ type EtclovgVerificationTests() =
                     // Check that required tools are available
                     let protocol = ToolProtocol.fromTools EtclovgDemoTools.allTools
                     task {
-                        let! available = protocol.IsAvailable "get_stock_price"
+                        let! available = protocol.IsAvailable "get_stock_price@1.0"
                         if available then return ReadinessResult.Ready
                         else return ReadinessResult.NotReady ["get_stock_price tool not available"]
                     } }
@@ -713,7 +713,7 @@ type EtclovgFullIntegrationTests() =
         let result = (EtclovgHarness.runAsync config agent "What is the AAPL stock price?").Result
 
         // Verify success
-        Assert.IsTrue(result.Success, sprintf "Expected success but got error: %A" result.Error)
+        Assert.IsTrue(result.Success, sprintf "Expected success but got error: %A" result.HarnessError)
         Assert.AreEqual(Some "The current AAPL price is $189.45 based on latest market data.", result.Response)
 
         // E: Resource usage tracked
@@ -755,7 +755,7 @@ type EtclovgFullIntegrationTests() =
         let result = (EtclovgHarness.runAsync config agent "How do I get help?").Result
 
         Assert.IsFalse(result.Success)
-        Assert.AreEqual(Some "Output violates constitution", result.Error)
+        Assert.IsTrue(result.HarnessError.Value.Message.Contains("Output violates constitution"))
         Assert.IsTrue(result.ConstitutionViolations.Length > 0)
         Assert.IsTrue(result.ConstitutionViolations |> List.exists (fun v -> v.RuleId = "privacy-no-pii"))
 
@@ -777,7 +777,7 @@ type EtclovgFullIntegrationTests() =
         let result = (EtclovgHarness.runAsync config agent "do something").Result
 
         Assert.IsFalse(result.Success)
-        Assert.IsTrue(result.Error.Value.Contains("Blocked by policy"))
+        Assert.IsTrue(result.HarnessError.Value.Message.Contains("Blocked by policy"))
         Assert.AreEqual(1, result.PolicyViolations.Length)
 
     [<TestMethod>]
@@ -799,8 +799,8 @@ type EtclovgFullIntegrationTests() =
         let result = (EtclovgHarness.runAsync config agent "query").Result
 
         Assert.IsFalse(result.Success)
-        Assert.IsTrue(result.Error.Value.Contains("LLM endpoint unavailable"))
-        Assert.IsTrue(result.Error.Value.Contains("Vector store not initialized"))
+        Assert.IsTrue(result.HarnessError.Value.Message.Contains("LLM endpoint unavailable"))
+        Assert.IsTrue(result.HarnessError.Value.Message.Contains("Vector store not initialized"))
 
     [<TestMethod>]
     member _.EndToEndOrchestratorThroughHarness() =
@@ -830,7 +830,7 @@ type EtclovgFullIntegrationTests() =
         let result = (EtclovgHarness.runAsync config orchestrator "What is the stock price of AAPL?").Result
 
         // The orchestrator should have: called LLM -> invoked tool -> called LLM -> produced response
-        Assert.IsTrue(result.Success, sprintf "Failed: %A" result.Error)
+        Assert.IsTrue(result.Success, sprintf "Failed: %A" result.HarnessError)
         Assert.IsTrue(result.Response.IsSome)
         Assert.IsTrue(result.Response.Value.Contains("189.45") || result.Response.Value.Contains("AAPL"),
             sprintf "Expected stock data in response: %s" result.Response.Value)

@@ -53,17 +53,20 @@ type PromptTests () =
         Assert.IsTrue(result.Contains("Explanation: Greeting"))
 
     [<TestMethod>]
-    member _.RenderJsonOutputFormat () =
-        let prompt = { Prompt.Empty with OutputFormat = Json(Some """{"type":"object"}""") }
+    member _.RenderOutputSchema () =
+        let schema = """{"type":"object"}"""
+        let prompt = { Prompt.Empty with OutputFormat = Schema schema }
         let result = Prompt.render prompt
-        Assert.IsTrue(result.Contains("Respond in JSON."))
-        Assert.IsTrue(result.Contains("Schema:"))
+        Assert.AreEqual(sprintf "# Output Format\nFollow this schema:\n%s" schema, result)
 
     [<TestMethod>]
-    member _.RenderMarkdownOutputFormat () =
-        let prompt = { Prompt.Empty with OutputFormat = Markdown }
+    member _.RenderContextBeforeOutputSchema () =
+        let prompt =
+            { Prompt.Empty with
+                Context = [ "Document A" ]
+                OutputFormat = Schema "Markdown" }
         let result = Prompt.render prompt
-        Assert.IsTrue(result.Contains("Respond in Markdown."))
+        Assert.AreEqual("# Context\n- Document A\n\n# Output Format\nFollow this schema:\nMarkdown", result)
 
     [<TestMethod>]
     member _.RenderContextSection () =

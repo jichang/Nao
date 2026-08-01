@@ -35,7 +35,7 @@ module ToolContext =
 
 [<RequireQualifiedAccess>]
 module ToolVersion =
-    /// Default version assigned to code-created tools and legacy definitions that omit one.
+    /// Version assigned by the simple tool constructors.
     let Default = "1.0"
 
 /// The result of resolving a permission request: the decision plus whether the user asked to
@@ -115,6 +115,8 @@ type Tool =
         Name: string
         /// Human-readable description shown to the LLM so it knows when to use the tool
         Description: string
+        /// Selection priority used as a tie-breaker after tool suitability
+        Priority: int
         /// Required version identifier (e.g. "1.0").
         Version: string
         /// Input/output contract for this tool.
@@ -137,8 +139,9 @@ type Tool =
     static member Create(name: string, description: string, execute: string -> Task<string>) =
         { Name = name
           Description = description
+          Priority = 0
           Version = ToolVersion.Default
-                    Signature = ToolSignature.Text
+          Signature = ToolSignature.Text
           Execute = (fun _ctx input -> execute input)
           Permissions = []
           Verify = None
@@ -149,8 +152,9 @@ type Tool =
     static member Create(name: string, description: string, permissions: ResourceAccess list, execute: ToolContext -> string -> Task<string>) =
         { Name = name
           Description = description
+          Priority = 0
           Version = ToolVersion.Default
-                    Signature = ToolSignature.Text
+          Signature = ToolSignature.Text
           Execute = execute
           Permissions = permissions
           Verify = None
@@ -179,33 +183,14 @@ type Tool =
     member this.CanVerify = this.Verify.IsSome
 
 /// Helpers for version-qualified references of the form "name@version".
-/// Used to look up a specific version of a tool or agent while remaining
-/// backward compatible with plain, unversioned "name" references.
 [<RequireQualifiedAccess>]
 module VersionRef =
 
-    /// Parse a possibly version-qualified reference "name@version" into
-    /// its (name, version option) parts. "name" => (name, None).
-    let parse (reference: string) : string * string option =
-        if String.IsNullOrEmpty reference then ("", None)
-        else
-            let idx = reference.IndexOf('@')
-            if idx < 0 then (reference, None)
-            else
-                let name = reference.Substring(0, idx)
-                let ver = reference.Substring(idx + 1)
-                (name, (if String.IsNullOrEmpty ver then None else Some ver))
-
-    /// Whether an actual version satisfies a requested version.
-    /// A request of None matches any actual version (name-only lookup).
-    let matches (requested: string option) (actual: string) : bool =
-        match requested with
-        | None -> true
-        | Some version -> version = actual
-
-    /// Whether an optional actual version satisfies a requested version.
-    /// Used for legacy version-optional definitions such as agents.
-    let matchesOptional (requested: string option) (actual: string option) : bool =
-        match requested with
-        | None -> true
-        | Some _ -> requested = actual
+    /// Parse a required version-qualified reference into its name and version.
+    let parse (reference: string) : string * string =
+        if String.IsNullOrWhiteSpace reference then
+            invalidArg "reference" "A tool reference must use the form name@version."
+        let separator = reference.IndexOf('@')
+        if separator <= 0 || separator = reference.Length - 1 then
+            invalidArg "reference" "A tool reference must use the form name@version."
+        reference.Substring(0, separator), reference.Substring(separator + 1)

@@ -24,11 +24,11 @@ type PersistedMessage =
     { Role: string
       Content: string
       Timestamp: DateTimeOffset
-      /// Turn this message belongs to ("" for legacy messages).
+    /// Turn this message belongs to.
       TurnId: string
-      /// Process steps for an assistant turn (empty for user messages / legacy).
+    /// Process steps for an assistant turn (empty for user messages).
       Steps: TurnStepRecord[]
-      /// Names of files attached to a user message (empty for assistant / legacy).
+    /// Names of files attached to a user message (empty for assistant messages).
       Attachments: string[] }
 
 /// Metadata about a persisted conversation

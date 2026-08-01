@@ -11,11 +11,11 @@ open Nao.Runtime.Orleans
 type MessageRecord() =
     [<Id(0u)>] member val Role: string = "" with get, set
     [<Id(1u)>] member val Content: string = "" with get, set
-    /// Turn this message belongs to ("" for legacy messages).
+    /// Turn this message belongs to.
     [<Id(2u)>] member val TurnId: string = "" with get, set
-    /// Process steps for an assistant turn (empty for user messages / legacy).
+    /// Process steps for an assistant turn (empty for user messages).
     [<Id(3u)>] member val Steps: ResizeArray<TurnStepRecord> = ResizeArray() with get, set
-    /// Names of files attached to a user message (empty for assistant / legacy).
+    /// Names of files attached to a user message (empty for assistant messages).
     [<Id(4u)>] member val Attachments: ResizeArray<string> = ResizeArray() with get, set
 
 /// Mapping between Orleans serializable records and domain types

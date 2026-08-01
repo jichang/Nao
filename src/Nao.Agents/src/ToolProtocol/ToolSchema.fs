@@ -8,6 +8,8 @@ type ToolSchema =
       Name: string
       /// Human-readable description of what the tool does
       Description: string
+      /// Selection priority used as a tie-breaker after tool suitability
+      Priority: int
       /// Category/namespace for grouping related tools
       Category: string option
       /// Input parameters schema
@@ -44,6 +46,7 @@ module ToolSchema =
     let fromTool (tool: Tool) : ToolSchema =
         { Name = tool.Name
           Description = tool.Description
+          Priority = tool.Priority
           Category = None
           Parameters =
             match tool.Signature.Input with
@@ -69,7 +72,7 @@ module ToolSchema =
             |> String.concat "\n"
 
         let lines =
-            [ yield sprintf "  %s: %s" schema.Name schema.Description
+            [ yield sprintf "  %s (priority %d): %s" schema.Name schema.Priority schema.Description
               if schema.Parameters.Length > 0 then yield sprintf "  Parameters:\n%s" paramsStr
               if schema.Examples.Length > 0 then yield sprintf "  Examples:\n%s" examplesStr ]
 

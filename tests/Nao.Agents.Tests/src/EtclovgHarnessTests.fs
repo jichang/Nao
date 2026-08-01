@@ -24,7 +24,7 @@ type EtclovgHarnessTests() =
         let result = (EtclovgHarness.runAsync config agent "test").Result
         Assert.IsTrue(result.Success)
         Assert.AreEqual(Some "hello world", result.Response)
-        Assert.IsTrue(result.Error.IsNone)
+        Assert.IsTrue(result.HarnessError.IsNone)
         Assert.IsTrue(result.Trace.IsSome)
 
     [<TestMethod>]
@@ -35,7 +35,7 @@ type EtclovgHarnessTests() =
         let config = { EtclovgConfig.Default with Permissions = Some perms }
         let result = (EtclovgHarness.runAsync config agent "test").Result
         Assert.IsFalse(result.Success)
-        Assert.AreEqual(Some "Permission denied", result.Error)
+        Assert.AreEqual(Some HarnessError.PermissionDenied, result.HarnessError)
         Assert.IsTrue(result.Response.IsNone)
 
     [<TestMethod>]
@@ -57,7 +57,7 @@ type EtclovgHarnessTests() =
         let blockConfig = { EtclovgConfig.Default with PolicyEngine = Some blockEngine }
         let result = (EtclovgHarness.runAsync blockConfig agent "test").Result
         Assert.IsFalse(result.Success)
-        Assert.IsTrue(result.Error.Value.Contains("Blocked by policy"))
+        Assert.IsTrue(result.HarnessError.Value.Message.Contains("Blocked by policy"))
         Assert.AreEqual(1, result.PolicyViolations.Length)
 
     [<TestMethod>]
@@ -70,7 +70,7 @@ type EtclovgHarnessTests() =
         let config = { EtclovgConfig.Default with ReadinessChecks = [ failCheck ] }
         let result = (EtclovgHarness.runAsync config agent "test").Result
         Assert.IsFalse(result.Success)
-        Assert.IsTrue(result.Error.Value.Contains("Not ready"))
+        Assert.IsTrue(result.HarnessError.Value.Message.Contains("Not ready"))
 
     [<TestMethod>]
     member _.LifecycleHookCanBlockInit() =
@@ -86,7 +86,7 @@ type EtclovgHarnessTests() =
         let config = { EtclovgConfig.Default with Lifecycle = [ blockHook ] }
         let result = (EtclovgHarness.runAsync config agent "test").Result
         Assert.IsFalse(result.Success)
-        Assert.AreEqual(Some "init blocked", result.Error)
+        Assert.AreEqual(Some (HarnessError.InitializationFailed "init blocked"), result.HarnessError)
 
     [<TestMethod>]
     member _.ConstitutionViolationBlocksOutput() =
@@ -97,7 +97,7 @@ type EtclovgHarnessTests() =
         let config = { EtclovgConfig.Default with Constitution = Some constitution }
         let result = (EtclovgHarness.runAsync config agent "test").Result
         Assert.IsFalse(result.Success)
-        Assert.AreEqual(Some "Output violates constitution", result.Error)
+        Assert.IsTrue(result.HarnessError.Value.Message.Contains("Output violates constitution"))
         Assert.IsTrue(result.ConstitutionViolations.Length > 0)
 
     [<TestMethod>]

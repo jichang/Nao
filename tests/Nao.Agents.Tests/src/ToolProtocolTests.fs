@@ -54,20 +54,26 @@ type ToolProtocolTests() =
     [<TestMethod>]
     member _.GetToolFindsExisting() =
         let protocol = ToolProtocol.fromTools tools
-        let found = (protocol.GetTool "add").Result
+        let found = (protocol.GetTool "add@1.0").Result
         Assert.IsTrue(found.IsSome)
         Assert.AreEqual("add", found.Value.Name)
 
     [<TestMethod>]
     member _.GetToolReturnsNoneForMissing() =
         let protocol = ToolProtocol.fromTools tools
-        let found = (protocol.GetTool "multiply").Result
+        let found = (protocol.GetTool "multiply@1.0").Result
         Assert.IsTrue(found.IsNone)
+
+    [<TestMethod>]
+    member _.GetToolRejectsUnqualifiedReference() =
+        let protocol = ToolProtocol.fromTools tools
+        Assert.ThrowsExactly<ArgumentException>(fun () -> protocol.GetTool "add" |> ignore)
+        |> ignore
 
     [<TestMethod>]
     member _.InvokeAsyncCallsCorrectTool() =
         let protocol = ToolProtocol.fromTools tools
-        let result = (protocol.InvokeAsync "add" "5").Result
+        let result = (protocol.InvokeAsync "add@1.0" "5").Result
         Assert.IsTrue(result.Success)
         Assert.AreEqual("result:5", result.Output)
         Assert.IsTrue(result.DurationMs >= 0L)
@@ -75,7 +81,7 @@ type ToolProtocolTests() =
     [<TestMethod>]
     member _.InvokeAsyncReturnsErrorForMissingTool() =
         let protocol = ToolProtocol.fromTools tools
-        let result = (protocol.InvokeAsync "unknown" "x").Result
+        let result = (protocol.InvokeAsync "unknown@1.0" "x").Result
         Assert.IsFalse(result.Success)
         Assert.IsTrue(result.Error.IsSome)
         Assert.IsTrue(result.Error.Value.Contains("not found"))
@@ -84,15 +90,15 @@ type ToolProtocolTests() =
     member _.InvokeAsyncHandlesException() =
         let failTools = [ Tool.Create("fail", "Fails", fun _ -> failwith "boom") ]
         let protocol = ToolProtocol.fromTools failTools
-        let result = (protocol.InvokeAsync "fail" "x").Result
+        let result = (protocol.InvokeAsync "fail@1.0" "x").Result
         Assert.IsFalse(result.Success)
         Assert.IsTrue(result.Error.Value.Contains("boom"))
 
     [<TestMethod>]
     member _.IsAvailableReturnsTrueForExisting() =
         let protocol = ToolProtocol.fromTools tools
-        Assert.IsTrue((protocol.IsAvailable "add").Result)
-        Assert.IsFalse((protocol.IsAvailable "missing").Result)
+        Assert.IsTrue((protocol.IsAvailable "add@1.0").Result)
+        Assert.IsFalse((protocol.IsAvailable "missing@1.0").Result)
 
     [<TestMethod>]
     member _.WithMiddlewareBlocksOnBeforeError() =
@@ -101,7 +107,7 @@ type ToolProtocolTests() =
                 member _.BeforeExecute _name _input = Task.FromResult(Error "blocked")
                 member _.AfterExecute _name result = Task.FromResult result }
         let protocol = ToolProtocol.fromTools tools |> ToolProtocol.withMiddleware blockMiddleware
-        let result = (protocol.InvokeAsync "add" "5").Result
+        let result = (protocol.InvokeAsync "add@1.0" "5").Result
         Assert.IsFalse(result.Success)
         Assert.AreEqual(Some "blocked", result.Error)
 

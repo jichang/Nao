@@ -81,7 +81,7 @@ Where score is a number on the scale described above."""
                     Prompt.render
                         { Prompt.Empty with
                             Role = "You are a precise evaluation judge."
-                            OutputFormat = OutputFormat.Json None }
+                            OutputFormat = OutputFormat.Schema "JSON" }
                 let conversation = [
                     { Role = System; Content = system }
                     { Role = User; Content = prompt }

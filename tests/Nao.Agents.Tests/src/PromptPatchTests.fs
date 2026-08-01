@@ -24,13 +24,13 @@ type PromptPatchTests () =
             { PromptPatch.Empty with
                 Role = Some(ReplaceText "new role")
                 DomainKnowledge = Some(ReplaceList [ "new domain" ])
-                OutputFormat = Some(ReplaceValue Markdown) }
+                OutputFormat = Some(ReplaceValue(Schema "Markdown")) }
 
         let result = Prompt.applyPatch patch prompt
 
         Assert.AreEqual("new role", result.Role)
         Assert.AreEqual([ "new domain" ], result.DomainKnowledge)
-        Assert.AreEqual(Markdown, result.OutputFormat)
+        Assert.AreEqual(Schema "Markdown", result.OutputFormat)
         Assert.AreEqual("base objective", result.Objective)
         Assert.AreEqual([ "base constraint" ], result.Constraints)
 

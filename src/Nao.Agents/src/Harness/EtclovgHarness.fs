@@ -112,9 +112,7 @@ type EtclovgResult =
       Response: string option
       /// Whether execution succeeded
       Success: bool
-      /// Error if execution failed (legacy string for backwards compat)
-      Error: string option
-      /// Structured error type (preferred over Error string)
+    /// Structured execution error
       HarnessError: HarnessError option
       /// Resource usage
       Usage: ResourceUsage
@@ -137,12 +135,17 @@ type EtclovgResult =
 module EtclovgHarness =
 
     let private failResult (harnessError: HarnessError) (usage: ResourceUsage) (trace: ExecutionTrace) (policyViolations: PolicyViolation list) (constitutionViolations: ConstitutionViolation list) (metrics: IMetricsCollector option) (auditEntries: int) : EtclovgResult =
-        { Response = None; Success = false; Error = Some harnessError.Message
-          HarnessError = Some harnessError
-          Usage = usage; Trace = Some trace
-          Metrics = metrics |> Option.map (fun m -> m.GetMetrics())
-          Judgement = None; Regression = None; AuditEntries = auditEntries
-          PolicyViolations = policyViolations; ConstitutionViolations = constitutionViolations }
+          { Response = None
+            Success = false
+            HarnessError = Some harnessError
+            Usage = usage
+            Trace = Some trace
+            Metrics = metrics |> Option.map (fun m -> m.GetMetrics())
+            Judgement = None
+            Regression = None
+            AuditEntries = auditEntries
+            PolicyViolations = policyViolations
+            ConstitutionViolations = constitutionViolations }
 
     /// Run an agent through the full ETCLOVG harness
     let runAsync (config: EtclovgConfig) (agent: IAgent) (input: string) : Task<EtclovgResult> =
@@ -292,14 +295,17 @@ module EtclovgHarness =
                     | _ -> ()
                     let violationIds = constitutionViolations |> List.map (fun v -> v.RuleId)
                     return
-                        { Response = None; Success = false
-                          Error = Some "Output violates constitution"
-                          HarnessError = Some (HarnessError.ConstitutionViolation violationIds)
-                          Usage = execCtx.Usage; Trace = Some trace
-                          Metrics = config.Metrics |> Option.map (fun m -> m.GetMetrics())
-                          Judgement = None; Regression = None; AuditEntries = 1
-                          PolicyViolations = policyViolations
-                          ConstitutionViolations = constitutionViolations }
+                        ({ Response = None
+                           Success = false
+                           HarnessError = Some (HarnessError.ConstitutionViolation violationIds)
+                           Usage = execCtx.Usage
+                           Trace = Some trace
+                           Metrics = config.Metrics |> Option.map (fun metrics -> metrics.GetMetrics())
+                           Judgement = None
+                           Regression = None
+                           AuditEntries = 1
+                           PolicyViolations = policyViolations
+                           ConstitutionViolations = constitutionViolations }: EtclovgResult)
                 else
 
                 // === L: Lifecycle — Complete ===
@@ -354,7 +360,6 @@ module EtclovgHarness =
                 return
                     { Response = Some response
                       Success = true
-                      Error = None
                       HarnessError = None
                       Usage = execCtx.Usage
                       Trace = Some trace

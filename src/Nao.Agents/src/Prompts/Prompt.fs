@@ -131,18 +131,13 @@ module Prompt =
                 |> String.concat "\n\n"
             sections.Add(sprintf "# Examples\n%s" examples)
 
-        match prompt.OutputFormat with
-        | FreeText -> ()
-        | Json schema ->
-            let schemaNote = schema |> Option.map (sprintf "\nSchema: %s") |> Option.defaultValue ""
-            sections.Add(sprintf "# Output Format\nRespond in JSON.%s" schemaNote)
-        | Markdown ->
-            sections.Add("# Output Format\nRespond in Markdown.")
-        | Custom instruction ->
-            sections.Add(sprintf "# Output Format\n%s" instruction)
-
         if prompt.Context <> [] then
             let items = prompt.Context |> List.map (sprintf "- %s") |> String.concat "\n"
             sections.Add(sprintf "# Context\n%s" items)
+
+        match prompt.OutputFormat with
+        | FreeText -> ()
+        | Schema description ->
+            sections.Add(sprintf "# Output Format\nFollow this schema:\n%s" description)
 
         sections |> Seq.toList |> String.concat "\n\n"

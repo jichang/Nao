@@ -13,10 +13,14 @@ type IAgent =
     abstract member Name: string
     /// Human-readable description of this agent's purpose
     abstract member Description: string
+    /// Selection priority used as a tie-breaker after capability suitability
+    abstract member Priority: int
     /// Concrete things this agent can do for a caller
     abstract member Capabilities: string list
     /// Work this agent owns and is responsible for completing
     abstract member Responsibilities: string list
+    /// Structured input/output contract for this agent
+    abstract member Signature: ToolSignature
     /// Process a user input string and return a response
     abstract member RunAsync: string -> Task<string>
     /// Handle an inter-agent message and optionally reply

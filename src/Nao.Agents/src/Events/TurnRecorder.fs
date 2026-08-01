@@ -12,8 +12,7 @@ open System.Threading.Tasks
 /// `SubAgentInvoked`/`SubAgentCompleted`) pairs sequentially, so we match each result
 /// to the earliest still-unmatched invocation of the same name (FIFO).
 type TurnRecorder(turnId: string, sessionId: string, userId: string,
-                  workspaceKey: string, agentName: string, agentVersion: string option,
-                  input: string,
+                  workspaceKey: string, agentName: string, input: string,
                   // Resolves a tool name to its known version for richer records.
                   resolveToolVersion: string -> string option) =
 
@@ -59,7 +58,6 @@ type TurnRecorder(turnId: string, sessionId: string, userId: string,
               UserId = userId
               WorkspaceKey = workspaceKey
               AgentName = agentName
-              AgentVersion = agentVersion
               Input = input
               Output = output
               ToolCalls = List.ofSeq toolCalls
@@ -101,13 +99,13 @@ type TurnRecorder(turnId: string, sessionId: string, userId: string,
 module TurnRecorder =
 
     /// Create a recorder that does not resolve tool versions.
-    let create (turnId, sessionId, userId, workspaceKey, agentName, agentVersion, input) =
-        TurnRecorder(turnId, sessionId, userId, workspaceKey, agentName, agentVersion, input, (fun _ -> None))
+    let create (turnId, sessionId, userId, workspaceKey, agentName, input) =
+        TurnRecorder(turnId, sessionId, userId, workspaceKey, agentName, input, (fun _ -> None))
 
     /// Create a recorder that resolves tool versions from a known tool list.
-    let forTools (tools: Tool list) (turnId, sessionId, userId, workspaceKey, agentName, agentVersion, input) =
+    let forTools (tools: Tool list) (turnId, sessionId, userId, workspaceKey, agentName, input) =
         let resolve (name: string) =
             tools
             |> List.tryFind (fun t -> t.Name = name)
             |> Option.map (fun t -> t.Version)
-        TurnRecorder(turnId, sessionId, userId, workspaceKey, agentName, agentVersion, input, resolve)
+        TurnRecorder(turnId, sessionId, userId, workspaceKey, agentName, input, resolve)

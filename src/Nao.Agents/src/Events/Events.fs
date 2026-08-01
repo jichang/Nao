@@ -53,12 +53,15 @@ type ConversationMessage =
     { Role: string
       Content: string
       Timestamp: DateTimeOffset
-      /// Turn this message belongs to ("" for legacy messages).
+    /// Turn this message belongs to.
       TurnId: string
-      /// Process steps for an assistant turn (empty for user / legacy messages).
+    /// Process steps for an assistant turn (empty for user messages).
       Steps: ConversationStep list
       /// Names of files attached to a user message (empty otherwise).
       Attachments: string list }
+
+/// The exact messages sent to an LLM and the raw response it returned.
+type LlmExchange = { Round: int; Attempt: int; IsRepair: bool; Messages: (string * string) list; Response: string }
 
 /// Domain events the system dispatches. Each carries an EventScope plus its payload.
 /// Consumers subscribe to the bus and decide how/where to persist, so adding a storage
@@ -80,6 +83,8 @@ type NaoEvent =
     /// delegation, final answer). The turn's recorder consumes these to build the durable
     /// TurnRecord and stream in-progress steps to a UI; any other consumer may persist them.
     | TurnProgress of EventScope * ProgressSignal
+    /// One exact prompt/response exchange with the language model, including repair calls.
+    | LlmExchangeRecorded of EventScope * LlmExchange
 
 /// One fine-grained observability write produced by the agent harness during a turn. These
 /// mirror the sink interfaces (ITracer / IMetricsCollector / IExecutionJournal / ITraceStore

@@ -146,7 +146,7 @@ module Verification =
                     { Prompt.Empty with
                         Objective = "Analyze the following task and reformulate your understanding of it."
                         OutputFormat =
-                            OutputFormat.Custom "Respond with:\n1. Your understanding of what needs to be done\n2. Key success criteria (one per line, prefixed with '- ')\n3. Required capabilities\n4. Estimated complexity (1-10)" }
+                            OutputFormat.Schema "1. Your understanding of what needs to be done\n2. Key success criteria (one per line, prefixed with '- ')\n3. Required capabilities\n4. Estimated complexity (1-10)" }
 
             let prompt =
                 [ { Role = System; Content = system }
@@ -184,7 +184,7 @@ type LlmJudge(provider: ILlmProvider, options: CompletionOptions, criteria: stri
                         { Prompt.Empty with
                             Role = "You are a quality judge."
                             Objective = "Evaluate the following agent execution trace against these criteria:\n" + criteriaStr
-                            OutputFormat = OutputFormat.Custom "Respond with PASS, FAIL, or PARTIAL(score) followed by an explanation." }
+                            OutputFormat = OutputFormat.Schema "PASS, FAIL, or PARTIAL(score), followed by an explanation." }
 
                 let prompt =
                     [ { Role = System; Content = system }

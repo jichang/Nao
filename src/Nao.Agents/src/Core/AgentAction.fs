@@ -7,7 +7,7 @@ type AgentAction =
     | Respond of string
     /// Invoke a tool by name with the given input
     | InvokeTool of toolName: string * input: string
-    /// Delegate the task to another agent by name
-    | DelegateToAgent of agentName: string * input: string
+    /// Delegate the task to another agent by its opaque runtime identifier.
+    | DelegateToAgent of agentId: string * input: string
     /// Internal reasoning step (chain-of-thought) — not shown to user
     | Think of string

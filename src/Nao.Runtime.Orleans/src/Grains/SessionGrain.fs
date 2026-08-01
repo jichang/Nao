@@ -27,8 +27,6 @@ type SessionInfo() =
     [<Id(7u)>] member val IsActive: bool = true with get, set
     [<Id(8u)>] member val ToolNames: ResizeArray<string> = ResizeArray() with get, set
     [<Id(9u)>] member val ActiveConversation: string = "default" with get, set
-    /// Optional pinned agent version ("" = unversioned / latest).
-    [<Id(10u)>] member val AgentVersion: string = "" with get, set
     /// Id of the most recently processed turn (used to attach feedback).
     [<Id(11u)>] member val LastTurnId: string = "" with get, set
     /// Runtime policy for launching tools ("" = host default; "docker"/"docker:&lt;image&gt;"
@@ -68,8 +66,6 @@ type SessionStartOptions() =
     [<Id(1u)>] member val ToolNames: ResizeArray<string> = ResizeArray() with get, set
     [<Id(2u)>] member val WorkspaceKey: string = "default" with get, set
     [<Id(3u)>] member val GroupId: string = "" with get, set
-    /// Optional pinned agent version ("" = unversioned / latest).
-    [<Id(4u)>] member val AgentVersion: string = "" with get, set
     /// Runtime policy for launching tools ("" = host default; "docker"/"docker:&lt;image&gt;"
     /// to containerize; a runtime name like "deno" to force it for all tools).
     [<Id(5u)>] member val RuntimeMode: string = "" with get, set
@@ -322,28 +318,20 @@ type SessionGrain
     // ─── Tool resolution ───
 
     let resolveTool (workspace: WorkspaceDefinitions) (name: string) : Tool option =
-        // Tool references may be version-qualified ("name@version").
         let (n, ver) = VersionRef.parse name
         workspace.Tools
-        |> List.tryFind (fun t -> t.Name = n && VersionRef.matches ver t.Version)
+        |> List.tryFind (fun tool -> tool.Name = n && tool.Version = ver)
 
     let resolveTools (workspace: WorkspaceDefinitions) (names: string list) : Tool list =
         names |> List.choose (resolveTool workspace)
 
     // ─── Agent resolution ───
 
-    /// Convert a stored version string ("" = none) into an optional version.
-    let versionOpt (version: string) : string option =
-        if String.IsNullOrEmpty version then None else Some version
+    let findBuiltAgent (workspace: WorkspaceDefinitions) (name: string) : IAgent option =
+        workspace.Agents |> List.tryFind (fun agent -> agent.Name = name)
 
-    let findBuiltAgent (workspace: WorkspaceDefinitions) (name: string) (version: string option) : IAgent option =
-        // Pre-built agents are unversioned (None); only resolvable when no version is requested.
-        match version with
-        | Some _ -> None
-        | None -> workspace.Agents |> List.tryFind (fun a -> a.Name = name)
-
-    let agentExists (workspace: WorkspaceDefinitions) (name: string) (version: string option) : bool =
-        (findBuiltAgent workspace name version).IsSome
+    let agentExists (workspace: WorkspaceDefinitions) (name: string) : bool =
+        (findBuiltAgent workspace name).IsSome
 
     /// Stable external-storage owner for this session. The grain key is immutable even
     /// though the session's selected agent and other runtime settings may change.
@@ -372,8 +360,8 @@ type SessionGrain
                     return sprintf "Remembered '%s'." key
                 })
 
-    let createAgentAsync (workspace: WorkspaceDefinitions) (name: string) (version: string option) : Task<IAgent option> =
-        findBuiltAgent workspace name version |> Task.FromResult
+    let createAgentAsync (workspace: WorkspaceDefinitions) (name: string) : Task<IAgent option> =
+        findBuiltAgent workspace name |> Task.FromResult
 
     /// Core turn processing. `llmInput` is the prompt the agent sees (may contain embedded
     /// attachment content); `displayText` + `attachmentNames` are what gets persisted into
@@ -394,7 +382,6 @@ type SessionGrain
                 return sprintf "[Error] Workspace '%s' not available" persistentState.State.Info.WorkspaceKey
             | Some workspace ->
 
-            let agentVersion = versionOpt persistentState.State.Info.AgentVersion
             let info = persistentState.State.Info
 
             let tools = resolveTools workspace (persistentState.State.Info.ToolNames |> Seq.toList)
@@ -413,7 +400,7 @@ type SessionGrain
             let recorder =
                 TurnRecorder.forTools tools
                     (turnId, info.SessionId, info.UserId, info.WorkspaceKey,
-                     agentName, agentVersion, contextualInput)
+                     agentName, contextualInput)
             // Expose this turn's recorder so GetLiveStepsAsync can stream progress while
             // the harness runs; always clear it once the turn finishes (success or not).
             currentRecorder <- Some recorder
@@ -492,7 +479,7 @@ type SessionGrain
             try
                 // Subscribe the recorder for this turn's progress signals; detached in finally.
                 eventBus.Subscribe(recorder :> IEventConsumer)
-                let! agentOpt = createAgentAsync workspace agentName agentVersion
+                let! agentOpt = createAgentAsync workspace agentName
                 match agentOpt with
                 | None ->
                     return sprintf "[Error] Agent '%s' not found in workspace '%s'" agentName persistentState.State.Info.WorkspaceKey
@@ -527,7 +514,7 @@ type SessionGrain
                         let errorMsg =
                             match result.HarnessError with
                             | Some err -> sprintf "[Blocked] %s" err.Message
-                            | None -> result.Error |> Option.defaultValue "[Error] Unknown harness failure"
+                            | None -> "[Error] Unknown harness failure"
                         return errorMsg
             finally
                 eventBus.Unsubscribe(recorder :> IEventConsumer)
@@ -557,18 +544,12 @@ type SessionGrain
                 | None -> return false
                 | Some workspace ->
 
-                // Agent version may be specified explicitly or inline as "name@version".
-                let (agentName, inlineVersion) = VersionRef.parse options.AgentName
-                let agentVersion =
-                    if String.IsNullOrEmpty options.AgentVersion then inlineVersion
-                    else Some options.AgentVersion
-
-                if not (agentExists workspace agentName agentVersion) then
+                let agentName = options.AgentName
+                if not (agentExists workspace agentName) then
                     return false
                 else
                     let info = persistentState.State.Info
                     info.AgentName <- agentName
-                    info.AgentVersion <- (agentVersion |> Option.defaultValue "")
                     info.SessionId <- sessionId
                     info.UserId <- userId
                     info.GroupId <- options.GroupId
@@ -633,8 +614,7 @@ type SessionGrain
                 | None -> return false
                 | Some workspace ->
                     let agentName = persistentState.State.Info.AgentName
-                    let agentVersion = versionOpt persistentState.State.Info.AgentVersion
-                    if not (String.IsNullOrEmpty(agentName)) && not (agentExists workspace agentName agentVersion) then
+                    if not (String.IsNullOrEmpty(agentName)) && not (agentExists workspace agentName) then
                         return false
                     else
                         persistentState.State.Info.WorkspaceKey <- workspaceKey
@@ -648,13 +628,10 @@ type SessionGrain
                 match getWorkspace () with
                 | None -> return false
                 | Some workspace ->
-                    // The target agent may be version-qualified ("name@version").
-                    let (targetName, targetVersion) = VersionRef.parse agentName
-                    if not (agentExists workspace targetName targetVersion) then
+                    if not (agentExists workspace agentName) then
                         return false
                     else
-                        persistentState.State.Info.AgentName <- targetName
-                        persistentState.State.Info.AgentVersion <- (targetVersion |> Option.defaultValue "")
+                        persistentState.State.Info.AgentName <- agentName
                         persistentState.State.Info.LastActiveAt <- DateTimeOffset.UtcNow
                         do! persistentState.WriteStateAsync()
                         return true

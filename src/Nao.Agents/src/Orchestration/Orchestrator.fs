@@ -24,7 +24,7 @@ type OrchestratorMemoryConfig =
         { OrchestratorMemoryConfig.None with WindowStrategy = Some strategy }
 
 /// Configuration for the Orchestrator
-type OrchestratorConfig = { Id: string; Name: string; Description: string; Capabilities: string list; Responsibilities: string list; Provider: ILlmProvider; Tools: Tool list; SubAgents: IAgent list; Prompt: Prompt; Options: CompletionOptions; MaxRounds: int; Bus: IEventBus; Scope: EventScope; Memory: OrchestratorMemoryConfig; Context: ToolContext }
+type OrchestratorConfig = { Id: string; Name: string; Description: string; Priority: int; Capabilities: string list; Responsibilities: string list; Signature: ToolSignature; Provider: ILlmProvider; Tools: Tool list; SubAgents: IAgent list; Prompt: Prompt; Options: CompletionOptions; MaxRounds: int; Bus: IEventBus; Scope: EventScope; Memory: OrchestratorMemoryConfig; Context: ToolContext }
 
 /// Factory interface for creating orchestrator instances via DI.
 /// Register a custom implementation to control how orchestrators are built from workspace definitions.
@@ -188,12 +188,26 @@ type OrchestratorBase(config: OrchestratorConfig) =
                     tracer.AddEvent child "llm.response" (Map.ofList [ "output.length", string outputLength; "latency.ms", string elapsedMs ])
                     tracer.EndSpan child status
                 | None -> ()
+            let recordExchange (attempt: int) (isRepair: bool) (prompt: Conversation) (result: string) =
+                let messagesForStorage =
+                    prompt
+                    |> List.map (fun message -> (sprintf "%A" message.Role, message.Content))
+                eventBus.PublishAsync(
+                    NaoEvent.LlmExchangeRecorded(
+                        eventScope,
+                        { Round = round
+                          Attempt = attempt
+                          IsRepair = isRepair
+                          Messages = messagesForStorage
+                          Response = result }))
+                |> ignore
             try
                 let llmStarted = Diagnostics.Stopwatch.StartNew()
                 let llmSpan = startLlmSpan 1
                 let! result = LlmProvider.streamAsync config.Provider messages config.Options (fun _ -> ())
                 llmStarted.Stop()
                 endLlmSpan llmSpan SpanStatus.Ok result.Content.Length llmStarted.ElapsedMilliseconds
+                recordExchange 1 false messages result.Content
                 let mutable working = result.Content
                 // Validate-and-repair: ask the model to correct an invalid response (bounded)
                 // before it is parsed. `ValidateResponse` defaults to accepting everything.
@@ -210,8 +224,13 @@ type OrchestratorBase(config: OrchestratorConfig) =
                     let! fixResult = config.Provider.CompleteAsync convo config.Options
                     repairStarted.Stop()
                     endLlmSpan repairSpan SpanStatus.Ok fixResult.Content.Length repairStarted.ElapsedMilliseconds
+                    recordExchange (repairAttempts + 1) true convo fixResult.Content
                     working <- fixResult.Content
                     validationError <- this.ValidateResponse working
+                match validationError with
+                | Some error ->
+                    raise (InvalidOperationException(sprintf "LLM response remained invalid after %d repair attempts: %s" repairAttempts error))
+                | None -> ()
                 // Guaranteed logging: the round's reasoning always reaches the event bus here.
                 if not (String.IsNullOrWhiteSpace working) then report (ReasoningAdded working)
                 this.EndRoundSpan roundSpan SpanStatus.Ok
@@ -231,6 +250,7 @@ type OrchestratorBase(config: OrchestratorConfig) =
             let mutable rounds = 0
             let mutable finalAnswer = ""
             let mutable finished = false
+            let successfulToolCalls = Collections.Generic.HashSet<string * string>()
 
             while not finished && rounds < config.MaxRounds do
                 // The base performs the LLM call (with repair + reasoning logging + tracing),
@@ -255,47 +275,53 @@ type OrchestratorBase(config: OrchestratorConfig) =
                         if not finished then
                             match action with
                             | InvokeTool (toolName, toolInput) ->
-                                report (ToolInvoked (toolName, toolInput))
+                                if successfulToolCalls.Contains((toolName, toolInput)) then
+                                    conversation <- conversation @ [ { Role = User; Content = sprintf "[Tool Result from %s]: This exact successful tool call was already completed. Do not repeat it; respond with the completed result." toolName } ]
+                                else
+                                  report (ToolInvoked (toolName, toolInput))
                                 // O: record the tool invocation (name + parameters + context) as a span.
-                                let toolSpan = this.StartToolSpan toolName toolInput (rounds + 1)
-                                match config.Tools |> List.tryFind (fun t -> t.Name = toolName) with
-                                | Some tool ->
-                                    let! toolResult = tool.InvokeAsync(toolContext, toolInput)
-                                    report (ToolCompleted (toolName, toolResult))
-                                    this.OnToolResult(toolName, toolInput, toolResult)
-                                    let! verifyMsg =
-                                        match tool.Verify with
-                                        | Some verify ->
-                                            task {
-                                                let! vr = verify toolInput toolResult
-                                                match vr with
-                                                | Ok () -> return None
-                                                | Error reason ->
-                                                    return Some (sprintf "[Verification Failed for %s]: %s. Please retry or choose a different approach." toolName reason)
-                                            }
-                                        | None -> Task.FromResult None
-                                    let resultContent = sprintf "[Tool Result from %s]: %s" toolName toolResult
-                                    conversation <- conversation @ [ { Role = User; Content = resultContent } ]
-                                    let resultAttrs = Map.ofList [ "result.length", string toolResult.Length ]
-                                    match verifyMsg with
-                                    | Some failMsg ->
-                                        conversation <- conversation @ [ { Role = User; Content = failMsg } ]
-                                        this.EndToolSpan toolSpan (SpanStatus.Error (sprintf "verification failed for %s" toolName)) resultAttrs
-                                    | None ->
-                                        this.EndToolSpan toolSpan SpanStatus.Ok resultAttrs
-                                | None ->
-                                    let err = sprintf "Tool '%s' not found. Available tools: %s" toolName (config.Tools |> List.map (fun t -> t.Name) |> String.concat ", ")
-                                    conversation <- conversation @ [ { Role = User; Content = sprintf "[Error]: %s" err } ]
-                                    this.EndToolSpan toolSpan (SpanStatus.Error err) Map.empty
+                                  let toolSpan = this.StartToolSpan toolName toolInput (rounds + 1)
+                                  match config.Tools |> List.tryFind (fun t -> t.Name = toolName) with
+                                  | Some tool ->
+                                      let! toolResult = tool.InvokeAsync(toolContext, toolInput)
+                                      report (ToolCompleted (toolName, toolResult))
+                                      this.OnToolResult(toolName, toolInput, toolResult)
+                                      let! verifyMsg =
+                                          match tool.Verify with
+                                          | Some verify ->
+                                              task {
+                                                  let! vr = verify toolInput toolResult
+                                                  match vr with
+                                                  | Ok () -> return None
+                                                  | Error reason ->
+                                                      return Some (sprintf "[Verification Failed for %s]: %s. Please retry or choose a different approach." toolName reason)
+                                              }
+                                          | None -> Task.FromResult None
+                                      let resultContent = sprintf "[Tool Result from %s]: %s" toolName toolResult
+                                      conversation <- conversation @ [ { Role = User; Content = resultContent } ]
+                                      let resultAttrs = Map.ofList [ "result.length", string toolResult.Length ]
+                                      match verifyMsg with
+                                      | Some failMsg ->
+                                          conversation <- conversation @ [ { Role = User; Content = failMsg } ]
+                                          this.EndToolSpan toolSpan (SpanStatus.Error (sprintf "verification failed for %s" toolName)) resultAttrs
+                                      | None ->
+                                          successfulToolCalls.Add((toolName, toolInput)) |> ignore
+                                          this.EndToolSpan toolSpan SpanStatus.Ok resultAttrs
+                                  | None ->
+                                      let err = sprintf "Tool '%s' not found. Available tools: %s" toolName (config.Tools |> List.map (fun t -> t.Name) |> String.concat ", ")
+                                      conversation <- conversation @ [ { Role = User; Content = sprintf "[Error]: %s" err } ]
+                                      this.EndToolSpan toolSpan (SpanStatus.Error err) Map.empty
 
-                            | DelegateToAgent (agentName, agentInput) ->
-                                if String.Equals(agentName, config.Name, StringComparison.OrdinalIgnoreCase) then
-                                    let err = sprintf "Agent '%s' cannot delegate to itself." agentName
+                            | DelegateToAgent (agentId, agentInput) ->
+                                let effectiveAgentInput =
+                                    if String.IsNullOrWhiteSpace agentInput then input else agentInput
+                                if String.Equals(agentId, config.Id, StringComparison.OrdinalIgnoreCase) then
+                                    let err = sprintf "Agent '%s' cannot delegate to itself." agentId
                                     conversation <- conversation @ [ { Role = User; Content = sprintf "[Error]: %s" err } ]
                                 else
-                                    report (SubAgentInvoked (agentName, agentInput))
-                                    match config.SubAgents |> List.tryFind (fun a -> a.Name = agentName) with
+                                    match config.SubAgents |> List.tryFind (fun a -> a.Id = agentId) with
                                     | Some agent ->
+                                        report (SubAgentInvoked (agent.Name, effectiveAgentInput))
                                         match agent with
                                         | :? IRuntimeAgentContext as contextual -> contextual.SetEventContext eventBus eventScope
                                         | _ -> ()
@@ -305,12 +331,12 @@ type OrchestratorBase(config: OrchestratorConfig) =
                                         match agent, this.TraceContext with
                                         | (:? OrchestratorBase as child), Some traceContext -> child.TraceContext <- Some traceContext
                                         | _ -> ()
-                                        let! agentResult = agent.RunAsync agentInput
-                                        report (SubAgentCompleted (agentName, agentResult))
+                                        let! agentResult = agent.RunAsync effectiveAgentInput
+                                        report (SubAgentCompleted (agent.Name, agentResult))
                                         finalAnswer <- agentResult
                                         finished <- true
                                     | None ->
-                                        let err = sprintf "Agent '%s' not found. Available agents: %s" agentName (config.SubAgents |> List.map (fun a -> a.Name) |> String.concat ", ")
+                                        let err = sprintf "Agent '%s' not found. Available agent identifiers: %s" agentId (config.SubAgents |> List.map (fun a -> a.Id) |> String.concat ", ")
                                         conversation <- conversation @ [ { Role = User; Content = sprintf "[Error]: %s" err } ]
 
                             | Respond response ->
@@ -335,8 +361,10 @@ type OrchestratorBase(config: OrchestratorConfig) =
         member _.Id = id
         member _.Name = config.Name
         member _.Description = config.Description
+        member _.Priority = config.Priority
         member _.Capabilities = config.Capabilities
         member _.Responsibilities = config.Responsibilities
+        member _.Signature = config.Signature
         member this.RunAsync(input: string) = this.RunCore(input)
         member this.HandleMessageAsync(msg: AgentMessage) =
             task {
