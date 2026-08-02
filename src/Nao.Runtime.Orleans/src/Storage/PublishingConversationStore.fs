@@ -15,16 +15,19 @@ type PublishingConversationStore(bus: IEventBus, inner: IConversationStore) =
 
     /// Map the runtime's storage record to the transport-neutral event shape.
     let toMessage (m: PersistedMessage) : ConversationMessage =
-        { Role = m.Role
-          Content = m.Content
-          Timestamp = m.Timestamp
-          TurnId = m.TurnId
-          Steps =
+        let steps =
             m.Steps
             |> Array.map (fun s ->
                 ({ Kind = s.Kind; Title = s.Title; Input = s.Input; Output = s.Output } : ConversationStep))
             |> Array.toList
-          Attachments = m.Attachments |> Array.toList }
+        let data =
+            if isNull (box m.Data) then []
+            else
+                m.Data
+                |> Array.map (fun value ->
+                    { ToolResultData.Kind = value.Kind; ContentType = value.ContentType; Payload = value.Payload })
+                |> Array.toList
+        { Role = m.Role; Content = m.Content; Timestamp = m.Timestamp; TurnId = m.TurnId; Steps = steps; Attachments = m.Attachments |> Array.toList; Data = data }
 
     /// Build the event scope for a conversation write. The action id is the turn id carried
     /// by the messages (empty when none) so each write is attributed to the turn that

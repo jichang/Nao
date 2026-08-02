@@ -275,22 +275,28 @@ type OrchestratorBase(config: OrchestratorConfig) =
                         if not finished then
                             match action with
                             | InvokeTool (toolName, toolInput) ->
-                                if successfulToolCalls.Contains((toolName, toolInput)) then
-                                    conversation <- conversation @ [ { Role = User; Content = sprintf "[Tool Result from %s]: This exact successful tool call was already completed. Do not repeat it; respond with the completed result." toolName } ]
-                                else
-                                  report (ToolInvoked (toolName, toolInput))
-                                // O: record the tool invocation (name + parameters + context) as a span.
-                                  let toolSpan = this.StartToolSpan toolName toolInput (rounds + 1)
-                                  match config.Tools |> List.tryFind (fun t -> t.Name = toolName) with
-                                  | Some tool ->
-                                      let! toolResult = tool.InvokeAsync(toolContext, toolInput)
+                                match config.Tools |> List.tryFind (fun t -> t.Name = toolName) with
+                                | Some tool ->
+                                    match tool.PrepareInput toolInput with
+                                    | Error reason ->
+                                        let toolSpan = this.StartToolSpan toolName toolInput (rounds + 1)
+                                        let failMsg = sprintf "[Tool Preparation Failed for %s]: %s. Correct the parameters before retrying." toolName reason
+                                        conversation <- conversation @ [ { Role = User; Content = failMsg } ]
+                                        this.EndToolSpan toolSpan (SpanStatus.Error (sprintf "input preparation failed for %s" toolName)) Map.empty
+                                    | Ok preparedInput when successfulToolCalls.Contains((toolName, preparedInput)) ->
+                                        conversation <- conversation @ [ { Role = User; Content = sprintf "[Tool Result from %s]: This equivalent successful tool call was already completed. Do not repeat it; respond with the completed result." toolName } ]
+                                    | Ok preparedInput ->
+                                      report (ToolInvoked (toolName, preparedInput))
+                                      // O: record the prepared invocation (name + normalized parameters + context) as a span.
+                                      let toolSpan = this.StartToolSpan toolName preparedInput (rounds + 1)
+                                      let! toolResult = tool.InvokePreparedAsync(toolContext, preparedInput)
                                       report (ToolCompleted (toolName, toolResult))
-                                      this.OnToolResult(toolName, toolInput, toolResult)
+                                      this.OnToolResult(toolName, preparedInput, toolResult)
                                       let! verifyMsg =
                                           match tool.Verify with
                                           | Some verify ->
                                               task {
-                                                  let! vr = verify toolInput toolResult
+                                                  let! vr = verify preparedInput toolResult
                                                   match vr with
                                                   | Ok () -> return None
                                                   | Error reason ->
@@ -305,12 +311,11 @@ type OrchestratorBase(config: OrchestratorConfig) =
                                           conversation <- conversation @ [ { Role = User; Content = failMsg } ]
                                           this.EndToolSpan toolSpan (SpanStatus.Error (sprintf "verification failed for %s" toolName)) resultAttrs
                                       | None ->
-                                          successfulToolCalls.Add((toolName, toolInput)) |> ignore
+                                          successfulToolCalls.Add((toolName, preparedInput)) |> ignore
                                           this.EndToolSpan toolSpan SpanStatus.Ok resultAttrs
-                                  | None ->
-                                      let err = sprintf "Tool '%s' not found. Available tools: %s" toolName (config.Tools |> List.map (fun t -> t.Name) |> String.concat ", ")
-                                      conversation <- conversation @ [ { Role = User; Content = sprintf "[Error]: %s" err } ]
-                                      this.EndToolSpan toolSpan (SpanStatus.Error err) Map.empty
+                                | None ->
+                                    let err = sprintf "Tool '%s' not found. Available tools: %s" toolName (config.Tools |> List.map (fun t -> t.Name) |> String.concat ", ")
+                                    conversation <- conversation @ [ { Role = User; Content = sprintf "[Error]: %s" err } ]
 
                             | DelegateToAgent (agentId, agentInput) ->
                                 let effectiveAgentInput =

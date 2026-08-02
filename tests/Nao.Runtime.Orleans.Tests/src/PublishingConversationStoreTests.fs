@@ -40,7 +40,8 @@ type PublishingConversationStoreTests() =
           Timestamp = DateTimeOffset.UtcNow
           TurnId = turnId
           Steps = [||]
-          Attachments = [||] }
+          Attachments = [||]
+          Data = [||] }
 
     /// Build a tee over a real FileConversationStore + a subscribed recorder.
     let setup (root: string) =

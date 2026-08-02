@@ -20,7 +20,10 @@ type RevertContext =
 /// intermediate results — and locate the session's file folder.
 /// The runtime builds one per session/turn and threads it explicitly; library and test code
 /// can use `ToolContext.allowAll`.
-type ToolContext = { SessionKey: string; FilesKey: string; TurnId: string; RequestPermission: ResourceAccess -> string -> bool -> Task<bool> }
+/// Structured data published by a tool for persistence and frontend rendering.
+type ToolResultData = { Kind: string; ContentType: string; Payload: string }
+
+type ToolContext = { SessionKey: string; FilesKey: string; TurnId: string; RequestPermission: ResourceAccess -> string -> bool -> Task<bool>; PublishData: ToolResultData -> Task }
 
 /// Helpers for the tool execution context.
 [<RequireQualifiedAccess>]
@@ -28,10 +31,7 @@ module ToolContext =
         /// Permissive, unscoped context used when no permission/session system is wired (tests,
         /// library use).
     let allowAll: ToolContext =
-        { SessionKey = ""
-          FilesKey = ""
-          TurnId = ""
-          RequestPermission = fun _ _ _ -> Task.FromResult true }
+        { SessionKey = ""; FilesKey = ""; TurnId = ""; RequestPermission = (fun _ _ _ -> Task.FromResult true); PublishData = (fun _ -> Task.CompletedTask) }
 
 [<RequireQualifiedAccess>]
 module ToolVersion =
@@ -108,7 +108,7 @@ module ToolSignature =
     let Text = { Input = []; Output = ContentMeta.Text }
 
 /// A tool that an agent can invoke to perform actions or retrieve information.
-/// Supports optional capabilities: content-type declaration, verify, and revert.
+/// Supports optional capabilities: content-type declaration, prepare, verify, and revert.
 type Tool =
     {
         /// Unique name used by the agent to reference this tool
@@ -127,6 +127,9 @@ type Tool =
         /// Static resource permissions this tool declares it needs. The runtime requests these
         /// through the context before each execution; a denied one short-circuits the call.
         Permissions: ResourceAccess list
+        /// Validate and normalize raw model-generated input before invocation. The prepared
+        /// value is used for execution, verification, tracing, and duplicate detection.
+        Prepare: (string -> Result<string, string>) option
         /// Verify the output is correct given the input. Returns Ok or Error with reason.
         Verify: (string -> string -> Task<Result<unit, string>>) option
         /// Revert/undo changes the tool has made to external resources.
@@ -144,6 +147,7 @@ type Tool =
           Signature = ToolSignature.Text
           Execute = (fun _ctx input -> execute input)
           Permissions = []
+          Prepare = None
           Verify = None
           Revert = None }
 
@@ -157,13 +161,21 @@ type Tool =
           Signature = ToolSignature.Text
           Execute = execute
           Permissions = permissions
+          Prepare = None
           Verify = None
           Revert = None }
 
-    /// Run the tool: request each declared static permission through the context first, then
-    /// execute. A denied declared permission short-circuits with a refusal message instead of
-    /// running the tool.
-    member this.InvokeAsync(ctx: ToolContext, input: string) : Task<string> =
+    /// Validate and normalize model-generated input without invoking the tool.
+    member this.PrepareInput(input: string) : Result<string, string> =
+        try
+            match this.Prepare with
+            | Some prepare -> prepare input
+            | None -> Ok input
+        with ex ->
+            Error(sprintf "Input preparation raised an exception: %s" ex.Message)
+
+    /// Invoke a tool with input that has already passed preparation.
+    member this.InvokePreparedAsync(ctx: ToolContext, preparedInput: string) : Task<string> =
         task {
             let mutable denied = None
             for access in this.Permissions do
@@ -173,7 +185,17 @@ type Tool =
             match denied with
             | Some access ->
                 return PermissionDenied.format access None
-            | None -> return! this.Execute ctx input
+            | None -> return! this.Execute ctx preparedInput
+        }
+
+    /// Run the tool: request each declared static permission through the context first, then
+    /// execute. A denied declared permission short-circuits with a refusal message instead of
+    /// running the tool.
+    member this.InvokeAsync(ctx: ToolContext, input: string) : Task<string> =
+        task {
+            match this.PrepareInput input with
+            | Ok preparedInput -> return! this.InvokePreparedAsync(ctx, preparedInput)
+            | Error reason -> return invalidArg "input" (sprintf "Tool '%s' input preparation failed: %s" this.Name reason)
         }
 
     /// Whether this tool declares revert capability
@@ -181,6 +203,9 @@ type Tool =
 
     /// Whether this tool declares verify capability
     member this.CanVerify = this.Verify.IsSome
+
+    /// Whether this tool declares input preparation capability
+    member this.CanPrepare = this.Prepare.IsSome
 
 /// Helpers for version-qualified references of the form "name@version".
 [<RequireQualifiedAccess>]

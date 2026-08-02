@@ -19,6 +19,7 @@ type TurnRecorder(turnId: string, sessionId: string, userId: string,
     let sync = obj ()
     let toolCalls = ResizeArray<ToolCallRecord>()
     let subAgentCalls = ResizeArray<SubAgentCallRecord>()
+    let data = ResizeArray<ToolResultData>()
     let steps = ResizeArray<TurnStep>()
     let pendingTools = Dictionary<string, Queue<string>>()
     let pendingAgents = Dictionary<string, Queue<string>>()
@@ -50,6 +51,9 @@ type TurnRecorder(turnId: string, sessionId: string, userId: string,
                 not (s.Kind = "reasoning" && s.Output.Trim() = output.Trim()))
             |> List.ofSeq)
 
+    member _.Data : ToolResultData list =
+        lock sync (fun () -> List.ofSeq data)
+
     /// The accumulated record so far. Safe to call after the turn completes.
     member _.Snapshot() : TurnRecord =
         lock sync (fun () ->
@@ -62,6 +66,7 @@ type TurnRecorder(turnId: string, sessionId: string, userId: string,
               Output = output
               ToolCalls = List.ofSeq toolCalls
               SubAgentCalls = List.ofSeq subAgentCalls
+              Data = List.ofSeq data
               CreatedAt = DateTimeOffset.UtcNow })
 
     interface IEventConsumer with
@@ -91,6 +96,8 @@ type TurnRecorder(turnId: string, sessionId: string, userId: string,
                         let agentInput = dequeue pendingAgents name |> Option.defaultValue ""
                         subAgentCalls.Add { Name = name; Input = agentInput; Output = result }
                         steps.Add { Kind = "agent"; Title = name; Input = agentInput; Output = result }
+                    | ToolDataPublished value ->
+                        data.Add value
                     | AnswerProduced answer ->
                         output <- answer)
                 Task.CompletedTask

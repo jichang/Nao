@@ -244,6 +244,8 @@ type SessionGrain
             record.Steps <- ResizeArray(pm.Steps)
         if not (isNull (box pm.Attachments)) then
             record.Attachments <- ResizeArray(pm.Attachments)
+        if not (isNull (box pm.Data)) then
+            record.Data <- ResizeArray(pm.Data)
         record
 
     let restoreActiveConversationAsync () =
@@ -264,6 +266,9 @@ type SessionGrain
     let toStepRecord (s: TurnStep) : TurnStepRecord =
         TurnStepRecord(Kind = s.Kind, Title = s.Title, Input = s.Input, Output = s.Output)
 
+    let toPersistedMessage timestamp turnId role content messageSteps attachments messageData : PersistedMessage =
+        { Role = role; Content = content; Timestamp = timestamp; TurnId = turnId; Steps = messageSteps; Attachments = attachments; Data = messageData }
+
     /// Append a completed turn — the user prompt plus a single assistant message that
     /// carries the whole process (ordered tool/sub-agent steps) and the final answer —
     /// to both in-memory grain state and the external append-only store.
@@ -271,16 +276,20 @@ type SessionGrain
     /// The orchestrator's internal LLM conversation (where tool results are themselves
     /// `User` messages and intermediate action-JSON is an `Assistant` message) is an
     /// implementation detail and is intentionally NOT persisted as the transcript.
-    let appendTurnAsync (userInput: string) (attachmentNames: string[]) (response: string) (turnId: string) (steps: TurnStep list) : Task =
+    let appendTurnAsync (userInput: string) (attachmentNames: string[]) (response: string) (turnId: string) (steps: TurnStep list) (data: ToolResultData list) : Task =
         task {
             let ctx = activeConversation ()
             let stepRecords = steps |> List.map toStepRecord
+            let dataRecords =
+                data
+                |> List.map (fun value ->
+                    ToolResultDataRecord(Kind = value.Kind, ContentType = value.ContentType, Payload = value.Payload))
 
             let userRecord = MessageRecord(Role = "User", Content = userInput, TurnId = turnId,
                                            Attachments = ResizeArray(attachmentNames))
             let assistantRecord =
                 MessageRecord(Role = "Assistant", Content = response, TurnId = turnId,
-                              Steps = ResizeArray(stepRecords))
+                              Steps = ResizeArray(stepRecords), Data = ResizeArray(dataRecords))
             ctx.Messages.Add userRecord
             ctx.Messages.Add assistantRecord
 
@@ -291,11 +300,8 @@ type SessionGrain
                 let grainKey = sprintf "%s/%s" userId sessionId
                 let now = DateTimeOffset.UtcNow
                 let persisted =
-                    [| { PersistedMessage.Role = "User"; Content = userInput
-                         Timestamp = now; TurnId = turnId; Steps = [||]; Attachments = attachmentNames }
-                       { PersistedMessage.Role = "Assistant"; Content = response
-                         Timestamp = now; TurnId = turnId
-                         Steps = stepRecords |> List.toArray; Attachments = [||] } |]
+                    [| toPersistedMessage now turnId "User" userInput [||] attachmentNames [||];
+                       toPersistedMessage now turnId "Assistant" response (stepRecords |> List.toArray) [||] (dataRecords |> List.toArray) |]
                 do! conversationStore.AppendAsync grainKey convName persisted
 
                 // Persist each sub-agent delegation as a nested child conversation, so the
@@ -308,10 +314,8 @@ type SessionGrain
                     let title = if String.IsNullOrWhiteSpace s.Title then "agent" else s.Title
                     let childName = sprintf "%s/%s-%s-%d" convName title turnId idx
                     let childMsgs =
-                        [| { PersistedMessage.Role = "User"; Content = s.Input
-                             Timestamp = now; TurnId = turnId; Steps = [||]; Attachments = [||] }
-                           { PersistedMessage.Role = "Assistant"; Content = s.Output
-                             Timestamp = now; TurnId = turnId; Steps = [||]; Attachments = [||] } |]
+                        [| toPersistedMessage now turnId "User" s.Input [||] [||] [||];
+                                    toPersistedMessage now turnId "Assistant" s.Output [||] [||] [||] |]
                     do! conversationStore.AppendAsync grainKey childName childMsgs
         }
 
@@ -472,10 +476,7 @@ type SessionGrain
                             return outcome.Decision = PermissionDecision.Allow
                 }
             let toolContext : ToolContext =
-                { SessionKey = sessionKey
-                  FilesKey = filesKey
-                  TurnId = turnId
-                  RequestPermission = requestPermission }
+                                { SessionKey = sessionKey; FilesKey = filesKey; TurnId = turnId; RequestPermission = requestPermission; PublishData = (fun data -> eventBus.PublishAsync(TurnProgress(turnScope, ToolDataPublished data))) }
             try
                 // Subscribe the recorder for this turn's progress signals; detached in finally.
                 eventBus.Subscribe(recorder :> IEventConsumer)
@@ -503,7 +504,7 @@ type SessionGrain
 
                         // Persist a CLEAN, user-facing transcript: the display text (no embedded
                         // attachment content) plus one assistant message carrying the process.
-                        do! appendTurnAsync displayText attachmentNames response turnId recorder.Steps
+                        do! appendTurnAsync displayText attachmentNames response turnId recorder.Steps recorder.Data
                         info.LastTurnId <- turnId
 
                         persistentState.State.Info.LastActiveAt <- DateTimeOffset.UtcNow

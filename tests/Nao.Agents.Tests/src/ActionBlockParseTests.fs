@@ -169,6 +169,48 @@ type ActionBlockParseTests() =
         | None -> Assert.Fail("Expected the repair request to include validation guidance")
 
     [<TestMethod>]
+    member _.PreparedInputControlsExecutionVerificationAndDuplicateDetection() =
+        let conversations = List<Conversation>()
+        let invokedInputs = List<string>()
+        let verifiedInputs = List<string>()
+        let tool =
+            { Tool.Create("normalize", "Normalizes input.", fun input ->
+                  invokedInputs.Add input
+                  Task.FromResult "ok") with
+                Prepare = Some(fun _ -> Ok "{\"value\":1}")
+                Verify = Some(fun input _ ->
+                    verifiedInputs.Add input
+                    Task.FromResult(Ok ())) }
+        let first = fence """{"actions":[{"type":"tool","name":"normalize","params":{"value":1}}]}"""
+        let equivalent = fence """{"actions":[{"type":"tool","name":"normalize","params":{"value":1.0}}]}"""
+        let provider = scriptedProvider [ first; equivalent; "done" ] conversations
+
+        let result = ((makeOrchestrator provider [ tool ]) :> IAgent).RunAsync("normalize").Result
+
+        Assert.AreEqual("done", result)
+        CollectionAssert.AreEqual([| "{\"value\":1}" |], invokedInputs.ToArray())
+        CollectionAssert.AreEqual([| "{\"value\":1}" |], verifiedInputs.ToArray())
+        Assert.IsTrue(conversations |> Seq.collect id |> Seq.exists (fun message -> message.Content.Contains("equivalent successful tool call")))
+
+    [<TestMethod>]
+    member _.PreparationFailureDoesNotInvokeTool() =
+        let conversations = List<Conversation>()
+        let invoked = ref false
+        let tool =
+            { Tool.Create("reject", "Rejects input.", fun _ ->
+                  invoked.Value <- true
+                  Task.FromResult "unexpected") with
+                Prepare = Some(fun _ -> Error "missing required field 'target'") }
+        let action = fence """{"actions":[{"type":"tool","name":"reject","params":{}}]}"""
+        let provider = scriptedProvider [ action; "done" ] conversations
+
+        let result = ((makeOrchestrator provider [ tool ]) :> IAgent).RunAsync("reject").Result
+
+        Assert.AreEqual("done", result)
+        Assert.IsFalse(invoked.Value)
+        Assert.IsTrue(conversations |> Seq.collect id |> Seq.exists (fun message -> message.Content.Contains("Tool Preparation Failed") && message.Content.Contains("target")))
+
+    [<TestMethod>]
     member _.PlainAnswerIsNotAnActionAndNotMalformed() =
         let content = "Here is your summary: the document has three sections."
         Assert.AreEqual(0, List.length (orchestrator.DefaultTryParseActions(content)))
