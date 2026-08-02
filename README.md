@@ -210,6 +210,8 @@ let history = AgentGroup.runAsync "Analyze this data" group
 The framework provides `OrchestratorBase` as an extensible execution template. Hosts supply the prompt format, action parser, agents, and tools as compiled .NET registrations; the runtime does not load code or definitions dynamically.
 
 ```fsharp
+open Nao.Protocols
+
 type MyOrchestrator(config: OrchestratorConfig) =
     inherit OrchestratorBase(config)
 
@@ -222,14 +224,24 @@ type MyOrchestrator(config: OrchestratorConfig) =
             return system :: conversation
         }
 
-    // Parse the LLM's raw response into actions. Empty list = plain final answer.
-    override _.ParseActions(response) =
-        if response.Contains("<tool>") then [ InvokeTool ("myTool", response) ] else []
-
-    // Optional: flag an invalid response so the base asks the model to repair it.
-    override _.ValidateResponse(response) =
-        if response.Contains("</tool>") || not (response.Contains("<tool>")) then None
-        else Some "unterminated <tool> tag"
+    override _.ResponseProtocol =
+        let descriptor =
+            { Name = "tool tags"
+              Description = "Invoke one tool using compact XML-like tags."
+              Instructions = [ "Return <tool>input</tool> with no surrounding prose." ]
+              Examples = [ "<tool>sample</tool>" ]
+              MediaType = Some "text/x-tool-tags"
+              Metadata = Map.empty }
+        let parse response =
+            if response.StartsWith("<tool>") && response.EndsWith("</tool>") then
+                Ok [ InvokeTool ("myTool", response.[6 .. response.Length - 8]) ]
+            else
+                Error
+                    { ResponseParseError.create "Invalid tool tag response." with
+                        Expected = Some "<tool>input</tool>"
+                        SuggestedFix = Some "Close the tool tag and remove surrounding prose." }
+        Some(ResponseProtocol.create descriptor parse (fun error ->
+            "Repair the response. " + ResponseParseError.format error))
 
     override _.OnToolResult(toolName, input, result) =
         printfn "Tool %s returned: %s" toolName result
@@ -251,7 +263,8 @@ Members on `OrchestratorBase`:
 | Member | Kind | Purpose |
 |--------|------|---------|
 | `GenerateReasoningPrompt(conversation)` | abstract | Build the messages sent to the LLM (system prompt + history). |
-| `ParseActions(response)` | abstract | Parse the LLM response into tool/agent actions. |
+| `ResponseProtocol` | virtual | Optional swappable descriptor, parser, diagnostics, and repair strategy. |
+| `ParseActions(response)` | virtual | Legacy parser hook used when no response protocol is supplied. |
 | `ValidateResponse(response)` | virtual | Return a repair error, or `None` to accept (default: accept). |
 | `BuildRepairMessage(error)` | virtual | Corrective instruction sent on a repair round. |
 | `OnToolResult(name, input, result)` | virtual | Hook after tool execution. |

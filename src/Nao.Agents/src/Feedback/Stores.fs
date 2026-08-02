@@ -18,13 +18,10 @@ module FeedbackJson =
     let serialize (value: 'a) : string = JsonSerializer.Serialize(value, options)
     let deserialize<'a> (s: string) : 'a = JsonSerializer.Deserialize<'a>(s, options)
 
-    /// Pretty-printed variant for human-editable artifacts (e.g. emitted tool JSON).
-    let indentedOptions =
-        let o = JsonSerializerOptions(WriteIndented = true)
-        o.Converters.Add(JsonFSharpConverter(JsonUnionEncoding.InternalTag ||| JsonUnionEncoding.UnwrapFieldlessTags))
-        o
-
-    let serializeIndented (value: 'a) : string = JsonSerializer.Serialize(value, indentedOptions)
+    /// Compatibility aliases retained for callers that previously requested pretty output.
+    /// All framework JSON is compact so it can be embedded safely in LLM protocols.
+    let indentedOptions = options
+    let serializeIndented (value: 'a) : string = serialize value
 
 // ─── Store interfaces ───
 

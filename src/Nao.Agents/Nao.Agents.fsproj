@@ -85,5 +85,8 @@
     <!-- Observability service adapters that publish harness writes onto the event bus. -->
     <Compile Include="src/Observability/ObservabilityServices.fs" />
   </ItemGroup>
+     <ItemGroup>
+          <ProjectReference Include="..\Nao.Protocols\Nao.Protocols.fsproj" />
+     </ItemGroup>
   <Import Project="..\..\.paket\Paket.Restore.targets" />
 </Project>

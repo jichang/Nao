@@ -27,7 +27,7 @@ open System.Threading.Tasks
 type FileConversationStore(baseDir: string) =
 
     let jsonOptions =
-        let opts = JsonSerializerOptions(WriteIndented = true)
+        let opts = JsonSerializerOptions(WriteIndented = false)
         opts.DefaultIgnoreCondition <- JsonIgnoreCondition.WhenWritingNull
         opts
 

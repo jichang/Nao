@@ -2,6 +2,7 @@ namespace Nao.Agents
 
 open System
 open System.Threading.Tasks
+open Nao.Protocols
 
 /// Memory management configuration for the orchestrator
 type OrchestratorMemoryConfig =
@@ -141,15 +142,34 @@ type OrchestratorBase(config: OrchestratorConfig) =
     /// and traced regardless of the implementation.
     abstract member GenerateReasoningPrompt: conversation: Conversation -> Task<Conversation>
 
+    /// Optional end-to-end response protocol. When present, the base class uses it for
+    /// validation, targeted repair, and action parsing. Existing virtual hooks remain the
+    /// compatibility path when no protocol is supplied.
+    abstract member ResponseProtocol: IResponseProtocol<AgentAction> option
+    default _.ResponseProtocol = None
+
     /// Parse the LLM's raw response into the actions to execute. Return an empty list to treat
     /// the response as a plain final answer; return a single `Respond` to end the turn.
     abstract member ParseActions: response: string -> AgentAction list
+    default this.ParseActions(response) =
+        match this.ResponseProtocol with
+        | Some protocol ->
+            match protocol.Parse response with
+            | Ok actions -> actions
+            | Error _ -> []
+        | None -> []
 
     /// Return a validation error for the raw response, or None when it is acceptable. When it
     /// is Some, the base asks the model to repair the response (bounded) before parsing it.
     /// Defaults to accepting every response (no repair).
     abstract member ValidateResponse: response: string -> string option
-    default _.ValidateResponse(_) = None
+    default this.ValidateResponse(response) =
+        match this.ResponseProtocol with
+        | Some protocol ->
+            match protocol.Parse response with
+            | Ok _ -> None
+            | Error error -> Some(ResponseParseError.format error)
+        | None -> None
 
     /// Build the corrective instruction sent to the model when `ValidateResponse` returns an
     /// error. Defaults to a generic request to resend a corrected response; override to add
@@ -210,14 +230,27 @@ type OrchestratorBase(config: OrchestratorConfig) =
                 recordExchange 1 false messages result.Content
                 let mutable working = result.Content
                 // Validate-and-repair: ask the model to correct an invalid response (bounded)
-                // before it is parsed. `ValidateResponse` defaults to accepting everything.
+                // before it is parsed. A response protocol owns structured diagnostics and
+                // repair guidance; legacy overrides remain supported when no protocol exists.
                 let maxRepairAttempts = 2
-                let mutable validationError = this.ValidateResponse working
+                let protocol = this.ResponseProtocol
+                let validate response =
+                    match protocol with
+                    | Some value ->
+                        match value.Parse response with
+                        | Ok _ -> None, None
+                        | Error error -> Some error, Some(ResponseParseError.format error)
+                    | None -> None, this.ValidateResponse response
+                let mutable protocolError, validationError = validate working
                 let mutable repairAttempts = 0
                 let mutable convo = messages
                 while validationError.IsSome && repairAttempts < maxRepairAttempts do
                     repairAttempts <- repairAttempts + 1
-                    let fixMsg = { Role = User; Content = this.BuildRepairMessage validationError.Value }
+                    let repairMessage =
+                        match protocol, protocolError with
+                        | Some value, Some error -> value.BuildRepairMessage error
+                        | _ -> this.BuildRepairMessage validationError.Value
+                    let fixMsg = { Role = User; Content = repairMessage }
                     convo <- convo @ [ { Role = Assistant; Content = working }; fixMsg ]
                     let repairStarted = Diagnostics.Stopwatch.StartNew()
                     let repairSpan = startLlmSpan (repairAttempts + 1)
@@ -226,7 +259,9 @@ type OrchestratorBase(config: OrchestratorConfig) =
                     endLlmSpan repairSpan SpanStatus.Ok fixResult.Content.Length repairStarted.ElapsedMilliseconds
                     recordExchange (repairAttempts + 1) true convo fixResult.Content
                     working <- fixResult.Content
-                    validationError <- this.ValidateResponse working
+                    let nextProtocolError, nextValidationError = validate working
+                    protocolError <- nextProtocolError
+                    validationError <- nextValidationError
                 match validationError with
                 | Some error ->
                     raise (InvalidOperationException(sprintf "LLM response remained invalid after %d repair attempts: %s" repairAttempts error))

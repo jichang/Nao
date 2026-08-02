@@ -62,6 +62,10 @@ type PublishingConversationStoreTests() =
             let loaded = (store.LoadAsync "dev/s1" "default").Result
             Assert.AreEqual(1, loaded.Length)
             Assert.AreEqual("hi", loaded.[0].Content)
+            let messagesPath = Directory.GetFiles(root, "messages.json", SearchOption.AllDirectories) |> Array.exactlyOne
+            let persistedJson = File.ReadAllText messagesPath
+            Assert.IsFalse(persistedJson.Contains('\n'), "Persisted conversation JSON must remain compact")
+            Assert.IsFalse(persistedJson.Contains('\r'), "Persisted conversation JSON must remain compact")
 
             // ...and the write was teed to the bus.
             match recorder.Signals with
