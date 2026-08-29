@@ -6,8 +6,6 @@ open System
 type ToolCallRecord =
     { /// Tool name as invoked.
       Name: string
-      /// Tool version that was used, if known.
-      Version: string option
       /// Input passed to the tool.
       Input: string
       /// Output the tool produced.
@@ -57,7 +55,7 @@ type TurnRecord =
       /// Sub-agents delegated to during the turn, in order.
       SubAgentCalls: SubAgentCallRecord list
       /// Structured data published by tools during the turn.
-      Data: ToolResultData list
+      Data: AgentContextData list
       /// When the turn completed.
       CreatedAt: DateTimeOffset }
 

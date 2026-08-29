@@ -6,9 +6,11 @@ open Nao.Agents
 /// Agents and tools are concrete .NET objects; the runtime does not load JSON definitions
 /// or assemblies dynamically.
 type WorkspaceDefinitions =
-    { Agents: IAgent list
-      Tools: Tool list
-      Constitutions: Constitution list }
+    {
+        Agents: IAgent list
+        Tools: ITool list
+        Constitutions: Constitution list
+    }
 
     static member Empty =
         { Agents = []
@@ -17,7 +19,7 @@ type WorkspaceDefinitions =
 
 module WorkspaceDefinitions =
 
-    let create (agents: IAgent list) (tools: Tool list) (constitutions: Constitution list) =
+    let create (agents: IAgent list) (tools: ITool list) (constitutions: Constitution list) =
         { Agents = agents
           Tools = tools
           Constitutions = constitutions }

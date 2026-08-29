@@ -12,14 +12,12 @@ open System.Threading.Tasks
 /// `SubAgentInvoked`/`SubAgentCompleted`) pairs sequentially, so we match each result
 /// to the earliest still-unmatched invocation of the same name (FIFO).
 type TurnRecorder(turnId: string, sessionId: string, userId: string,
-                  workspaceKey: string, agentName: string, input: string,
-                  // Resolves a tool name to its known version for richer records.
-                  resolveToolVersion: string -> string option) =
+                  workspaceKey: string, agentName: string, input: string) =
 
     let sync = obj ()
     let toolCalls = ResizeArray<ToolCallRecord>()
     let subAgentCalls = ResizeArray<SubAgentCallRecord>()
-    let data = ResizeArray<ToolResultData>()
+    let data = ResizeArray<AgentContextData>()
     let steps = ResizeArray<TurnStep>()
     let pendingTools = Dictionary<string, Queue<string>>()
     let pendingAgents = Dictionary<string, Queue<string>>()
@@ -51,7 +49,7 @@ type TurnRecorder(turnId: string, sessionId: string, userId: string,
                 not (s.Kind = "reasoning" && s.Output.Trim() = output.Trim()))
             |> List.ofSeq)
 
-    member _.Data : ToolResultData list =
+    member _.Data : AgentContextData list =
         lock sync (fun () -> List.ofSeq data)
 
     /// The accumulated record so far. Safe to call after the turn completes.
@@ -83,10 +81,8 @@ type TurnRecorder(turnId: string, sessionId: string, userId: string,
                         enqueue pendingTools name input
                     | ToolCompleted (name, result) ->
                         let toolInput = dequeue pendingTools name |> Option.defaultValue ""
-                        let version = resolveToolVersion name
                         toolCalls.Add
                             { Name = name
-                              Version = version
                               Input = toolInput
                               Output = result }
                         steps.Add { Kind = "tool"; Title = name; Input = toolInput; Output = result }
@@ -105,14 +101,5 @@ type TurnRecorder(turnId: string, sessionId: string, userId: string,
 
 module TurnRecorder =
 
-    /// Create a recorder that does not resolve tool versions.
     let create (turnId, sessionId, userId, workspaceKey, agentName, input) =
-        TurnRecorder(turnId, sessionId, userId, workspaceKey, agentName, input, (fun _ -> None))
-
-    /// Create a recorder that resolves tool versions from a known tool list.
-    let forTools (tools: Tool list) (turnId, sessionId, userId, workspaceKey, agentName, input) =
-        let resolve (name: string) =
-            tools
-            |> List.tryFind (fun t -> t.Name = name)
-            |> Option.map (fun t -> t.Version)
-        TurnRecorder(turnId, sessionId, userId, workspaceKey, agentName, input, resolve)
+        TurnRecorder(turnId, sessionId, userId, workspaceKey, agentName, input)

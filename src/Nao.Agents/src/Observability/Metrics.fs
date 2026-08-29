@@ -1,15 +1,12 @@
 namespace Nao.Agents
 
 open System
+open System.Threading
 open System.Threading.Tasks
 
 /// Cost model for LLM provider pricing
 type CostModel =
-    { /// Provider name
-      Provider: string
-      /// Model name
-      Model: string
-      /// Cost per 1K input tokens in USD
+    { /// Cost per 1K input tokens in USD
       InputCostPer1K: decimal
       /// Cost per 1K output tokens in USD
       OutputCostPer1K: decimal }
@@ -85,10 +82,8 @@ type IMetricsCollector =
     /// Calculate cost using a cost model
     abstract member EstimateCost: CostModel -> decimal
 
-module MetricsCollector =
+module internal RuntimeMetrics =
+    let private current = AsyncLocal<IMetricsCollector option>()
 
-    /// Well-known cost models
-    let gpt4o = { Provider = "OpenAI"; Model = "gpt-4o"; InputCostPer1K = 0.0025m; OutputCostPer1K = 0.01m }
-    let gpt4oMini = { Provider = "OpenAI"; Model = "gpt-4o-mini"; InputCostPer1K = 0.00015m; OutputCostPer1K = 0.0006m }
-    let claude35Sonnet = { Provider = "Anthropic"; Model = "claude-3.5-sonnet"; InputCostPer1K = 0.003m; OutputCostPer1K = 0.015m }
-    let claude4Sonnet = { Provider = "Anthropic"; Model = "claude-sonnet-4"; InputCostPer1K = 0.003m; OutputCostPer1K = 0.015m }
+    let get () = current.Value
+    let set value = current.Value <- value

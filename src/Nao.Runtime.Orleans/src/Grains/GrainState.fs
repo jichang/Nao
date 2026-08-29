@@ -18,7 +18,7 @@ type MessageRecord() =
     /// Names of files attached to a user message (empty for assistant messages).
     [<Id(4u)>] member val Attachments: ResizeArray<string> = ResizeArray() with get, set
     /// Structured data published by tools during this turn.
-    [<Id(5u)>] member val Data: ResizeArray<ToolResultDataRecord> = ResizeArray() with get, set
+    [<Id(5u)>] member val Data: ResizeArray<AgentContextDataRecord> = ResizeArray() with get, set
 
 /// Mapping between Orleans serializable records and domain types
 module GrainStateMapping =

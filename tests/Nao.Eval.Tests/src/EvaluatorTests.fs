@@ -2,8 +2,16 @@ namespace Nao.Eval.Tests
 
 open System.Threading.Tasks
 open Microsoft.VisualStudio.TestTools.UnitTesting
+open Nao.Agents
 open Nao.Eval
 open Nao.Eval.Evaluators
+
+type private CapturingProvider(response: string, capturedPrompt: string ref) =
+    interface ILlmProvider with
+        member _.Name = "capturing"
+        member _.CompleteAsync conversation _options =
+            capturedPrompt.Value <- conversation |> List.last |> _.Content
+            Task.FromResult(CompletionResult.create response "stop" None None)
 
 [<TestClass>]
 type ExactMatchEvaluatorTests() =
@@ -88,6 +96,34 @@ type RegexEvaluatorTests() =
         let case = EvalCase.create "test2" "input" ""
         let (verdict, _) = (evaluator.EvaluateAsync case "not a number").Result
         Assert.AreEqual(EvalVerdict.Fail, verdict)
+
+[<TestClass>]
+type LlmJudgeEvaluatorTests() =
+
+    [<TestMethod>]
+    member _.``Prompt example and parser share the DTO contract``() =
+        let capturedPrompt = ref ""
+        let provider = CapturingProvider("""{"score":5,"reason":"correct"}""", capturedPrompt) :> ILlmProvider
+        let evaluator = LlmJudge.create provider
+        let case = EvalCase.create "judge" "question" "answer"
+
+        let verdict, reason = evaluator.EvaluateAsync case "answer" |> _.Result
+
+        Assert.AreEqual(EvalVerdict.Pass, verdict)
+        Assert.AreEqual("correct", reason)
+        StringAssert.Contains(capturedPrompt.Value, """{"score":5,"reason":"brief explanation"}""")
+
+    [<TestMethod>]
+    member _.``Missing required response field fails``() =
+        let capturedPrompt = ref ""
+        let provider = CapturingProvider("""{"score":5}""", capturedPrompt) :> ILlmProvider
+        let evaluator = LlmJudge.create provider
+        let case = EvalCase.create "judge" "question" "answer"
+
+        let verdict, reason = evaluator.EvaluateAsync case "answer" |> _.Result
+
+        Assert.AreEqual(EvalVerdict.Fail, verdict)
+        StringAssert.StartsWith(reason, "Parse error:")
 
 [<TestClass>]
 type CompositeEvaluatorTests() =

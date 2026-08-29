@@ -19,8 +19,8 @@ type AuditEntry =
       Output: string option
       /// Whether the action was permitted
       Permitted: bool
-      /// Permission level that was applied
-      PermissionLevel: PermissionLevel
+    /// Permission decision that was applied
+      Decision: PermissionDecision
       /// Any constitution violations
       ConstitutionViolations: string list
       /// Execution context identifier
@@ -54,7 +54,7 @@ type IAuditLog =
 module AuditLog =
 
     /// Create an audit entry for a tool invocation
-    let toolInvocation (agentId: string) (toolName: string) (input: string) (output: string) (permitted: bool) (level: PermissionLevel) (execId: Guid option) : AuditEntry =
+    let toolInvocation (agentId: string) (toolName: string) (input: string) (output: string) (permitted: bool) (decision: PermissionDecision) (execId: Guid option) : AuditEntry =
         { Id = Guid.NewGuid()
           Timestamp = DateTimeOffset.UtcNow
           AgentId = agentId
@@ -62,7 +62,7 @@ module AuditLog =
           Input = Some input
           Output = Some output
           Permitted = permitted
-          PermissionLevel = level
+          Decision = decision
           ConstitutionViolations = []
           ExecutionId = execId
           Metadata = Map.empty }
@@ -76,7 +76,7 @@ module AuditLog =
           Input = None
           Output = None
           Permitted = true
-          PermissionLevel = PermissionLevel.Allow
+          Decision = PermissionDecision.Allow
           ConstitutionViolations = []
           ExecutionId = execId
           Metadata = Map.empty }
@@ -90,7 +90,7 @@ module AuditLog =
           Input = None
           Output = None
           Permitted = violations.IsEmpty
-          PermissionLevel = if violations.IsEmpty then PermissionLevel.Allow else PermissionLevel.Deny
+          Decision = if violations.IsEmpty then PermissionDecision.Allow else PermissionDecision.Deny
           ConstitutionViolations = violations
           ExecutionId = execId
           Metadata = Map.empty }

@@ -7,7 +7,7 @@ Nao is an F# framework for building, orchestrating, and evaluating LLM-powered a
 | Project | Description |
 |---------|-------------|
 | [Nao.Agents](reference/nao-agents.html) | Agent framework — ETCLOVG harness, tools (verify/revert), execution journal, orchestration |
-| [Nao.Providers](reference/nao-providers.html) | LLM provider implementations (Ollama, OpenAI, Anthropic, vLLM, llama.cpp) |
+| [Nao.Providers](reference/nao-providers.html) | LLM provider implementations (Ollama, OpenAI, DeepSeek, Kimi, Anthropic, vLLM, llama.cpp) |
 | [Nao.Eval](reference/nao-eval.html) | Agent evaluation framework — test cases, evaluators, LLM judge, regression |
 | [Nao.Runtime.Orleans](reference/nao-runtime-orleans.html) | Distributed runtime — multi-workspace registry, group directory, session grains |
 
@@ -39,7 +39,7 @@ The framework implements the **ETCLOVG** seven-layer taxonomy for structured age
 │ └────────────────────────────────────────────────────────────────┘  │
 ├─────────────────────────────────────────────────────────────────────┤
 │                        Nao.Agents                                   │
-│  Agent · Tool · Prompt · ContentMeta · CompletionOptions · ILlmProvider│
+│  Agent · Tool · Prompt · CompletionOptions · ILlmProvider             │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -58,13 +58,9 @@ Resource-bounded sandboxed agent execution. Enforces time limits, LLM call budge
 MCP-inspired structured tool discovery and invocation with middleware:
 
 - `IToolProtocol` — List, discover, invoke tools with structured results
-- `ToolSchema` — Rich discovery metadata projected from a compiled `Tool` (parameters, examples, cost category)
+- `ITool` — Explicit tool contract with author-supplied parameters, schemas, permissions, and invocation behavior
+- `Tool.render` — Renders an `ITool` and its explicit transport contract for model prompts
 - `IToolMiddleware` — Pre/post-processing (rate limiting, auditing, transformation)
-- `ToolRouter` — Pattern-based or name-based tool selection
-- `ContentMeta` — Generic content-type tag on tool outputs (text, JSON, PDF, images, etc.)
-- `Tool.Verify` — Optional function to check output correctness
-- `Tool.Revert` — Optional function to undo side-effects (with `RevertContext`)
-- `ExecutionJournal` — Immutable log of tool executions; supports bulk revert of revertible operations
 
 ### C — Context & Memory
 
@@ -73,41 +69,43 @@ Tiered memory management and context compaction:
 - `MemoryTier` — ShortTerm, MidTerm, LongTerm with promotion policies
 - `ContextCompaction` — DropOldest, Summarize, RelevanceFilter, Hierarchical strategies
 - `ConversationWindow` — LastN, TokenBudget, SummarizeAfter windowing
+- `MemoryAgent` — LLM specialist exposed as one tool for deliberate recall and memory management
+- `MemoryTools` — Host-scoped search, stable-key update, and opt-in exact deletion operations
 - `ISemanticMemory` — Embedding-based retrieval
 
 ### L — Lifecycle & Orchestration
 
-Agent lifecycle state machine and multi-stage pipelines:
+Harness-owned lifecycle state transitions and multi-agent orchestration:
 
-- `AgentLifecycle` — Created → Ready → Running → Suspended → Completed/Failed
 - `ILifecycleHook` — OnBeforeInit, OnBeforeStep, OnCompleted, OnFailed
-- `LifecyclePipeline` — Multi-stage execution with validation and `RetryPolicy`
+- `AgentLifecycle` — Harness-integrated state transitions and lifecycle hooks
 - `Router`, `Pipeline`, `AgentGroup` — Multi-agent orchestration patterns
 - `OrchestratorBase` — Abstract template that owns the run loop; subclasses supply the prompt and parser
 - `IOrchestratorFactory` — DI interface to control orchestrator instantiation
 
 #### Custom Orchestrators
 
-`OrchestratorBase` owns the whole run loop — calling the LLM, logging the round's reasoning, tracing each step, appending the model's message, executing tools and delegations, and producing the final answer. A subclass only supplies *how to prompt* and *how to parse*. Because the base makes the LLM call, **logs and traces are captured no matter how the orchestrator is implemented** — a custom subclass cannot accidentally drop them. Hosts subclass `OrchestratorBase` or provide their own concrete implementation.
+`OrchestratorBase` owns the whole run loop — calling the LLM, logging reasoning, tracing and measuring each actual provider call, validating and repairing responses, appending model messages, executing tools and delegations, and producing the final answer. A subclass supplies prompt generation and an optional response protocol. Metrics include repair, fallback, delegated, and agent-backed memory calls; split token counts are used only when the provider reports both values.
 
 | Member | Kind | Purpose |
 |--------|------|---------|
 | `GenerateReasoningPrompt(conversation)` | abstract | Build the messages sent to the LLM (system prompt + running history) |
-| `ParseActions(response)` | abstract | Parse LLM output into `AgentAction`s (empty = plain final answer) |
+| `ResponseProtocol` | virtual | Optional descriptor, parser, diagnostics, and repair strategy |
+| `ParseActions(response)` | virtual | Compatibility parser used when no response protocol is supplied |
 | `ValidateResponse(response)` | virtual | Return a repair error, or `None` to accept (default: accept) |
 | `BuildRepairMessage(error)` | virtual | Corrective instruction sent on a repair round |
-| `OnToolResult(name, input, result)` | virtual | Post-processing hook after a tool executes |
-| `OnRoundComplete(round, content)` | virtual | Hook called after each reasoning round |
 
-Users subclass `OrchestratorBase` and register an `IOrchestratorFactory` via DI to have the runtime use their custom orchestrator. For every round, regardless of subclass, the base guarantees a `ReasoningAdded` signal, an `agent.plan` trace span, and `ToolInvoked`/`ToolCompleted` (and `SubAgentInvoked`/`SubAgentCompleted`) signals with `tool.invoke` spans for each executed action.
+Users subclass `OrchestratorBase` and register an `IOrchestratorFactory` via DI to have the runtime use their custom orchestrator. The base guarantees progress signals, planning and tool spans, LLM exchange recording, and one metric entry for every actual provider call. Use harness `ILifecycleHook` implementations for lifecycle customization.
 
 ### O — Observability & Operations
 
 Distributed tracing, cost metrics, and resilience:
 
 - `ITracer` — OpenTelemetry-style spans with parent/child relationships
-- `IMetricsCollector` — LLM call counts, token usage, latency percentiles, cost estimation
-- `RetryPolicy` — Core retry contract used by lifecycle pipelines and resilience policies
+- `IMetricsCollector` — Actual LLM call counts, provider-reported split token usage, latency percentiles, and caller-priced cost estimation
+- `TokenUsage` — Explicit input/output counts present only when both values are reported; aggregate-only usage is never guessed into a split
+- `IExecutionJournal` — Immutable history of tool executions and their outcomes
+- `RetryPolicy` — Core retry contract used by resilience policies
 - `CircuitBreaker` — Failure threshold, open duration, half-open recovery
 - `FallbackStrategy` — DefaultValue, Alternative, Cached
 
@@ -124,9 +122,10 @@ Pre-flight readiness, execution traces, quality judgement, and regression detect
 
 Permissions, constitutional rules, audit logging, and runtime policy enforcement:
 
-- `PermissionModel` — Permissive/Restrictive with per-capability grants
-- `ResourceAccess` — Resource-level requests (`File`/`Web`/`ToolCall`) evaluated by the pure `ResourcePermission` engine (`Allow`/`Deny`/`Ask`, deny-by-default)
-- `ToolContext` — Passed to every `Tool.Execute`; lets tools request approval dynamically and carries the session key. Tools can also declare a static `Permissions` list that `InvokeAsync` auto-requests before running
+- `ResourceAccess` — Core request contract for concrete file, web, and tool access
+- `PermissionRule` — Core policy contract with a typed `PermissionTarget`, decision, and scope
+- `ResourcePermission` — Pure Governance evaluator with `Allow`/`Deny`/`Ask` outcomes
+- `AgentContext` — Host-constructed execution context passed explicitly to agents and tools; carries session data and resource approval behavior
 - `PermissionGate` — Process-wide host hook so the Orleans runtime can resolve permission requests without depending on a transport or application
 - `Constitution` — Declarative output rules (PII detection, harm prevention, domain rules)
 - `IAuditLog` — Full audit trail of all agent actions
@@ -135,7 +134,7 @@ Permissions, constitutional rules, audit logging, and runtime policy enforcement
 
 #### Resource Permissions
 
-The resource-permission system is the resource-level companion to the capability-level `PermissionModel`:
+The permission system separates Core contracts from Governance evaluation:
 
 - **Deny-by-default & opt-in** — Enforcement is gated by a master switch in Settings (off by default). When on, file access outside the session workspace and all web access need an allow rule.
 - **Interactive approval** — Hosts can route unresolved requests (`Ask`) through their own transport and approval mechanism. No client or no answer within the timeout fails closed (deny).

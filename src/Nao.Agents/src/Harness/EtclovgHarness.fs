@@ -52,8 +52,6 @@ type EtclovgConfig =
       ToolProtocol: IToolProtocol option
       /// T — Execution journal for tracking tool calls (revert support)
       ExecutionJournal: IExecutionJournal option
-      /// C — Context & Memory: tiered memory configuration
-      MemoryConfig: OrchestratorMemoryConfig
       /// L — Lifecycle: hooks and pipeline stages
       Lifecycle: ILifecycleHook list
       /// O — Observability: tracer, metrics, and resilience
@@ -65,7 +63,6 @@ type EtclovgConfig =
       TraceStore: ITraceStore option
       Judge: IJudge option
       /// G — Governance: permissions, constitution, audit, policies
-      Permissions: PermissionModel option
       Constitution: Constitution option
       AuditLog: IAuditLog option
       PolicyEngine: PolicyEngine option
@@ -78,7 +75,6 @@ type EtclovgConfig =
         { Execution = SandboxConfig.Default
           ToolProtocol = None
           ExecutionJournal = None
-          MemoryConfig = OrchestratorMemoryConfig.None
           Lifecycle = []
           Tracer = None
           Metrics = None
@@ -86,7 +82,6 @@ type EtclovgConfig =
           ReadinessChecks = []
           TraceStore = None
           Judge = None
-          Permissions = None
           Constitution = None
           AuditLog = None
           PolicyEngine = None
@@ -148,25 +143,12 @@ module EtclovgHarness =
             ConstitutionViolations = constitutionViolations }
 
     /// Run an agent through the full ETCLOVG harness
-    let runAsync (config: EtclovgConfig) (agent: IAgent) (input: string) : Task<EtclovgResult> =
+    let runAsync (config: EtclovgConfig) (agentContext: AgentContext) (agent: IAgent) (input: string) : Task<EtclovgResult> =
         task {
             let execCtx = ExecutionContext.Create config.Execution
             let mutable trace = Verification.startTrace agent.Id input
             let mutable policyViolations = []
             let mutable constitutionViolations = []
-
-            // === G: Governance — Check permissions ===
-            let permissionDenied =
-                match config.Permissions with
-                | Some perms ->
-                    match PermissionModel.check perms "execute" with
-                    | PermissionLevel.Deny -> true
-                    | _ -> false
-                | None -> false
-
-            if permissionDenied then
-                return failResult HarnessError.PermissionDenied execCtx.Usage trace [] [] None 0
-            else
 
             // === G: Policy engine pre-check ===
             let policyBlocked =
@@ -239,16 +221,20 @@ module EtclovgHarness =
             match box agent, execSpan, config.Tracer with
             | (:? OrchestratorBase as orch), Some parent, Some tracer -> orch.TraceContext <- Some (tracer, parent)
             | _ -> ()
+            let previousMetrics = RuntimeMetrics.get ()
+            RuntimeMetrics.set config.Metrics
             let env = ExecutionEnvironment.local ()
-            let! execResult = env.ExecuteAsync execCtx agent input
+            let! execResult =
+                task {
+                    try
+                        return! env.ExecuteAsync execCtx agentContext agent input
+                    finally
+                        match box agent with
+                        | :? OrchestratorBase as orch -> orch.TraceContext <- None
+                        | _ -> ()
+                        RuntimeMetrics.set previousMetrics
+                }
             sw.Stop()
-            // Detach the tracing context once execution completes.
-            match box agent with
-            | :? OrchestratorBase as orch -> orch.TraceContext <- None
-            | _ -> ()
-
-            // === O: Record metrics ===
-            config.Metrics |> Option.iter (fun m -> m.RecordLlmCall 0 0 sw.ElapsedMilliseconds)
 
             // === O: End execution span ===
             match execSpan, config.Tracer with

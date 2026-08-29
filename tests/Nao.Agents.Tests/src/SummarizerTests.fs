@@ -18,10 +18,7 @@ type MockSummarizerProvider() =
             // Count messages in the input being summarized
             let lineCount = lastUserMsg.Split('\n').Length
             let summary = sprintf "Summarized %d exchanges about various topics." lineCount
-            Task.FromResult(
-                { Content = summary
-                  FinishReason = "stop"
-                  TokensUsed = Some 20 })
+            Task.FromResult(CompletionResult.create summary "stop" (Some 20) None)
 
 [<TestClass>]
 type SummarizerTests() =

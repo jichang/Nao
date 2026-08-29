@@ -1,6 +1,10 @@
 namespace Nao.Runtime.Orleans.Grains
 
 open System
+open System.IO
+open System.Text
+open System.Text.Json
+open System.Threading
 open System.Threading.Tasks
 open Orleans
 open Orleans.Runtime
@@ -142,18 +146,6 @@ type ISessionGrain =
 
 /// Self-contained session grain. Resolves workspaces from IWorkspaceRegistry,
 /// manages multiple conversation contexts and memory through Orleans persistence.
-///
-/// Dependencies (injected via Orleans DI at silo startup):
-/// - IWorkspaceRegistry: multi-tenant workspace registry (multiple workspaces per silo)
-/// - ILlmProvider: the LLM backend used to power agents
-/// - IMemoryStore: external persistence for session memories, keyed by the session grain key
-///
-/// On each ProcessAsync call:
-/// 1. Resolves the workspace from registry by stored key
-/// 2. Finds the compiled agent + tools from that workspace
-/// 3. Runs the compiled agent instance
-/// 4. Runs the agent through the full ETCLOVG harness (governance, verification, etc.)
-/// 5. Persists the updated conversation in the active context
 type SessionGrain
     (
         [<PersistentState("sessionState", "sessionStore")>] persistentState: IPersistentState<SessionGrainState>,
@@ -164,7 +156,8 @@ type SessionGrain
         harnessServicesFactory: Func<string, string, IHarnessServices>,
         feedbackFactory: Func<string, FeedbackService>,
         eventBus: IEventBus,
-        memoryStore: IMemoryStore
+        memoryStore: IMemoryStore,
+        memoryToolConfig: MemoryToolConfig
     ) as this =
     inherit Grain()
 
@@ -194,7 +187,7 @@ type SessionGrain
             info.UserId, info.SessionId, info.ActiveConversation, info.WorkspaceKey,
             actionId, sessionKey)
 
-    let buildHarnessConfig (workspace: WorkspaceDefinitions) (tools: Tool list) (scope: EventScope) (services: IHarnessServices) : EtclovgConfig =
+    let buildHarnessConfig (workspace: WorkspaceDefinitions) (tools: ITool list) (scope: EventScope) (services: IHarnessServices) : EtclovgConfig =
         let constitution = WorkspaceDefinitions.mergedConstitution workspace
         let toolProtocol =
             if tools.Length > 0 then
@@ -276,14 +269,14 @@ type SessionGrain
     /// The orchestrator's internal LLM conversation (where tool results are themselves
     /// `User` messages and intermediate action-JSON is an `Assistant` message) is an
     /// implementation detail and is intentionally NOT persisted as the transcript.
-    let appendTurnAsync (userInput: string) (attachmentNames: string[]) (response: string) (turnId: string) (steps: TurnStep list) (data: ToolResultData list) : Task =
+    let appendTurnAsync (userInput: string) (attachmentNames: string[]) (response: string) (turnId: string) (steps: TurnStep list) (data: AgentContextData list) : Task =
         task {
             let ctx = activeConversation ()
             let stepRecords = steps |> List.map toStepRecord
             let dataRecords =
                 data
                 |> List.map (fun value ->
-                    ToolResultDataRecord(Kind = value.Kind, ContentType = value.ContentType, Payload = value.Payload))
+                    AgentContextDataRecord(Kind = value.Kind, ContentType = value.ContentType, Payload = value.Payload))
 
             let userRecord = MessageRecord(Role = "User", Content = userInput, TurnId = turnId,
                                            Attachments = ResizeArray(attachmentNames))
@@ -321,12 +314,11 @@ type SessionGrain
 
     // ─── Tool resolution ───
 
-    let resolveTool (workspace: WorkspaceDefinitions) (name: string) : Tool option =
-        let (n, ver) = VersionRef.parse name
+    let resolveTool (workspace: WorkspaceDefinitions) (name: string) : ITool option =
         workspace.Tools
-        |> List.tryFind (fun tool -> tool.Name = n && tool.Version = ver)
+        |> List.tryFind (fun tool -> tool.Name = name)
 
-    let resolveTools (workspace: WorkspaceDefinitions) (names: string list) : Tool list =
+    let resolveTools (workspace: WorkspaceDefinitions) (names: string list) : ITool list =
         names |> List.choose (resolveTool workspace)
 
     // ─── Agent resolution ───
@@ -341,31 +333,31 @@ type SessionGrain
     /// though the session's selected agent and other runtime settings may change.
     let memoryOwner () = sprintf "session:%s" (this.GetPrimaryKeyString())
 
-    let sessionMemoryConfig = { OrchestratorMemoryConfig.None with MemoryStore = Some memoryStore }
+    let addMemoryAgentTool (tools: ITool list) =
+        let existingNames = tools |> List.map _.Name |> Set.ofList
+        let memoryTools = MemoryTools.create memoryToolConfig memoryStore memoryOwner
+        if memoryTools.IsEmpty || existingNames.Contains "memory" then
+            tools
+        else
+            let memoryAgent = MemoryAgent.create orchestratorFactory provider memoryTools
+            MemoryAgent.asTool memoryAgent :: tools
 
-    /// Built-in tool the agent calls to remember a fact across turns of this session. Input
-    /// is "key=value" (or plain text, stored under an auto-generated key).
-    let sessionMemoryTool =
-        Tool.Create(
-            "remember",
-            "Save a fact to long-term session memory so it can be recalled in later turns. Input: \"key=value\".",
-            fun input ->
-                task {
-                    let key, value =
-                        match input.IndexOf '=' with
-                        | i when i > 0 -> input.Substring(0, i).Trim(), input.Substring(i + 1).Trim()
-                        | _ -> sprintf "note-%d" DateTimeOffset.UtcNow.Ticks, input.Trim()
-                    let entry =
-                        { Key = key
-                          Value = value
-                          Timestamp = DateTimeOffset.UtcNow
-                          Tags = [] }
-                    do! memoryStore.SaveAsync (memoryOwner ()) entry
-                    return sprintf "Remembered '%s'." key
-                })
+    let rec bindSessionAgent (agent: IAgent) : IAgent =
+        match agent with
+        | :? OrchestratorBase as orchestrator ->
+            let template = orchestrator.Config
+            let subAgents = template.SubAgents |> List.map bindSessionAgent
+            let tools = if subAgents.IsEmpty then addMemoryAgentTool template.Tools else template.Tools
+            orchestratorFactory.Create
+                { template with
+                    Tools = tools
+                    SubAgents = subAgents }
+        | _ -> agent
 
     let createAgentAsync (workspace: WorkspaceDefinitions) (name: string) : Task<IAgent option> =
-        findBuiltAgent workspace name |> Task.FromResult
+        findBuiltAgent workspace name
+        |> Option.map bindSessionAgent
+        |> Task.FromResult
 
     /// Core turn processing. `llmInput` is the prompt the agent sees (may contain embedded
     /// attachment content); `displayText` + `attachmentNames` are what gets persisted into
@@ -402,7 +394,7 @@ type SessionGrain
             // delegations) — not just the harness-level final answer. It filters bus events
             // by `scope.ActionId = turnId`, so a shared bus never cross-talks between turns.
             let recorder =
-                TurnRecorder.forTools tools
+                TurnRecorder.create
                     (turnId, info.SessionId, info.UserId, info.WorkspaceKey,
                      agentName, contextualInput)
             // Expose this turn's recorder so GetLiveStepsAsync can stream progress while
@@ -411,25 +403,22 @@ type SessionGrain
             // Flow the session/turn identity into tools so file operations and permission
             // requests can attribute their output to this session.
             let sessionKey = sprintf "%s/%s" info.UserId info.SessionId
-            let filesKey = sessionKey
             // Build this session's permission context: tools request resource access through
             // it. We answer from the session's OWN granted permissions (held in this grain's
             // state) first, then fall back to the server-registered interactive prompt. A
             // grant the user chose to remember for the session is recorded into this grain's
             // state so the session never re-prompts for it.
             let grants = persistentState.State.GrantedPermissions
+            let targetOf kind pattern =
+                match kind with
+                | "file" -> PermissionTarget.File(pattern, [])
+                | "web" -> PermissionTarget.Web(pattern, [])
+                | _ -> PermissionTarget.Tool pattern
             let grantRules () : PermissionRule list =
                 grants
                 |> Seq.map (fun g ->
-                    let kind =
-                        match g.Kind with
-                        | "file" -> ResourceKind.File
-                        | "web" -> ResourceKind.Web
-                        | _ -> ResourceKind.Tool
                     { Id = ""
-                      Kind = kind
-                      Pattern = g.Pattern
-                      Operations = []
+                      AppliesTo = targetOf g.Kind g.Pattern
                       Decision = PermissionDecision.Allow
                       Scope = RuleScope.Session sessionKey
                       CreatedAt = DateTimeOffset.UtcNow })
@@ -437,11 +426,8 @@ type SessionGrain
             // Does a stored grant pattern of this kind cover a resource pattern? Uses the
             // same matching the evaluator does, so redundant or overlapping grants (e.g.
             // granting "/a" then "/a/b") collapse instead of letting the list grow unbounded.
-            let covers (kind: string) (broader: string) (narrower: string) =
-                match kind with
-                | "file" -> ResourcePermission.pathMatches broader narrower
-                | "web" -> ResourcePermission.hostMatches broader narrower
-                | _ -> String.Equals(broader, narrower, StringComparison.OrdinalIgnoreCase)
+            let covers kind broader narrower =
+                ResourcePermission.targetCovers (targetOf kind broader) (targetOf kind narrower)
             let recordGrant (access: ResourceAccess) =
                 let kind, pattern =
                     match access with
@@ -458,7 +444,7 @@ type SessionGrain
                     for g in subsumed do
                         grants.Remove g |> ignore
                     grants.Add(PermissionGrantRecord(Kind = kind, Pattern = pattern))
-            let requestPermission (access: ResourceAccess) (reason: string) (forceConfirm: bool) : Task<bool> =
+            let resolvePermission (access: ResourceAccess) (reason: string) (forceConfirm: bool) : Task<bool> =
                 task {
                     // grantRules are all session-scoped for this key; filter through `applicable`
                     // so the scope-agnostic evaluator only ever sees rules that apply here.
@@ -475,8 +461,38 @@ type SessionGrain
                                 try do! persistentState.WriteStateAsync() with _ -> ()
                             return outcome.Decision = PermissionDecision.Allow
                 }
-            let toolContext : ToolContext =
-                                { SessionKey = sessionKey; FilesKey = filesKey; TurnId = turnId; RequestPermission = requestPermission; PublishData = (fun data -> eventBus.PublishAsync(TurnProgress(turnScope, ToolDataPublished data))) }
+            let contextData = ResizeArray<AgentContextData>()
+            let grantedResources = ResizeArray<ResourceAccess>()
+            let permissionLock = new SemaphoreSlim(1, 1)
+            let requestPermission access reason forceConfirm =
+                task {
+                    do! permissionLock.WaitAsync()
+                    try
+                        let alreadyGranted =
+                            lock grantedResources (fun () ->
+                                grantedResources
+                                |> Seq.exists (fun approved -> ResourceAccess.isCoveredBy approved access))
+                        if alreadyGranted then
+                            return true
+                        else
+                            let! allowed = resolvePermission access reason forceConfirm
+                            if allowed then lock grantedResources (fun () -> grantedResources.Add access)
+                            return allowed
+                    finally
+                        permissionLock.Release() |> ignore
+                }
+            let publishData data : Task =
+                (task {
+                    lock contextData (fun () -> contextData.Add data)
+                    do! eventBus.PublishAsync(TurnProgress(turnScope, ToolDataPublished data))
+                } :> Task)
+            let agentContext : AgentContext =
+                { SessionKey = sessionKey
+                  TurnId = turnId
+                  GetData = fun () -> lock contextData (fun () -> List.ofSeq contextData)
+                  GetGrantedResources = fun () -> lock grantedResources (fun () -> List.ofSeq grantedResources)
+                  RequestPermission = requestPermission
+                  PublishData = publishData }
             try
                 // Subscribe the recorder for this turn's progress signals; detached in finally.
                 eventBus.Subscribe(recorder :> IEventConsumer)
@@ -488,12 +504,9 @@ type SessionGrain
                     match agent with
                     | :? IRuntimeAgentContext as contextual -> contextual.SetEventContext eventBus turnScope
                     | _ -> ()
-                    match agent with
-                    | :? IContextualAgent as contextual -> contextual.SetToolContext toolContext
-                    | _ -> ()
                     let harnessServices = harnessServicesFactory.Invoke(sessionKey, turnId)
                     let harnessConfig = buildHarnessConfig workspace tools turnScope harnessServices
-                    let! result = EtclovgHarness.runAsync harnessConfig agent contextualInput
+                    let! result = EtclovgHarness.runAsync harnessConfig agentContext agent contextualInput
 
                     match result.Success, result.Response with
                     | true, Some response ->
@@ -708,6 +721,7 @@ type SessionGrain
                 // Clean up external conversation store
                 let grainKey = this.GetPrimaryKeyString()
                 do! conversationStore.DeleteSessionAsync(grainKey)
+                do! memoryStore.ClearAsync(memoryOwner())
                 do! persistentState.ClearStateAsync()
                 this.DeactivateOnIdle()
             }

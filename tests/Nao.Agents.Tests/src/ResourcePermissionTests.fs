@@ -7,16 +7,27 @@ open Nao.Agents
 [<TestClass>]
 type ResourcePermissionTests() =
 
-    let rule kind pattern ops decision scope =
+    let rule appliesTo decision scope =
         { Id = Guid.NewGuid().ToString("N")
-          Kind = kind
-          Pattern = pattern
-          Operations = ops
+          AppliesTo = appliesTo
           Decision = decision
           Scope = scope
           CreatedAt = DateTimeOffset.UtcNow }
 
     // ---- glob ----------------------------------------------------------------
+
+    [<TestMethod>]
+    member _.ApprovedResourceCoversEquivalentRequest() =
+        Assert.IsTrue(ResourceAccess.isCoveredBy (ResourceAccess.File("READ", "/tmp/../tmp/a")) (ResourceAccess.File("read", "/tmp/a")))
+        Assert.IsTrue(ResourceAccess.isCoveredBy (ResourceAccess.Web("GET", "https://example.com/first")) (ResourceAccess.Web("get", "https://example.com/second")))
+        Assert.IsTrue(ResourceAccess.isCoveredBy (ResourceAccess.ToolCall "*") (ResourceAccess.ToolCall "search"))
+
+    [<TestMethod>]
+    member _.ApprovedResourceDoesNotCoverDifferentAccess() =
+        Assert.IsFalse(ResourceAccess.isCoveredBy (ResourceAccess.File("read", "/tmp/a")) (ResourceAccess.File("write", "/tmp/a")))
+        Assert.IsFalse(ResourceAccess.isCoveredBy (ResourceAccess.Web("GET", "https://example.com")) (ResourceAccess.Web("GET", "https://other.com")))
+        Assert.IsFalse(ResourceAccess.isCoveredBy (ResourceAccess.ToolCall "search") (ResourceAccess.ToolCall "delete"))
+        Assert.IsFalse(ResourceAccess.isCoveredBy (ResourceAccess.ToolCall "search") (ResourceAccess.File("read", "/tmp/search")))
 
     [<TestMethod>]
     member _.GlobMatchesStarAndQuestion() =
@@ -67,20 +78,20 @@ type ResourcePermissionTests() =
 
     [<TestMethod>]
     member _.AllowRulePermitsMatchingWeb() =
-        let r = rule ResourceKind.Web "example.com" [] PermissionDecision.Allow RuleScope.Global
+        let r = rule (PermissionTarget.Web("example.com", [])) PermissionDecision.Allow RuleScope.Global
         let access = ResourceAccess.Web("GET", "https://api.example.com/data")
         Assert.AreEqual(PermissionDecision.Allow, ResourcePermission.evaluate [ r ] access)
 
     [<TestMethod>]
     member _.DenyRuleWinsOverAllow() =
-        let allow = rule ResourceKind.Web "example.com" [] PermissionDecision.Allow RuleScope.Global
-        let deny = rule ResourceKind.Web "example.com" [] PermissionDecision.Deny RuleScope.Global
+        let allow = rule (PermissionTarget.Web("example.com", [])) PermissionDecision.Allow RuleScope.Global
+        let deny = rule (PermissionTarget.Web("example.com", [])) PermissionDecision.Deny RuleScope.Global
         let access = ResourceAccess.Web("GET", "https://example.com")
         Assert.AreEqual(PermissionDecision.Deny, ResourcePermission.evaluate [ allow; deny ] access)
 
     [<TestMethod>]
     member _.OperationFilterRestrictsRule() =
-        let r = rule ResourceKind.File "/data" [ "read" ] PermissionDecision.Allow RuleScope.Global
+        let r = rule (PermissionTarget.File("/data", [ "read" ])) PermissionDecision.Allow RuleScope.Global
         let readAccess = ResourceAccess.File("read", "/data/a.txt")
         let writeAccess = ResourceAccess.File("write", "/data/a.txt")
         Assert.AreEqual(PermissionDecision.Allow, ResourcePermission.evaluate [ r ] readAccess)
@@ -91,9 +102,9 @@ type ResourcePermissionTests() =
 
     [<TestMethod>]
     member _.ApplicableKeepsGlobalAndMatchingSession() =
-        let g = rule ResourceKind.Web "a.com" [] PermissionDecision.Allow RuleScope.Global
-        let s1 = rule ResourceKind.Web "b.com" [] PermissionDecision.Allow (RuleScope.Session "user/1")
-        let s2 = rule ResourceKind.Web "c.com" [] PermissionDecision.Allow (RuleScope.Session "user/2")
+        let g = rule (PermissionTarget.Web("a.com", [])) PermissionDecision.Allow RuleScope.Global
+        let s1 = rule (PermissionTarget.Web("b.com", [])) PermissionDecision.Allow (RuleScope.Session "user/1")
+        let s2 = rule (PermissionTarget.Web("c.com", [])) PermissionDecision.Allow (RuleScope.Session "user/2")
         let kept = ResourcePermission.applicable "user/1" [ g; s1; s2 ]
         Assert.AreEqual(2, kept.Length)
         Assert.IsTrue(kept |> List.contains g)
@@ -102,7 +113,7 @@ type ResourcePermissionTests() =
 
     [<TestMethod>]
     member _.SessionRuleDoesNotLeakToOtherSession() =
-        let s1 = rule ResourceKind.Web "b.com" [] PermissionDecision.Allow (RuleScope.Session "user/1")
+        let s1 = rule (PermissionTarget.Web("b.com", [])) PermissionDecision.Allow (RuleScope.Session "user/1")
         let access = ResourceAccess.Web("GET", "https://b.com")
         let forUser2 = ResourcePermission.applicable "user/2" [ s1 ]
         Assert.AreEqual(PermissionDecision.Deny, ResourcePermission.evaluate forUser2 access)

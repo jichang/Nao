@@ -2,7 +2,6 @@ namespace Nao.Agents
 
 open System
 open System.Threading.Tasks
-open Nao.Agents
 
 /// A record of a single tool execution (immutable, for journaling)
 type ExecutionRecord =
@@ -12,8 +11,6 @@ type ExecutionRecord =
       Input: string
       /// The output produced
       Output: string
-      /// Content type of the output
-      ContentMeta: ContentMeta
       /// When it was executed
       ExecutedAt: DateTimeOffset
       /// Whether the execution has been reverted
@@ -38,7 +35,7 @@ module ExecutionJournal =
 
     /// Revert all revertible executions in reverse chronological order.
     /// Returns list of (toolName, result) for each attempted revert.
-    let revertAllAsync (journal: IExecutionJournal) (tools: Tool list) : Task<(string * Result<unit, string>) list> =
+    let revertAllAsync (journal: IExecutionJournal) (tools: ITool list) : Task<(string * Result<unit, string>) list> =
         task {
             let! revertible = journal.GetRevertibleAsync()
             let results = System.Collections.Generic.List<string * Result<unit, string>>()
@@ -46,13 +43,13 @@ module ExecutionJournal =
             for record in revertible do
                 let tool = tools |> List.tryFind (fun t -> t.Name = record.ToolName)
                 match tool with
-                | Some t when t.CanRevert ->
-                    let ctx: RevertContext =
+                | Some tool when tool.CanRevert ->
+                    let context: RevertContext =
                         { Input = record.Input
                           Output = record.Output
                           ExecutedAt = record.ExecutedAt
                           Metadata = record.Metadata }
-                    let! result = t.Revert.Value ctx
+                    let! result = tool.RevertAsync context
                     match result with
                     | Ok () -> do! journal.MarkRevertedAsync record
                     | _ -> ()
@@ -63,26 +60,26 @@ module ExecutionJournal =
             return results |> Seq.toList
         }
 
-    /// Revert the most recent execution only
-    let revertLastAsync (journal: IExecutionJournal) (tools: Tool list) : Task<Result<unit, string>> =
+    /// Revert the most recent execution only.
+    let revertLastAsync (journal: IExecutionJournal) (tools: ITool list) : Task<Result<unit, string>> =
         task {
             let! revertible = journal.GetRevertibleAsync()
             match revertible with
             | [] -> return Error "No revertible executions"
             | record :: _ ->
-                let tool = tools |> List.tryFind (fun t -> t.Name = record.ToolName)
+                let tool = tools |> List.tryFind (fun candidate -> candidate.Name = record.ToolName)
                 match tool with
-                | Some t when t.CanRevert ->
-                    let ctx: RevertContext =
+                | Some tool when tool.CanRevert ->
+                    let context: RevertContext =
                         { Input = record.Input
                           Output = record.Output
                           ExecutedAt = record.ExecutedAt
                           Metadata = record.Metadata }
-                    let! result = t.Revert.Value ctx
+                    let! result = tool.RevertAsync context
                     match result with
                     | Ok () -> do! journal.MarkRevertedAsync record
                     | _ -> ()
                     return result
                 | _ ->
-                    return Error (sprintf "Tool '%s' does not support revert" record.ToolName)
+                    return Error(sprintf "Tool '%s' does not support revert" record.ToolName)
         }

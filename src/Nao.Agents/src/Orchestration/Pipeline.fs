@@ -13,11 +13,11 @@ module Pipeline =
         { Stages = stages }
 
     /// Run input through all stages sequentially, passing each output to the next
-    let runAsync (input: string) (pipeline: Pipeline) : Task<string> =
+    let runAsync (context: AgentContext) (input: string) (pipeline: Pipeline) : Task<string> =
         task {
             let mutable current = input
             for agent in pipeline.Stages do
-                let! result = agent.RunAsync current
+                let! result = agent.RunAsync(context, current)
                 current <- result
             return current
         }

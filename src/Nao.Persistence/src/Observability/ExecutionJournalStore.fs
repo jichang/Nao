@@ -4,7 +4,6 @@ open System.Data.Common
 open System.IO
 open System.Threading.Tasks
 open Nao.Agents
-open Nao.Agents
 
 /// In-memory execution journal (default implementation)
 type InMemoryExecutionJournal() =
@@ -21,15 +20,17 @@ type InMemoryExecutionJournal() =
 
         member _.GetRevertibleAsync() =
             lock entries (fun () ->
-                entries |> Seq.filter (fun e -> not e.Reverted) |> Seq.toList)
+                entries |> Seq.filter (fun entry -> not entry.Reverted) |> Seq.toList)
             |> Task.FromResult
 
         member _.MarkRevertedAsync(record: ExecutionRecord) =
             lock entries (fun () ->
-                let idx = entries |> Seq.tryFindIndex (fun e ->
-                    e.ToolName = record.ToolName && e.ExecutedAt = record.ExecutedAt)
-                match idx with
-                | Some i -> entries.[i] <- { entries.[i] with Reverted = true }
+                let index =
+                    entries
+                    |> Seq.tryFindIndex (fun entry ->
+                        entry.ToolName = record.ToolName && entry.ExecutedAt = record.ExecutedAt)
+                match index with
+                | Some value -> entries.[value] <- { entries.[value] with Reverted = true }
                 | None -> ())
             Task.CompletedTask
 
@@ -51,16 +52,13 @@ type AdoExecutionJournal(factory: IDbConnectionFactory) =
             []
         :> Task
 
-    let mapRecord (r: DbDataReader) : ExecutionRecord =
-        { ToolName = Ado.getString r "tool_name"
-          Input = Ado.getString r "tool_input"
-          Output = Ado.getString r "tool_output"
-          ContentMeta =
-            { ContentType = Ado.getString r "content_type"
-              Metadata = Json.mapFromJson (Ado.getString r "content_meta") }
-          ExecutedAt = Time.fromIso (Ado.getString r "executed_at")
-          Reverted = Ado.getBool r "reverted"
-          Metadata = Json.mapFromJson (Ado.getString r "metadata") }
+    let mapRecord (reader: DbDataReader) : ExecutionRecord =
+        { ToolName = Ado.getString reader "tool_name"
+          Input = Ado.getString reader "tool_input"
+          Output = Ado.getString reader "tool_output"
+          ExecutedAt = Time.fromIso (Ado.getString reader "executed_at")
+          Reverted = Ado.getBool reader "reverted"
+          Metadata = Json.mapFromJson (Ado.getString reader "metadata") }
 
     interface IExecutionJournal with
         member _.RecordAsync(record: ExecutionRecord) =
@@ -74,8 +72,8 @@ type AdoExecutionJournal(factory: IDbConnectionFactory) =
                         [ "@tn", box record.ToolName
                           "@ti", box record.Input
                           "@to", box record.Output
-                          "@ct", box record.ContentMeta.ContentType
-                          "@cm", box (Json.mapToJson record.ContentMeta.Metadata)
+                          "@ct", box ""
+                          "@cm", box "{}"
                           "@ea", box (Time.toIso record.ExecutedAt)
                           "@rv", Ado.boolValue record.Reverted
                           "@md", box (Json.mapToJson record.Metadata) ]
@@ -89,7 +87,7 @@ type AdoExecutionJournal(factory: IDbConnectionFactory) =
                 return!
                     Ado.query
                         factory
-                        "SELECT tool_name, tool_input, tool_output, content_type, content_meta, executed_at, reverted, metadata \
+                        "SELECT tool_name, tool_input, tool_output, executed_at, reverted, metadata \
                             FROM nao_journal ORDER BY executed_at DESC"
                         []
                         mapRecord
@@ -101,7 +99,7 @@ type AdoExecutionJournal(factory: IDbConnectionFactory) =
                 return!
                     Ado.query
                         factory
-                        "SELECT tool_name, tool_input, tool_output, content_type, content_meta, executed_at, reverted, metadata \
+                        "SELECT tool_name, tool_input, tool_output, executed_at, reverted, metadata \
                             FROM nao_journal WHERE reverted = 0 ORDER BY executed_at DESC"
                         []
                         mapRecord
@@ -140,7 +138,7 @@ type FileExecutionJournal(baseDir: string) =
             task {
                 return
                     lock sync (fun () ->
-                        load () |> List.map Dto.ofExecutionDto |> List.filter (fun r -> not r.Reverted))
+                        load () |> List.map Dto.ofExecutionDto |> List.filter (fun record -> not record.Reverted))
             }
 
         member _.MarkRevertedAsync(record: ExecutionRecord) =
@@ -149,12 +147,12 @@ type FileExecutionJournal(baseDir: string) =
                     let mutable marked = false
                     let updated =
                         load ()
-                        |> List.map (fun d ->
-                            if not marked && d.ToolName = record.ToolName && d.ExecutedAt = record.ExecutedAt then
+                        |> List.map (fun dto ->
+                            if not marked && dto.ToolName = record.ToolName && dto.ExecutedAt = record.ExecutedAt then
                                 marked <- true
-                                { d with Reverted = true }
+                                { dto with Reverted = true }
                             else
-                                d)
+                                dto)
                     save updated)
             }
             :> Task

@@ -1,9 +1,30 @@
 namespace Nao.Eval.Evaluators
 
+open System
 open System.Text.Json
+open System.Text.Json.Serialization
 open System.Threading.Tasks
 open Nao.Agents
 open Nao.Eval
+
+[<AllowNullLiteral>]
+type LlmJudgeResponseDto() =
+    [<JsonPropertyName("score")>]
+    member val Score = Nullable<float>() with get, set
+
+    [<JsonPropertyName("reason")>]
+    member val Reason: string = null with get, set
+
+[<RequireQualifiedAccess>]
+module internal LlmJudgeResponse =
+    let example () =
+        let response = LlmJudgeResponseDto()
+        response.Score <- Nullable 5.0
+        response.Reason <- "brief explanation"
+        JsonSerializer.Serialize(response)
+
+    let deserialize (json: string) =
+        JsonSerializer.Deserialize<LlmJudgeResponseDto>(json.Trim())
 
 /// Configuration for the LLM-as-judge evaluator
 type LlmJudgeConfig =
@@ -42,7 +63,7 @@ Agent Output:
 %s
 
 Respond with ONLY a JSON object in this exact format:
-{"score": <number>, "reason": "<brief explanation>"}
+%s
 
 Where score is a number on the scale described above."""
             config.Criteria
@@ -50,27 +71,21 @@ Where score is a number on the scale described above."""
             case.Input
             expectedPart
             actual
+            (LlmJudgeResponse.example ())
 
     let parseScore (response: string) =
         try
-            use doc = JsonDocument.Parse(response.Trim())
-            let root = doc.RootElement
-
-            let score =
-                match root.TryGetProperty("score") with
-                | true, elem when elem.ValueKind = JsonValueKind.Number -> elem.GetDouble()
-                | _ -> 2.5 // midpoint fallback
-
-            let reason =
-                match root.TryGetProperty("reason") with
-                | true, elem when elem.ValueKind = JsonValueKind.String -> elem.GetString()
-                | _ -> "No reason provided"
+            let parsed = LlmJudgeResponse.deserialize response
+            if isNull parsed || not parsed.Score.HasValue then
+                raise (JsonException("score is required and must be a number."))
+            if String.IsNullOrWhiteSpace parsed.Reason then
+                raise (JsonException("reason is required and must be a non-empty string."))
 
             // Normalize to 0-1 scale (assuming 1-5 scale by default)
-            let normalized = (score - 1.0) / 4.0 |> max 0.0 |> min 1.0
-            (normalized, reason)
+            let normalized = (parsed.Score.Value - 1.0) / 4.0 |> max 0.0 |> min 1.0
+            (normalized, parsed.Reason)
         with ex ->
-            (0.5, sprintf "Parse error: %s" ex.Message)
+            (0.0, sprintf "Parse error: %s" ex.Message)
 
     interface IEvaluator with
         member _.Name = "LlmJudge"

@@ -1,7 +1,6 @@
 namespace Nao.Providers
 
 open System
-open System.Threading.Tasks
 open Nao.Agents
 
 /// Factory for creating LLM providers
@@ -12,18 +11,19 @@ module ProviderFactory =
 
     let create (providerType: ProviderType) : ILlmProvider =
         match providerType with
-        // OpenAI, vLLM and llama.cpp all speak the same OpenAI-compatible
+        // These providers all speak the same OpenAI-compatible
         // /v1/chat/completions API, so they share one client.
         | OpenAI config ->
-            new OpenAICompatibleProvider("OpenAI", config.BaseUrl, config.Model, optionalKey config.ApiKey) :> ILlmProvider
+            new OpenAICompatibleProvider("OpenAI", config.BaseUrl, config.Model, optionalKey config.ApiKey, ?timeoutSeconds = config.TimeoutSeconds) :> ILlmProvider
+        | DeepSeek config ->
+            new OpenAICompatibleProvider("DeepSeek", config.BaseUrl, config.Model, optionalKey config.ApiKey, ?timeoutSeconds = config.TimeoutSeconds) :> ILlmProvider
+        | Kimi config ->
+            new OpenAICompatibleProvider("Kimi", config.BaseUrl, config.Model, optionalKey config.ApiKey, ?timeoutSeconds = config.TimeoutSeconds) :> ILlmProvider
         | Vllm config ->
-            new OpenAICompatibleProvider("vLLM", config.BaseUrl, config.Model, config.ApiKey) :> ILlmProvider
+            new OpenAICompatibleProvider("vLLM", config.BaseUrl, config.Model, config.ApiKey, ?timeoutSeconds = config.TimeoutSeconds) :> ILlmProvider
         | LlamaCpp config ->
-            new OpenAICompatibleProvider("llama.cpp", config.BaseUrl, config.Model, None) :> ILlmProvider
+            new OpenAICompatibleProvider("llama.cpp", config.BaseUrl, config.Model, None, ?timeoutSeconds = config.TimeoutSeconds) :> ILlmProvider
         | Ollama config ->
             new OllamaProvider(config) :> ILlmProvider
-        | Anthropic _config ->
-            { new ILlmProvider with
-                member _.Name = "Anthropic"
-                member _.CompleteAsync _conversation _options =
-                    Task.FromResult { Content = ""; FinishReason = "stop"; TokensUsed = None } }
+        | Anthropic config ->
+            new AnthropicProvider(config) :> ILlmProvider

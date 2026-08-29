@@ -38,7 +38,7 @@ module AgentGroup =
         | Custom predicate -> predicate history
 
     /// Run a collaborative conversation starting with an initial input
-    let runAsync (input: string) (group: AgentGroup) : Task<AgentMessage list> =
+    let runAsync (context: AgentContext) (input: string) (group: AgentGroup) : Task<AgentMessage list> =
         task {
             let history = ResizeArray<AgentMessage>()
 
@@ -51,7 +51,7 @@ module AgentGroup =
                 for agent in group.Agents do
                     if not finished then
                         let lastMessage = history.[history.Count - 1]
-                        let! reply = agent.HandleMessageAsync lastMessage
+                        let! reply = agent.HandleMessageAsync(context, lastMessage)
                         match reply with
                         | Some msg ->
                             history.Add(msg)

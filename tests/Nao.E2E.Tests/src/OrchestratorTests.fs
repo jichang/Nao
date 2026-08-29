@@ -14,14 +14,14 @@ type WeatherAgent() =
 
     interface IAgent with
         member _.Id = id
-        member _.RunAsync(input: string) =
+        member _.RunAsync(context: AgentContext, input: string) =
             task {
-                let! result = tool.Execute ToolContext.allowAll input
+                let! result = tool.Execute context input
                 return result
             }
-        member _.HandleMessageAsync(msg: AgentMessage) =
+        member _.HandleMessageAsync(context: AgentContext, msg: AgentMessage) =
             task {
-                let! result = tool.Execute ToolContext.allowAll msg.Content
+                let! result = tool.Execute context msg.Content
                 return Some (AgentMessage.create id msg.From result)
             }
 
@@ -43,16 +43,16 @@ type MathAgent() =
 
     interface IAgent with
         member _.Id = id
-        member _.RunAsync(input: string) =
+        member _.RunAsync(context: AgentContext, input: string) =
             task {
                 let expr = extractExpression input
-                let! result = tool.Execute ToolContext.allowAll expr
+                let! result = tool.Execute context expr
                 return result
             }
-        member _.HandleMessageAsync(msg: AgentMessage) =
+        member _.HandleMessageAsync(context: AgentContext, msg: AgentMessage) =
             task {
                 let expr = extractExpression msg.Content
-                let! result = tool.Execute ToolContext.allowAll expr
+                let! result = tool.Execute context expr
                 return Some (AgentMessage.create id msg.From result)
             }
 
@@ -63,14 +63,14 @@ type GreetingAgent() =
 
     interface IAgent with
         member _.Id = id
-        member _.RunAsync(input: string) =
+        member _.RunAsync(context: AgentContext, input: string) =
             task {
-                let! result = tool.Execute ToolContext.allowAll input
+                let! result = tool.Execute context input
                 return result
             }
-        member _.HandleMessageAsync(msg: AgentMessage) =
+        member _.HandleMessageAsync(context: AgentContext, msg: AgentMessage) =
             task {
-                let! result = tool.Execute ToolContext.allowAll msg.Content
+                let! result = tool.Execute context msg.Content
                 return Some (AgentMessage.create id msg.From result)
             }
 
@@ -80,10 +80,10 @@ type SummarizerAgent() =
 
     interface IAgent with
         member _.Id = id
-        member _.RunAsync(input: string) =
+        member _.RunAsync(_context: AgentContext, input: string) =
             let summary = sprintf "Summary: %s" (input.Substring(0, min 50 input.Length))
             Task.FromResult(summary)
-        member _.HandleMessageAsync(msg: AgentMessage) =
+        member _.HandleMessageAsync(_context: AgentContext, msg: AgentMessage) =
             let summary = sprintf "Summary: %s" (msg.Content.Substring(0, min 50 msg.Content.Length))
             Task.FromResult(Some (AgentMessage.create id msg.From summary))
 
@@ -94,7 +94,7 @@ type OrchestratorRoutingAgent() =
 
     interface IAgent with
         member _.Id = id
-        member _.RunAsync(input: string) =
+        member _.RunAsync(_context: AgentContext, input: string) =
             // The orchestrator's job: analyze input and return the name of the best sub-agent
             let agentName =
                 if input.Contains("weather") || input.Contains("temperature") then
@@ -106,7 +106,7 @@ type OrchestratorRoutingAgent() =
                 else
                     "weather-agent" // default fallback
             Task.FromResult(agentName)
-        member _.HandleMessageAsync(msg: AgentMessage) =
+        member _.HandleMessageAsync(_context: AgentContext, msg: AgentMessage) =
             Task.FromResult(None)
 
 
@@ -129,18 +129,18 @@ type OrchestratorByPromptTests() =
 
     [<TestMethod>]
     member _.OrchestratorRoutesToWeatherAgent() =
-        let result = (Router.routeAsync "What is the weather in Tokyo?" router).Result
+        let result = (Router.routeAsync AgentContext.allowAll "What is the weather in Tokyo?" router).Result
         Assert.IsTrue(result.Contains("Tokyo"), sprintf "Expected Tokyo in result, got: %s" result)
         Assert.IsTrue(result.Contains("18°C"))
 
     [<TestMethod>]
     member _.OrchestratorRoutesToMathAgent() =
-        let result = (Router.routeAsync "calculate 2 + 2" router).Result
+        let result = (Router.routeAsync AgentContext.allowAll "calculate 2 + 2" router).Result
         Assert.IsTrue(result.Contains("4"), sprintf "Expected '4', got: %s" result)
 
     [<TestMethod>]
     member _.OrchestratorRoutesToGreetingAgent() =
-        let result = (Router.routeAsync "Please greet Alice" router).Result
+        let result = (Router.routeAsync AgentContext.allowAll "Please greet Alice" router).Result
         Assert.IsTrue(result.Contains("Hello"), sprintf "Expected greeting, got: %s" result)
         Assert.IsTrue(result.Contains("Alice"))
 
@@ -174,18 +174,18 @@ type OrchestratorCustomRoutingTests() =
 
     [<TestMethod>]
     member _.CustomRouterSelectsWeatherAgent() =
-        let result = (Router.routeAsync "Tell me the weather in Paris" router).Result
+        let result = (Router.routeAsync AgentContext.allowAll "Tell me the weather in Paris" router).Result
         Assert.IsTrue(result.Contains("Paris"))
         Assert.IsTrue(result.Contains("18°C"))
 
     [<TestMethod>]
     member _.CustomRouterSelectsMathAgent() =
-        let result = (Router.routeAsync "calculate 3 * 7" router).Result
+        let result = (Router.routeAsync AgentContext.allowAll "calculate 3 * 7" router).Result
         Assert.IsTrue(result.Contains("21"), sprintf "Expected '21', got: %s" result)
 
     [<TestMethod>]
     member _.CustomRouterFallsBackToGreeting() =
-        let result = (Router.routeAsync "Hey there!" router).Result
+        let result = (Router.routeAsync AgentContext.allowAll "Hey there!" router).Result
         Assert.IsTrue(result.Contains("Hello"))
 
 
@@ -206,13 +206,13 @@ type OrchestratorByNameTests() =
 
     [<TestMethod>]
     member _.ByNameRoutesDirectlyToNamedAgent() =
-        let result = (Router.routeAsync "10 / 2" router).Result
+        let result = (Router.routeAsync AgentContext.allowAll "10 / 2" router).Result
         Assert.AreEqual("5", result)
 
     [<TestMethod>]
     member _.ByNameReturnsErrorForUnknownAgent() =
         let router = Router.create [ weatherAgent ] (ByName "nonexistent")
-        let result = (Router.routeAsync "anything" router).Result
+        let result = (Router.routeAsync AgentContext.allowAll "anything" router).Result
         Assert.IsTrue(result.Contains("not found"))
 
 
@@ -230,7 +230,7 @@ type PipelineOrchestratorTests() =
     member _.PipelineRunsAgentsSequentially() =
         // First agent fetches weather, second agent summarizes the result
         let pipeline = Pipeline.create [ weatherAgent; summarizer ]
-        let result = (Pipeline.runAsync "London" pipeline).Result
+        let result = (Pipeline.runAsync AgentContext.allowAll "London" pipeline).Result
         // The summarizer should have received the weather output and summarized it
         Assert.IsTrue(result.Contains("Summary:"), sprintf "Expected summary, got: %s" result)
         Assert.IsTrue(result.Contains("18°C") || result.Contains("London"))
@@ -238,7 +238,7 @@ type PipelineOrchestratorTests() =
     [<TestMethod>]
     member _.PipelineSingleStagePassesThrough() =
         let pipeline = Pipeline.create [ weatherAgent ]
-        let result = (Pipeline.runAsync "Berlin" pipeline).Result
+        let result = (Pipeline.runAsync AgentContext.allowAll "Berlin" pipeline).Result
         Assert.IsTrue(result.Contains("Berlin"))
         Assert.IsTrue(result.Contains("18°C"))
 
@@ -256,7 +256,7 @@ type AgentGroupOrchestratorTests() =
     [<TestMethod>]
     member _.GroupTerminatesAfterMaxRounds() =
         let group = AgentGroup.create [ weatherAgent; mathAgent ] (MaxRounds 2)
-        let history = (AgentGroup.runAsync "London" group).Result
+        let history = (AgentGroup.runAsync AgentContext.allowAll "London" group).Result
         // Should have: seed + agent replies, limited by max rounds
         Assert.IsTrue(history.Length > 1, sprintf "Expected messages, got %d" history.Length)
         Assert.IsTrue(history.Length <= 5, sprintf "Expected <= 5 messages, got %d" history.Length)
@@ -265,7 +265,7 @@ type AgentGroupOrchestratorTests() =
     member _.GroupTerminatesOnKeyword() =
         // The weather agent always responds with "sunny", so ContentContains "sunny" should stop it
         let group = AgentGroup.create [ weatherAgent; mathAgent ] (ContentContains "sunny")
-        let history = (AgentGroup.runAsync "London" group).Result
+        let history = (AgentGroup.runAsync AgentContext.allowAll "London" group).Result
         let lastMessages = history |> List.map (fun m -> m.Content)
         Assert.IsTrue(
             lastMessages |> List.exists (fun c -> c.Contains("sunny")),
@@ -274,7 +274,7 @@ type AgentGroupOrchestratorTests() =
     [<TestMethod>]
     member _.GroupSeedMessageIsFromUser() =
         let group = AgentGroup.create [ weatherAgent ] (MaxRounds 1)
-        let history = (AgentGroup.runAsync "test input" group).Result
+        let history = (AgentGroup.runAsync AgentContext.allowAll "test input" group).Result
         let firstMsg = history |> List.head
         Assert.AreEqual("user", firstMsg.From.Name)
         Assert.AreEqual("test input", firstMsg.Content)
@@ -304,10 +304,10 @@ type FullOrchestratorPatternTests() =
         let router = Router.create [ weatherAgent; mathAgent; greetingAgent ] (ByPrompt orchestrator)
 
         // User sends different types of requests through the same entry point
-        let weatherResult = (Router.routeAsync "What's the weather in NYC?" router).Result
-        let mathResult = (Router.routeAsync "calculate 100 - 37" router).Result
+        let weatherResult = (Router.routeAsync AgentContext.allowAll "What's the weather in NYC?" router).Result
+        let mathResult = (Router.routeAsync AgentContext.allowAll "calculate 100 - 37" router).Result
         // Note: MathAgent passes full input to calculator; calculator matches exact expressions
-        let greetResult = (Router.routeAsync "hello Bob" router).Result
+        let greetResult = (Router.routeAsync AgentContext.allowAll "hello Bob" router).Result
 
         // Each request was routed to the correct specialist
         Assert.IsTrue(weatherResult.Contains("NYC"), sprintf "Weather: %s" weatherResult)
@@ -324,11 +324,11 @@ type FullOrchestratorPatternTests() =
         let router = Router.create [ weatherAgent ] (ByPrompt orchestrator)
 
         // Step 1: Route to the right agent
-        let rawResult = (Router.routeAsync "weather in London" router).Result
+        let rawResult = (Router.routeAsync AgentContext.allowAll "weather in London" router).Result
 
         // Step 2: Post-process through a pipeline (e.g., summarize/format)
         let pipeline = Pipeline.create [ summarizer ]
-        let finalResult = (Pipeline.runAsync rawResult pipeline).Result
+        let finalResult = (Pipeline.runAsync AgentContext.allowAll rawResult pipeline).Result
 
         Assert.IsTrue(finalResult.Contains("Summary:"))
         Assert.IsTrue(finalResult.Contains("18°C") || finalResult.Contains("sunny"))

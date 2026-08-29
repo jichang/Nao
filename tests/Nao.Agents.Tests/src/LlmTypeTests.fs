@@ -60,8 +60,9 @@ type CompletionResultTests () =
 
     [<TestMethod>]
     member _.CanCreateResult () =
-        let result = { Content = "answer"; FinishReason = "stop"; TokensUsed = Some 42 }
+        let result = CompletionResult.create "answer" "stop" (Some 42) (Some { InputTokens = 30; OutputTokens = 12 })
         Assert.AreEqual("answer", result.Content)
         Assert.AreEqual("stop", result.FinishReason)
         Assert.AreEqual(Some 42, result.TokensUsed)
+        Assert.AreEqual(Some { InputTokens = 30; OutputTokens = 12 }, result.Usage)
 

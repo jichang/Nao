@@ -25,7 +25,7 @@ type PublishingConversationStore(bus: IEventBus, inner: IConversationStore) =
             else
                 m.Data
                 |> Array.map (fun value ->
-                    { ToolResultData.Kind = value.Kind; ContentType = value.ContentType; Payload = value.Payload })
+                    { AgentContextData.Kind = value.Kind; ContentType = value.ContentType; Payload = value.Payload })
                 |> Array.toList
         { Role = m.Role; Content = m.Content; Timestamp = m.Timestamp; TurnId = m.TurnId; Steps = steps; Attachments = m.Attachments |> Array.toList; Data = data }
 

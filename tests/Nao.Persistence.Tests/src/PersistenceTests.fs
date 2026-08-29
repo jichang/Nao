@@ -2,6 +2,7 @@ module PersistenceTests
 
 open System
 open System.IO
+open System.Text.Json
 open Microsoft.VisualStudio.TestTools.UnitTesting
 open Microsoft.Data.Sqlite
 open Nao.Agents
@@ -69,13 +70,75 @@ type MemoryStoreTests() =
         let dir = tempDir ()
         (runMemoryStoreRoundTrip (MemoryStores.file dir)).GetAwaiter().GetResult()
 
+[<TestClass>]
+type MemoryToolTests() =
+
+    let runTool (tool: ITool) input =
+        match tool.RunAsync(AgentContext.allowAll, input).GetAwaiter().GetResult() with
+        | Ok output -> output
+        | Error failure -> Assert.Fail(failure.Message); ""
+
+    [<TestMethod>]
+    member _.RememberedFactCanBeDeliberatelySearched() =
+        let store = InMemoryStore() :> IMemoryStore
+        let owner = "session:user/one"
+        let tools = MemoryTools.create MemoryToolConfig.Default store (fun () -> owner)
+        let remember = tools |> List.find (fun tool -> tool.Name = "memory_remember")
+        let search = tools |> List.find (fun tool -> tool.Name = "memory_search")
+
+        runTool remember "{\"key\":\"preferred-format\",\"value\":\"Use HTML previews\",\"tags\":[\"preference\",\"documents\"]}" |> ignore
+        let result = runTool search "{\"query\":\"HTML format\",\"intent\":\"Recall the user's document preference\",\"tags\":[\"preference\"]}"
+        use document = JsonDocument.Parse result
+
+        StringAssert.Contains(result, "preferred-format")
+        StringAssert.Contains(result, "Use HTML previews")
+        Assert.AreEqual("Recall the user's document preference", document.RootElement.GetProperty("intent").GetString())
+
+    [<TestMethod>]
+    member _.SearchIsBoundedAndOwnerScoped() =
+        let store = InMemoryStore() :> IMemoryStore
+        let owner = "session:user/active"
+        let otherOwner = "session:user/other"
+        let itemCount = Random.Shared.Next(3, 8)
+        let maxResults = Random.Shared.Next(1, itemCount)
+        for index in 1 .. itemCount do
+            (store.SaveAsync owner (memEntry (sprintf "project-%d" index) (sprintf "Project decision %d" index))).GetAwaiter().GetResult()
+        (store.SaveAsync otherOwner (memEntry "project-private" "Other session secret")).GetAwaiter().GetResult()
+
+        let config = { MemoryToolConfig.Default with MaxSearchResults = maxResults }
+        let search = MemoryTools.create config store (fun () -> owner) |> List.find (fun tool -> tool.Name = "memory_search")
+        let result = runTool search "{\"query\":\"project decision\",\"intent\":\"Find earlier project decisions\",\"limit\":999}"
+        use document = JsonDocument.Parse result
+        let entries = document.RootElement.GetProperty("entries")
+
+        Assert.AreEqual(maxResults, entries.GetArrayLength())
+        Assert.IsFalse(result.Contains("Other session secret"))
+
+    [<TestMethod>]
+    member _.ForgetRequiresPolicyAndExplicitConfirmation() =
+        let store = InMemoryStore() :> IMemoryStore
+        let owner = "session:user/forget"
+        (store.SaveAsync owner (memEntry "obsolete-decision" "Use the old format")).GetAwaiter().GetResult()
+
+        let defaultTools = MemoryTools.create MemoryToolConfig.Default store (fun () -> owner)
+        Assert.IsFalse(defaultTools |> List.exists (fun tool -> tool.Name = "memory_forget"))
+
+        let config = { MemoryToolConfig.Default with ForgetEnabled = true }
+        let forget = MemoryTools.create config store (fun () -> owner) |> List.find (fun tool -> tool.Name = "memory_forget")
+        match forget.RunAsync(AgentContext.allowAll, "{\"key\":\"obsolete-decision\",\"reason\":\"Replace old decision\",\"confirmedByUser\":false}").GetAwaiter().GetResult() with
+        | Ok _ -> Assert.Fail("Unconfirmed deletion unexpectedly succeeded.")
+        | Error failure -> Assert.AreEqual(ToolFailureKind.InputContract, failure.Kind)
+
+        runTool forget "{\"key\":\"obsolete-decision\",\"reason\":\"User explicitly asked to forget it\",\"confirmedByUser\":true}" |> ignore
+        let remaining = store.RecallAllAsync(owner).GetAwaiter().GetResult()
+        Assert.IsTrue(remaining.IsEmpty)
+
 // ---------------- ExecutionJournal ----------------
 
 let private execRecord (tool: string) (at: DateTimeOffset) =
     { ToolName = tool
       Input = "in"
       Output = "out"
-      ContentMeta = ContentMeta.WithMeta "text/plain" [ "k", "v" ]
       ExecutedAt = at
       Reverted = false
       Metadata = Map.ofList [ "m", "1" ] }
@@ -92,7 +155,7 @@ let private runJournalRoundTrip (journal: IExecutionJournal) =
         Assert.AreEqual(2, history.Length)
         // Most recent first
         Assert.AreEqual("tool-b", history.Head.ToolName)
-        Assert.AreEqual("v", history.Head.ContentMeta.Metadata.["k"])
+        Assert.AreEqual("1", history.Head.Metadata.["m"])
 
         let! revertible = journal.GetRevertibleAsync()
         Assert.AreEqual(2, revertible.Length)
@@ -148,18 +211,8 @@ type SemanticMemoryTests() =
 
 // ---------------- AuditLog ----------------
 
-let private auditEntry permitted execId =
-    { Id = Guid.NewGuid()
-      Timestamp = DateTimeOffset.UtcNow
-      AgentId = agent
-      Action = AuditAction.ToolInvocation "search"
-      Input = Some "query"
-      Output = Some "result"
-      Permitted = permitted
-      PermissionLevel = PermissionLevel.AllowWithAudit
-      ConstitutionViolations = [ "none" ]
-      ExecutionId = execId
-      Metadata = Map.ofList [ "src", "test" ] }
+let private auditEntry permitted execId : AuditEntry =
+    { Id = Guid.NewGuid(); Timestamp = DateTimeOffset.UtcNow; AgentId = agent; Action = AuditAction.ToolInvocation "search"; Input = Some "query"; Output = Some "result"; Permitted = permitted; Decision = PermissionDecision.Allow; ConstitutionViolations = [ "none" ]; ExecutionId = execId; Metadata = Map.ofList [ "src", "test" ] }
 
 let private runAuditRoundTrip (log: IAuditLog) =
     task {

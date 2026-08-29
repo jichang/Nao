@@ -25,23 +25,23 @@ module Router =
         router.Agents |> List.tryFind (fun a -> a.Name = name)
 
     /// Route input to an agent and return its response
-    let routeAsync (input: string) (router: Router) : Task<string> =
+    let routeAsync (context: AgentContext) (input: string) (router: Router) : Task<string> =
         task {
             match router.Strategy with
             | ByName name ->
                 match findAgent name router with
-                | Some agent -> return! agent.RunAsync input
+                | Some agent -> return! agent.RunAsync(context, input)
                 | None -> return sprintf "Agent '%s' not found" name
             | ByPrompt supervisor ->
-                let! selectedName = supervisor.RunAsync input
+                let! selectedName = supervisor.RunAsync(context, input)
                 match findAgent (selectedName.Trim()) router with
-                | Some agent -> return! agent.RunAsync input
+                | Some agent -> return! agent.RunAsync(context, input)
                 | None -> return sprintf "Agent '%s' not found" (selectedName.Trim())
             | RoundRobin ->
                 match router.Agents with
-                | agent :: _ -> return! agent.RunAsync input
+                | agent :: _ -> return! agent.RunAsync(context, input)
                 | [] -> return "No agents available"
             | Custom selector ->
                 let! agent = selector input router.Agents
-                return! agent.RunAsync input
+                return! agent.RunAsync(context, input)
         }

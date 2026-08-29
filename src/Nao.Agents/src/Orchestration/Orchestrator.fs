@@ -4,28 +4,8 @@ open System
 open System.Threading.Tasks
 open Nao.Protocols
 
-/// Memory management configuration for the orchestrator
-type OrchestratorMemoryConfig =
-    { /// Strategy for trimming conversation history before each LLM call
-      WindowStrategy: WindowStrategy option
-      /// Optional summarization config (uses LLM to condense old messages)
-      Summarization: SummarizationConfig option
-      /// Optional key-value memory store for cross-session facts
-      MemoryStore: IMemoryStore option
-      /// How many memories to inject into the system prompt context
-      MaxMemoriesToInject: int }
-
-    static member None =
-        { WindowStrategy = Option.None
-          Summarization = Option.None
-          MemoryStore = Option.None
-          MaxMemoriesToInject = 5 }
-
-    static member WithWindow strategy =
-        { OrchestratorMemoryConfig.None with WindowStrategy = Some strategy }
-
 /// Configuration for the Orchestrator
-type OrchestratorConfig = { Id: string; Name: string; Description: string; Priority: int; Capabilities: string list; Responsibilities: string list; Signature: ToolSignature; Provider: ILlmProvider; Tools: Tool list; SubAgents: IAgent list; Prompt: Prompt; Options: CompletionOptions; MaxRounds: int; Bus: IEventBus; Scope: EventScope; Memory: OrchestratorMemoryConfig; Context: ToolContext }
+type OrchestratorConfig = { Id: string; Name: string; Description: string; Priority: int; Responsibilities: string list; Contract: AgentContract; Provider: ILlmProvider; Tools: ITool list; SubAgents: IAgent list; Prompt: Prompt; Options: CompletionOptions; MaxRounds: int; Bus: IEventBus; Scope: EventScope }
 
 /// Factory interface for creating orchestrator instances via DI.
 /// Register a custom implementation to control how orchestrators are built from workspace definitions.
@@ -45,39 +25,17 @@ type IRuntimeAgentContext =
 [<AbstractClass>]
 type OrchestratorBase(config: OrchestratorConfig) =
     let id = config.Id
-    let mutable toolContext = config.Context
     let mutable eventBus = config.Bus
     let mutable eventScope = config.Scope
 
     let report (signal: ProgressSignal) =
         eventBus.PublishAsync(NaoEvent.TurnProgress(eventScope, signal)) |> ignore
 
-    let getMemoryContext () : Task<string> =
-        task {
-            match config.Memory.MemoryStore with
-            | Some store ->
-                let! memories = store.RecallAllAsync id
-                if memories.IsEmpty then return ""
-                else
-                    let relevant =
-                        memories
-                        |> List.sortByDescending (fun m -> m.Timestamp)
-                        |> List.truncate config.Memory.MaxMemoriesToInject
-                        |> List.map (fun m -> sprintf "  - [%s]: %s" m.Key m.Value)
-                        |> String.concat "\n"
-                    return sprintf "\n\n# Agent Memories\n%s" relevant
-            | Option.None -> return ""
-        }
-
     // Strip a single surrounding Markdown code fence (```lang ... ```), which models often
     // wrap structured JSON in despite being told not to.
     /// Publish a turn-progress signal (reasoning, tool/agent activity) onto the event bus.
     /// Subclasses call this from `Orchestrate` to surface their own reasoning to the UI.
     member _.Report(signal: ProgressSignal) = report signal
-
-    /// The system-prompt memory context assembled from the configured memory store, or an
-    /// empty string when no store is configured. Subclasses append this to their prompt.
-    member _.GetMemoryContextAsync() : Task<string> = getMemoryContext ()
 
     /// The orchestrator configuration.
     member _.Config = config
@@ -178,14 +136,6 @@ type OrchestratorBase(config: OrchestratorConfig) =
     default _.BuildRepairMessage(error) =
         sprintf "[System]: Your previous response was invalid: %s. Please re-send a corrected response." error
 
-    /// Override to add custom logic after a tool executes.
-    abstract member OnToolResult: toolName: string * input: string * result: string -> unit
-    default _.OnToolResult(_, _, _) = ()
-
-    /// Override to add custom logic after an agent round completes.
-    abstract member OnRoundComplete: round: int * content: string -> unit
-    default _.OnRoundComplete(_, _) = ()
-
     /// Run one planning round: build the prompt (`GenerateReasoningPrompt`), call the LLM,
     /// repair an invalid response up to a bounded number of times (`ValidateResponse` /
     /// `BuildRepairMessage`), report the reasoning, and trace the round. Centralised here so
@@ -195,11 +145,11 @@ type OrchestratorBase(config: OrchestratorConfig) =
         task {
             let! messages = this.GenerateReasoningPrompt(conversation)
             let roundSpan = this.StartRoundSpan round
-            let startLlmSpan (attempt: int) : (ITracer * Span) option =
+            let startLlmSpan (attempt: int) (messageCount: int) : (ITracer * Span) option =
                 match this.TraceContext with
                 | Some (tracer, parent) ->
                     let span = tracer.StartSpan parent "llm.call"
-                    tracer.SetAttributes span (Map.ofList [ "agent.name", config.Name; "round", string round; "attempt", string attempt; "messages.count", string messages.Length ])
+                    tracer.SetAttributes span (Map.ofList [ "agent.name", config.Name; "round", string round; "attempt", string attempt; "messages.count", string messageCount ])
                     Some (tracer, span)
                 | None -> None
             let endLlmSpan (span: (ITracer * Span) option) (status: SpanStatus) (outputLength: int) (elapsedMs: int64) =
@@ -208,6 +158,31 @@ type OrchestratorBase(config: OrchestratorConfig) =
                     tracer.AddEvent child "llm.response" (Map.ofList [ "output.length", string outputLength; "latency.ms", string elapsedMs ])
                     tracer.EndSpan child status
                 | None -> ()
+            let recordMetrics (usage: TokenUsage option) (elapsedMs: int64) =
+                let inputTokens, outputTokens =
+                    usage
+                    |> Option.map (fun usage -> usage.InputTokens, usage.OutputTokens)
+                    |> Option.defaultValue (0, 0)
+                RuntimeMetrics.get ()
+                |> Option.iter (fun metrics -> metrics.RecordLlmCall inputTokens outputTokens elapsedMs)
+            let invokeProvider (attempt: int) (streaming: bool) (prompt: Conversation) =
+                task {
+                    let started = Diagnostics.Stopwatch.StartNew()
+                    let span = startLlmSpan attempt prompt.Length
+                    try
+                        let! result =
+                            if streaming then LlmProvider.streamAsync config.Provider prompt config.Options (fun _ -> ())
+                            else config.Provider.CompleteAsync prompt config.Options
+                        started.Stop()
+                        endLlmSpan span SpanStatus.Ok result.Content.Length started.ElapsedMilliseconds
+                        recordMetrics result.Usage started.ElapsedMilliseconds
+                        return result
+                    with ex ->
+                        started.Stop()
+                        endLlmSpan span (SpanStatus.Error ex.Message) 0 started.ElapsedMilliseconds
+                        recordMetrics None started.ElapsedMilliseconds
+                        return raise ex
+                }
             let recordExchange (attempt: int) (isRepair: bool) (prompt: Conversation) (result: string) =
                 let messagesForStorage =
                     prompt
@@ -222,11 +197,7 @@ type OrchestratorBase(config: OrchestratorConfig) =
                           Response = result }))
                 |> ignore
             try
-                let llmStarted = Diagnostics.Stopwatch.StartNew()
-                let llmSpan = startLlmSpan 1
-                let! result = LlmProvider.streamAsync config.Provider messages config.Options (fun _ -> ())
-                llmStarted.Stop()
-                endLlmSpan llmSpan SpanStatus.Ok result.Content.Length llmStarted.ElapsedMilliseconds
+                let! result = invokeProvider 1 true messages
                 recordExchange 1 false messages result.Content
                 let mutable working = result.Content
                 // Validate-and-repair: ask the model to correct an invalid response (bounded)
@@ -252,11 +223,7 @@ type OrchestratorBase(config: OrchestratorConfig) =
                         | _ -> this.BuildRepairMessage validationError.Value
                     let fixMsg = { Role = User; Content = repairMessage }
                     convo <- convo @ [ { Role = Assistant; Content = working }; fixMsg ]
-                    let repairStarted = Diagnostics.Stopwatch.StartNew()
-                    let repairSpan = startLlmSpan (repairAttempts + 1)
-                    let! fixResult = config.Provider.CompleteAsync convo config.Options
-                    repairStarted.Stop()
-                    endLlmSpan repairSpan SpanStatus.Ok fixResult.Content.Length repairStarted.ElapsedMilliseconds
+                    let! fixResult = invokeProvider (repairAttempts + 1) false convo
                     recordExchange (repairAttempts + 1) true convo fixResult.Content
                     working <- fixResult.Content
                     let nextProtocolError, nextValidationError = validate working
@@ -276,7 +243,7 @@ type OrchestratorBase(config: OrchestratorConfig) =
                 return raise ex
         }
 
-    member private this.RunCore(input: string) : Task<string> =
+    member private this.RunCore(agentContext: AgentContext, input: string) : Task<string> =
         task {
             // The running conversation the concrete `Orchestrate` sees each round: the user
             // input followed by any tool/agent results appended below. The subclass prepends
@@ -311,43 +278,26 @@ type OrchestratorBase(config: OrchestratorConfig) =
                             match action with
                             | InvokeTool (toolName, toolInput) ->
                                 match config.Tools |> List.tryFind (fun t -> t.Name = toolName) with
-                                | Some tool ->
-                                    match tool.PrepareInput toolInput with
-                                    | Error reason ->
-                                        let toolSpan = this.StartToolSpan toolName toolInput (rounds + 1)
-                                        let failMsg = sprintf "[Tool Preparation Failed for %s]: %s. Correct the parameters before retrying." toolName reason
-                                        conversation <- conversation @ [ { Role = User; Content = failMsg } ]
-                                        this.EndToolSpan toolSpan (SpanStatus.Error (sprintf "input preparation failed for %s" toolName)) Map.empty
-                                    | Ok preparedInput when successfulToolCalls.Contains((toolName, preparedInput)) ->
+                                | Some tool when successfulToolCalls.Contains((toolName, toolInput)) ->
                                         conversation <- conversation @ [ { Role = User; Content = sprintf "[Tool Result from %s]: This equivalent successful tool call was already completed. Do not repeat it; respond with the completed result." toolName } ]
-                                    | Ok preparedInput ->
-                                      report (ToolInvoked (toolName, preparedInput))
+                                | Some tool ->
+                                      report (ToolInvoked (toolName, toolInput))
                                       // O: record the prepared invocation (name + normalized parameters + context) as a span.
-                                      let toolSpan = this.StartToolSpan toolName preparedInput (rounds + 1)
-                                      let! toolResult = tool.InvokePreparedAsync(toolContext, preparedInput)
-                                      report (ToolCompleted (toolName, toolResult))
-                                      this.OnToolResult(toolName, preparedInput, toolResult)
-                                      let! verifyMsg =
-                                          match tool.Verify with
-                                          | Some verify ->
-                                              task {
-                                                  let! vr = verify preparedInput toolResult
-                                                  match vr with
-                                                  | Ok () -> return None
-                                                  | Error reason ->
-                                                      return Some (sprintf "[Verification Failed for %s]: %s. Please retry or choose a different approach." toolName reason)
-                                              }
-                                          | None -> Task.FromResult None
-                                      let resultContent = sprintf "[Tool Result from %s]: %s" toolName toolResult
-                                      conversation <- conversation @ [ { Role = User; Content = resultContent } ]
-                                      let resultAttrs = Map.ofList [ "result.length", string toolResult.Length ]
-                                      match verifyMsg with
-                                      | Some failMsg ->
+                                      let toolSpan = this.StartToolSpan toolName toolInput (rounds + 1)
+                                      match! tool.RunAsync(agentContext, toolInput) with
+                                      | Ok toolResult ->
+                                          report (ToolCompleted (toolName, toolResult))
+                                          let resultContent = sprintf "[Tool Result from %s]: %s" toolName toolResult
+                                          conversation <- conversation @ [ { Role = User; Content = resultContent } ]
+                                          successfulToolCalls.Add((toolName, toolInput)) |> ignore
+                                          this.EndToolSpan toolSpan SpanStatus.Ok (Map.ofList [ "result.length", string toolResult.Length ])
+                                      | Error failure ->
+                                          let guidance =
+                                              if failure.Retryable then "Correct the input or choose a different approach, then retry."
+                                              else "Do not repeat the same call; choose a different approach or explain the failure."
+                                          let failMsg = sprintf "[Tool %A Failed for %s]: %s. %s" failure.Kind toolName failure.Message guidance
                                           conversation <- conversation @ [ { Role = User; Content = failMsg } ]
-                                          this.EndToolSpan toolSpan (SpanStatus.Error (sprintf "verification failed for %s" toolName)) resultAttrs
-                                      | None ->
-                                          successfulToolCalls.Add((toolName, preparedInput)) |> ignore
-                                          this.EndToolSpan toolSpan SpanStatus.Ok resultAttrs
+                                          this.EndToolSpan toolSpan (SpanStatus.Error (sprintf "%A failed for %s" failure.Kind toolName)) Map.empty
                                 | None ->
                                     let err = sprintf "Tool '%s' not found. Available tools: %s" toolName (config.Tools |> List.map (fun t -> t.Name) |> String.concat ", ")
                                     conversation <- conversation @ [ { Role = User; Content = sprintf "[Error]: %s" err } ]
@@ -365,13 +315,10 @@ type OrchestratorBase(config: OrchestratorConfig) =
                                         match agent with
                                         | :? IRuntimeAgentContext as contextual -> contextual.SetEventContext eventBus eventScope
                                         | _ -> ()
-                                        match agent with
-                                        | :? IContextualAgent as contextual -> contextual.SetToolContext toolContext
-                                        | _ -> ()
                                         match agent, this.TraceContext with
                                         | (:? OrchestratorBase as child), Some traceContext -> child.TraceContext <- Some traceContext
                                         | _ -> ()
-                                        let! agentResult = agent.RunAsync effectiveAgentInput
+                                        let! agentResult = agent.RunAsync(agentContext, effectiveAgentInput)
                                         report (SubAgentCompleted (agent.Name, agentResult))
                                         finalAnswer <- agentResult
                                         finished <- true
@@ -382,16 +329,24 @@ type OrchestratorBase(config: OrchestratorConfig) =
                             | Respond response ->
                                 finalAnswer <- response
                                 finished <- true
+                            | RequestUserInput prompt ->
+                                finalAnswer <- prompt
+                                finished <- true
                             | Think _ -> ()
 
-                this.OnRoundComplete(rounds + 1, if finished then finalAnswer else "")
                 rounds <- rounds + 1
 
             if not finished then
                 let forceMsg = { Role = User; Content = "[System]: Maximum rounds reached. Please provide your final answer now." }
                 conversation <- conversation @ [ forceMsg ]
-                let! result = config.Provider.CompleteAsync conversation config.Options
-                finalAnswer <- result.Content
+                let! response = this.ReasonAsync conversation (rounds + 1)
+                finalAnswer <-
+                    this.ParseActions response
+                    |> List.tryPick (function
+                        | Respond answer
+                        | RequestUserInput answer -> Some answer
+                        | _ -> None)
+                    |> Option.defaultValue response
 
             report (AnswerProduced finalAnswer)
             return finalAnswer
@@ -402,18 +357,14 @@ type OrchestratorBase(config: OrchestratorConfig) =
         member _.Name = config.Name
         member _.Description = config.Description
         member _.Priority = config.Priority
-        member _.Capabilities = config.Capabilities
         member _.Responsibilities = config.Responsibilities
-        member _.Signature = config.Signature
-        member this.RunAsync(input: string) = this.RunCore(input)
-        member this.HandleMessageAsync(msg: AgentMessage) =
+        member _.Contract = config.Contract
+        member this.RunAsync(context: AgentContext, input: string) = this.RunCore(context, input)
+        member this.HandleMessageAsync(context: AgentContext, msg: AgentMessage) =
             task {
-                let! response = this.RunCore(msg.Content)
+                let! response = this.RunCore(context, msg.Content)
                 return Some (AgentMessage.create id msg.From response)
             }
-
-    interface IContextualAgent with
-        member _.SetToolContext(context: ToolContext) = toolContext <- context
 
     interface IRuntimeAgentContext with
         member _.SetEventContext(bus: IEventBus) (scope: EventScope) =

@@ -95,7 +95,6 @@ module TestHost =
                         Output = "please"
                         ToolCalls =
                             [ { Name = "echo"
-                                Version = None
                                 Input = "please"
                                 Output = "please" } ] }
                 do! feedback.RecordTurnAsync turn

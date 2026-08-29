@@ -35,7 +35,7 @@ type InMemoryAuditLog() =
             |> Seq.length
             |> Task.FromResult
 
-/// ADO.NET-backed IAuditLog. The AuditAction/PermissionLevel unions are encoded
+/// ADO.NET-backed IAuditLog. The AuditAction/PermissionDecision unions are encoded
 /// to text columns so the schema stays portable across providers.
 type AdoAuditLog(factory: IDbConnectionFactory) =
 
@@ -66,7 +66,7 @@ type AdoAuditLog(factory: IDbConnectionFactory) =
           Input = Ado.getStringOpt r "audit_input"
           Output = Ado.getStringOpt r "audit_output"
           Permitted = Ado.getBool r "permitted"
-          PermissionLevel = PermissionLevelCodec.fromString (Ado.getString r "permission_level")
+          Decision = PermissionDecisionCodec.fromString (Ado.getString r "permission_level")
           ConstitutionViolations = Json.tagsFromJson (Ado.getString r "violations")
           ExecutionId = Ado.getStringOpt r "execution_id" |> Option.map Guid.Parse
           Metadata = Json.mapFromJson (Ado.getString r "metadata") }
@@ -98,7 +98,7 @@ type AdoAuditLog(factory: IDbConnectionFactory) =
                           "@in", (match entry.Input with Some s -> box s | None -> box DBNull.Value)
                           "@out", (match entry.Output with Some s -> box s | None -> box DBNull.Value)
                           "@pm", Ado.boolValue entry.Permitted
-                          "@pl", box (PermissionLevelCodec.toString entry.PermissionLevel)
+                          "@pl", box (PermissionDecisionCodec.toString entry.Decision)
                           "@vi", box (Json.tagsToJson entry.ConstitutionViolations)
                           "@ex", (match entry.ExecutionId with Some g -> box (g.ToString("D")) | None -> box DBNull.Value)
                           "@md", box (Json.mapToJson entry.Metadata) ]

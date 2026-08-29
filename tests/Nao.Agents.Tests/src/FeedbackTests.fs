@@ -21,8 +21,11 @@ let private sqliteFactory () : IDbConnectionFactory =
     let cs = sprintf "Data Source=%s" path
     DbConnectionFactory.ofFunc (fun () -> new SqliteConnection(cs) :> System.Data.Common.DbConnection)
 
-let private echoTool (name: string) : Tool =
-    Tool.Create(name, "Echoes its input.", (fun (s: string) -> Task.FromResult(sprintf "echo:%s" s)))
+type private EchoTool(name: string) =
+    inherit TypedTool<string, string>(name, "Echoes its input.", [], ToolParameter.text, ToolParameter.text)
+    override _.ExecuteAsync(_context, input) = Task.FromResult(Ok(sprintf "echo:%s" input))
+
+let private echoTool name : ITool = EchoTool(name)
 
 [<TestClass>]
 type TurnRecorderTests() =
@@ -51,19 +54,16 @@ type TurnRecorderTests() =
         Assert.AreEqual("final answer", snap.Output)
 
     [<TestMethod>]
-    member _.``Resolves tool version from tool list``() =
-        let versioned =
-            { echoTool "search" with
-                Version = "v1" }
+    member _.``Records tool calls from progress events``() =
         let recorder =
-            TurnRecorder.forTools [ versioned ] ("t1", "s1", "u1", "ws", "agent", "hi")
+            TurnRecorder.create("t1", "s1", "u1", "ws", "agent", "hi")
         let consumer = recorder :> IEventConsumer
         let scope = EventScope.Create("u1", "s1", "", "ws", "t1", "u1/s1")
         let send signal = consumer.HandleAsync(NaoEvent.TurnProgress(scope, signal)).Wait()
         send (ToolInvoked("search", "q"))
         send (ToolCompleted("search", "r"))
         let snap = recorder.Snapshot()
-        Assert.AreEqual(Some "v1", snap.ToolCalls.[0].Version)
+        Assert.AreEqual("search", snap.ToolCalls.[0].Name)
 
 [<TestClass>]
 type FileStoreTests() =
@@ -76,13 +76,12 @@ type FileStoreTests() =
             let turn =
                 { TurnRecord.Empty with
                     TurnId = "t1"; SessionId = "s1"
-                    ToolCalls = [ { Name = "search"; Version = Some "v1"; Input = "q"; Output = "r" } ] }
+                    ToolCalls = [ { Name = "search"; Input = "q"; Output = "r" } ] }
             do! store.SaveAsync turn
             let! loaded = store.GetAsync "t1"
             Assert.IsTrue(loaded.IsSome)
             Assert.AreEqual(1, loaded.Value.ToolCalls.Length)
             Assert.AreEqual("search", loaded.Value.ToolCalls.[0].Name)
-            Assert.AreEqual(Some "v1", loaded.Value.ToolCalls.[0].Version)
         }).GetAwaiter().GetResult()
 
 /// Same coverage as FileStoreTests but against the ADO.NET (SQLite) backend, proving
@@ -98,13 +97,12 @@ type DatabaseStoreTests() =
             let turn =
                 { TurnRecord.Empty with
                     TurnId = "t1"; SessionId = "s1"
-                    ToolCalls = [ { Name = "search"; Version = Some "v1"; Input = "q"; Output = "r" } ] }
+                    ToolCalls = [ { Name = "search"; Input = "q"; Output = "r" } ] }
             do! store.SaveAsync turn
             let! loaded = store.GetAsync "t1"
             Assert.IsTrue(loaded.IsSome)
             Assert.AreEqual(1, loaded.Value.ToolCalls.Length)
             Assert.AreEqual("search", loaded.Value.ToolCalls.[0].Name)
-            Assert.AreEqual(Some "v1", loaded.Value.ToolCalls.[0].Version)
             let! forSession = store.GetForSessionAsync "s1"
             Assert.AreEqual(1, forSession.Length)
         }).GetAwaiter().GetResult()
@@ -119,7 +117,7 @@ type FeedbackServiceTests() =
             let turn =
                 { TurnRecord.Empty with
                     TurnId = "t1"; SessionId = "s1"
-                    ToolCalls = [ { Name = "search"; Version = None; Input = "q"; Output = "r" } ] }
+                    ToolCalls = [ { Name = "search"; Input = "q"; Output = "r" } ] }
             do! svc.RecordTurnAsync turn
             let feedback =
                 { Id = Guid.NewGuid(); TurnId = "t1"; SessionId = "s1"; UserId = "u1"

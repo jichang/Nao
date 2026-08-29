@@ -18,16 +18,16 @@ module internal AgentHelpers =
         else
             None
 
-    let findTool (tools: Tool list) (name: string) =
+    let findTool (tools: ITool list) (name: string) =
         tools |> List.tryFind (fun t -> t.Name = name)
 
 /// A demo agent that uses the local LLM provider and tools.
 /// When the LLM response contains a tool invocation JSON pattern,
 /// the agent executes the tool and feeds the result back to the LLM.
-type DemoAgent(provider: ILlmProvider, tools: Tool list, prompt: Prompt) =
+type DemoAgent(provider: ILlmProvider, tools: ITool list, prompt: Prompt) =
     let id = { Name = "demo-agent"; Description = "A demo agent for E2E testing" }
 
-    member private _.RunCore(input: string) : Task<string> =
+    member private _.RunCore(context: AgentContext, input: string) : Task<string> =
         let systemMsg = { Role = System; Content = Prompt.render prompt }
         let userMsg = { Role = User; Content = input }
         let conv1 = [systemMsg; userMsg]
@@ -40,7 +40,7 @@ type DemoAgent(provider: ILlmProvider, tools: Tool list, prompt: Prompt) =
         | Some (toolName, args) ->
             match AgentHelpers.findTool tools toolName with
             | Some tool ->
-                let toolResult = (tool.Execute ToolContext.allowAll args).Result
+                let toolResult = (tool.Execute context args).Result
                 let toolMsg = { Role = User; Content = "tool_result: " + toolResult }
                 let conv3 = conv2 @ [toolMsg]
                 let finalResult = (provider.CompleteAsync conv3 CompletionOptions.Default).Result
@@ -52,9 +52,9 @@ type DemoAgent(provider: ILlmProvider, tools: Tool list, prompt: Prompt) =
 
     interface IAgent with
         member _.Id = id
-        member this.RunAsync(input: string) = this.RunCore(input)
-        member this.HandleMessageAsync(msg: AgentMessage) =
-            let response = this.RunCore(msg.Content).Result
+        member this.RunAsync(context: AgentContext, input: string) = this.RunCore(context, input)
+        member this.HandleMessageAsync(context: AgentContext, msg: AgentMessage) =
+            let response = this.RunCore(context, msg.Content).Result
             let reply = AgentMessage.create id msg.From response
             Task.FromResult(Some reply)
 

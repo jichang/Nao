@@ -11,33 +11,32 @@ The framework implements the **ETCLOVG** taxonomy from "Agent Harness Engineerin
 | Layer | Concern | Key Types |
 |-------|---------|-----------|
 | **E** — Execution | Resource-bounded sandboxed execution | `ExecutionContext`, `ResourceLimits`, `SandboxConfig` |
-| **T** — Tool Protocol | Structured tool discovery, middleware, verify/revert | `IToolProtocol`, `ToolSchema`, `IToolMiddleware`, `ExecutionJournal` |
+| **T** — Tool Protocol | Structured tool discovery, invocation, middleware | `IToolProtocol`, `ITool`, `IToolMiddleware` |
 | **C** — Context & Memory | Tiered memory, context compaction | `ITieredMemory`, `ContextCompaction`, `MemoryTier` |
-| **L** — Lifecycle | State-machine lifecycle, pipeline stages | `AgentLifecycle`, `LifecyclePipeline`, `RetryPolicy` |
-| **O** — Observability | Distributed tracing, metrics, resilience | `ITracer`, `IMetricsCollector`, `CircuitBreaker` |
+| **L** — Lifecycle | Harness lifecycle hooks, orchestration, context tool selection | `AgentLifecycle`, `ILifecycleHook`, `IToolSelector` |
+| **O** — Observability | Tracing, metrics, execution journals, resilience | `ITracer`, `IMetricsCollector`, `IExecutionJournal` |
 | **V** — Verification | Readiness checks, execution traces, regression | `IReadinessCheck`, `ExecutionTrace`, `IJudge` |
-| **G** — Governance | Permissions, resource access, constitution, audit, policies | `PermissionModel`, `ResourceAccess`, `ToolContext`, `Constitution`, `PolicyEngine` |
+| **G** — Governance | Permissions, resource access, constitution, audit, policies | `ResourceAccess`, `PermissionRule`, `AgentContext`, `Constitution`, `PolicyEngine` |
 
 ## Features
 
 - **ETCLOVG Harness** — Seven-layer execution pipeline with resource bounds, governance, observability, and verification
 - **Multi-Agent Orchestration** — Router, Pipeline, and AgentGroup patterns for composing agents
-- **Extensible Orchestrator** — Abstract base class with virtual members (`TryParseAction`, `BuildSystemPrompt`) for custom behavior via inheritance and DI
+- **Extensible Orchestrator** — Abstract base class with explicit prompt generation and response protocol hooks for custom behavior via inheritance and DI
 - **Conversation Memory** — Sliding window, token-budget, summarization, and tiered memory strategies
 - **Semantic Memory** — Embedding-based retrieval for long-term agent knowledge
 - **Persistent State** — Orleans grain persistence for conversation history and memories across sessions
 - **Structured Prompts** — Type-safe prompt engineering with roles, constraints, examples, and output formats
-- **Tool Protocol** — MCP-inspired tool discovery with middleware, rate limiting, and schemas
-- **Content Metadata** — Generic `ContentMeta` type lets tools/agents declare output types (JSON, PDF, images, etc.)
-- **Tool Verify & Revert** — Tools can declare verify (check correctness) and revert (undo side-effects) capabilities
-- **Execution Journal** — Immutable log of all tool executions; supports bulk revert of revertible operations
+- **Tool Protocol** — Local tool discovery with middleware, rate limiting, and explicit contracts
+- **Explicit Tool Contracts** — Tools supply their schemas, encoders, decoders, permissions, and invocation behavior through `ITool`
+- **Execution Journal** — Immutable log of tool executions and their outcomes
 - **Pluggable Tool Integrations** — Customer-defined .NET tools can call application services, HTTP APIs, MCP, or other integrations
 - **Governance** — Constitution rules, permission models, audit logging, and runtime policy enforcement
-- **Resource Permissions** — Deny-by-default file/web access with interactive, per-session approval prompts; tools declare the permissions they need and can request access dynamically through a `ToolContext`, with grants remembered per session or globally
-- **Observability** — Distributed tracing (OpenTelemetry-style), cost metrics, circuit breakers, retries
+- **Resource Permissions** — Deny-by-default file/web access with interactive, per-session approval prompts; tools declare the permissions they need and can request access dynamically through an `AgentContext`, with grants remembered per session or globally
+- **Observability** — Distributed tracing, per-LLM-call provider-reported token metrics, caller-owned cost models, circuit breakers, and retries
 - **Verification** — Readiness gates, execution trace capture, LLM judges, regression detection
 - **Evaluation** — Test case framework with multiple evaluators, LLM judges, and dataset-level reports
-- **Multi-Provider Support** — Pluggable LLM backends (OpenAI, Anthropic, Ollama, vLLM, llama.cpp)
+- **Multi-Provider Support** — Pluggable LLM backends (OpenAI, DeepSeek, Kimi, Anthropic, Ollama, vLLM, llama.cpp)
 - **Compiled Workspace Registration** — Customer-defined .NET agents and tools are registered explicitly through `WorkspaceRegistry`
 - **Multi-Workspace Runtime** — Multiple isolated compiled workspaces within a single Orleans silo
 - **Group Directory** — Organizational multi-tenancy: groups own sessions, members, and default workspaces
@@ -49,15 +48,14 @@ The framework implements the **ETCLOVG** taxonomy from "Agent Harness Engineerin
 Nao.slnx
 ├── src/
 │   ├── Nao.Agents/              # Agent framework (core types + ETCLOVG architecture)
-│   │   ├── Llm/                 # Message, Role, ContentMeta, ILlmProvider, completion types
+│   │   ├── Llm/                 # Message, Role, ILlmProvider, completion types
 │   │   ├── Core/                # IAgent, AgentId, Tool (verify/revert), AgentAction, RetryPolicy
 │   │   ├── Prompts/             # Prompt, PromptExample, OutputFormat
 │   │   ├── Messaging/           # AgentMessage for inter-agent communication
-│   │   ├── Logging/             # LogLevel, LogEntry, AgentLogger
 │   │   ├── Environment/         # [E] ResourceLimits, SandboxConfig, ExecutionContext
-│   │   ├── ToolProtocol/        # [T] ToolSchema, IToolProtocol, ToolRouter, ExecutionJournal
+│   │   ├── ToolProtocol/        # [T] IToolProtocol, MCP, composition
 │   │   ├── Memory/              # [C] ConversationWindow, MemoryStore, SemanticMemory, ContextCompaction
-│   │   ├── Lifecycle/           # [L] AgentLifecycle, LifecyclePipeline
+│   │   ├── Lifecycle/           # [L] AgentLifecycle and ILifecycleHook
 │   │   ├── Orchestration/       # [L] Router, Pipeline, AgentGroup, Orchestrator
 │   │   ├── Observability/       # [O] Trace, Metrics, Resilience (CircuitBreaker)
 │   │   ├── Verification/        # [V] Verification, Regression
@@ -118,7 +116,7 @@ The `EtclovgHarness` integrates all seven layers into a unified execution pipeli
 G: Governance (permissions + policy pre-check)
   → V: Verification (readiness gates)
     → L: Lifecycle (initialize + start)
-      → O: Observability (trace spans + metrics)
+    → O: Observability (trace spans + actual per-call LLM metrics)
         → E: Execution (sandboxed agent.RunAsync)
       → G: Constitution (output validation)
     → L: Lifecycle (complete)
@@ -132,9 +130,8 @@ let config =
         Execution = SandboxConfig.Restricted (ResourceLimits.Constrained 60 50 100000)
         ToolProtocol = Some (ToolProtocol.fromTools myTools)
         Tracer = Some (Tracer.inMemory ())
-        Metrics = Some (MetricsCollector.inMemory ())
+        Metrics = Some (InMemory.metrics ())
         Constitution = Some (Constitution.empty "safety" |> Constitution.addRule Constitution.noPrivateDataRule)
-        Permissions = Some (PermissionModel.Permissive agentId)
         PolicyEngine = Some (PolicyEngine.create [ PolicyEngine.costBudgetPolicy 10.0m ])
         ReadinessChecks = [ myReadinessCheck ]
         TraceStore = Some traceStore
@@ -158,14 +155,35 @@ match result.HarnessError with
 
 ### Agent Model
 
-Every agent implements `IAgent`:
+Agents are named typed classes. Name, description, and transport contract are explicit in the class definition. The base class does not infer a schema or impose a serialization format; each concrete agent overrides `RunAsync` and uses the codecs its consumer provides:
 
 ```fsharp
-type IAgent =
-    abstract member Id: AgentId
-    abstract member RunAsync: string -> Task<string>
-    abstract member HandleMessageAsync: AgentMessage -> Task<AgentMessage option>
-    abstract member State: AgentState
+type EligibilityInput =
+    { [<Description("Applicant age in years.")>]
+      Age: int
+      [<Description("Whether the applicant accepted the terms.")>]
+      AcceptedTerms: bool }
+
+type EligibilityOutput = { Eligible: bool }
+
+type EligibilityAgent(decodeInput: string -> EligibilityInput, encodeOutput: EligibilityOutput -> string) =
+    inherit TypedContextualAgent<EligibilityInput, EligibilityOutput>(
+        "eligibility-agent",
+        "eligibility",
+        "Checks whether an applicant is eligible.",
+        10,
+                [ "Check eligibility and return a typed decision" ],
+                { Input = AgentParameter.Structured "object with required integer age and boolean acceptedTerms"
+                    Output = AgentParameter.Structured "object with required boolean eligible" })
+
+    override _.RunAsync(context, encodedInput) =
+        task {
+            let input = decodeInput encodedInput
+            return encodeOutput { Eligible = input.Age >= 18 && input.AcceptedTerms }
+        }
+
+let agent = EligibilityAgent(decodeInput, encodeOutput) :> IAgent
+let! encodedResult = agent.RunAsync(AgentContext.allowAll, encodedInput)
 ```
 
 Agents can invoke tools, delegate to sub-agents, or respond directly:
@@ -205,7 +223,7 @@ let history = AgentGroup.runAsync "Analyze this data" group
 
 ### Custom Orchestrators
 
-`OrchestratorBase` is an abstract template: it owns the run loop — calling the LLM, logging the round's reasoning, tracing each step, appending the model's message, executing tools and delegations, and producing the final answer. A concrete orchestrator only fills in *how to prompt* and *how to parse*. Because the base makes the LLM call, **logs and traces are captured no matter how you implement your orchestrator** — a custom subclass cannot accidentally drop them.
+`OrchestratorBase` is an abstract template: it owns the run loop — calling the LLM, logging the round's reasoning, tracing and measuring each call, validating and repairing structured responses, appending the model's message, executing tools and delegations, and producing the final answer. A concrete orchestrator only fills in *how to prompt* and *how to parse*. Because the base makes the LLM call, logs, traces, latency, call counts, and provider-reported split token usage are captured consistently for initial, repair, fallback, delegated, and agent-backed memory calls.
 
 The framework provides `OrchestratorBase` as an extensible execution template. Hosts supply the prompt format, action parser, agents, and tools as compiled .NET registrations; the runtime does not load code or definitions dynamically.
 
@@ -243,11 +261,6 @@ type MyOrchestrator(config: OrchestratorConfig) =
         Some(ResponseProtocol.create descriptor parse (fun error ->
             "Repair the response. " + ResponseParseError.format error))
 
-    override _.OnToolResult(toolName, input, result) =
-        printfn "Tool %s returned: %s" toolName result
-
-    override _.OnRoundComplete(round, content) =
-        printfn "Round %d complete" round
 ```
 
 Register a custom factory via DI to have the runtime use your subclass:
@@ -267,10 +280,8 @@ Members on `OrchestratorBase`:
 | `ParseActions(response)` | virtual | Legacy parser hook used when no response protocol is supplied. |
 | `ValidateResponse(response)` | virtual | Return a repair error, or `None` to accept (default: accept). |
 | `BuildRepairMessage(error)` | virtual | Corrective instruction sent on a repair round. |
-| `OnToolResult(name, input, result)` | virtual | Hook after tool execution. |
-| `OnRoundComplete(round, content)` | virtual | Hook after each reasoning round. |
 
-The base guarantees, for every round, regardless of subclass: a `ReasoningAdded` progress signal, an `agent.plan` trace span, and `ToolInvoked`/`ToolCompleted` (and `SubAgentInvoked`/`SubAgentCompleted`) signals plus `tool.invoke` spans for each action it executes.
+The base guarantees, for every round, regardless of subclass: a `ReasoningAdded` progress signal, an `agent.plan` trace span, one metric entry per actual LLM call, and `ToolInvoked`/`ToolCompleted` (and `SubAgentInvoked`/`SubAgentCompleted`) signals plus `tool.invoke` spans for each action it executes. Lifecycle customization belongs in harness `ILifecycleHook` implementations rather than orchestrator callbacks.
 
 
 ### Memory Management
@@ -299,6 +310,23 @@ store.SaveAsync agentId { Key = "user-name"; Value = "Alice"; ... }
 store.RecallAsync agentId "user"
 ```
 
+**Built-in Memory Agent** — Let an orchestrator decide when prior context is needed instead
+of injecting every memory into every prompt. The specialist is exposed as one agent-backed
+`memory` tool so its curated result returns to the caller's planning loop:
+
+```fsharp
+let policy = MemoryToolConfig.Default
+let operations = MemoryTools.create policy store (fun () -> sessionOwner)
+let specialist = MemoryAgent.create orchestratorFactory provider operations
+let memory = MemoryAgent.asTool specialist
+```
+
+The memory agent interprets vague requests, can search repeatedly, reconciles conflicting facts,
+and curates the result. Deterministic `memory_search`, `memory_remember`, and optional
+`memory_forget` operations enforce storage semantics and bounds. The host supplies the owner
+function, so neither the agent nor its tools can choose or cross memory scopes. Semantic and
+tiered stores remain optional retrieval implementations rather than hidden behavior.
+
 **Semantic Memory** — Embedding-based similarity retrieval:
 
 ```fsharp
@@ -326,30 +354,47 @@ let! result = protocol.InvokeAsync "get_weather" "London"
 // result.Success, result.Output, result.DurationMs, result.Error
 ```
 
-### Content Metadata
+### Typed Tools
 
-Tools and agents declare their output type via `ContentMeta`:
-
-```fsharp
-let meta = ContentMeta.Json
-let custom = ContentMeta.WithMeta "image/png" [ "width", "1024"; "height", "768" ]
-```
-
-### Tool Verify & Revert
-
-Tools can optionally verify correctness and undo side-effects:
+Tools follow the same interface and abstract-base pattern as agents. Names, descriptions, and parameter descriptors are explicit. Each descriptor owns its schema, encoder, and decoder:
 
 ```fsharp
-let tool =
-    { Tool.Create("deploy", "Deploy to staging", fun input -> task { ... }) with
-        Verify = Some (fun input output -> task {
-            // Check the deployment was successful
-            return Ok ()
-        })
-        Revert = Some (fun ctx -> task {
-            // Rollback the deployment
-            return Ok ()
-        }) }
+type DeployInput =
+    { [<Description("Target environment name.")>]
+      Environment: string
+      [<Description("Optional release label.")>]
+      Release: string option }
+
+type DeployOutput = { DeploymentId: string }
+
+module DeployContract =
+    let input =
+        ToolParameter.create
+            "object with required string environment and optional string release"
+            encodeDeployInput
+            decodeDeployInput
+
+    let output =
+        ToolParameter.create
+            "object with required string deploymentId"
+            encodeDeployOutput
+            decodeDeployOutput
+
+type DeployTool() =
+    inherit TypedTool<DeployInput, DeployOutput>(
+        "deploy",
+        "Deploy an application to an environment.",
+        [],
+        DeployContract.input,
+        DeployContract.output)
+
+    override _.ExecuteAsync(_context, input) =
+        task {
+            let! deploymentId = deploy input.Environment input.Release
+            return Ok { DeploymentId = deploymentId }
+        }
+
+let tool: ITool = DeployTool()
 ```
 
 ### Execution Journal
@@ -364,15 +409,6 @@ let! failures = ExecutionJournal.revertAllAsync journal tools
 ```
 
 ### Governance (G)
-
-**Permission Model** — Control which tools/capabilities agents can access:
-
-```fsharp
-let perms =
-    PermissionModel.Permissive agentId
-    |> PermissionModel.grant "tool:search" PermissionLevel.Allow
-    |> PermissionModel.grant "tool:delete" PermissionLevel.Deny
-```
 
 **Constitution** — Rules that agent outputs must satisfy:
 
@@ -395,7 +431,7 @@ let engine = PolicyEngine.create [
 let result = engine.Evaluate(PolicyContext.FromExecutionContext agentId "execute" input ctx)
 ```
 
-**Resource Permissions** — Fine-grained, *resource-level* approval that complements the capability-level `PermissionModel`. Where `PermissionModel` asks "may this agent use tool X?", `ResourceAccess` asks "may this run touch THIS path or THIS url?". Access is **deny-by-default** (opt-in via Settings) and unresolved requests prompt the user live.
+**Resource Permissions** — Fine-grained approval for concrete file, web, and tool access. Core defines `ResourceAccess`, `PermissionTarget`, `PermissionRule`, and `PermissionDecision`; Governance evaluates those contracts. Access is **deny-by-default** (opt-in via Settings) and unresolved requests prompt the user live.
 
 ```fsharp
 // A sensitive action + the specific resource it targets
@@ -412,25 +448,42 @@ let decision = ResourcePermission.evaluateWith PermissionDecision.Deny rules acc
 // PermissionDecision.Allow | Deny | Ask
 ```
 
-Tools are permission-aware through a `ToolContext` passed to `Execute`. A tool can declare the static `Permissions` it needs (auto-requested before each run) and/or request access dynamically mid-execution once it knows what resource its input targets:
+Tools are permission-aware through the `AgentContext` passed to `ExecuteAsync`. `TypedTool` decodes input, requests declared static permissions, executes the typed implementation, and encodes output. A tool can also request access dynamically once it knows what resource its input targets:
 
 ```fsharp
 // Declared up-front: auto-requested by InvokeAsync before Execute runs
-let fetcher =
-    Tool.Create("fetch", "Download a page",
+type FetchTool() =
+    inherit TypedTool<FetchInput, FetchOutput>(
+        "fetch",
+        "Fetch data from the configured endpoint.",
         [ ResourceAccess.Web("GET", "https://example.com") ],
-        fun ctx input -> task { ... })
+        FetchContract.input,
+        FetchContract.output)
 
-// Or requested dynamically from inside Execute
-let writer =
-    Tool.Create("save", "Write a file", [],
-        fun ctx input -> task {
-            let! ok = ctx.RequestPermission (ResourceAccess.File("write", path)) "Save the report."
-            if ok then return! doWrite input else return "[denied]"
-        })
+    override _.ExecuteAsync(ctx, input) = task { ... }
+
+let fetcher: ITool = FetchTool()
+
+// Or requested dynamically from inside ExecuteAsync
+type SaveTool() =
+    inherit TypedTool<SaveInput, SaveOutput>(
+        "save",
+        "Save a report to a file.",
+        [],
+        SaveContract.input,
+        SaveContract.output)
+
+    override _.ExecuteAsync(ctx, input) =
+        task {
+            let! ok = ctx.RequestPermission (ResourceAccess.File("write", path)) "Save the report." false
+            if ok then return Ok(doWrite input)
+            else return Error(ToolExecError.PermissionDenied "Write access denied.")
+        }
+
+let writer: ITool = SaveTool()
 
 // In tests/library code with no permission system wired:
-let! result = tool.InvokeAsync(ToolContext.allowAll, input)
+let! result = tool.RunAsync(AgentContext.allowAll, input)
 ```
 
 The pieces fit together so the runtime layer stays independent of host-specific decision and transport logic:
@@ -460,14 +513,18 @@ let child = tracer.StartSpan root "tool.invoke"
 tracer.EndSpan child SpanStatus.Ok
 ```
 
-**Metrics** — Token usage, cost tracking, latency percentiles:
+**Metrics** — Actual LLM call counts, provider-reported token usage, caller-owned cost tracking, and latency percentiles:
 
 ```fsharp
-let metrics = MetricsCollector.inMemory ()
-metrics.RecordLlmCall inputTokens outputTokens latencyMs
-let cost = metrics.EstimateCost MetricsCollector.gpt4o
-let summary = metrics.GetMetrics() // TotalLlmCalls, AvgLatencyMs, P95, ...
+let metrics = InMemory.metrics ()
+let pricing =
+    { InputCostPer1K = inputPrice
+    OutputCostPer1K = outputPrice }
+let cost = metrics.EstimateCost pricing
+let summary = metrics.GetMetrics() // TotalLlmCalls, TotalInputTokens, TotalOutputTokens, ...
 ```
+
+Attach the collector through `EtclovgConfig.Metrics`. `OrchestratorBase` records each provider call, including validation repairs, max-round fallback, delegation, and agent-backed memory work. A `CompletionResult` retains aggregate `TokensUsed` when available and exposes `Usage: TokenUsage option` only when the provider reports both input and output counts. Unknown splits are recorded as zero rather than estimated. Pricing is supplied by the host because model prices are deployment-specific and change independently of Nao.
 
 **Resilience** — Retry with backoff, circuit breakers, fallbacks:
 

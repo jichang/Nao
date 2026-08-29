@@ -4,9 +4,12 @@ namespace Nao.Providers
 type LlamaCppConfig =
     { BaseUrl: string
       Model: string
-      NPredict: int option }
+      NPredict: int option
+      /// Request timeout in seconds. None uses the HttpClient default.
+      TimeoutSeconds: int option }
 
     static member Default =
-        { BaseUrl = "http://localhost:8080"
+        { BaseUrl = "http://localhost:8080/v1/chat/completions"
           Model = "default"
-          NPredict = None }
+          NPredict = None
+          TimeoutSeconds = None }

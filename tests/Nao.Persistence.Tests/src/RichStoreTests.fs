@@ -173,36 +173,6 @@ type WorkingMemoryTests() =
             .GetAwaiter()
             .GetResult()
 
-// ---------------- Tool discovery ----------------
-
-[<TestClass>]
-type ToolDiscoveryTests() =
-    let exercise (make: unit -> PersistentToolDiscovery) =
-        task {
-            let first = make () :> IToolDiscovery
-            do! first.RecordInvocationAsync "search" true 100L 0.01
-            do! first.RecordInvocationAsync "search" false 200L 0.02
-            let reloaded = make () :> IToolDiscovery
-            let! stats = reloaded.GetStatsAsync "search"
-            Assert.IsTrue(stats.IsSome)
-            Assert.AreEqual(2, stats.Value.InvocationCount)
-            Assert.AreEqual(1, stats.Value.SuccessCount)
-        }
-
-    [<TestMethod>]
-    member _.Ado_Persists() =
-        let factory = sqliteFactory ()
-        (exercise (fun () -> ToolDiscoveries.ado factory ToolDiscoveryConfig.Default None))
-            .GetAwaiter()
-            .GetResult()
-
-    [<TestMethod>]
-    member _.File_Persists() =
-        let dir = tempDir ()
-        (exercise (fun () -> ToolDiscoveries.file dir ToolDiscoveryConfig.Default None))
-            .GetAwaiter()
-            .GetResult()
-
 // ---------------- Metrics ----------------
 
 [<TestClass>]

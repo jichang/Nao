@@ -7,10 +7,15 @@
 
   <ItemGroup>
     <Compile Include="src/Configs/OpenAIConfig.fs" />
+    <Compile Include="src/Configs/DeepSeekConfig.fs" />
+    <Compile Include="src/Configs/KimiConfig.fs" />
     <Compile Include="src/Configs/AnthropicConfig.fs" />
     <Compile Include="src/Configs/OllamaConfig.fs" />
     <Compile Include="src/Configs/VllmConfig.fs" />
     <Compile Include="src/Configs/LlamaCppConfig.fs" />
+    <Compile Include="src/Providers/OpenAIChatDtos.fs" />
+    <Compile Include="src/Providers/AnthropicDtos.fs" />
+    <Compile Include="src/Providers/AnthropicProvider.fs" />
     <Compile Include="src/Providers/OllamaProvider.fs" />
     <Compile Include="src/Providers/OpenAICompatibleProvider.fs" />
     <Compile Include="src/Factory/ProviderType.fs" />

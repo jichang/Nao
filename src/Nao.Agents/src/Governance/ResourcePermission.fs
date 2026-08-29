@@ -2,65 +2,6 @@ namespace Nao.Agents
 
 open System
 
-/// A sensitive action a tool or agent wants to perform, together with the specific
-/// resource it targets. The permission system decides whether to allow it. This is the
-/// resource-level companion to the capability-level `Permission` model: where `Permission`
-/// asks "may this agent use tool X?", `ResourceAccess` asks "may this run touch THIS path
-/// or THIS url?".
-[<RequireQualifiedAccess>]
-type ResourceAccess =
-    /// Filesystem access at an absolute path. Operation is "read", "write", "delete", "list".
-    | File of operation: string * path: string
-    /// Network access to a URL. Operation is the HTTP method ("GET"/"POST"/…) or "fetch".
-    | Web of operation: string * url: string
-    /// Invoke a named tool whose resource semantics the guard cannot introspect.
-    | ToolCall of toolName: string
-
-/// The outcome of evaluating an access request.
-[<RequireQualifiedAccess>]
-type PermissionDecision =
-    /// Permitted — proceed.
-    | Allow
-    /// Refused — block the action.
-    | Deny
-    /// Needs interactive user approval. Reserved for the interactive-prompt phase; until
-    /// that channel exists, callers treat `Ask` as `Deny`.
-    | Ask
-
-/// How broadly a granted rule applies.
-[<RequireQualifiedAccess>]
-type RuleScope =
-    /// Applies only within one session (the grain key "userId/sessionId"). This is the
-    /// default when a user grants access in response to a single request.
-    | Session of sessionKey: string
-    /// Applies to every session — the user explicitly opted to remember the grant globally.
-    | Global
-
-/// The class of resource a rule matches.
-[<RequireQualifiedAccess>]
-type ResourceKind =
-    | File
-    | Web
-    | Tool
-
-/// A single allow/deny rule the user granted.
-type PermissionRule =
-    { /// Stable identifier (used to revoke).
-      Id: string
-      Kind: ResourceKind
-      /// Match pattern.
-      ///  • File: an absolute path prefix — matches the path itself and anything under it
-      ///    (e.g. "/home/me/project" matches "/home/me/project/sub/a.txt"). Globs allowed.
-      ///  • Web: a host or host suffix — "example.com" matches "example.com" and any
-      ///    subdomain "*.example.com". A bare "*" matches everything. Globs allowed.
-      ///  • Tool: the tool name, a glob, or "*".
-      Pattern: string
-      /// Operations this rule covers, lowercased (e.g. ["read"; "write"]). Empty = any.
-      Operations: string list
-      Decision: PermissionDecision
-      Scope: RuleScope
-      CreatedAt: DateTimeOffset }
-
 /// Pure evaluation of resource-access requests against a set of granted rules. No IO — the
 /// persistence and enforcement layers live in the server; this module is the testable core.
 [<RequireQualifiedAccess>]
@@ -119,22 +60,34 @@ module ResourcePermission =
             let x = norm path
             x = p || x.StartsWith(p + "/", StringComparison.Ordinal) || glob pattern path
 
-    let private opMatches (rule: PermissionRule) (op: string) =
-        match rule.Operations with
+    let private opMatches operations (op: string) =
+        match operations with
         | [] -> true
         | ops -> ops |> List.contains (op.Trim().ToLowerInvariant())
 
+    /// Returns whether one rule target covers another target of the same resource class.
+    let targetCovers broader narrower =
+        match broader, narrower with
+        | PermissionTarget.File(broaderPath, _), PermissionTarget.File(narrowerPath, _) ->
+            pathMatches broaderPath narrowerPath
+        | PermissionTarget.Web(broaderHost, _), PermissionTarget.Web(narrowerHost, _) ->
+            hostMatches broaderHost narrowerHost
+        | PermissionTarget.Tool broaderName, PermissionTarget.Tool narrowerName ->
+            broaderName = "*" || glob broaderName narrowerName
+        | _ -> false
+
     /// Does a rule match an access request? (Scope is filtered by the caller via `applicable`.)
     let ruleMatches (access: ResourceAccess) (rule: PermissionRule) : bool =
-        match rule.Kind, access with
-        | ResourceKind.File, ResourceAccess.File(op, path) -> opMatches rule op && pathMatches rule.Pattern path
-        | ResourceKind.Web, ResourceAccess.Web(op, url) ->
-            opMatches rule op
+        match rule.AppliesTo, access with
+        | PermissionTarget.File(pattern, operations), ResourceAccess.File(op, path) ->
+            opMatches operations op && pathMatches pattern path
+        | PermissionTarget.Web(pattern, operations), ResourceAccess.Web(op, url) ->
+            opMatches operations op
             && (match hostOf url with
-                | Some h -> hostMatches rule.Pattern h
-                | None -> rule.Pattern = "*")
-        | ResourceKind.Tool, ResourceAccess.ToolCall name ->
-            rule.Pattern = "*" || rule.Pattern = name || glob rule.Pattern name
+                | Some h -> hostMatches pattern h
+                | None -> pattern = "*")
+        | PermissionTarget.Tool pattern, ResourceAccess.ToolCall name ->
+            pattern = "*" || glob pattern name
         | _ -> false
 
     /// Keep only the rules that apply to the given session — every Global rule, plus the

@@ -109,8 +109,10 @@ type MetricsTests() =
     member _.EstimateCostUsesModel() =
         let collector = InMemory.metrics ()
         collector.RecordLlmCall 1000 500 100L
-        let cost = collector.EstimateCost MetricsCollector.gpt4o
-        // 1000 input tokens * 0.0025/1K + 500 output tokens * 0.01/1K = 0.0025 + 0.005 = 0.0075
+        let model : CostModel =
+            { InputCostPer1K = 0.0025m
+              OutputCostPer1K = 0.01m }
+        let cost = collector.EstimateCost model
         Assert.AreEqual(0.0075m, cost)
 
     [<TestMethod>]

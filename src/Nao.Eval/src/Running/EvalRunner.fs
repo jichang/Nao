@@ -35,7 +35,7 @@ module EvalRunner =
     let runCaseAsync (evaluator: IEvaluator) (agent: IAgent) (case: EvalCase) : Task<EvalResult> =
         task {
             let sw = Stopwatch.StartNew()
-            let! output = agent.RunAsync case.Input
+            let! output = agent.RunAsync(AgentContext.allowAll, case.Input)
             sw.Stop()
 
             let! (verdict, reason) = evaluator.EvaluateAsync case output
@@ -61,7 +61,7 @@ module EvalRunner =
     let runCaseLightAsync (evaluator: IEvaluator) (agent: IAgent) (case: EvalCase) : Task<EvalResult> =
         task {
             let sw = Stopwatch.StartNew()
-            let! output = agent.RunAsync case.Input
+            let! output = agent.RunAsync(AgentContext.allowAll, case.Input)
             sw.Stop()
 
             let! (verdict, reason) = evaluator.EvaluateAsync case output

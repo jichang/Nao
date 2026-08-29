@@ -1,7 +1,7 @@
 namespace Nao.Providers
 
-/// Configuration for Anthropic Claude
-type AnthropicConfig =
+/// Configuration for DeepSeek's OpenAI-compatible API
+type DeepSeekConfig =
     { ApiKey: string
       Model: string
       BaseUrl: string
@@ -10,6 +10,6 @@ type AnthropicConfig =
 
     static member Default =
         { ApiKey = ""
-          Model = "claude-sonnet-4-20250514"
-          BaseUrl = "https://api.anthropic.com"
+          Model = "deepseek-chat"
+          BaseUrl = "https://api.deepseek.com/v1/chat/completions"
           TimeoutSeconds = None }

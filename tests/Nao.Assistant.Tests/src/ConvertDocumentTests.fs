@@ -33,11 +33,11 @@ type ConvertDocumentTests() =
         File.WriteAllText(Path.Combine(workspace, name), content)
 
     member private _.Convert (input: string) =
-        let json = (AssistantTools.convertDocument.Execute ToolContext.allowAll input).GetAwaiter().GetResult()
+        let json = (AssistantTools.convertDocument.Execute AgentContext.allowAll input).GetAwaiter().GetResult()
         JsonDocument.Parse(json).RootElement
 
     member private _.WriteDocument (input: string) =
-        let json = (AssistantTools.writeDocument.Execute ToolContext.allowAll input).GetAwaiter().GetResult()
+        let json = (AssistantTools.writeDocument.Execute AgentContext.allowAll input).GetAwaiter().GetResult()
         JsonDocument.Parse(json).RootElement
 
     [<TestMethod>]

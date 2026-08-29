@@ -16,34 +16,39 @@ open Nao.Agents
 /// Demo tools with richer metadata for the tool protocol layer
 module EtclovgDemoTools =
 
-    let stockPrice: Tool =
-        Tool.Create("get_stock_price", "Get the current stock price for a ticker symbol",
-            fun ticker ->
-                let price =
-                    match ticker.Trim().ToUpper() with
-                    | "AAPL" -> "189.45"
-                    | "MSFT" -> "420.12"
-                    | "GOOGL" -> "175.30"
-                    | t -> sprintf "Unknown ticker: %s" t
-                Task.FromResult(sprintf """{"ticker":"%s","price":%s,"currency":"USD"}""" (ticker.ToUpper()) price))
+    type private StockPriceTool() =
+        inherit TypedTool<string, string>("get_stock_price", "Get the current stock price for a ticker symbol", [], ToolParameter.text, ToolParameter.text)
+        override _.ExecuteAsync(_context, ticker) =
+            let price =
+                match ticker.Trim().ToUpper() with
+                | "AAPL" -> "189.45"
+                | "MSFT" -> "420.12"
+                | "GOOGL" -> "175.30"
+                | value -> sprintf "Unknown ticker: %s" value
+            Task.FromResult(Ok(sprintf """{"ticker":"%s","price":%s,"currency":"USD"}""" (ticker.ToUpper()) price))
 
-    let sendEmail: Tool =
-        Tool.Create("send_email", "Send an email to a recipient. Input format: 'to@email.com|subject|body'",
-            fun input ->
-                let parts = input.Split('|')
-                if parts.Length >= 3 then
-                    Task.FromResult(sprintf "Email sent to %s with subject '%s'" parts.[0] parts.[1])
-                else
-                    Task.FromResult("Error: invalid email format"))
+    type private SendEmailTool() =
+        inherit TypedTool<string, string>("send_email", "Send an email to a recipient. Input format: 'to@email.com|subject|body'", [], ToolParameter.text, ToolParameter.text)
+        override _.ExecuteAsync(_context, input) =
+            let parts = input.Split('|')
+            let output =
+                if parts.Length >= 3 then sprintf "Email sent to %s with subject '%s'" parts.[0] parts.[1]
+                else "Error: invalid email format"
+            Task.FromResult(Ok output)
 
-    let searchDocs: Tool =
-        Tool.Create("search_docs", "Search internal documentation. Returns relevant passages.",
-            fun query ->
-                Task.FromResult(sprintf "Found 3 results for '%s': [1] Getting Started Guide [2] API Reference [3] FAQ" query))
+    type private SearchDocsTool() =
+        inherit TypedTool<string, string>("search_docs", "Search internal documentation. Returns relevant passages.", [], ToolParameter.text, ToolParameter.text)
+        override _.ExecuteAsync(_context, query) =
+            Task.FromResult(Ok(sprintf "Found 3 results for '%s': [1] Getting Started Guide [2] API Reference [3] FAQ" query))
 
-    let dangerousDelete: Tool =
-        Tool.Create("delete_all_data", "Permanently delete all data. DANGEROUS - requires confirmation.",
-            fun _ -> Task.FromResult("All data deleted permanently"))
+    type private DangerousDeleteTool() =
+        inherit TypedTool<string, string>("delete_all_data", "Permanently delete all data. DANGEROUS - requires confirmation.", [], ToolParameter.text, ToolParameter.text)
+        override _.ExecuteAsync(_context, _input) = Task.FromResult(Ok "All data deleted permanently")
+
+    let stockPrice: ITool = StockPriceTool()
+    let sendEmail: ITool = SendEmailTool()
+    let searchDocs: ITool = SearchDocsTool()
+    let dangerousDelete: ITool = DangerousDeleteTool()
 
     let allTools = [ stockPrice; sendEmail; searchDocs; dangerousDelete ]
 
@@ -81,7 +86,7 @@ type EtclovgMockProvider() =
                 else
                     sprintf "I understand your request: %s. Here's my response." lastMsg
 
-            Task.FromResult({ Content = response; FinishReason = "stop"; TokensUsed = Some 150 })
+            Task.FromResult(CompletionResult.create response "stop" (Some 150) None)
 
 
 // =============================================================================
@@ -94,8 +99,8 @@ type EtclovgExecutionTests() =
     let makeAgent response : IAgent =
         { new IAgent with
             member _.Id = { Name = "bounded-agent"; Description = "Agent with resource bounds" }
-            member _.RunAsync(_) = Task.FromResult response
-            member _.HandleMessageAsync(_) = Task.FromResult None }
+            member _.RunAsync(_context, _) = Task.FromResult response
+            member _.HandleMessageAsync(_context, _) = Task.FromResult None }
 
     [<TestMethod>]
     member _.AgentRunsWithinResourceBudget() =
@@ -163,12 +168,12 @@ type EtclovgToolProtocolTests() =
         Assert.IsTrue(schemas |> List.exists (fun s -> s.Name = "send_email"))
 
         // Get specific tool
-        let stockTool = (protocol.GetTool "get_stock_price@1.0").Result
+        let stockTool = (protocol.GetTool "get_stock_price").Result
         Assert.IsTrue(stockTool.IsSome)
         Assert.AreEqual("Get the current stock price for a ticker symbol", stockTool.Value.Description)
 
         // Invoke tool through protocol
-        let result = (protocol.InvokeAsync "get_stock_price@1.0" "MSFT").Result
+        let result = (protocol.InvokeAsync "get_stock_price" "MSFT").Result
         Assert.IsTrue(result.Success)
         Assert.IsTrue(result.Output.Contains("420.12"))
         Assert.IsTrue(result.DurationMs >= 0L)
@@ -182,27 +187,13 @@ type EtclovgToolProtocolTests() =
 
         // Should work within the rate limit
         for _ in 1..5 do
-            let result = (protocol.InvokeAsync "get_stock_price@1.0" "AAPL").Result
+            let result = (protocol.InvokeAsync "get_stock_price" "AAPL").Result
             Assert.IsTrue(result.Success)
 
         // 6th call should be blocked
-        let blocked = (protocol.InvokeAsync "get_stock_price@1.0" "AAPL").Result
+        let blocked = (protocol.InvokeAsync "get_stock_price" "AAPL").Result
         Assert.IsFalse(blocked.Success)
         Assert.IsTrue(blocked.Error.Value.Contains("Rate limit"))
-
-    [<TestMethod>]
-    member _.ToolRouterSelectsByKeyword() =
-        let schemas = EtclovgDemoTools.allTools |> List.map ToolSchema.fromTool
-        let patterns = Map.ofList [
-            "get_stock_price", ["stock"; "price"; "ticker"]
-            "send_email", ["email"; "send"; "mail"]
-            "search_docs", ["search"; "find"; "docs"; "documentation"]
-        ]
-        let result = ToolRouter.selectByPattern patterns "look up stock price for AAPL" schemas
-        Assert.IsTrue(result.IsSome)
-        Assert.AreEqual("get_stock_price", result.Value.Tool.Name)
-        Assert.IsTrue(result.Value.Confidence > 0.0)
-
 
 // =============================================================================
 // C: Context & Memory — Tiered memory and context compaction
@@ -292,38 +283,6 @@ type EtclovgLifecycleTests() =
         Assert.AreEqual(5, completed.Events.Length)
 
     [<TestMethod>]
-    member _.LifecyclePipelineWithMultipleStages() =
-        // Simulate an issue-to-deployment pipeline
-        let planStage : PipelineStage =
-            { Name = "plan"
-              Description = "Analyze the task and create a plan"
-              Execute = fun input -> Task.FromResult(sprintf "Plan: Break '%s' into 3 subtasks" input)
-              Validate = fun output -> Task.FromResult(if output.Contains("Plan:") then Ok () else Error "No plan generated")
-              Retry = RetryPolicy.None }
-
-        let implementStage : PipelineStage =
-            { Name = "implement"
-              Description = "Execute the plan"
-              Execute = fun plan -> Task.FromResult(sprintf "Implementation complete based on: %s" plan)
-              Validate = fun output -> Task.FromResult(if output.Contains("complete") then Ok () else Error "Implementation incomplete")
-              Retry = RetryPolicy.Fixed (2, 0) }
-
-        let verifyStage : PipelineStage =
-            { Name = "verify"
-              Description = "Verify the implementation"
-              Execute = fun impl -> Task.FromResult(sprintf "Verified: %s - All checks passed" impl)
-              Validate = fun output -> Task.FromResult(if output.Contains("passed") then Ok () else Error "Verification failed")
-              Retry = RetryPolicy.None }
-
-        let result = (LifecyclePipeline.executeAsync [ planStage; implementStage; verifyStage ] "add user authentication").Result
-
-        Assert.IsTrue(result.Success)
-        Assert.AreEqual(3, result.Stages.Length)
-        Assert.IsTrue(result.FinalOutput.Value.Contains("Verified"))
-        Assert.IsTrue(result.FinalOutput.Value.Contains("passed"))
-        Assert.IsTrue(result.Stages |> List.forall (fun s -> s.Success))
-
-    [<TestMethod>]
     member _.OrchestratorWithToolProtocolIntegration() =
         // Show the Orchestrator using ToolProtocol for structured tool management
         let provider = EtclovgMockProvider() :> ILlmProvider
@@ -336,7 +295,7 @@ type EtclovgLifecycleTests() =
 
         // Create orchestrator with these tools
         let orchestrator = NaoOrchestrator.create provider tools []
-        let result = (orchestrator.RunAsync "What is the stock price of AAPL?").Result
+        let result = (orchestrator.RunAsync(AgentContext.allowAll, "What is the stock price of AAPL?")).Result
         Assert.IsTrue(result.Contains("189.45") || result.Contains("AAPL"))
 
 
@@ -363,7 +322,7 @@ type EtclovgObservabilityTests() =
         let toolSpan = tracer.StartSpan orchestratorSpan "tool.invoke.get_stock_price"
         tracer.SetAttributes toolSpan (Map.ofList ["tool.input", "AAPL"])
         // Simulate tool execution
-        let toolResult = (EtclovgDemoTools.stockPrice.Execute ToolContext.allowAll "AAPL").Result
+        let toolResult = (EtclovgDemoTools.stockPrice.Execute AgentContext.allowAll "AAPL").Result
         tracer.AddEvent toolSpan "tool-result" (Map.ofList ["output", toolResult])
         tracer.EndSpan toolSpan SpanStatus.Ok
 
@@ -397,9 +356,8 @@ type EtclovgObservabilityTests() =
         Assert.AreEqual(1, summary.TotalToolCalls)
         Assert.AreEqual(150.0, summary.AvgLatencyMs)
 
-        // Estimate cost with GPT-4o pricing
-        let cost = metrics.EstimateCost MetricsCollector.gpt4o
-        // 1500 input * 0.0025/1K + 600 output * 0.01/1K = 0.00375 + 0.006 = 0.00975
+            let costModel : CostModel = { InputCostPer1K = 0.0025m; OutputCostPer1K = 0.01m }
+            let cost = metrics.EstimateCost costModel
         Assert.IsTrue(cost > 0m)
         Assert.AreEqual(0.00975m, cost)
 
@@ -469,7 +427,7 @@ type EtclovgVerificationTests() =
                     // Check that required tools are available
                     let protocol = ToolProtocol.fromTools EtclovgDemoTools.allTools
                     task {
-                        let! available = protocol.IsAvailable "get_stock_price@1.0"
+                        let! available = protocol.IsAvailable "get_stock_price"
                         if available then return ReadinessResult.Ready
                         else return ReadinessResult.NotReady ["get_stock_price tool not available"]
                     } }
@@ -542,24 +500,6 @@ type EtclovgGovernanceTests() =
     let agentId = { Name = "governed-agent"; Description = "Agent with governance" }
 
     [<TestMethod>]
-    member _.PermissionModelRestrictsDangerousTools() =
-        // Create a permission model that blocks dangerous operations
-        let perms =
-            PermissionModel.Permissive agentId
-            |> PermissionModel.grant "tool:get_stock_price" PermissionLevel.Allow
-            |> PermissionModel.grant "tool:search_docs" PermissionLevel.Allow
-            |> PermissionModel.grant "tool:send_email" PermissionLevel.AllowWithAudit
-            |> PermissionModel.grant "tool:delete_all_data" PermissionLevel.Deny
-
-        // Safe tools are allowed
-        Assert.AreEqual(PermissionLevel.Allow, PermissionModel.canUseTool perms "get_stock_price")
-        Assert.AreEqual(PermissionLevel.Allow, PermissionModel.canUseTool perms "search_docs")
-        // Email requires audit trail
-        Assert.AreEqual(PermissionLevel.AllowWithAudit, PermissionModel.canUseTool perms "send_email")
-        // Dangerous tool is blocked
-        Assert.AreEqual(PermissionLevel.Deny, PermissionModel.canUseTool perms "delete_all_data")
-
-    [<TestMethod>]
     member _.ConstitutionEnforcesOutputSafety() =
         let constitution =
             Constitution.empty "corporate-safety"
@@ -607,8 +547,8 @@ type EtclovgGovernanceTests() =
 
         // Record a sequence of actions
         audit.RecordAsync(AuditLog.llmCall agentId "gpt-4o" (Some execId)).Wait()
-        audit.RecordAsync(AuditLog.toolInvocation agentId "get_stock_price" "AAPL" """{"price":189.45}""" true PermissionLevel.Allow (Some execId)).Wait()
-        audit.RecordAsync(AuditLog.toolInvocation agentId "delete_all_data" "confirm" "" false PermissionLevel.Deny (Some execId)).Wait()
+        audit.RecordAsync(AuditLog.toolInvocation agentId "get_stock_price" "AAPL" """{"price":189.45}""" true PermissionDecision.Allow (Some execId)).Wait()
+        audit.RecordAsync(AuditLog.toolInvocation agentId "delete_all_data" "confirm" "" false PermissionDecision.Deny (Some execId)).Wait()
 
         // Query all entries for this execution
         let entries = (audit.QueryByExecutionAsync execId).Result
@@ -650,8 +590,8 @@ type EtclovgFullIntegrationTests() =
     let makeAgent response : IAgent =
         { new IAgent with
             member _.Id = { Name = "full-demo-agent"; Description = "Full ETCLOVG demo" }
-            member _.RunAsync(_) = Task.FromResult response
-            member _.HandleMessageAsync(_) = Task.FromResult None }
+            member _.RunAsync(_context, _) = Task.FromResult response
+            member _.HandleMessageAsync(_context, _) = Task.FromResult None }
 
     [<TestMethod>]
     member _.CompleteHarnessExecution_AllLayersActive() =
@@ -678,7 +618,6 @@ type EtclovgFullIntegrationTests() =
                 member _.CheckAsync _ _ = Task.FromResult ReadinessResult.Ready }
 
         // G: Governance
-        let perms = PermissionModel.Permissive agentId
         let constitution =
             Constitution.empty "safety"
             |> Constitution.addRule Constitution.noPrivateDataRule
@@ -693,7 +632,6 @@ type EtclovgFullIntegrationTests() =
             { Execution = sandbox
               ToolProtocol = None
               ExecutionJournal = None
-              MemoryConfig = OrchestratorMemoryConfig.None
               Lifecycle = [ lifecycleHook ]
               Tracer = Some tracer
               Metrics = Some metrics
@@ -701,7 +639,6 @@ type EtclovgFullIntegrationTests() =
               ReadinessChecks = [ readinessCheck ]
               TraceStore = Some traceStore
               Judge = None
-              Permissions = Some perms
               Constitution = Some constitution
               AuditLog = Some audit
               PolicyEngine = Some policyEngine
@@ -710,7 +647,7 @@ type EtclovgFullIntegrationTests() =
 
         // Execute
         let agent = makeAgent "The current AAPL price is $189.45 based on latest market data."
-        let result = (EtclovgHarness.runAsync config agent "What is the AAPL stock price?").Result
+        let result = (EtclovgHarness.runAsync config AgentContext.allowAll agent "What is the AAPL stock price?").Result
 
         // Verify success
         Assert.IsTrue(result.Success, sprintf "Expected success but got error: %A" result.HarnessError)
@@ -752,7 +689,7 @@ type EtclovgFullIntegrationTests() =
                 AuditLog = Some (InMemory.auditLog ())
                 Lifecycle = [ PassthroughHook() :> ILifecycleHook ] }
 
-        let result = (EtclovgHarness.runAsync config agent "How do I get help?").Result
+        let result = (EtclovgHarness.runAsync config AgentContext.allowAll agent "How do I get help?").Result
 
         Assert.IsFalse(result.Success)
         Assert.IsTrue(result.HarnessError.Value.Message.Contains("Output violates constitution"))
@@ -774,7 +711,7 @@ type EtclovgFullIntegrationTests() =
                       Evaluate = fun _ -> Some "Budget exhausted" }
                 ]) }
 
-        let result = (EtclovgHarness.runAsync config agent "do something").Result
+        let result = (EtclovgHarness.runAsync config AgentContext.allowAll agent "do something").Result
 
         Assert.IsFalse(result.Success)
         Assert.IsTrue(result.HarnessError.Value.Message.Contains("Blocked by policy"))
@@ -796,7 +733,7 @@ type EtclovgFullIntegrationTests() =
                 ReadinessChecks = [ failedCheck ]
                 Lifecycle = [ PassthroughHook() :> ILifecycleHook ] }
 
-        let result = (EtclovgHarness.runAsync config agent "query").Result
+        let result = (EtclovgHarness.runAsync config AgentContext.allowAll agent "query").Result
 
         Assert.IsFalse(result.Success)
         Assert.IsTrue(result.HarnessError.Value.Message.Contains("LLM endpoint unavailable"))
@@ -822,12 +759,11 @@ type EtclovgFullIntegrationTests() =
                 Metrics = Some metrics
                 TraceStore = Some traceStore
                 AuditLog = Some audit
-                Permissions = Some (PermissionModel.Permissive agentId)
                 Constitution = Some (Constitution.empty "basic" |> Constitution.addRule Constitution.noHarmRule)
                 PolicyEngine = Some (PolicyEngine.create [ PolicyEngine.costBudgetPolicy 100.0m ])
                 Lifecycle = [ PassthroughHook() :> ILifecycleHook ] }
 
-        let result = (EtclovgHarness.runAsync config orchestrator "What is the stock price of AAPL?").Result
+        let result = (EtclovgHarness.runAsync config AgentContext.allowAll orchestrator "What is the stock price of AAPL?").Result
 
         // The orchestrator should have: called LLM -> invoked tool -> called LLM -> produced response
         Assert.IsTrue(result.Success, sprintf "Failed: %A" result.HarnessError)

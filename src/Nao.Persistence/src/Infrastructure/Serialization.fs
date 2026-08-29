@@ -5,6 +5,7 @@ open System.Collections.Generic
 open System.Globalization
 open System.IO
 open System.Text.Json
+open System.Text.Json.Serialization
 open Nao.Agents
 open Nao.Agents
 
@@ -55,22 +56,22 @@ module Sanitize =
     let id (value: string) : string =
         value.Replace('/', '_').Replace('\\', '_').Replace(':', '_')
 
-/// Codec for the PermissionLevel discriminated union.
-module PermissionLevelCodec =
-    let toString (level: PermissionLevel) : string =
-        match level with
-        | PermissionLevel.Allow -> "Allow"
-        | PermissionLevel.AllowWithAudit -> "AllowWithAudit"
-        | PermissionLevel.RequireConfirmation -> "RequireConfirmation"
-        | PermissionLevel.Deny -> "Deny"
+/// Codec for permission decisions. Legacy permission-level values remain readable.
+module PermissionDecisionCodec =
+    let toString (decision: PermissionDecision) : string =
+        match decision with
+        | PermissionDecision.Allow -> "Allow"
+        | PermissionDecision.Ask -> "Ask"
+        | PermissionDecision.Deny -> "Deny"
 
-    let fromString (s: string) : PermissionLevel =
+    let fromString (s: string) : PermissionDecision =
         match s with
-        | "Allow" -> PermissionLevel.Allow
-        | "AllowWithAudit" -> PermissionLevel.AllowWithAudit
-        | "RequireConfirmation" -> PermissionLevel.RequireConfirmation
-        | "Deny" -> PermissionLevel.Deny
-        | other -> failwithf "Unknown PermissionLevel: %s" other
+        | "Allow"
+        | "AllowWithAudit" -> PermissionDecision.Allow
+        | "Ask"
+        | "RequireConfirmation" -> PermissionDecision.Ask
+        | "Deny" -> PermissionDecision.Deny
+        | other -> failwithf "Unknown PermissionDecision: %s" other
 
 /// Codec for the AuditAction discriminated union (encoded as a small JSON DTO).
 module AuditActionCodec =
@@ -160,16 +161,10 @@ module Dto =
 
     // ---- ExecutionRecord ----
     [<CLIMutable>]
-    type ContentMetaDto =
-        { ContentType: string
-          Metadata: Dictionary<string, string> }
-
-    [<CLIMutable>]
     type ExecutionRecordDto =
         { ToolName: string
           Input: string
           Output: string
-          ContentMeta: ContentMetaDto
           ExecutedAt: DateTimeOffset
           Reverted: bool
           Metadata: Dictionary<string, string> }
@@ -178,9 +173,6 @@ module Dto =
         { ToolName = r.ToolName
           Input = r.Input
           Output = r.Output
-          ContentMeta =
-            { ContentType = r.ContentMeta.ContentType
-              Metadata = dictOfMap r.ContentMeta.Metadata }
           ExecutedAt = r.ExecutedAt
           Reverted = r.Reverted
           Metadata = dictOfMap r.Metadata }
@@ -189,9 +181,6 @@ module Dto =
         { ToolName = d.ToolName
           Input = d.Input
           Output = d.Output
-          ContentMeta =
-            { ContentType = (if isNull (box d.ContentMeta) then "" else d.ContentMeta.ContentType)
-              Metadata = (if isNull (box d.ContentMeta) then Map.empty else mapOfDict d.ContentMeta.Metadata) }
           ExecutedAt = d.ExecutedAt
           Reverted = d.Reverted
           Metadata = mapOfDict d.Metadata }
@@ -206,7 +195,8 @@ module Dto =
           Input: string
           Output: string
           Permitted: bool
-          PermissionLevel: string
+          [<JsonPropertyName("PermissionLevel")>]
+          Decision: string
           ConstitutionViolations: string array
           ExecutionId: string
           Metadata: Dictionary<string, string> }
@@ -219,13 +209,13 @@ module Dto =
           Input = (match e.Input with Some s -> s | None -> null)
           Output = (match e.Output with Some s -> s | None -> null)
           Permitted = e.Permitted
-          PermissionLevel = PermissionLevelCodec.toString e.PermissionLevel
+          Decision = PermissionDecisionCodec.toString e.Decision
           ConstitutionViolations = List.toArray e.ConstitutionViolations
           ExecutionId = (match e.ExecutionId with Some g -> g.ToString("D") | None -> null)
           Metadata = dictOfMap e.Metadata }
 
     let ofAuditDto (d: AuditEntryDto) : AuditEntry =
-        { Id = d.Id; Timestamp = d.Timestamp; AgentId = d.AgentId; Action = AuditActionCodec.fromJson d.ActionJson; Input = (if isNull d.Input then None else Some d.Input); Output = (if isNull d.Output then None else Some d.Output); Permitted = d.Permitted; PermissionLevel = PermissionLevelCodec.fromString d.PermissionLevel; ConstitutionViolations = listOfArray d.ConstitutionViolations; ExecutionId = (if isNull d.ExecutionId then None else Some(Guid.Parse d.ExecutionId)); Metadata = mapOfDict d.Metadata }
+        { Id = d.Id; Timestamp = d.Timestamp; AgentId = d.AgentId; Action = AuditActionCodec.fromJson d.ActionJson; Input = (if isNull d.Input then None else Some d.Input); Output = (if isNull d.Output then None else Some d.Output); Permitted = d.Permitted; Decision = PermissionDecisionCodec.fromString d.Decision; ConstitutionViolations = listOfArray d.ConstitutionViolations; ExecutionId = (if isNull d.ExecutionId then None else Some(Guid.Parse d.ExecutionId)); Metadata = mapOfDict d.Metadata }
 
 /// Simple file-backed JSON document helpers (whole-file read/write).
 module FileJson =

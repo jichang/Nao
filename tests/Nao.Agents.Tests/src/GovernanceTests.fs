@@ -7,72 +7,6 @@ open Nao.Agents
 open Nao.Persistence
 
 [<TestClass>]
-type PermissionTests() =
-
-    let agentId = { Name = "test-agent"; Description = "test" }
-
-    [<TestMethod>]
-    member _.PermissiveModelAllowsAll() =
-        let model = PermissionModel.Permissive agentId
-        let level = PermissionModel.check model "anything"
-        Assert.AreEqual(PermissionLevel.Allow, level)
-
-    [<TestMethod>]
-    member _.RestrictiveModelDeniesAll() =
-        let model = PermissionModel.Restrictive agentId
-        let level = PermissionModel.check model "anything"
-        Assert.AreEqual(PermissionLevel.Deny, level)
-
-    [<TestMethod>]
-    member _.GrantOverridesDefault() =
-        let model =
-            PermissionModel.Restrictive agentId
-            |> PermissionModel.grant "tool:search" PermissionLevel.Allow
-        let level = PermissionModel.check model "tool:search"
-        Assert.AreEqual(PermissionLevel.Allow, level)
-        // Other capabilities still denied
-        let otherLevel = PermissionModel.check model "tool:delete"
-        Assert.AreEqual(PermissionLevel.Deny, otherLevel)
-
-    [<TestMethod>]
-    member _.RevokeSetsToDeny() =
-        let model =
-            PermissionModel.Permissive agentId
-            |> PermissionModel.grant "tool:dangerous" PermissionLevel.Allow
-            |> PermissionModel.revoke "tool:dangerous"
-        let level = PermissionModel.check model "tool:dangerous"
-        Assert.AreEqual(PermissionLevel.Deny, level)
-
-    [<TestMethod>]
-    member _.CanUseToolChecksToolPrefix() =
-        let model =
-            PermissionModel.Restrictive agentId
-            |> PermissionModel.grant "tool:search" PermissionLevel.AllowWithAudit
-        let level = PermissionModel.canUseTool model "search"
-        Assert.AreEqual(PermissionLevel.AllowWithAudit, level)
-
-    [<TestMethod>]
-    member _.CanDelegateToChecksPrefix() =
-        let model =
-            PermissionModel.Restrictive agentId
-            |> PermissionModel.grant "delegate:helper" PermissionLevel.Allow
-        let level = PermissionModel.canDelegateTo model "helper"
-        Assert.AreEqual(PermissionLevel.Allow, level)
-
-    [<TestMethod>]
-    member _.ExpiredPermissionIsDenied() =
-        let model =
-            { PermissionModel.Restrictive agentId with
-                Permissions =
-                    [ { Capability = "tool:temp"
-                        Level = PermissionLevel.Allow
-                        Conditions = []
-                        GrantedBy = None
-                        ExpiresAt = Some (DateTimeOffset.UtcNow.AddHours(-1.0)) } ] }
-        let level = PermissionModel.check model "tool:temp"
-        Assert.AreEqual(PermissionLevel.Deny, level)
-
-[<TestClass>]
 type ConstitutionTests() =
 
     [<TestMethod>]
@@ -143,7 +77,7 @@ type AuditLogTests() =
     [<TestMethod>]
     member _.RecordAndQuery() =
         let audit = InMemory.auditLog ()
-        let entry = AuditLog.toolInvocation agentId "search" "query" "results" true PermissionLevel.Allow None
+        let entry = AuditLog.toolInvocation agentId "search" "query" "results" true PermissionDecision.Allow None
         audit.RecordAsync(entry).Wait()
         let results = (audit.QueryAsync agentId (DateTimeOffset.UtcNow.AddHours(-1.0))).Result
         Assert.AreEqual(1, results.Length)
@@ -163,8 +97,8 @@ type AuditLogTests() =
     [<TestMethod>]
     member _.GetDeniedCountFiltersDenied() =
         let audit = InMemory.auditLog ()
-        let permitted = AuditLog.toolInvocation agentId "t1" "" "" true PermissionLevel.Allow None
-        let denied = { AuditLog.toolInvocation agentId "t2" "" "" false PermissionLevel.Deny None with Permitted = false }
+        let permitted = AuditLog.toolInvocation agentId "t1" "" "" true PermissionDecision.Allow None
+        let denied = { AuditLog.toolInvocation agentId "t2" "" "" false PermissionDecision.Deny None with Permitted = false }
         audit.RecordAsync(permitted).Wait()
         audit.RecordAsync(denied).Wait()
         let count = (audit.GetDeniedCountAsync agentId (DateTimeOffset.UtcNow.AddHours(-1.0))).Result

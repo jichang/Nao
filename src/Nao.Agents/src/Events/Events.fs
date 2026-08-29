@@ -60,7 +60,7 @@ type ConversationMessage =
       /// Names of files attached to a user message (empty otherwise).
       Attachments: string list
       /// Structured data published by tools during this turn.
-      Data: ToolResultData list }
+      Data: AgentContextData list }
 
 /// The exact messages sent to an LLM and the raw response it returned.
 type LlmExchange = { Round: int; Attempt: int; IsRepair: bool; Messages: (string * string) list; Response: string }
@@ -129,7 +129,7 @@ and ProgressSignal =
     /// A sub-agent returned a result.
     | SubAgentCompleted of name: string * result: string
     /// A tool published structured data for persistence and frontend rendering.
-    | ToolDataPublished of data: ToolResultData
+    | ToolDataPublished of data: AgentContextData
     /// The turn produced its final answer.
     | AnswerProduced of answer: string
 

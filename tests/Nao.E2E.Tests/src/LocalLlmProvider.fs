@@ -30,7 +30,4 @@ type LocalLlmProvider() =
                 else
                     sprintf "I can help with that. You said: %s" lastMessage
 
-            Task.FromResult(
-                { Content = response
-                  FinishReason = "stop"
-                  TokensUsed = Some (lastMessage.Length + response.Length) })
+                        Task.FromResult(CompletionResult.create response "stop" (Some(lastMessage.Length + response.Length)) None)

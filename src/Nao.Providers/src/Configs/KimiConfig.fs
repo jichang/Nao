@@ -1,7 +1,7 @@
 namespace Nao.Providers
 
-/// Configuration for Anthropic Claude
-type AnthropicConfig =
+/// Configuration for Kimi's OpenAI-compatible API
+type KimiConfig =
     { ApiKey: string
       Model: string
       BaseUrl: string
@@ -10,6 +10,6 @@ type AnthropicConfig =
 
     static member Default =
         { ApiKey = ""
-          Model = "claude-sonnet-4-20250514"
-          BaseUrl = "https://api.anthropic.com"
+          Model = "kimi-k2.5"
+          BaseUrl = "https://api.moonshot.ai/v1/chat/completions"
           TimeoutSeconds = None }

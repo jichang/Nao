@@ -106,15 +106,15 @@ type ExecutionEnvironmentTests() =
         let id = { Name = "test"; Description = "test agent" }
         { new IAgent with
             member _.Id = id
-            member _.RunAsync(_input) = Task.FromResult response
-            member _.HandleMessageAsync(_msg) = Task.FromResult None }
+            member _.RunAsync(_context, _input) = Task.FromResult response
+            member _.HandleMessageAsync(_context, _msg) = Task.FromResult None }
 
     [<TestMethod>]
     member _.LocalEnvironmentExecutesAgent() =
         let agent = makeAgent "hello"
         let ctx = ExecutionContext.Create SandboxConfig.Default
         let env = ExecutionEnvironment.local ()
-        let result = (env.ExecuteAsync ctx agent "input").Result
+        let result = (env.ExecuteAsync ctx AgentContext.allowAll agent "input").Result
         match result with
         | Ok response -> Assert.AreEqual("hello", response)
         | Error _ -> Assert.Fail("Expected Ok")
@@ -125,7 +125,7 @@ type ExecutionEnvironmentTests() =
         let config = { SandboxConfig.Default with Limits = { ResourceLimits.Unlimited with MaxDuration = TimeSpan.FromSeconds 5.0 } }
         let ctx = ExecutionContext.Create config
         let env = ExecutionEnvironment.local ()
-        let result = (ExecutionEnvironment.executeWithTimeout env ctx agent "go").Result
+        let result = (ExecutionEnvironment.executeWithTimeout env ctx AgentContext.allowAll agent "go").Result
         match result with
         | Ok r -> Assert.AreEqual("fast", r)
         | Error _ -> Assert.Fail("Expected Ok")

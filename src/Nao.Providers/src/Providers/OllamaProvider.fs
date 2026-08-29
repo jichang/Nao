@@ -4,18 +4,21 @@ open System
 open System.Net.Http
 open System.Text
 open System.Text.Json
-open System.Threading
 open System.Threading.Tasks
 open Nao.Agents
 
 /// LLM provider that connects to an Ollama server via its OpenAI-compatible API.
 /// Ollama exposes /v1/chat/completions for chat-style completions.
-type OllamaProvider(config: OllamaConfig) =
-    let client = new HttpClient(BaseAddress = Uri(config.BaseUrl))
+type OllamaProvider(config: OllamaConfig, ?httpHandler: HttpMessageHandler) =
+    let client =
+        match httpHandler with
+        | Some handler -> new HttpClient(handler, true)
+        | None -> new HttpClient()
 
     do
-        if String.Equals(Environment.GetEnvironmentVariable("NAO_EVALUATION_UNLIMITED"), "true", StringComparison.OrdinalIgnoreCase) then
-            client.Timeout <- Timeout.InfiniteTimeSpan
+        client.BaseAddress <- Uri(config.BaseUrl)
+        config.TimeoutSeconds
+        |> Option.iter (fun seconds -> client.Timeout <- TimeSpan.FromSeconds(float seconds))
 
     let roleToString (role: Role) =
         match role with
@@ -24,121 +27,66 @@ type OllamaProvider(config: OllamaConfig) =
         | Assistant -> "assistant"
 
     let buildRequestBody (conversation: Conversation) (options: CompletionOptions) (streaming: bool) =
-        use stream = new System.IO.MemoryStream()
-        use writer = new Utf8JsonWriter(stream)
-        writer.WriteStartObject()
-        writer.WriteString("model", config.Model)
+        let messages =
+            conversation
+            |> List.map (fun message -> roleToString message.Role, message.Content)
+            |> List.toArray
+        OpenAIChatDto.serializeRequest
+            config.Model messages options.Temperature streaming options.MaxTokens
+            (List.toArray options.StopSequences) (Option.toObj config.ReasoningEffort)
 
-        writer.WriteStartArray("messages")
-        for m in conversation do
-            writer.WriteStartObject()
-            writer.WriteString("role", roleToString m.Role)
-            writer.WriteString("content", m.Content)
-            writer.WriteEndObject()
-        writer.WriteEndArray()
+    let tokenUsage (usage: OpenAIUsageDto) =
+        if isNull usage then None
+        elif usage.PromptTokens.HasValue && usage.CompletionTokens.HasValue then
+            Some { InputTokens = usage.PromptTokens.Value; OutputTokens = usage.CompletionTokens.Value }
+        else None
 
-        writer.WriteNumber("temperature", options.Temperature)
-        writer.WriteBoolean("stream", streaming)
-        // Ask for a trailing usage chunk so streamed completions can still report token
-        // counts (ignored by backends that don't support it).
-        if streaming then
-            writer.WriteStartObject("stream_options")
-            writer.WriteBoolean("include_usage", true)
-            writer.WriteEndObject()
-
-        match options.MaxTokens with
-        | Some t -> writer.WriteNumber("max_tokens", t)
-        | None -> ()
-
-        match options.StopSequences with
-        | [] -> ()
-        | seqs ->
-            writer.WriteStartArray("stop")
-            for s in seqs do
-                writer.WriteStringValue(s)
-            writer.WriteEndArray()
-
-        writer.WriteEndObject()
-        writer.Flush()
-        Encoding.UTF8.GetString(stream.ToArray())
-
-    // Parse one streamed SSE JSON object into (text delta, finish reason, total tokens).
+    // Parse one streamed SSE JSON object into text, finish reason, total tokens, and split usage.
     // Any of the three may be absent in a given chunk (deltas carry text; the penultimate
     // chunk carries finish_reason; an optional trailing chunk carries usage).
-    let parseStreamChunk (json: string) : (string * string option * int option) =
-        try
-            use doc = JsonDocument.Parse(json)
-            let root = doc.RootElement
-            let delta, finish =
-                match root.TryGetProperty("choices") with
-                | true, choices when choices.GetArrayLength() > 0 ->
-                    let choice = choices.[0]
-                    let d =
-                        match choice.TryGetProperty("delta") with
-                        | true, deltaObj ->
-                            match deltaObj.TryGetProperty("content") with
-                            | true, c when c.ValueKind = JsonValueKind.String -> c.GetString()
-                            | _ -> ""
-                        | _ -> ""
-                    let fr =
-                        match choice.TryGetProperty("finish_reason") with
-                        | true, fr when fr.ValueKind = JsonValueKind.String && not (String.IsNullOrEmpty(fr.GetString())) ->
-                            Some (fr.GetString())
-                        | _ -> None
-                    d, fr
-                | _ -> "", None
-            let tokens =
-                match root.TryGetProperty("usage") with
-                | true, usage when usage.ValueKind = JsonValueKind.Object ->
-                    match usage.TryGetProperty("total_tokens") with
-                    | true, t when t.ValueKind = JsonValueKind.Number -> Some (t.GetInt32())
-                    | _ -> None
-                | _ -> None
-            delta, finish, tokens
-        with _ -> "", None, None
+    let parseStreamChunk (json: string) : (string * string option * int option * TokenUsage option) =
+        let response = OpenAIChatDto.deserializeResponse json
+        if isNull response then
+            raise (JsonException("The response body must be a JSON object."))
+        let delta, finish =
+            if isNull response.Choices || response.Choices.Length = 0 then
+                "", None
+            else
+                let choice = response.Choices.[0]
+                let deltaText =
+                    if isNull choice.Delta || isNull choice.Delta.Content then ""
+                    else choice.Delta.Content
+                let finishReason =
+                    if isNull choice.FinishReason then None
+                    elif String.IsNullOrWhiteSpace choice.FinishReason then
+                        raise (JsonException("choices[0].finish_reason must be a non-empty string or null."))
+                    else Some choice.FinishReason
+                deltaText, finishReason
+        let tokens =
+            if isNull response.Usage then None
+            elif response.Usage.TotalTokens.HasValue then Some response.Usage.TotalTokens.Value
+            else raise (JsonException("usage.total_tokens is required when usage is present."))
+        delta, finish, tokens, tokenUsage response.Usage
 
     let parseResponse (json: string) : CompletionResult =
         try
-            use doc = JsonDocument.Parse(json)
-            let root = doc.RootElement
-
-            let content =
-                match root.TryGetProperty("choices") with
-                | true, choices when choices.GetArrayLength() > 0 ->
-                    let firstChoice = choices.[0]
-                    match firstChoice.TryGetProperty("message") with
-                    | true, message ->
-                        match message.TryGetProperty("content") with
-                        | true, c -> c.GetString()
-                        | _ -> ""
-                    | _ -> ""
-                | _ -> ""
-
-            let finishReason =
-                match root.TryGetProperty("choices") with
-                | true, choices when choices.GetArrayLength() > 0 ->
-                    match choices.[0].TryGetProperty("finish_reason") with
-                    | true, fr when fr.ValueKind = JsonValueKind.String ->
-                        let r = fr.GetString()
-                        if String.IsNullOrEmpty(r) then "stop" else r
-                    | _ -> "stop"
-                | _ -> "stop"
-
+            let response = OpenAIChatDto.deserializeResponse json
+            if isNull response then
+                raise (JsonException("The response body must be a JSON object."))
+            if isNull response.Choices || response.Choices.Length = 0 then
+                raise (JsonException("choices must be a non-empty array."))
+            let choice = response.Choices.[0]
+            if isNull choice.Message || isNull choice.Message.Content then
+                raise (JsonException("choices[0].message.content must be a string."))
+            if String.IsNullOrWhiteSpace choice.FinishReason then
+                raise (JsonException("choices[0].finish_reason must be a non-empty string."))
             let totalTokens =
-                match root.TryGetProperty("usage") with
-                | true, usage ->
-                    match usage.TryGetProperty("total_tokens") with
-                    | true, t when t.ValueKind = JsonValueKind.Number -> Some (t.GetInt32())
-                    | _ -> None
-                | _ -> None
-
-            { Content = content
-              FinishReason = finishReason
-              TokensUsed = totalTokens }
+                if isNull response.Usage then None
+                elif response.Usage.TotalTokens.HasValue then Some response.Usage.TotalTokens.Value
+                else raise (JsonException("usage.total_tokens is required when usage is present."))
+            CompletionResult.create choice.Message.Content choice.FinishReason totalTokens (tokenUsage response.Usage)
         with ex ->
-            { Content = sprintf "Parse error: %s" ex.Message
-              FinishReason = "error"
-              TokensUsed = None }
+            CompletionResult.create (sprintf "Parse error: %s" ex.Message) "error" None None
 
     interface ILlmProvider with
         member _.Name = sprintf "Ollama(%s)" config.Model
@@ -152,10 +100,7 @@ type OllamaProvider(config: OllamaConfig) =
                 let! responseBody = response.Content.ReadAsStringAsync()
 
                 if not response.IsSuccessStatusCode then
-                    return
-                        { Content = sprintf "Error: %d - %s" (int response.StatusCode) responseBody
-                          FinishReason = "error"
-                          TokensUsed = None }
+                    return CompletionResult.create (sprintf "Error: %d - %s" (int response.StatusCode) responseBody) "error" None None
                 else
                     return parseResponse responseBody
             }
@@ -173,16 +118,14 @@ type OllamaProvider(config: OllamaConfig) =
                     let! response = client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead)
                     if not response.IsSuccessStatusCode then
                         let! errorBody = response.Content.ReadAsStringAsync()
-                        return
-                            { Content = sprintf "Error: %d - %s" (int response.StatusCode) errorBody
-                              FinishReason = "error"
-                              TokensUsed = None }
+                        return CompletionResult.create (sprintf "Error: %d - %s" (int response.StatusCode) errorBody) "error" None None
                     else
                         use! responseStream = response.Content.ReadAsStreamAsync()
                         use reader = new System.IO.StreamReader(responseStream)
                         let builder = StringBuilder()
-                        let mutable finishReason = "stop"
+                        let mutable finishReason = None
                         let mutable tokens = None
+                        let mutable usage = None
                         let mutable reading = true
                         while reading do
                             let! line = reader.ReadLineAsync()
@@ -195,23 +138,20 @@ type OllamaProvider(config: OllamaConfig) =
                                     if payload = "[DONE]" then
                                         reading <- false
                                     elif payload <> "" then
-                                        let delta, finish, tk = parseStreamChunk payload
-                                        match finish with Some r -> finishReason <- r | None -> ()
+                                        let delta, finish, tk, reportedUsage = parseStreamChunk payload
+                                        match finish with Some reason -> finishReason <- Some reason | None -> ()
                                         match tk with Some _ -> tokens <- tk | None -> ()
+                                        match reportedUsage with Some _ -> usage <- reportedUsage | None -> ()
                                         if delta <> "" then
                                             builder.Append(delta) |> ignore
-                                            onChunk { Delta = delta; FinishReason = None; TokensUsed = None }
-                        // Terminal chunk: report how generation finished and any token usage.
-                        onChunk { Delta = ""; FinishReason = Some finishReason; TokensUsed = tokens }
-                        return
-                            { Content = builder.ToString()
-                              FinishReason = finishReason
-                              TokensUsed = tokens }
+                                            onChunk (CompletionChunk.create delta None None None)
+                        let finishReason =
+                            finishReason
+                            |> Option.defaultWith (fun () -> raise (JsonException("The stream ended without a finish_reason.")))
+                        onChunk (CompletionChunk.create "" (Some finishReason) tokens usage)
+                        return CompletionResult.create (builder.ToString()) finishReason tokens usage
                 with ex ->
-                    return
-                        { Content = sprintf "Error: %s" ex.Message
-                          FinishReason = "error"
-                          TokensUsed = None }
+                    return CompletionResult.create (sprintf "Error: %s" ex.Message) "error" None None
             }
 
     interface IDisposable with

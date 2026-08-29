@@ -5,9 +5,12 @@ namespace Nao.Agents
 type AgentAction =
     /// Respond directly to the user with the given text
     | Respond of string
-    /// Invoke a tool by name with the given input
-    | InvokeTool of toolName: string * input: string
+    /// Invoke a tool by its identifier with the given input
+    | InvokeTool of toolId: string * input: string
     /// Delegate the task to another agent by its opaque runtime identifier.
     | DelegateToAgent of agentId: string * input: string
+    /// Ask the user for information required to continue. This ends the current turn;
+    /// the user's answer arrives as the next turn with conversation history attached.
+    | RequestUserInput of prompt: string
     /// Internal reasoning step (chain-of-thought) — not shown to user
     | Think of string

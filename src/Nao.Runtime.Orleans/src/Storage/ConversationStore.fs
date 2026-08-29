@@ -21,7 +21,7 @@ type TurnStepRecord() =
 
 /// Structured data published by a tool during a turn.
 [<GenerateSerializer>]
-type ToolResultDataRecord() =
+type AgentContextDataRecord() =
     [<Id(0u)>] member val Kind: string = "" with get, set
     [<Id(1u)>] member val ContentType: string = "" with get, set
     [<Id(2u)>] member val Payload: string = "" with get, set
@@ -38,7 +38,7 @@ type PersistedMessage =
     /// Names of files attached to a user message (empty for assistant messages).
       Attachments: string[]
     /// Structured data published by tools during the turn (empty for user messages).
-      Data: ToolResultDataRecord[] }
+      Data: AgentContextDataRecord[] }
 
 /// Metadata about a persisted conversation
 type ConversationMeta =

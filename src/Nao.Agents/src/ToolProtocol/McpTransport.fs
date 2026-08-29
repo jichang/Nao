@@ -1,7 +1,50 @@
 namespace Nao.Agents
 
 open System
+open System.Text.Json
+open System.Text.Json.Serialization
 open System.Threading.Tasks
+
+[<RequireQualifiedAccess>]
+module McpJson =
+    type EmptyParamsDto() = class end
+
+    type ToolsCapabilityDto() = class end
+
+    type CapabilitiesDto() =
+        [<JsonPropertyName("tools")>]
+        member val Tools = ToolsCapabilityDto() with get, set
+
+    type InitializeParamsDto() =
+        [<JsonPropertyName("capabilities")>]
+        member val Capabilities = CapabilitiesDto() with get, set
+
+    type ToolCallParamsDto() =
+        [<JsonPropertyName("name")>]
+        member val Name: string = null with get, set
+
+        [<JsonPropertyName("arguments")>]
+        member val Arguments = JsonElement() with get, set
+
+    type RequestDto() =
+        [<JsonPropertyName("jsonrpc")>]
+        member val JsonRpc = "2.0" with get, set
+
+        [<JsonPropertyName("id")>]
+        member val Id: string = null with get, set
+
+        [<JsonPropertyName("method")>]
+        member val Method: string = null with get, set
+
+        [<JsonPropertyName("params")>]
+        member val Params: obj = null with get, set
+
+    let serializeRequest id methodName parameters =
+        let request = RequestDto()
+        request.Id <- id
+        request.Method <- methodName
+        request.Params <- parameters
+        JsonSerializer.Serialize(request)
 
 /// MCP transport type
 [<RequireQualifiedAccess>]
@@ -102,11 +145,10 @@ type StdioMcpClient(command: string, args: string list) =
         proc <- Some p
         p
 
-    let sendJsonRpc (p: System.Diagnostics.Process) (method': string) (params': string) =
+    let sendJsonRpc (p: System.Diagnostics.Process) (methodName: string) (parameters: obj) =
         task {
             let id = Guid.NewGuid().ToString("N").[..7]
-            let msg =
-                sprintf """{"jsonrpc":"2.0","id":"%s","method":"%s","params":%s}""" id method' params'
+            let msg = McpJson.serializeRequest id methodName parameters
             let bytes = System.Text.Encoding.UTF8.GetBytes(msg)
             let header = sprintf "Content-Length: %d\r\n\r\n" bytes.Length
             do! p.StandardInput.WriteAsync(header)
@@ -123,7 +165,7 @@ type StdioMcpClient(command: string, args: string list) =
                 try
                     state <- McpConnectionState.Connecting
                     let p = startProcess ()
-                    let! _response = sendJsonRpc p "initialize" """{"capabilities":{"tools":{}}}"""
+                    let! _response = sendJsonRpc p "initialize" (McpJson.InitializeParamsDto())
                     let info =
                         { Name = command
                           Version = "1.0"
@@ -141,7 +183,7 @@ type StdioMcpClient(command: string, args: string list) =
             task {
                 match proc with
                 | Some p when not p.HasExited ->
-                    let! _response = sendJsonRpc p "tools/list" "{}"
+                    let! _response = sendJsonRpc p "tools/list" (McpJson.EmptyParamsDto())
                     // In production, parse JSON response into McpToolDef list
                     return tools |> Seq.toList
                 | _ -> return []
@@ -153,12 +195,18 @@ type StdioMcpClient(command: string, args: string list) =
             task {
                 match proc with
                 | Some p when not p.HasExited ->
-                    let params' = sprintf """{"name":"%s","arguments":%s}""" name arguments
-                    let! response = sendJsonRpc p "tools/call" params'
-                    if String.IsNullOrEmpty response then
-                        return Error "No response from tool server"
-                    else
-                        return Ok response
+                    try
+                        use document = JsonDocument.Parse(arguments)
+                        let parameters = McpJson.ToolCallParamsDto()
+                        parameters.Name <- name
+                        parameters.Arguments <- document.RootElement.Clone()
+                        let! response = sendJsonRpc p "tools/call" parameters
+                        if String.IsNullOrEmpty response then
+                            return Error "No response from tool server"
+                        else
+                            return Ok response
+                    with :? JsonException as ex ->
+                        return Error(sprintf "Invalid MCP tool arguments: %s" ex.Message)
                 | _ -> return Error "MCP server not connected"
             }
 
@@ -172,7 +220,7 @@ type StdioMcpClient(command: string, args: string list) =
                 match proc with
                 | Some p ->
                     if not p.HasExited then
-                        let! _ = sendJsonRpc p "shutdown" "{}"
+                        let! _ = sendJsonRpc p "shutdown" (McpJson.EmptyParamsDto())
                         p.Kill()
                     p.Dispose()
                     proc <- None

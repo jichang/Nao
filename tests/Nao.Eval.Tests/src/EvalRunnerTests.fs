@@ -16,12 +16,11 @@ type EchoAgent(prefix: string) =
         member _.Description = "Echoes input with a prefix"
 
         member _.Priority = 0
-        member _.Signature = ToolSignature.Text
-        member _.Capabilities = []
+        member _.Contract = AgentContract.Text
         member _.Responsibilities = []
-        member _.RunAsync(input: string) =
+        member _.RunAsync(_context: AgentContext, input: string) =
             Task.FromResult(sprintf "%s: %s" prefix input)
-        member _.HandleMessageAsync(_msg: AgentMessage) =
+        member _.HandleMessageAsync(_context: AgentContext, _msg: AgentMessage) =
             Task.FromResult(None)
 
 /// Agent that returns a fixed response regardless of input
@@ -33,11 +32,10 @@ type FixedAgent(response: string) =
         member _.Name = "Fixed"
         member _.Description = "Returns fixed response"
         member _.Priority = 0
-        member _.Signature = ToolSignature.Text
-        member _.Capabilities = []
+        member _.Contract = AgentContract.Text
         member _.Responsibilities = []
-        member _.RunAsync(_input: string) = Task.FromResult(response)
-        member _.HandleMessageAsync(_msg: AgentMessage) = Task.FromResult(None)
+        member _.RunAsync(_context: AgentContext, _input: string) = Task.FromResult(response)
+        member _.HandleMessageAsync(_context: AgentContext, _msg: AgentMessage) = Task.FromResult(None)
 
 [<TestClass>]
 type EvalRunnerTests() =

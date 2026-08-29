@@ -4,9 +4,12 @@ namespace Nao.Providers
 type VllmConfig =
     { BaseUrl: string
       Model: string
-      ApiKey: string option }
+      ApiKey: string option
+      /// Request timeout in seconds. None uses the HttpClient default.
+      TimeoutSeconds: int option }
 
     static member Default =
-        { BaseUrl = "http://localhost:8000/v1"
+        { BaseUrl = "http://localhost:8000/v1/chat/completions"
           Model = "default"
-          ApiKey = None }
+          ApiKey = None
+          TimeoutSeconds = None }

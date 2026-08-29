@@ -31,6 +31,6 @@ module LlmProvider =
         | _ ->
             task {
                 let! result = provider.CompleteAsync conversation options
-                onChunk { Delta = result.Content; FinishReason = Some result.FinishReason; TokensUsed = result.TokensUsed }
+                onChunk { Delta = result.Content; FinishReason = Some result.FinishReason; TokensUsed = result.TokensUsed; Usage = result.Usage }
                 return result
             }

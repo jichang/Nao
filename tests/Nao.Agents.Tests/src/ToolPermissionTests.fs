@@ -6,16 +6,16 @@ open Microsoft.VisualStudio.TestTools.UnitTesting
 open Nao.Agents
 
 /// Tests for the permission-aware Tool surface: the static `Permissions` a tool declares are
-/// auto-requested through the `ToolContext` before `Execute` runs, a denied one short-circuits
+/// auto-requested through the `AgentContext` before `Execute` runs, a denied one short-circuits
 /// with the canonical structured refusal, and tools can request access dynamically mid-run.
 [<TestClass>]
 type ToolPermissionTests() =
 
-    /// A ToolContext whose RequestPermission returns a fixed answer and records what was asked.
+    /// An AgentContext whose RequestPermission returns a fixed answer and records what was asked.
     let recordingCtx (sessionKey: string) (answer: bool) =
         let asked = ResizeArray<ResourceAccess>()
         let ctx =
-            { ToolContext.allowAll with
+            { AgentContext.allowAll with
                 SessionKey = sessionKey
                 RequestPermission =
                     fun access _reason _force ->
@@ -30,6 +30,7 @@ type ToolPermissionTests() =
             Tool.Create(
                 "writer",
                 "writes",
+                ToolSignature.Text,
                 [ ResourceAccess.File("write", "/tmp/a.txt") ],
                 fun _ctx input ->
                     task {
@@ -49,6 +50,7 @@ type ToolPermissionTests() =
             Tool.Create(
                 "fetcher",
                 "fetches",
+                ToolSignature.Text,
                 [ ResourceAccess.Web("GET", "https://example.com") ],
                 fun _ctx _ ->
                     task {
@@ -68,7 +70,7 @@ type ToolPermissionTests() =
         // Two declared permissions; the first is denied so the second is never requested.
         let asked = ResizeArray<ResourceAccess>()
         let ctx =
-            { ToolContext.allowAll with
+            { AgentContext.allowAll with
                 SessionKey = ""
                 RequestPermission =
                     fun access _ _ ->
@@ -78,6 +80,7 @@ type ToolPermissionTests() =
             Tool.Create(
                 "multi",
                 "multi",
+                ToolSignature.Text,
                 [ ResourceAccess.File("read", "/a"); ResourceAccess.File("write", "/b") ],
                 fun _ _ -> task { return "ran" })
         tool.InvokeAsync(ctx, "x").Result |> ignore
@@ -87,7 +90,7 @@ type ToolPermissionTests() =
     member _.FourArgCreateThreadsContextToExecute() =
         let seen = ref ""
         let tool =
-            Tool.Create("ctxtool", "ctx", [], fun ctx _ -> task {
+            Tool.Create("ctxtool", "ctx", ToolSignature.Text, [], fun ctx _ -> task {
                 seen.Value <- ctx.SessionKey
                 return "ok" })
         let ctx, _ = recordingCtx "user/42" true
@@ -98,7 +101,7 @@ type ToolPermissionTests() =
     member _.DynamicRequestInsideExecuteIsHonored() =
         // No static permissions; the tool asks dynamically once it knows its target.
         let tool =
-            Tool.Create("dyn", "dynamic", [], fun ctx input -> task {
+            Tool.Create("dyn", "dynamic", ToolSignature.Text, [], fun ctx input -> task {
                 let! ok = ctx.RequestPermission (ResourceAccess.File("write", input)) "save" false
                 return (if ok then "wrote" else "blocked") })
         let allowCtx, _ = recordingCtx "" true
@@ -112,15 +115,16 @@ type ToolPermissionTests() =
             Tool.Create(
                 "w",
                 "w",
+                ToolSignature.Text,
                 [ ResourceAccess.Web("GET", "https://x.com") ],
                 fun _ _ -> task { return "done" })
-        Assert.AreEqual("done", tool.InvokeAsync(ToolContext.allowAll, "x").Result)
+        Assert.AreEqual("done", tool.InvokeAsync(AgentContext.allowAll, "x").Result)
 
     [<TestMethod>]
-    member _.LegacyCreateHasNoDeclaredPermissions() =
-        let tool = Tool.Create("legacy", "legacy", fun input -> task { return input })
+    member _.CreateHasNoDeclaredPermissionsByDefault() =
+        let tool = Tool.Create("strict", "strict", ToolSignature.Text, (fun input -> task { return input }))
         Assert.AreEqual(0, tool.Permissions.Length)
-        Assert.AreEqual("hi", tool.InvokeAsync(ToolContext.allowAll, "hi").Result)
+        Assert.AreEqual("hi", tool.InvokeAsync(AgentContext.allowAll, "hi").Result)
 
     [<TestMethod>]
     member _.PermissionDeniedFormatIncludesHintWhenProvided() =

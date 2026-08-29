@@ -24,57 +24,52 @@ type IToolMiddleware =
 
 /// Protocol for tool discovery and invocation (MCP-inspired)
 type IToolProtocol =
-    /// List all available tools with their schemas
-    abstract member ListTools: unit -> Task<ToolSchema list>
-    /// Get a specific tool schema by name
-    abstract member GetTool: string -> Task<ToolSchema option>
+    /// List all available tools.
+    abstract member ListTools: unit -> Task<ITool list>
+    /// Get a specific tool by name.
+    abstract member GetTool: string -> Task<ITool option>
     /// Invoke a tool by name with input
     abstract member InvokeAsync: string -> string -> Task<ToolInvocationResult>
     /// Check if a tool is available and ready
     abstract member IsAvailable: string -> Task<bool>
-
-/// Strategy for selecting which tool to use
-[<RequireQualifiedAccess>]
-type ToolSelectionStrategy =
-    /// Let the LLM decide based on descriptions
-    | LlmDriven
-    /// Match by keyword patterns
-    | PatternMatch of patterns: Map<string, string list>
-    /// Custom selection function
-    | Custom of selector: (string -> ToolSchema list -> Task<ToolSchema option>)
 
 /// Routes tool invocations through middleware and protocol
 module ToolProtocol =
     open System.Diagnostics
 
     /// Create a protocol from a list of tools
-    let fromTools (tools: Tool list) : IToolProtocol =
-        let schemas = tools |> List.map ToolSchema.fromTool
-
+    let fromTools (tools: ITool list) : IToolProtocol =
         { new IToolProtocol with
-            member _.ListTools() = Task.FromResult schemas
+            member _.ListTools() = Task.FromResult tools
 
             member _.GetTool(name) =
-                let (n, ver) = VersionRef.parse name
-                schemas
-                |> List.tryFind (fun schema -> schema.Name = n && schema.Version = ver)
+                tools
+                |> List.tryFind (fun tool -> tool.Name = name)
                 |> Task.FromResult
 
             member _.InvokeAsync (name: string) (input: string) =
                 task {
                     let sw = Stopwatch.StartNew()
-                    let (n, ver) = VersionRef.parse name
-                    match tools |> List.tryFind (fun tool -> tool.Name = n && tool.Version = ver) with
+                    match tools |> List.tryFind (fun tool -> tool.Name = name) with
                     | Some tool ->
                         try
-                            let! result = tool.InvokeAsync(ToolContext.allowAll, input)
+                            let! result = tool.RunAsync(AgentContext.allowAll, input)
                             sw.Stop()
-                            return
-                                { Success = true
-                                  Output = result
-                                  Error = None
-                                  DurationMs = sw.ElapsedMilliseconds
-                                  HadSideEffects = false }
+                            match result with
+                            | Ok output ->
+                                return
+                                    { Success = true
+                                      Output = output
+                                      Error = None
+                                      DurationMs = sw.ElapsedMilliseconds
+                                      HadSideEffects = false }
+                            | Error failure ->
+                                return
+                                    { Success = false
+                                      Output = ""
+                                      Error = Some failure.Message
+                                      DurationMs = sw.ElapsedMilliseconds
+                                      HadSideEffects = false }
                         with ex ->
                             sw.Stop()
                             return
@@ -94,8 +89,7 @@ module ToolProtocol =
                 }
 
             member _.IsAvailable(name: string) =
-                let (n, ver) = VersionRef.parse name
-                tools |> List.exists (fun tool -> tool.Name = n && tool.Version = ver) |> Task.FromResult }
+                tools |> List.exists (fun tool -> tool.Name = name) |> Task.FromResult }
 
     /// Wrap a protocol with middleware
     let withMiddleware (middleware: IToolMiddleware) (protocol: IToolProtocol) : IToolProtocol =
