@@ -42,28 +42,6 @@ type IAgent =
     /// Handle an inter-agent message in the supplied runtime context and optionally reply
     abstract member HandleMessageAsync: context: AgentContext * message: AgentMessage -> Task<AgentMessage option>
 
-type private AgentBackedTool
-    (name: string, description: string, priority: int, inputSchema: string, outputSchema: string, agent: IAgent) =
-    inherit TypedTool<string, string>(
-        name,
-        description,
-        priority,
-        [],
-        ToolParameter.create inputSchema Ok Ok,
-        ToolParameter.create outputSchema Ok Ok)
-
-    override _.ExecuteAsync(context, input) =
-        task {
-            let! output = agent.RunAsync(context, input)
-            return Ok output
-        }
-
-[<RequireQualifiedAccess>]
-module AgentTool =
-    /// Exposes an agent as a tool so its result returns to the caller's planning loop.
-    let create name description priority inputSchema outputSchema (agent: IAgent) : ITool =
-        AgentBackedTool(name, description, priority, inputSchema, outputSchema, agent)
-
 /// Base class for a concrete, context-aware agent with explicit metadata and transport contract.
 /// The generic arguments describe the domain types owned by the implementation; this base does
 /// not serialize them or infer a contract from them.

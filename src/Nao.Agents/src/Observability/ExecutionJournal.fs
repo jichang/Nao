@@ -1,6 +1,7 @@
 namespace Nao.Agents
 
 open System
+open System.Threading
 open System.Threading.Tasks
 
 /// A record of a single tool execution (immutable, for journaling)
@@ -29,6 +30,12 @@ type IExecutionJournal =
     abstract member GetRevertibleAsync: unit -> Task<ExecutionRecord list>
     /// Mark an execution as reverted
     abstract member MarkRevertedAsync: ExecutionRecord -> Task
+
+module internal RuntimeExecutionJournal =
+    let private current = AsyncLocal<IExecutionJournal option>()
+
+    let get () = current.Value
+    let set value = current.Value <- value
 
 /// Orchestrates reverting tool executions in reverse order
 module ExecutionJournal =

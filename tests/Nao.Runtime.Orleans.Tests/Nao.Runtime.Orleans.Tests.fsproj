@@ -14,6 +14,7 @@
     <Compile Include="src/MSTestSettings.fs" />
     <Compile Include="src/PublishingConversationStoreTests.fs" />
     <Compile Include="src/ConversationContextRenderTests.fs" />
+    <Compile Include="src/OrchestratorObservabilityTests.fs" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\Nao.Runtime.Orleans\Nao.Runtime.Orleans.fsproj" />

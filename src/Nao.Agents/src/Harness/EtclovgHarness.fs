@@ -222,7 +222,9 @@ module EtclovgHarness =
             | (:? OrchestratorBase as orch), Some parent, Some tracer -> orch.TraceContext <- Some (tracer, parent)
             | _ -> ()
             let previousMetrics = RuntimeMetrics.get ()
+            let previousJournal = RuntimeExecutionJournal.get ()
             RuntimeMetrics.set config.Metrics
+            RuntimeExecutionJournal.set config.ExecutionJournal
             let env = ExecutionEnvironment.local ()
             let! execResult =
                 task {
@@ -233,6 +235,7 @@ module EtclovgHarness =
                         | :? OrchestratorBase as orch -> orch.TraceContext <- None
                         | _ -> ()
                         RuntimeMetrics.set previousMetrics
+                        RuntimeExecutionJournal.set previousJournal
                 }
             sw.Stop()
 

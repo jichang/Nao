@@ -18,6 +18,10 @@ type IOrchestratorFactory =
 type IRuntimeAgentContext =
     abstract member SetEventContext: IEventBus -> EventScope -> unit
 
+/// Runtime observability context supplied to tools that wrap another agent.
+type IRuntimeToolContext =
+    abstract member SetRuntimeContext: IEventBus -> EventScope -> (ITracer * Span) option -> unit
+
 /// The fundamental orchestrator agent.
 /// Accepts user input, uses an LLM to decide which tool or sub-agent to invoke,
 /// executes the action, feeds results back, and produces a final response.
@@ -284,12 +288,33 @@ type OrchestratorBase(config: OrchestratorConfig) =
                                       report (ToolInvoked (toolName, toolInput))
                                       // O: record the prepared invocation (name + normalized parameters + context) as a span.
                                       let toolSpan = this.StartToolSpan toolName toolInput (rounds + 1)
-                                      match! tool.RunAsync(agentContext, toolInput) with
+                                      match tool with
+                                      | :? IRuntimeToolContext as contextual ->
+                                          contextual.SetRuntimeContext eventBus eventScope this.TraceContext
+                                      | _ -> ()
+                                      let toolStopwatch = System.Diagnostics.Stopwatch.StartNew()
+                                      let! toolExecution = tool.RunAsync(agentContext, toolInput)
+                                      toolStopwatch.Stop()
+                                      match RuntimeMetrics.get () with
+                                      | Some metrics -> metrics.RecordToolCall toolName toolStopwatch.ElapsedMilliseconds (Result.isOk toolExecution)
+                                      | None -> ()
+                                      match toolExecution with
                                       | Ok toolResult ->
                                           report (ToolCompleted (toolName, toolResult))
                                           let resultContent = sprintf "[Tool Result from %s]: %s" toolName toolResult
                                           conversation <- conversation @ [ { Role = User; Content = resultContent } ]
                                           successfulToolCalls.Add((toolName, toolInput)) |> ignore
+                                          let durationMs = toolStopwatch.ElapsedMilliseconds.ToString(Globalization.CultureInfo.InvariantCulture)
+                                          match RuntimeExecutionJournal.get () with
+                                          | Some journal ->
+                                              do! journal.RecordAsync(
+                                                  { ToolName = toolName
+                                                    Input = toolInput
+                                                    Output = toolResult
+                                                    ExecutedAt = DateTimeOffset.UtcNow
+                                                    Reverted = false
+                                                    Metadata = Map.ofArray [| ("session.key", agentContext.SessionKey); ("turn.id", agentContext.TurnId); ("duration.ms", durationMs) |] })
+                                          | None -> ()
                                           this.EndToolSpan toolSpan SpanStatus.Ok (Map.ofList [ "result.length", string toolResult.Length ])
                                       | Error failure ->
                                           let guidance =

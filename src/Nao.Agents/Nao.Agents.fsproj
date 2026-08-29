@@ -68,6 +68,7 @@
     <Compile Include="src/Events/Events.fs" />
     <Compile Include="src/Events/TurnRecorder.fs" />
     <Compile Include="src/Orchestration/Orchestrator.fs" />
+     <Compile Include="src/Orchestration/AgentTool.fs" />
      <Compile Include="src/Memory/MemoryAgent.fs" />
     <!-- O: Observability & Operations -->
     <Compile Include="src/Observability/Resilience.fs" />
