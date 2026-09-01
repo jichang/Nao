@@ -145,7 +145,11 @@ type OrchestratorBase(config: OrchestratorConfig) =
     /// `BuildRepairMessage`), report the reasoning, and trace the round. Centralised here so
     /// every subclass gets identical logging and tracing for free — a custom orchestrator only
     /// supplies the prompt and the parser and can never accidentally drop the round's trace.
-    member private this.ReasonAsync (conversation: Conversation) (round: int) : Task<string> =
+    member private this.ReasonAsync
+        (conversation: Conversation)
+        (round: int)
+        (successfulToolCalls: Collections.Generic.HashSet<string * string>)
+        : Task<string> =
         task {
             let! messages = this.GenerateReasoningPrompt(conversation)
             let roundSpan = this.StartRoundSpan round
@@ -225,7 +229,17 @@ type OrchestratorBase(config: OrchestratorConfig) =
                         match protocol, protocolError with
                         | Some value, Some error -> value.BuildRepairMessage error
                         | _ -> this.BuildRepairMessage validationError.Value
-                    let fixMsg = { Role = User; Content = repairMessage }
+                    let completedToolGuidance =
+                        if successfulToolCalls.Count = 0 then
+                            ""
+                        else
+                            let names =
+                                successfulToolCalls
+                                |> Seq.map fst
+                                |> Seq.distinct
+                                |> String.concat ", "
+                            sprintf " Successful tool calls from earlier rounds: %s. Do not repeat equivalent successful calls. If they completed the request, reply only with respond <completed summary>. Otherwise emit only the missing tool actions." names
+                    let fixMsg = { Role = User; Content = repairMessage + completedToolGuidance }
                     convo <- convo @ [ { Role = Assistant; Content = working }; fixMsg ]
                     let! fixResult = invokeProvider (repairAttempts + 1) false convo
                     recordExchange (repairAttempts + 1) true convo fixResult.Content
@@ -262,7 +276,7 @@ type OrchestratorBase(config: OrchestratorConfig) =
                 // The base performs the LLM call (with repair + reasoning logging + tracing),
                 // so logs/traces are captured no matter how a subclass builds the prompt or
                 // parses the response.
-                let! response = this.ReasonAsync conversation (rounds + 1)
+                let! response = this.ReasonAsync conversation (rounds + 1) successfulToolCalls
                 // The assistant's own message joins the running conversation — like before —
                 // so the next round's prompt can include what the model already said.
                 conversation <- conversation @ [ { Role = Assistant; Content = response } ]
@@ -364,7 +378,7 @@ type OrchestratorBase(config: OrchestratorConfig) =
             if not finished then
                 let forceMsg = { Role = User; Content = "[System]: Maximum rounds reached. Please provide your final answer now." }
                 conversation <- conversation @ [ forceMsg ]
-                let! response = this.ReasonAsync conversation (rounds + 1)
+                let! response = this.ReasonAsync conversation (rounds + 1) successfulToolCalls
                 finalAnswer <-
                     this.ParseActions response
                     |> List.tryPick (function
