@@ -23,7 +23,19 @@ type ToolFailureKind =
 
 /// Runtime failure containing its pipeline stage, caller-facing diagnostic, and whether changing
 /// the invocation input may allow a retry to succeed.
-type ToolFailure = { Kind: ToolFailureKind; Message: string; Retryable: bool }
+type ToolFailure =
+    { Kind: ToolFailureKind; Message: string; Retryable: bool }
+
+    member this.Category =
+        match this.Kind with
+        | ToolFailureKind.InputContract -> PlatformErrorCategory.InvalidInput
+        | ToolFailureKind.PermissionDenied -> PlatformErrorCategory.PermissionDenied
+        | ToolFailureKind.OutputContract -> PlatformErrorCategory.InvalidOutput
+        | ToolFailureKind.Execution when this.Retryable -> PlatformErrorCategory.TransientDependency
+        | ToolFailureKind.Execution -> PlatformErrorCategory.PermanentDependency
+
+    member this.ToPlatformFailure(correlationId) =
+        PlatformFailure.create this.Category this.Message this.Retryable correlationId
 
 /// Encoded result returned through the executable tool boundary.
 type ToolRunResult = Result<string, ToolFailure>

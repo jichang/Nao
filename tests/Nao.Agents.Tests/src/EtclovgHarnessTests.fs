@@ -21,6 +21,27 @@ type EtclovgHarnessTests() =
             (fun _context _message -> Task.FromResult None)
 
     [<TestMethod>]
+    member _.HarnessErrorsExposePlatformCategoryAndRetryability() =
+        let cases =
+                        [ (HarnessError.PermissionDenied, PlatformErrorCategory.PermissionDenied, false);
+                            (HarnessError.PolicyBlocked [], PlatformErrorCategory.PermissionDenied, false);
+                            (HarnessError.NotReady [], PlatformErrorCategory.NotReady, true);
+                            (HarnessError.InitializationFailed "failed", PlatformErrorCategory.NotReady, true);
+                            (HarnessError.ResourceLimitExceeded LimitExceeded.Duration, PlatformErrorCategory.ResourceExhausted, false);
+                            (HarnessError.ConstitutionViolation [], PlatformErrorCategory.InvalidOutput, false);
+                            (HarnessError.ExecutionFailed "failed", PlatformErrorCategory.InternalFailure, false) ]
+
+        for error, expectedCategory, expectedRetryable in cases do
+            Assert.AreEqual(expectedCategory, error.Category)
+            Assert.AreEqual(expectedRetryable, error.Retryable)
+
+            let failure = error.ToPlatformFailure(Some "execution-1")
+            Assert.AreEqual(expectedCategory, failure.Category)
+            Assert.AreEqual(expectedRetryable, failure.Retryable)
+            Assert.AreEqual(error.Message, failure.Message)
+            Assert.AreEqual(Some "execution-1", failure.CorrelationId)
+
+    [<TestMethod>]
     member _.SuccessfulExecutionReturnsResponse() =
         let agent = makeAgent "hello world"
         let config = EtclovgConfig.Default

@@ -14,6 +14,23 @@ MARKDOWN_LINK = re.compile(r"\[[^]]*\]\(([^)]+)\)")
 HEADING = re.compile(r"^(#{1,6})\s+(.+)$")
 TASK_ID = re.compile(r"\b[A-Z]{3}-\d{2}\b")
 EXTERNAL_SCHEMES = {"http", "https", "mailto", "data", "javascript"}
+REQUIRED_ARCHITECTURE_SECTIONS = {
+    "## Platform vocabulary",
+    "## Data ownership and lifetime",
+    "## Trust levels",
+    "## Error categories and retryability",
+}
+REQUIRED_VOCABULARY_TERMS = {
+    "Agent",
+    "Orchestrator",
+    "Harness",
+    "Tool",
+    "Provider",
+    "Workspace",
+    "Session",
+    "Turn",
+    "Execution",
+}
 
 
 class HtmlLinks(HTMLParser):
@@ -94,6 +111,22 @@ def validate_markdown(root: Path) -> tuple[list[str], int, int]:
     for roadmap_page in sorted((root / "docs" / "roadmap").glob("*.md")):
         if "[Back to roadmap](../roadmap.md)" not in roadmap_page.read_text(encoding="utf-8"):
             errors.append(f"{roadmap_page.relative_to(root)}: missing roadmap backlink")
+
+    architecture = root / "docs" / "architecture.md"
+    architecture_lines = architecture.read_text(encoding="utf-8").splitlines()
+    architecture_sections = set(architecture_lines) & REQUIRED_ARCHITECTURE_SECTIONS
+    for section in sorted(REQUIRED_ARCHITECTURE_SECTIONS - architecture_sections):
+        errors.append(f"docs/architecture.md: missing required section {section}")
+
+    vocabulary_terms = {
+        columns[1].strip()
+        for line in architecture_lines
+        if line.startswith("|")
+        for columns in [line.split("|")]
+        if len(columns) > 2
+    }
+    for term in sorted(REQUIRED_VOCABULARY_TERMS - vocabulary_terms):
+        errors.append(f"docs/architecture.md: missing platform vocabulary term {term}")
 
     return errors, len(files), link_count
 

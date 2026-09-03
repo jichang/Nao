@@ -23,9 +23,11 @@ type ToolPermissionTests() =
                 let! output = execute context input
                 return Ok output }))
 
-    let run tool context input = tool.RunAsync context input |> fun task -> task.Result
+    let run (tool: Tool) context input : ToolRunResult =
+        tool.RunAsync context input |> fun task -> task.Result
 
-    let outputOf = function
+    let outputOf (result: ToolRunResult) =
+        match result with
         | Ok output -> output
         | Error failure -> Assert.Fail(failure.Message); ""
 

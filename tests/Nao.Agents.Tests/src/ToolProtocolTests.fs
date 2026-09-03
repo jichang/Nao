@@ -7,7 +7,6 @@ open Nao.Agents
 
 [<TestClass>]
 type ToolProtocolTests() =
-
     let textTool name description execute =
         Tool.create
             name
@@ -23,6 +22,25 @@ type ToolProtocolTests() =
     let tools =
         [ textTool "add" "Add numbers" (fun input -> Task.FromResult (sprintf "result:%s" input))
           textTool "sub" "Subtract numbers" (fun _ -> Task.FromResult "subtracted") ]
+
+    [<TestMethod>]
+    member _.ToolFailuresExposePlatformCategory() =
+        let cases =
+            [ ToolFailureKind.InputContract, true, PlatformErrorCategory.InvalidInput
+              ToolFailureKind.PermissionDenied, false, PlatformErrorCategory.PermissionDenied
+              ToolFailureKind.OutputContract, false, PlatformErrorCategory.InvalidOutput
+              ToolFailureKind.Execution, true, PlatformErrorCategory.TransientDependency
+              ToolFailureKind.Execution, false, PlatformErrorCategory.PermanentDependency ]
+
+        for kind, retryable, expectedCategory in cases do
+            let failure = { Kind = kind; Message = "failed"; Retryable = retryable }
+            Assert.AreEqual(expectedCategory, failure.Category)
+
+            let platformFailure = failure.ToPlatformFailure(Some "tool-call-1")
+            Assert.AreEqual(expectedCategory, platformFailure.Category)
+            Assert.AreEqual(retryable, platformFailure.Retryable)
+            Assert.AreEqual("failed", platformFailure.Message)
+            Assert.AreEqual(Some "tool-call-1", platformFailure.CorrelationId)
 
     [<TestMethod>]
     member _.FromToolsListsAll() =

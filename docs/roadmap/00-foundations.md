@@ -51,16 +51,16 @@ This workstream establishes an accurate baseline, stable platform vocabulary, pa
 
 ## FND-03 — Platform vocabulary and ownership
 
-- [ ] Define `agent`, `orchestrator`, `harness`, `tool`, `provider`, `workspace`, `session`, `turn`, and `execution`.
-- [ ] Distinguish conversation context, working memory, episodic memory, semantic memory, knowledge, and artifacts.
-- [ ] Define ownership and lifetime for tenant, workspace, group, user, session, and execution data.
-- [ ] Define source-of-truth rules for immutable events versus materialized projections.
-- [ ] Define trust levels for user input, retrieved content, model output, tools, and reasoner results.
-- [ ] Define platform error categories and which errors are retryable.
+- [x] Define `agent`, `orchestrator`, `harness`, `tool`, `provider`, `workspace`, `session`, `turn`, and `execution`.
+- [x] Distinguish conversation context, working memory, episodic memory, semantic memory, knowledge, and artifacts.
+- [x] Define ownership and lifetime for tenant, workspace, group, user, session, and execution data.
+- [x] Define source-of-truth rules for immutable events versus materialized projections.
+- [x] Define trust levels for user input, retrieved content, model output, tools, and reasoner results.
+- [x] Define platform error categories and which errors are retryable.
 
 **Acceptance criteria**
 
-- [ ] Public APIs and documentation use the same terms consistently.
+- [x] Public APIs and documentation use the same terms consistently.
 - [ ] Each durable record has an owner, retention policy, and deletion path.
 - [ ] Error categories map consistently across agents, tools, providers, storage, and hosts.
 

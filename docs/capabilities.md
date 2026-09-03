@@ -89,6 +89,7 @@ A capability can have more than one status when, for example, a core primitive i
 | Capability | Status | Source and tests | Current boundary | Roadmap |
 |---|---|---|---|---|
 | Supported solution and deterministic test surface | **Implemented** | `Nao.slnx`, `scripts/validate-test-surface.py`, and `.github/workflows/ci.yml` | Seven Nao-owned test projects run by default; CI publishes per-project TRX and Cobertura artifacts grouped by category. External-service tests require a named opt-in category and CI job before admission. | FND-02 |
+| Platform vocabulary and failure taxonomy | **Partial** | `PlatformErrorCategory`, tool/harness mappings, `docs/architecture.md`, and documentation validation | Vocabulary, ownership, trust, event authority, and retry rules are defined. Provider, persistence, and Orleans error mappings plus complete durable deletion paths remain incomplete. | FND-03 |
 
 ## Ontology and symbolic reasoning
 

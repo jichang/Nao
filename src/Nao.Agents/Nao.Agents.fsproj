@@ -14,6 +14,7 @@
      <!-- Core agent and tool contracts -->
     <Compile Include="src/Core/Permission.fs" />
     <Compile Include="src/Core/AgentContext.fs" />
+     <Compile Include="src/Core/PlatformError.fs" />
      <Compile Include="src/Core/ToolSchema.fs" />
      <Compile Include="src/Core/ToolCodec.fs" />
      <Compile Include="src/Core/ToolOperation.fs" />

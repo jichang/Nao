@@ -28,3 +28,26 @@ type HarnessError =
         | ResourceLimitExceeded limit -> sprintf "Resource limit exceeded: %A" limit
         | ConstitutionViolation ruleIds -> sprintf "Output violates constitution: %s" (ruleIds |> String.concat ", ")
         | ExecutionFailed msg -> msg
+
+    member this.Category =
+        match this with
+        | PermissionDenied
+        | PolicyBlocked _ -> PlatformErrorCategory.PermissionDenied
+        | NotReady _
+        | InitializationFailed _ -> PlatformErrorCategory.NotReady
+        | ResourceLimitExceeded _ -> PlatformErrorCategory.ResourceExhausted
+        | ConstitutionViolation _ -> PlatformErrorCategory.InvalidOutput
+        | ExecutionFailed _ -> PlatformErrorCategory.InternalFailure
+
+    member this.Retryable =
+        match this with
+        | NotReady _
+        | InitializationFailed _ -> true
+        | PermissionDenied
+        | PolicyBlocked _
+        | ResourceLimitExceeded _
+        | ConstitutionViolation _
+        | ExecutionFailed _ -> false
+
+    member this.ToPlatformFailure(correlationId) =
+        PlatformFailure.create this.Category this.Message this.Retryable correlationId
