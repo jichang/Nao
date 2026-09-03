@@ -25,5 +25,6 @@ group Test
   source https://api.nuget.org/v3/index.json
   storage: none
 
+  nuget coverlet.collector
   nuget MSTest
   nuget Microsoft.Orleans.TestingHost

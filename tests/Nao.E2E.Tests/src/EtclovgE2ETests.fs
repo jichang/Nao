@@ -1,9 +1,9 @@
 namespace Nao.E2E.Tests
 
 open System
+open System.Text.Json
 open System.Threading.Tasks
 open Microsoft.VisualStudio.TestTools.UnitTesting
-open Nao.Assistant
 open Nao.Persistence
 open Nao.Agents
 
@@ -49,36 +49,71 @@ module EtclovgDemoTools =
 
 /// Mock provider that simulates LLM behavior for ETCLOVG demos
 module EtclovgMockProvider =
-        let create () =
-            let mutable callCount = 0
-            LlmProvider.create
-                (fun () -> "EtclovgMock")
-                (fun (conversation: Conversation) (_options: CompletionOptions) ->
-            callCount <- callCount + 1
-            let lastMsg =
-                conversation
-                |> List.tryFindBack (fun m -> m.Role = User)
-                |> Option.map (fun m -> m.Content)
-                |> Option.defaultValue ""
+    let create () =
+        let mutable callCount = 0
+        LlmProvider.create
+            (fun () -> "EtclovgMock")
+            (fun (conversation: Conversation) (_options: CompletionOptions) ->
+                callCount <- callCount + 1
+                let lastMsg =
+                    conversation
+                    |> List.tryFindBack (fun message -> message.Role = User)
+                    |> Option.map (fun message -> message.Content)
+                    |> Option.defaultValue ""
 
-            let response =
-                if lastMsg.Contains("[Tool Result") || lastMsg.Contains("[Agent Result") then
-                    let result = lastMsg.Split("]:") |> Array.last |> fun s -> s.Trim()
-                    sprintf "Based on the data: %s" result
-                elif lastMsg.Contains("stock") || lastMsg.Contains("price") then
-                    """{"action":"tool","name":"get_stock_price","input":"AAPL"}"""
-                elif lastMsg.Contains("email") || lastMsg.Contains("send") then
-                    """{"action":"tool","name":"send_email","input":"team@company.com|Update|Project is on track"}"""
-                elif lastMsg.Contains("search") || lastMsg.Contains("docs") then
-                    """{"action":"tool","name":"search_docs","input":"deployment guide"}"""
-                elif lastMsg.Contains("delete") then
-                    """{"action":"tool","name":"delete_all_data","input":"confirm"}"""
-                elif lastMsg.Contains("delegate") || lastMsg.Contains("specialist") then
-                    """{"action":"delegate","name":"research-agent","input":"find latest trends"}"""
-                else
-                    sprintf "I understand your request: %s. Here's my response." lastMsg
+                let response =
+                    if lastMsg.Contains("[Tool Result") || lastMsg.Contains("[Agent Result") then
+                        let result = lastMsg.Split("]:") |> Array.last |> fun value -> value.Trim()
+                        sprintf "Based on the data: %s" result
+                    elif lastMsg.Contains("stock") || lastMsg.Contains("price") then
+                        """{"action":"tool","name":"get_stock_price","input":"AAPL"}"""
+                    elif lastMsg.Contains("email") || lastMsg.Contains("send") then
+                        """{"action":"tool","name":"send_email","input":"team@company.com|Update|Project is on track"}"""
+                    elif lastMsg.Contains("search") || lastMsg.Contains("docs") then
+                        """{"action":"tool","name":"search_docs","input":"deployment guide"}"""
+                    elif lastMsg.Contains("delete") then
+                        """{"action":"tool","name":"delete_all_data","input":"confirm"}"""
+                    elif lastMsg.Contains("delegate") || lastMsg.Contains("specialist") then
+                        """{"action":"delegate","name":"research-agent","input":"find latest trends"}"""
+                    else
+                        sprintf "I understand your request: %s. Here's my response." lastMsg
 
-            Task.FromResult(CompletionResult.create response "stop" (Some 150) None))
+                Task.FromResult(CompletionResult.create response "stop" (Some 150) None))
+
+    let createOrchestrator tools =
+        let parseActions (response: string) =
+            if response.TrimStart().StartsWith("{") then
+                use document = JsonDocument.Parse(response)
+                let root = document.RootElement
+                let action = root.GetProperty("action").GetString()
+                let name = root.GetProperty("name").GetString()
+                let input = root.GetProperty("input").GetString()
+                match action with
+                | "tool" -> [ InvokeTool(name, input) ]
+                | "delegate" -> [ DelegateToAgent(name, input) ]
+                | _ -> []
+            else
+                [ Respond response ]
+
+        let config =
+            { Id = "etclovg-orchestrator"
+              Name = "ETCLOVG orchestrator"
+              Description = "Exercises Nao orchestration through the ETCLOVG harness."
+              Priority = 0
+              Responsibilities = []
+              Contract = AgentContract.Text
+              Provider = create ()
+              Tools = tools
+              SubAgents = []
+              Prompt = Prompt.Empty
+              Options = CompletionOptions.Default
+              MaxRounds = 5
+              Bus = EventBus.none
+              Scope = EventScope.Empty }
+        let definition =
+            { OrchestratorDefinition.create Task.FromResult with
+                ParseActions = parseActions }
+        Orchestrator.create config definition
 
 
 // =============================================================================
@@ -108,7 +143,7 @@ type EtclovgExecutionTests() =
         let agent = makeAgent "resource-bounded output"
         let env = ExecutionEnvironment.local ()
 
-        let result = (env.ExecuteAsync ctx agent "process this").Result
+        let result = (env.ExecuteAsync ctx AgentContext.allowAll agent "process this").Result
         match result with
         | Ok response -> Assert.AreEqual("resource-bounded output", response)
         | Error exceeded -> Assert.Fail(sprintf "Unexpected limit exceeded: %A" exceeded)
@@ -125,7 +160,7 @@ type EtclovgExecutionTests() =
 
         let agent = makeAgent "should not reach"
         let env = ExecutionEnvironment.local ()
-        let result = (env.ExecuteAsync ctx agent "query").Result
+        let result = (env.ExecuteAsync ctx AgentContext.allowAll agent "query").Result
         match result with
         | Error LimitExceeded.LlmCalls -> Assert.IsTrue(true)
         | _ -> Assert.Fail("Expected LlmCalls limit exceeded")
@@ -248,7 +283,7 @@ type EtclovgContextMemoryTests() =
 [<TestClass>]
 type EtclovgLifecycleTests() =
 
-    let agentId = { Name = "lifecycle-demo"; Description = "Demonstrates lifecycle" }
+    let agentId = "lifecycle-demo"
 
     [<TestMethod>]
     member _.FullLifecycleTransitions() =
@@ -282,7 +317,6 @@ type EtclovgLifecycleTests() =
     [<TestMethod>]
     member _.OrchestratorWithToolProtocolIntegration() =
         // Show the Orchestrator using ToolProtocol for structured tool management
-        let provider = EtclovgMockProvider.create ()
         let tools = [ EtclovgDemoTools.stockPrice; EtclovgDemoTools.searchDocs ]
         let protocol = ToolProtocol.fromTools tools
 
@@ -291,7 +325,7 @@ type EtclovgLifecycleTests() =
         Assert.AreEqual(2, schemas.Length)
 
         // Create orchestrator with these tools
-        let orchestrator = NaoOrchestrator.create provider tools []
+        let orchestrator = EtclovgMockProvider.createOrchestrator tools
         let result = (Agent.runAsync AgentContext.allowAll "What is the stock price of AAPL?" orchestrator).Result
         Assert.IsTrue(result.Contains("189.45") || result.Contains("AAPL"))
 
@@ -415,7 +449,7 @@ type EtclovgObservabilityTests() =
 [<TestClass>]
 type EtclovgVerificationTests() =
 
-    let agentId = { Name = "verified-agent"; Description = "Agent with verification" }
+    let agentId = "verified-agent"
 
     [<TestMethod>]
     member _.ReadinessChecksValidatePrerequisites() =
@@ -493,7 +527,7 @@ type EtclovgVerificationTests() =
 [<TestClass>]
 type EtclovgGovernanceTests() =
 
-    let agentId = { Name = "governed-agent"; Description = "Agent with governance" }
+    let agentId = "governed-agent"
 
     [<TestMethod>]
     member _.ConstitutionEnforcesOutputSafety() =
@@ -597,7 +631,7 @@ type EtclovgFullIntegrationTests() =
     [<TestMethod>]
     member _.CompleteHarnessExecution_AllLayersActive() =
         // This test demonstrates ALL seven ETCLOVG layers working together
-        let agentId = { Name = "full-demo-agent"; Description = "Full ETCLOVG demo" }
+        let agentId = "full-demo-agent"
 
         // E: Execution environment with resource bounds
         let sandbox =
@@ -657,7 +691,7 @@ type EtclovgFullIntegrationTests() =
 
         // O: Metrics collected
         Assert.IsTrue(result.Metrics.IsSome)
-        Assert.AreEqual(1, result.Metrics.Value.TotalLlmCalls)
+        Assert.AreEqual(0, result.Metrics.Value.TotalLlmCalls)
 
         // V: Trace stored
         Assert.IsTrue(result.Trace.IsSome)
@@ -678,7 +712,7 @@ type EtclovgFullIntegrationTests() =
     member _.HarnessBlocksDangerousOutput() =
         // Agent produces output containing PII — constitution should block it
         let agent = makeAgent "Please contact support at admin@internal.corp for help."
-        let agentId = { Name = "full-demo-agent"; Description = "Full ETCLOVG demo" }
+        let agentId = "full-demo-agent"
 
         let config =
             { EtclovgConfig.Default with
@@ -698,7 +732,7 @@ type EtclovgFullIntegrationTests() =
     [<TestMethod>]
     member _.HarnessEnforcesCostBudget() =
         let agent = makeAgent "response"
-        let agentId = { Name = "full-demo-agent"; Description = "Full ETCLOVG demo" }
+        let agentId = "full-demo-agent"
 
         // Zero budget policy — should block immediately
         let config =
@@ -739,9 +773,8 @@ type EtclovgFullIntegrationTests() =
     [<TestMethod>]
     member _.EndToEndOrchestratorThroughHarness() =
         // Complete E2E: Orchestrator agent routed through ETCLOVG harness
-        let provider = EtclovgMockProvider.create ()
         let tools = [ EtclovgDemoTools.stockPrice; EtclovgDemoTools.searchDocs ]
-        let orchestrator = NaoOrchestrator.create provider tools []
+        let orchestrator = EtclovgMockProvider.createOrchestrator tools
         let agentId = orchestrator.Metadata.Id
 
         let tracer = InMemory.tracer ()

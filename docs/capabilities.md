@@ -84,6 +84,12 @@ A capability can have more than one status when, for example, a core primitive i
 | OpenTelemetry, OTLP, Prometheus, and dashboards | **Planned** | No standard exporter or dashboard implementation exists | Backend selection and operation are deployment-owned through future adapters. | OBS-02, OBS-04 |
 | Continuous evaluation and drift detection | **Planned** | Regression primitives exist, but no production sampling and promotion workflow exists | Requires consent, redaction, dataset review, release gates, and operational alerts. | EVAL-04, EVAL-05 |
 
+## Build and test surface
+
+| Capability | Status | Source and tests | Current boundary | Roadmap |
+|---|---|---|---|---|
+| Supported solution and deterministic test surface | **Implemented** | `Nao.slnx`, `scripts/validate-test-surface.py`, and `.github/workflows/ci.yml` | Seven Nao-owned test projects run by default; CI publishes per-project TRX and Cobertura artifacts grouped by category. External-service tests require a named opt-in category and CI job before admission. | FND-02 |
+
 ## Ontology and symbolic reasoning
 
 | Capability | Status | Source and tests | Current boundary | Roadmap |

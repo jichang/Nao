@@ -799,6 +799,7 @@ NUGET
       Azure.Core (>= 1.56) - restriction: >= netstandard2.0
       OpenTelemetry.Extensions.Hosting (>= 1.15.3) - restriction: >= netstandard2.0
       OpenTelemetry.PersistentStorage.FileSystem (>= 1.0.3) - restriction: >= netstandard2.0
+    coverlet.collector (10.0.1)
     Humanizer.Core (3.0.10) - restriction: >= net8.0
     Microsoft.ApplicationInsights (3.1.2) - restriction: || (&& (>= net462) (>= netstandard2.0)) (>= net8.0)
       Azure.Monitor.OpenTelemetry.Exporter (>= 1.8) - restriction: || (>= net462) (>= netstandard2.0)

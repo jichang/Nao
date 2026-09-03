@@ -72,7 +72,7 @@ type ConstitutionTests() =
 [<TestClass>]
 type AuditLogTests() =
 
-    let agentId = { Name = "test"; Description = "" }
+    let agentId = "test"
 
     [<TestMethod>]
     member _.RecordAndQuery() =
@@ -107,7 +107,7 @@ type AuditLogTests() =
 [<TestClass>]
 type PolicyEngineTests() =
 
-    let agentId = { Name = "test"; Description = "" }
+    let agentId = "test"
 
     [<TestMethod>]
     member _.NoPoliciesAllowsAll() =

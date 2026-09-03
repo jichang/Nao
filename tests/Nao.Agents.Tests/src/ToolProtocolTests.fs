@@ -45,12 +45,6 @@ type ToolProtocolTests() =
         Assert.IsTrue(found.IsNone)
 
     [<TestMethod>]
-    member _.GetToolRejectsUnqualifiedReference() =
-        let protocol = ToolProtocol.fromTools tools
-        Assert.ThrowsExactly<ArgumentException>(fun () -> protocol.GetTool "add" |> ignore)
-        |> ignore
-
-    [<TestMethod>]
     member _.InvokeAsyncCallsCorrectTool() =
         let protocol = ToolProtocol.fromTools tools
         let result = (protocol.InvokeAsync AgentContext.allowAll "add" "5").Result

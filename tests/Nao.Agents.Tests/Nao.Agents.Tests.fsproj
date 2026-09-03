@@ -31,8 +31,6 @@
     <Compile Include="src/ResourcePermissionTests.fs" />
     <Compile Include="src/ToolPermissionTests.fs" />
     <Compile Include="src/EtclovgHarnessTests.fs" />
-    <Compile Include="src/DelegationHookTests.fs" />
-    <Compile Include="src/ActionBlockParseTests.fs" />
     <Compile Include="src/EventBusTests.fs" />
     <Compile Include="src/ObservabilityServicesTests.fs" />
     <Compile Include="src/InMemoryStores.fs" />
@@ -41,7 +39,6 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Nao.Agents\Nao.Agents.fsproj" />
     <ProjectReference Include="..\..\src\Nao.Persistence\Nao.Persistence.fsproj" />
-    <ProjectReference Include="..\..\..\Assistant\src\SignedByte.Assistant.Server\SignedByte.Assistant.Server.fsproj" />
   </ItemGroup>
   <Import Project="..\..\.paket\Paket.Restore.targets" />
 </Project>

@@ -194,7 +194,7 @@ type OrchestratorByNameTests() =
     member _.ByNameReturnsErrorForUnknownAgent() =
         let router = Router.create [ weatherAgent ] (ByName "nonexistent")
         let result = (Router.routeAsync AgentContext.allowAll "anything" router).Result
-        Assert.IsTrue(result.Contains("not found"))
+        Assert.AreEqual("No matching agent available", result)
 
 
 // =============================================================================

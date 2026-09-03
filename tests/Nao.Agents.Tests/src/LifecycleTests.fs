@@ -8,7 +8,7 @@ open Nao.Agents
 [<TestClass>]
 type LifecycleTests() =
 
-    let agentId = { Name = "test-agent"; Description = "test" }
+    let agentId = "test-agent"
 
     [<TestMethod>]
     member _.CreateStartsInCreatedState() =

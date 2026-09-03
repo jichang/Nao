@@ -78,16 +78,16 @@ type AgentMessageTests () =
 
     [<TestMethod>]
     member _.CreateDirectedMessage () =
-        let from = { Name = "agent1"; Description = "" }
-        let toAgent = { Name = "agent2"; Description = "" }
+        let from = "agent1"
+        let toAgent = "agent2"
         let message = AgentMessage.create from toAgent "hello"
-        Assert.AreEqual("agent1", message.From.Name)
+        Assert.AreEqual("agent1", message.From)
         Assert.AreEqual(Some toAgent, message.To)
         Assert.AreEqual("hello", message.Content)
 
     [<TestMethod>]
     member _.BroadcastHasNoRecipient () =
-        let from = { Name = "agent1"; Description = "" }
+        let from = "agent1"
         let message = AgentMessage.broadcast from "hello all"
         Assert.AreEqual(None, message.To)
         Assert.AreEqual("hello all", message.Content)

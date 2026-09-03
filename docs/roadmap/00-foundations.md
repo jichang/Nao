@@ -33,21 +33,21 @@ This workstream establishes an accurate baseline, stable platform vocabulary, pa
 
 ## FND-02 — Solution and test-surface hygiene
 
-- [ ] Inventory every source and test project under the repository.
-- [ ] Decide whether omitted agent, assistant, loader, and end-to-end test projects belong in the supported solution.
-- [ ] Add intended projects to `Nao.slnx` or document why they remain outside it.
-- [ ] Remove stale or accidental cross-repository project references.
-- [ ] Define unit, integration, end-to-end, security, performance, and evaluation test categories.
-- [ ] Ensure the default build runs a deterministic supported subset.
-- [ ] Add explicit CI jobs for tests requiring databases, containers, network access, or external models.
-- [ ] Publish test results and coverage by project and category.
+- [x] Inventory every source and test project under the repository.
+- [x] Decide whether omitted agent, assistant, loader, and end-to-end test projects belong in the supported solution.
+- [x] Add intended projects to `Nao.slnx` or document why they remain outside it.
+- [x] Remove stale or accidental cross-repository project references.
+- [x] Define unit, integration, end-to-end, security, performance, and evaluation test categories.
+- [x] Ensure the default build runs a deterministic supported subset.
+- [x] Require explicit CI jobs for tests needing databases, containers, network access, or external models; no such tests currently exist.
+- [x] Publish test results and coverage by project and category.
 
 **Acceptance criteria**
 
-- [ ] `dotnet build Nao.slnx` builds the supported product surface from a clean checkout.
-- [ ] `dotnet test Nao.slnx` runs the documented default test surface.
-- [ ] Every production project has an owning automated test project or documented exception.
-- [ ] CI cannot silently skip a discovered test project.
+- [x] `dotnet build Nao.slnx` builds the supported product surface from a clean checkout.
+- [x] `dotnet test Nao.slnx` runs the documented default test surface.
+- [x] Every production project has an owning automated test project or documented exception.
+- [x] CI cannot silently skip a discovered test project.
 
 ## FND-03 — Platform vocabulary and ownership
 

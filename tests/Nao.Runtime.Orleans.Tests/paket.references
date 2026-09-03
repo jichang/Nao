@@ -1,3 +1,4 @@
 group Test
+coverlet.collector
 MSTest
 Microsoft.Orleans.TestingHost

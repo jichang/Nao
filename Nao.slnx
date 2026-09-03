@@ -9,6 +9,8 @@
     <Project Path="src/Nao.Runtime.Orleans.Codegen/Nao.Runtime.Orleans.Codegen.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/Nao.Agents.Tests/Nao.Agents.Tests.fsproj" />
+    <Project Path="tests/Nao.E2E.Tests/Nao.E2E.Tests.fsproj" />
     <Project Path="tests/Nao.Eval.Tests/Nao.Eval.Tests.fsproj" />
     <Project Path="tests/Nao.Persistence.Tests/Nao.Persistence.Tests.fsproj" />
     <Project Path="tests/Nao.Protocols.Tests/Nao.Protocols.Tests.fsproj" />

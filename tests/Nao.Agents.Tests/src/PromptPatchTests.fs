@@ -52,7 +52,7 @@ type PromptPatchTests () =
     member _.UpdateOperationsReceiveTheExistingFieldValue() =
         let patch =
             { PromptPatch.Empty with
-                Role = Some(UpdateText String.ToUpperInvariant)
+                Role = Some(UpdateText (fun value -> value.ToUpperInvariant()))
                 Examples =
                     Some(UpdateList (fun examples ->
                         examples

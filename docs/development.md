@@ -80,6 +80,27 @@ Do not create cyclic dependencies or make a vendor SDK a transitive requirement 
 - Use real adapter integration tests where practical and deterministic fixtures elsewhere.
 - Keep evaluation datasets versioned separately from ordinary unit tests.
 
+The supported solution uses these primary test categories:
+
+| Category | Projects | Purpose |
+|---|---|---|
+| Unit | `Nao.Agents.Tests`, `Nao.Protocols.Tests` | In-process contract and behavior checks |
+| Integration | `Nao.Persistence.Tests`, `Nao.Providers.Tests`, `Nao.Runtime.Orleans.Tests` | Deterministic adapter, storage, and runtime checks |
+| End-to-end | `Nao.E2E.Tests` | Full harness and orchestration flows using local fakes |
+| Evaluation | `Nao.Eval.Tests` | Evaluation runner, metric, and report behavior |
+| Security | MSTest `Security` category within an owning project | Permission, policy, isolation, and tenant-boundary checks |
+| Performance | MSTest `Performance` category within an owning project | Explicit benchmark or regression-threshold checks |
+
+All currently supported projects are deterministic and run with `dotnet test Nao.slnx`. Tests that require an external database, container, network service, or model must use the corresponding MSTest category (`ExternalDatabase`, `Container`, `Network`, or `ExternalModel`) and an explicit opt-in CI job before entering the supported solution. No such tests currently exist.
+
+The CI workflow validates solution membership, then publishes TRX and Cobertura files under category and project directories. Run the same inventory check locally with:
+
+```bash
+python3 scripts/validate-test-surface.py
+```
+
+`Nao.Runtime.Orleans.Tests` owns runtime and generated-code integration coverage. `Nao.Assistant.Tests` remains outside `Nao.slnx` because it is an application-owned cross-solution integration project for the sibling Assistant solution. There is no current `Nao.Loader.Tests` project; generated artifacts with that name do not define a supported test surface.
+
 ## Public contract changes
 
 Before changing a public F# record, union, interface, Orleans state type, event, or persisted document:
