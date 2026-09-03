@@ -34,6 +34,8 @@ Identity scopes are ordered from broad to narrow: tenant, organizational group, 
 | Turn | Session runtime | Immutable attribution for the session retention lifetime; corrections append new facts rather than changing identity |
 | Execution | Harness/runtime | One bounded attempt; completion, failure, or cancellation closes it, after which operational records follow telemetry/audit policy |
 
+`SessionDeletion` coordinates the implemented session destruction path. It deletes the session conversation directory, clears the `session:<grain-key>` memory owner, removes the per-user directory entry, and clears Orleans session state. The runtime performs these idempotent effects before deactivation, and isolation tests verify that another session is preserved.
+
 | Data | Durable authority | Projection or derived view | Trust | Retention and deletion owner |
 |---|---|---|---|---|
 | Conversation context | Committed session turns | Model window, compacted history, summary | Untrusted input plus model output | Session runtime applies host retention; session destruction removes the conversation records it owns |
@@ -48,6 +50,8 @@ Identity scopes are ordered from broad to narrow: tenant, organizational group, 
 Persisted append-only events record accepted facts and are the reconstruction authority. Mutable stores, indexes, summaries, registries, and dashboards are projections or configuration views and must be rebuildable or explicitly versioned. `NaoEvent` is an in-process notification contract, not automatically a persisted event. `ConversationStore.SaveAsync` is a mutable projection boundary, while `EventStore` is append-only.
 
 Deletion means deleting or tombstoning the authoritative record according to policy and then removing or rebuilding all derived views. Current adapters do not yet implement this lifecycle consistently; callers must not infer complete erasure from one store operation.
+
+The session lifecycle does not yet cover globally rooted or database-backed feedback, turns, audit records, execution journals, traces, metrics, episodic memory, graph memory, working memory, tiered memory, or append-only event streams. Those stores require owner fields, retention contracts, and deletion or tombstone operations before Nao can claim complete durable-record lifecycle coverage.
 
 ## Trust levels
 

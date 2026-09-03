@@ -157,7 +157,8 @@ type SessionGrain
         feedbackFactory: Func<string, FeedbackService>,
         eventBus: EventBus,
         memoryStore: MemoryStore,
-        memoryToolConfig: MemoryToolConfig
+        memoryToolConfig: MemoryToolConfig,
+        grainFactory: IGrainFactory
     ) as this =
     inherit Grain()
 
@@ -702,11 +703,8 @@ type SessionGrain
 
         member this.DestroyAsync() : Task =
             task {
-                // Clean up external conversation store
                 let grainKey = this.GetPrimaryKeyString()
-                do! conversationStore.DeleteSessionAsync(grainKey)
-                do! memoryStore.ClearAsync(memoryOwner())
-                do! persistentState.ClearStateAsync()
+                do! SessionDeletion.executeForSessionAsync grainKey (memoryOwner()) parseKey conversationStore.DeleteSessionAsync memoryStore.ClearAsync (fun userId sessionId -> grainFactory.GetGrain<ISessionDirectoryGrain>(userId).RemoveAsync sessionId) persistentState.ClearStateAsync
                 this.DeactivateOnIdle()
             }
 

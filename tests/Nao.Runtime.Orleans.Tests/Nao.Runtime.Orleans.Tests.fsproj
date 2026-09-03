@@ -12,6 +12,7 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="src/MSTestSettings.fs" />
+    <Compile Include="src/SessionDeletionTests.fs" />
     <Compile Include="src/PublishingConversationStoreTests.fs" />
     <Compile Include="src/ConversationContextRenderTests.fs" />
     <Compile Include="src/OrchestratorObservabilityTests.fs" />
