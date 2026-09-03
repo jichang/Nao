@@ -33,14 +33,14 @@ and [<RequireQualifiedAccess>] RegressionCategory =
     | ToolUsage
     | SuccessRate
 
-/// Stores execution traces for regression comparison
-type ITraceStore =
-    /// Save an execution trace
-    abstract member SaveAsync: ExecutionTrace -> Task<unit>
-    /// Get the most recent successful trace for an agent + task pattern
-    abstract member GetBaselineAsync: string -> taskPattern: string -> Task<ExecutionTrace option>
-    /// Get all traces for an agent
-    abstract member GetTracesAsync: string -> limit: int -> Task<ExecutionTrace list>
+/// Functional execution-trace persistence operations for regression comparison.
+type TraceStore =
+        { /// Save an execution trace
+            SaveAsync: ExecutionTrace -> Task<unit>
+            /// Get the most recent successful trace for an agent + task pattern
+            GetBaselineAsync: string -> string -> Task<ExecutionTrace option>
+            /// Get all traces for an agent
+            GetTracesAsync: string -> int -> Task<ExecutionTrace list> }
 
 module Regression =
 

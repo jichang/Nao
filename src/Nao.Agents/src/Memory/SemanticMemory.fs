@@ -12,21 +12,19 @@ type SemanticEntry =
       Timestamp: DateTimeOffset
       Tags: string list }
 
-/// Interface for generating text embeddings
-type IEmbeddingProvider =
-    /// Generate an embedding vector for the given text
-    abstract member EmbedAsync: string -> Task<float array>
+/// Functional text-embedding capability.
+type EmbeddingProvider =
+    { /// Generate an embedding vector for the given text
+      EmbedAsync: string -> Task<float array> }
 
-/// Semantic memory store that uses embeddings for similarity-based retrieval
-type ISemanticMemory =
-    /// Store a memory with its embedding
-    abstract member StoreAsync: string -> string -> string -> Task<unit>
-
-    /// Retrieve the top-k most relevant memories for a query
-    abstract member RetrieveAsync: string -> string -> int -> Task<SemanticEntry list>
-
-    /// Remove a memory by key
-    abstract member RemoveAsync: string -> string -> Task<unit>
+/// Functional semantic memory that uses embeddings for similarity-based retrieval.
+type SemanticMemory =
+    { /// Store a memory with its embedding
+      StoreAsync: string -> string -> string -> Task<unit>
+      /// Retrieve the top-k most relevant memories for a query
+      RetrieveAsync: string -> string -> int -> Task<SemanticEntry list>
+      /// Remove a memory by key
+      RemoveAsync: string -> string -> Task<unit> }
 
 module SemanticSimilarity =
 

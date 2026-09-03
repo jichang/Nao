@@ -9,7 +9,7 @@ G: Governance (permissions and policy pre-check)
   → V: Verification (readiness gates)
     → L: Lifecycle (initialize and start)
       → O: Observability (trace spans and LLM metrics)
-        → E: Execution (agent.RunAsync)
+        → E: Execution (`Agent.runAsync agentContext input agent`)
       → G: Constitution (output validation)
     → L: Lifecycle (complete or fail)
   → V: Verification (trace store, regression, and judge)
@@ -43,11 +43,16 @@ The current harness uses local in-process execution. Process and container isola
 
 The tool protocol separates discovery, contracts, middleware, and invocation:
 
-- `ITool` and `TypedTool` define explicit transport and permission contracts.
-- `IToolProtocol` handles listing, availability, and invocation.
-- `IToolMiddleware` supplies cross-cutting behavior.
+- `Tool`, `ToolCodec`, and `ToolOperation` define executable capabilities with explicit transport and permission contracts.
+- `ToolProtocol` handles listing, availability, and invocation.
+- `ToolSelector` creates a deterministic, budgeted candidate set from the protocol catalog.
+- `ToolMiddleware` supplies cross-cutting behavior.
 - MCP transports connect external tool servers.
 - Revert operations support compensation where a tool can safely undo work.
+
+An orchestrator can capture its own `ToolProtocol`. For each planning round, discovery, selected
+prompt details, response validation, repair, and execution use the same catalog snapshot. Agents see
+ordinary tool names, descriptions, and schemas; transport and selection remain host infrastructure.
 
 See [Tools, security, and governance](tools-governance.md).
 
@@ -90,9 +95,9 @@ Standard OpenTelemetry exporters, operational dashboards, and production drift p
 
 Verification includes:
 
-- Readiness checks before execution
+- Functional `ReadinessCheck` records run concurrently before execution
 - Step-level execution traces
-- Deterministic and model-based judges
+- Functional `Judge` records, including deterministic and model-based factories
 - Regression comparison
 - Dataset-level evaluation reports
 

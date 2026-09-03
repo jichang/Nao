@@ -4,7 +4,7 @@ Nao separates model-provider integration from agent behavior and offers Orleans 
 
 ## Provider abstraction
 
-`ILlmProvider` provides a common completion interface with optional streaming. Current adapters cover OpenAI-compatible services, Anthropic, DeepSeek, Kimi, Ollama, vLLM, and llama.cpp.
+The immutable `LlmProvider` capability record provides common completion behavior with an optional streaming function. Current adapters cover OpenAI-compatible services, Anthropic, DeepSeek, Kimi, Ollama, vLLM, and llama.cpp.
 
 Applications should not select a provider by hard-coded model-name heuristics. A production control plane needs explicit capability metadata for:
 

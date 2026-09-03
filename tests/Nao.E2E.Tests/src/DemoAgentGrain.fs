@@ -2,7 +2,6 @@ namespace Nao.E2E.Tests
 
 open System.Threading.Tasks
 open Nao.Agents
-open Nao.Agents
 open Nao.Runtime.Orleans.Grains
 
 module internal AgentHelpers =
@@ -18,49 +17,60 @@ module internal AgentHelpers =
         else
             None
 
-    let findTool (tools: ITool list) (name: string) =
+    let findTool (tools: Tool list) (name: string) =
         tools |> List.tryFind (fun t -> t.Name = name)
 
 /// A demo agent that uses the local LLM provider and tools.
 /// When the LLM response contains a tool invocation JSON pattern,
 /// the agent executes the tool and feeds the result back to the LLM.
-type DemoAgent(provider: ILlmProvider, tools: ITool list, prompt: Prompt) =
-    let id = { Name = "demo-agent"; Description = "A demo agent for E2E testing" }
+module DemoAgent =
+    let create (provider: LlmProvider) (tools: Tool list) (prompt: Prompt) =
+        let runCore (context: AgentContext) (input: string) : Task<string> =
+            task {
+                let systemMsg = { Role = System; Content = Prompt.render prompt }
+                let userMsg = { Role = User; Content = input }
+                let conv1 = [ systemMsg; userMsg ]
 
-    member private _.RunCore(context: AgentContext, input: string) : Task<string> =
-        let systemMsg = { Role = System; Content = Prompt.render prompt }
-        let userMsg = { Role = User; Content = input }
-        let conv1 = [systemMsg; userMsg]
+                let! result = provider.CompleteAsync conv1 CompletionOptions.Default
+                let assistantMsg = { Role = Assistant; Content = result.Content }
+                let conv2 = conv1 @ [ assistantMsg ]
 
-        let result = (provider.CompleteAsync conv1 CompletionOptions.Default).Result
-        let assistantMsg = { Role = Assistant; Content = result.Content }
-        let conv2 = conv1 @ [assistantMsg]
+                match AgentHelpers.tryParseToolCall result.Content with
+                | Some (toolName, args) ->
+                    match AgentHelpers.findTool tools toolName with
+                    | Some tool ->
+                        let! execution = tool.RunAsync context args
+                        let toolResult =
+                            match execution with
+                            | Ok output -> output
+                            | Error failure -> failure.Message
+                        let toolMsg = { Role = User; Content = "tool_result: " + toolResult }
+                        let conv3 = conv2 @ [ toolMsg ]
+                        let! finalResult = provider.CompleteAsync conv3 CompletionOptions.Default
+                        return finalResult.Content
+                    | None -> return "Unknown tool: " + toolName
+                | None -> return result.Content
+            }
 
-        match AgentHelpers.tryParseToolCall result.Content with
-        | Some (toolName, args) ->
-            match AgentHelpers.findTool tools toolName with
-            | Some tool ->
-                let toolResult = (tool.Execute context args).Result
-                let toolMsg = { Role = User; Content = "tool_result: " + toolResult }
-                let conv3 = conv2 @ [toolMsg]
-                let finalResult = (provider.CompleteAsync conv3 CompletionOptions.Default).Result
-                Task.FromResult(finalResult.Content)
-            | None ->
-                Task.FromResult("Unknown tool: " + toolName)
-        | None ->
-            Task.FromResult(result.Content)
+        let handleMessage context (message: AgentMessage) =
+            task {
+                let! response = runCore context message.Content
+                return Some(AgentMessage.create "demo-agent" message.From response)
+            }
 
-    interface IAgent with
-        member _.Id = id
-        member this.RunAsync(context: AgentContext, input: string) = this.RunCore(context, input)
-        member this.HandleMessageAsync(context: AgentContext, msg: AgentMessage) =
-            let response = this.RunCore(context, msg.Content).Result
-            let reply = AgentMessage.create id msg.From response
-            Task.FromResult(Some reply)
+        Agent.create
+            "demo-agent"
+            "demo-agent"
+            "A demo agent for E2E testing"
+            0
+            []
+            AgentContract.Text
+            runCore
+            handleMessage
 
 /// Test workspace definitions that provide DemoAgent via built agents/tools
 module DemoWorkspace =
-    let private provider = LocalLlmProvider() :> ILlmProvider
+    let private provider = LocalLlmProvider.create ()
     let private tools = [ DemoTools.getWeather; DemoTools.calculator; DemoTools.greeter ]
     let private prompt =
         { Prompt.Empty with
@@ -68,7 +78,7 @@ module DemoWorkspace =
             Objective = "Help the user by answering questions. Use tools when needed."
             Constraints = ["Always use a tool when the user asks about weather or math."] }
 
-    let createAgent () = DemoAgent(provider, tools, prompt) :> IAgent
+    let createAgent () = DemoAgent.create provider tools prompt
 
     let definitions : Nao.Runtime.Orleans.WorkspaceDefinitions =
         { Agents = [ createAgent () ]

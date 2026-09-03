@@ -10,28 +10,45 @@ open Nao.Assistant
 [<TestClass>]
 type ActionBlockParseTests() =
 
-    let provider: ILlmProvider =
-        { new ILlmProvider with
-            member _.CompleteAsync _conversation _options =
-                Task.FromResult(CompletionResult.create "unused" "stop" None None)
-            member _.Name = "stub" }
+    let textTool name description execute =
+        Tool.create
+            name
+            description
+            0
+            []
+            ToolCodec.text
+            ToolCodec.text
+            (ToolOperation.create (fun _ input -> task {
+                let! output = execute input
+                return Ok output }))
 
-    let scriptedProvider (responses: string list) (conversations: List<Conversation>) : ILlmProvider =
+    let provider =
+        LlmProvider.create
+            (fun () -> "stub")
+            (fun _conversation _options ->
+                Task.FromResult(CompletionResult.create "unused" "stop" None None))
+
+    let scriptedProvider (responses: string list) (conversations: List<Conversation>) =
         let queue = Queue<string>(responses)
-        { new ILlmProvider with
-            member _.CompleteAsync conversation _options =
+        LlmProvider.create
+            (fun () -> "scripted")
+            (fun conversation _options ->
                 conversations.Add conversation
                 let content = if queue.Count > 0 then queue.Dequeue() else "done"
-                Task.FromResult(CompletionResult.create content "stop" None None)
-            member _.Name = "scripted" }
+                Task.FromResult(CompletionResult.create content "stop" None None))
 
-    let convertTool = Tool.Create("convert_document", "Converts documents.", ToolSignature.Text, (fun _ -> Task.FromResult "ok"))
+    let convertTool = textTool "convert_document" "Converts documents." (fun _ -> Task.FromResult "ok")
 
-    let converterAgent: IAgent =
-        { new IAgent with
-            member _.Id = { Name = "converter"; Description = "doc converter" }
-            member _.RunAsync(_context, _input) = Task.FromResult "done"
-            member _.HandleMessageAsync(_context, _msg) = Task.FromResult None }
+    let converterAgent =
+        Agent.create
+            "converter"
+            "converter"
+            "doc converter"
+            0
+            []
+            AgentContract.Text
+            (fun _context _input -> Task.FromResult "done")
+            (fun _context _message -> Task.FromResult None)
 
     let orchestrator = NaoOrchestrator({ Id = { Name = "orchestrator"; Description = "test orchestrator" }; Provider = provider; Tools = [ convertTool ]; SubAgents = [ converterAgent ]; Prompt = Prompt.Empty; Options = CompletionOptions.Default; MaxRounds = 5; Bus = EventBus.none; Scope = EventScope.Empty })
 
@@ -145,17 +162,16 @@ type ActionBlockParseTests() =
         let conversations = List<Conversation>()
         let invoked = ref false
         let tool =
-            Tool.Create(
-                "convert_document",
-                "Converts documents.",
-                ToolSignature.Text,
+            textTool
+                "convert_document"
+                "Converts documents."
                 (fun _ ->
                     invoked.Value <- true
-                    Task.FromResult "converted"))
+                    Task.FromResult "converted")
         let invalid = fence """{"actions":[{"type":"tool","name":"convert_document","params":{"source":"a.md","target":"pdf"}}]"""
         let corrected = fence """{"actions":[{"type":"tool","name":"convert_document","params":{"source":"a.md","target":"pdf"}}]}"""
         let provider = scriptedProvider [ invalid; corrected; "done" ] conversations
-        let result = ((makeOrchestrator provider [ tool ]) :> IAgent).RunAsync(AgentContext.allowAll, "convert a.md to pdf").Result
+        let result = (Agent.runAsync AgentContext.allowAll "convert a.md to pdf" (makeOrchestrator provider [ tool ])).Result
         Assert.AreEqual("done", result)
         Assert.IsTrue(invoked.Value, "The corrected action should execute after repair")
         let repairPrompt =
@@ -174,21 +190,19 @@ type ActionBlockParseTests() =
         let conversations = List<Conversation>()
         let invokedInputs = List<string>()
         let verifiedInputs = List<string>()
-        let baseTool =
-            Tool.Create("normalize", "Normalizes input.", ToolSignature.Text, (fun input ->
-                invokedInputs.Add input
-                Task.FromResult "ok"))
+        let input = ToolCodec.create "string" Ok (fun _ -> Ok "{\"value\":1}")
+        let operation =
+            ToolOperation.create (fun _ value ->
+                invokedInputs.Add value
+                verifiedInputs.Add value
+                Task.FromResult(Ok "ok"))
         let tool =
-            { baseTool with
-                Prepare = Some(fun _ -> Ok "{\"value\":1}")
-                Verify = Some(fun input _ ->
-                    verifiedInputs.Add input
-                    Task.FromResult(Ok ())) }
+            Tool.create "normalize" "Normalizes input." 0 [] input ToolCodec.text operation
         let first = fence """{"actions":[{"type":"tool","name":"normalize","params":{"value":1}}]}"""
         let equivalent = fence """{"actions":[{"type":"tool","name":"normalize","params":{"value":1.0}}]}"""
         let provider = scriptedProvider [ first; equivalent; "done" ] conversations
 
-        let result = ((makeOrchestrator provider [ tool ]) :> IAgent).RunAsync(AgentContext.allowAll, "normalize").Result
+        let result = (Agent.runAsync AgentContext.allowAll "normalize" (makeOrchestrator provider [ tool ])).Result
 
         Assert.AreEqual("done", result)
         CollectionAssert.AreEqual([| "{\"value\":1}" |], invokedInputs.ToArray())
@@ -199,17 +213,17 @@ type ActionBlockParseTests() =
     member _.PreparationFailureDoesNotInvokeTool() =
         let conversations = List<Conversation>()
         let invoked = ref false
-        let baseTool =
-            Tool.Create("reject", "Rejects input.", ToolSignature.Text, (fun _ ->
+        let input = ToolCodec.create "string" Ok (fun _ -> Error "missing required field 'target'")
+        let operation =
+            ToolOperation.create (fun _ _ ->
                 invoked.Value <- true
-                Task.FromResult "unexpected"))
+                Task.FromResult(Ok "unexpected"))
         let tool =
-            { baseTool with
-                Prepare = Some(fun _ -> Error "missing required field 'target'") }
+            Tool.create "reject" "Rejects input." 0 [] input ToolCodec.text operation
         let action = fence """{"actions":[{"type":"tool","name":"reject","params":{}}]}"""
         let provider = scriptedProvider [ action; "done" ] conversations
 
-        let result = ((makeOrchestrator provider [ tool ]) :> IAgent).RunAsync(AgentContext.allowAll, "reject").Result
+        let result = (Agent.runAsync AgentContext.allowAll "reject" (makeOrchestrator provider [ tool ])).Result
 
         Assert.AreEqual("done", result)
         Assert.IsFalse(invoked.Value)

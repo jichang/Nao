@@ -32,31 +32,16 @@ type LifecycleEvent =
     | Failed of agentId: string * error: string * timestamp: DateTimeOffset
     | Terminated of agentId: string * reason: string * timestamp: DateTimeOffset
 
-/// Hook that can intercept lifecycle transitions
-type ILifecycleHook =
-    /// Called before initialization — can prevent startup
-    abstract member OnBeforeInit: string -> Task<Result<unit, string>>
-    /// Called after successful initialization
-    abstract member OnAfterInit: string -> Task<unit>
-    /// Called before each execution step — can prevent or modify input
-    abstract member OnBeforeStep: string -> string -> Task<Result<string, string>>
-    /// Called after each execution step
-    abstract member OnAfterStep: string -> string -> Task<unit>
-    /// Called when the agent completes
-    abstract member OnCompleted: string -> string -> Task<unit>
-    /// Called when the agent fails
-    abstract member OnFailed: string -> exn -> Task<unit>
+/// Functional hook that can intercept lifecycle transitions.
+type LifecycleHook = { OnBeforeInit: string -> Task<Result<unit, string>>; OnAfterInit: string -> Task<unit>; OnBeforeStep: string -> string -> Task<Result<string, string>>; OnAfterStep: string -> string -> Task<unit>; OnCompleted: string -> string -> Task<unit>; OnFailed: string -> exn -> Task<unit> }
+
+[<RequireQualifiedAccess>]
+module LifecycleHook =
+    /// No-op lifecycle behavior suitable as a default or record-update base.
+    let passthrough = { OnBeforeInit = (fun _ -> Task.FromResult(Ok ())); OnAfterInit = (fun _ -> Task.FromResult(())); OnBeforeStep = (fun _ input -> Task.FromResult(Ok input)); OnAfterStep = (fun _ _ -> Task.FromResult(())); OnCompleted = (fun _ _ -> Task.FromResult(())); OnFailed = (fun _ _ -> Task.FromResult(())) }
 
 /// Manages agent lifecycle with hooks and state tracking
-type AgentLifecycle =
-    { /// Current lifecycle state
-      State: LifecycleState
-      /// History of lifecycle events
-      Events: LifecycleEvent list
-      /// Registered lifecycle hooks
-      Hooks: ILifecycleHook list
-      /// When the lifecycle was created
-      CreatedAt: DateTimeOffset }
+type AgentLifecycle = { State: LifecycleState; Events: LifecycleEvent list; Hooks: LifecycleHook list; CreatedAt: DateTimeOffset }
 
 module AgentLifecycle =
 
@@ -66,7 +51,7 @@ module AgentLifecycle =
           Hooks = []
           CreatedAt = DateTimeOffset.UtcNow }
 
-    let withHooks (hooks: ILifecycleHook list) (lc: AgentLifecycle) : AgentLifecycle =
+    let withHooks (hooks: LifecycleHook list) (lc: AgentLifecycle) : AgentLifecycle =
         { lc with Hooks = hooks }
 
     let private transition (newState: LifecycleState) (event: LifecycleEvent) (lc: AgentLifecycle) : AgentLifecycle =
@@ -127,13 +112,3 @@ module AgentLifecycle =
     let terminate (agentId: string) (reason: string) (lc: AgentLifecycle) : AgentLifecycle =
         let event = LifecycleEvent.Terminated (agentId, reason, DateTimeOffset.UtcNow)
         lc |> transition LifecycleState.Terminated event
-
-/// No-op lifecycle hook for default behavior
-type PassthroughHook() =
-    interface ILifecycleHook with
-        member _.OnBeforeInit _ = Task.FromResult(Ok ())
-        member _.OnAfterInit _ = Task.FromResult(())
-        member _.OnBeforeStep _ input = Task.FromResult(Ok input)
-        member _.OnAfterStep _ _ = Task.FromResult(())
-        member _.OnCompleted _ _ = Task.FromResult(())
-        member _.OnFailed _ _ = Task.FromResult(())

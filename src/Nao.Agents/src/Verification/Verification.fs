@@ -23,12 +23,24 @@ type TaskGrounding =
       /// Estimated complexity (1-10)
       EstimatedComplexity: int option }
 
-/// Pre-flight readiness checks before agent execution
-type IReadinessCheck =
-    /// Check name
-    abstract member Name: string
-    /// Perform the check
-    abstract member CheckAsync: string -> string -> Task<ReadinessResult>
+/// Functional pre-flight readiness check before agent execution.
+type ReadinessCheck =
+    { /// Check name.
+      Name: string
+      /// Perform the check.
+      CheckAsync: string -> string -> Task<ReadinessResult> }
+
+/// Functions for constructing and invoking readiness checks.
+[<RequireQualifiedAccess>]
+module ReadinessCheck =
+
+    /// Construct a readiness check from its name and check function.
+    let create name checkAsync : ReadinessCheck =
+        { Name = name; CheckAsync = checkAsync }
+
+    /// Perform a readiness check.
+    let checkAsync agentId input (check: ReadinessCheck) =
+        check.CheckAsync agentId input
 
 /// Captures a complete execution trace for offline analysis
 type ExecutionTrace = { Id: Guid; AgentId: string; Input: string; Output: string option; Steps: TraceStep list; StartedAt: DateTimeOffset; CompletedAt: DateTimeOffset option; Success: bool; Metadata: Map<string, string> }
@@ -78,12 +90,24 @@ type JudgementResult =
       /// The judge that produced this result
       JudgeName: string }
 
-/// Interface for automated quality judgement
-type IJudge =
-    /// Judge name
-    abstract member Name: string
-    /// Evaluate an execution trace and produce a judgement
-    abstract member JudgeAsync: ExecutionTrace -> Task<JudgementResult>
+/// Functional capability for automated quality judgement.
+type Judge =
+    { /// Judge name.
+      Name: string
+      /// Evaluate an execution trace and produce a judgement.
+      JudgeAsync: ExecutionTrace -> Task<JudgementResult> }
+
+/// Functions for constructing and invoking judges.
+[<RequireQualifiedAccess>]
+module Judge =
+
+    /// Construct a judge from its name and judgement function.
+    let create name judgeAsync : Judge =
+        { Name = name; JudgeAsync = judgeAsync }
+
+    /// Evaluate an execution trace.
+    let judgeAsync trace (judge: Judge) =
+        judge.JudgeAsync trace
 
 /// Captures and manages execution traces for verification
 module Verification =
@@ -126,20 +150,26 @@ module Verification =
             Success = false }
 
     /// Run all readiness checks
-    let checkReadiness (checks: IReadinessCheck list) (agentId: string) (input: string) : Task<ReadinessResult> =
+    let checkReadiness (checks: ReadinessCheck list) (agentId: string) (input: string) : Task<ReadinessResult> =
         task {
-            let mutable allReasons = []
-            for check in checks do
-                match! check.CheckAsync agentId input with
-                | ReadinessResult.Ready -> ()
-                | ReadinessResult.NotReady reasons -> allReasons <- allReasons @ reasons
+            let! results =
+                checks
+                |> List.map (ReadinessCheck.checkAsync agentId input)
+                |> Task.WhenAll
+
+            let allReasons =
+                results
+                |> Array.toList
+                |> List.collect (function
+                    | ReadinessResult.Ready -> []
+                    | ReadinessResult.NotReady reasons -> reasons)
 
             if allReasons.IsEmpty then return ReadinessResult.Ready
             else return ReadinessResult.NotReady allReasons
         }
 
     /// Ground a task by having the agent reformulate its understanding
-    let groundTaskAsync (provider: ILlmProvider) (options: CompletionOptions) (taskDescription: string) : Task<TaskGrounding> =
+    let groundTaskAsync (provider: LlmProvider) (options: CompletionOptions) (taskDescription: string) : Task<TaskGrounding> =
         task {
             let system =
                 Prompt.render
@@ -162,13 +192,13 @@ module Verification =
                   EstimatedComplexity = None }
         }
 
-/// LLM-based judge that evaluates execution traces
-type LlmJudge(provider: ILlmProvider, options: CompletionOptions, criteria: string list) =
+/// Factories for LLM-based execution-trace judges.
+[<RequireQualifiedAccess>]
+module LlmJudge =
 
-    interface IJudge with
-        member _.Name = "llm-judge"
-
-        member _.JudgeAsync(trace: ExecutionTrace) =
+    /// Create an LLM-based judge for the supplied criteria.
+    let create (provider: LlmProvider) (options: CompletionOptions) (criteria: string list) : Judge =
+        Judge.create "llm-judge" (fun trace ->
             task {
                 let traceDescription =
                     trace.Steps
@@ -203,4 +233,4 @@ type LlmJudge(provider: ILlmProvider, options: CompletionOptions, criteria: stri
                       CriteriaScores = Map.empty
                       Suggestions = []
                       JudgeName = "llm-judge" }
-            }
+            })

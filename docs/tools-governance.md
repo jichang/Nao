@@ -4,7 +4,7 @@ Tools connect model-directed execution to deterministic code and external system
 
 ## Typed tools
 
-`ITool` exposes an explicit name, description, input/output contract, required resources, invocation method, and optional revert behavior. `TypedTool<'Input, 'Output>` decodes input, requests declared permissions, runs typed code, and encodes output.
+`Tool` is an immutable executable capability containing explicit metadata, schemas, required resources, execution, and optional revert behavior. `Tool.create` combines typed `ToolCodec` values with a `ToolOperation` to decode input, request permissions, run domain logic, and encode output.
 
 ```fsharp
 type DeployInput =
@@ -14,26 +14,25 @@ type DeployInput =
 type DeployOutput =
     { DeploymentId: string }
 
-type DeployTool() =
-    inherit TypedTool<DeployInput, DeployOutput>(
-        "deploy",
-        "Deploy an application.",
-        [],
-        DeployContract.input,
-        DeployContract.output)
-
-    override _.ExecuteAsync(_context, input) =
-        task {
+let deployTool =
+    Tool.create
+        "deploy"
+        "Deploy an application."
+        0
+        []
+        DeployContract.input
+        DeployContract.output
+        (ToolOperation.create (fun _context input -> task {
             let! id = deploy input.Environment input.Release
             return Ok { DeploymentId = id }
-        }
+        }))
 ```
 
 Explicit codecs keep transport behavior testable and prevent the framework from guessing public schemas.
 
 ## Tool protocol
 
-`IToolProtocol` supports discovery, availability, and invocation. Middleware can add cross-cutting behavior.
+`ToolProtocol` supports discovery, availability, and invocation. Middleware can add cross-cutting behavior.
 
 ```fsharp
 let protocol =
@@ -42,26 +41,33 @@ let protocol =
         (ToolProtocol.rateLimitMiddleware 100)
 
 let! available = protocol.IsAvailable "get_weather"
-let! result = protocol.InvokeAsync "get_weather" "London"
+let! result = protocol.InvokeAsync agentContext "get_weather" "London"
 ```
 
-Nao also supports MCP transports for external tool servers. External transport does not remove the need for local identity, policy, timeout, and resource controls.
+`ToolProtocol` forwards the caller's `AgentContext`; production hosts must supply session identity,
+permission, and publishing callbacks. `ToolSelector` discovers through the protocol and prepares a
+bounded, schema-aware candidate set for the orchestrator prompt. The orchestrator's LLM still makes
+the final tool choice.
+
+Each orchestrator can receive its own protocol through `Orchestrator.createWithProtocol`. Nao also
+supports MCP transports for external tool servers. MCP definitions are adapted to ordinary qualified
+tools such as `server.tool`, so external transport does not bypass local identity, policy, timeout,
+or resource controls.
 
 ## Static and dynamic permissions
 
 A tool can declare known resources up front or request a concrete resource after decoding its input:
 
 ```fsharp
-type SaveTool() =
-    inherit TypedTool<SaveInput, SaveOutput>(
-        "save",
-        "Save a report.",
-        [],
-        SaveContract.input,
-        SaveContract.output)
-
-    override _.ExecuteAsync(context, input) =
-        task {
+let saveTool =
+    Tool.create
+        "save"
+        "Save a report."
+        0
+        []
+        SaveContract.input
+        SaveContract.output
+        (ToolOperation.create (fun context input -> task {
             let access = ResourceAccess.File("write", input.Path)
             let! allowed =
                 context.RequestPermission access "Save the report." false
@@ -70,7 +76,7 @@ type SaveTool() =
                 return Ok(writeReport input)
             else
                 return Error(ToolExecError.PermissionDenied "Write denied.")
-        }
+        }))
 ```
 
 Prompts cannot grant permissions. The host constructs `AgentContext` and owns the approval mechanism.
@@ -117,10 +123,10 @@ Probabilistic judges should identify model, prompt, threshold, and evidence. The
 
 ## Audit and execution journal
 
-`IAuditLog` records governance decisions. `IExecutionJournal` records tool executions and outcomes. Revertible operations can be compensated in reverse order:
+`AuditLog` records governance decisions. `ExecutionJournal` records tool executions and outcomes. Revertible operations can be compensated in reverse order:
 
 ```fsharp
-let journal = InMemoryExecutionJournal() :> IExecutionJournal
+let journal = InMemoryExecutionJournal.create ()
 let! failures = ExecutionJournal.revertAllAsync journal tools
 ```
 

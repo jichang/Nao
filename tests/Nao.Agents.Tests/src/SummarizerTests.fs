@@ -3,13 +3,13 @@ namespace Nao.Agents.Tests
 open System.Threading.Tasks
 open Microsoft.VisualStudio.TestTools.UnitTesting
 open Nao.Agents
-open Nao.Agents
 
 /// A mock LLM provider that returns predictable summaries
-type MockSummarizerProvider() =
-    interface ILlmProvider with
-        member _.Name = "MockSummarizer"
-        member _.CompleteAsync (conversation: Conversation) (_options: CompletionOptions) =
+module MockSummarizerProvider =
+    let create () =
+        LlmProvider.create
+            (fun () -> "MockSummarizer")
+            (fun (conversation: Conversation) (_options: CompletionOptions) ->
             let lastUserMsg =
                 conversation
                 |> List.tryFindBack (fun m -> m.Role = User)
@@ -18,12 +18,12 @@ type MockSummarizerProvider() =
             // Count messages in the input being summarized
             let lineCount = lastUserMsg.Split('\n').Length
             let summary = sprintf "Summarized %d exchanges about various topics." lineCount
-            Task.FromResult(CompletionResult.create summary "stop" (Some 20) None)
+            Task.FromResult(CompletionResult.create summary "stop" (Some 20) None))
 
 [<TestClass>]
 type SummarizerTests() =
 
-    let provider = MockSummarizerProvider() :> ILlmProvider
+    let provider = MockSummarizerProvider.create ()
 
     let makeConversation (n: int) =
         [ for i in 1 .. n do

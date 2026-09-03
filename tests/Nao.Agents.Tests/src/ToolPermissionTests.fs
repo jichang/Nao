@@ -11,6 +11,24 @@ open Nao.Agents
 [<TestClass>]
 type ToolPermissionTests() =
 
+    let createTool name description permissions execute =
+        Tool.create
+            name
+            description
+            0
+            permissions
+            ToolCodec.text
+            ToolCodec.text
+            (ToolOperation.create (fun context input -> task {
+                let! output = execute context input
+                return Ok output }))
+
+    let run tool context input = tool.RunAsync context input |> fun task -> task.Result
+
+    let outputOf = function
+        | Ok output -> output
+        | Error failure -> Assert.Fail(failure.Message); ""
+
     /// An AgentContext whose RequestPermission returns a fixed answer and records what was asked.
     let recordingCtx (sessionKey: string) (answer: bool) =
         let asked = ResizeArray<ResourceAccess>()
@@ -27,18 +45,17 @@ type ToolPermissionTests() =
     member _.InvokeAsyncRequestsDeclaredPermissionsThenExecutes() =
         let ran = ref false
         let tool =
-            Tool.Create(
-                "writer",
-                "writes",
-                ToolSignature.Text,
-                [ ResourceAccess.File("write", "/tmp/a.txt") ],
-                fun _ctx input ->
+            createTool
+                "writer"
+                "writes"
+                [ ResourceAccess.File("write", "/tmp/a.txt") ]
+                (fun _ctx input ->
                     task {
                         ran.Value <- true
                         return "ok:" + input
                     })
         let ctx, asked = recordingCtx "u/1" true
-        let result = tool.InvokeAsync(ctx, "hi").Result
+        let result = run tool ctx "hi" |> outputOf
         Assert.AreEqual("ok:hi", result)
         Assert.IsTrue(ran.Value)
         Assert.AreEqual(1, asked.Count)
@@ -47,18 +64,20 @@ type ToolPermissionTests() =
     member _.InvokeAsyncDeniesAndShortCircuits() =
         let ran = ref false
         let tool =
-            Tool.Create(
-                "fetcher",
-                "fetches",
-                ToolSignature.Text,
-                [ ResourceAccess.Web("GET", "https://example.com") ],
-                fun _ctx _ ->
+            createTool
+                "fetcher"
+                "fetches"
+                [ ResourceAccess.Web("GET", "https://example.com") ]
+                (fun _ctx _ ->
                     task {
                         ran.Value <- true
                         return "ran"
                     })
         let ctx, _ = recordingCtx "u/1" false
-        let result = tool.InvokeAsync(ctx, "x").Result
+        let result =
+            match run tool ctx "x" with
+            | Error failure -> failure.Message
+            | Ok _ -> Assert.Fail("Denied tool unexpectedly ran."); ""
         Assert.IsFalse(ran.Value)
         use doc = JsonDocument.Parse result
         Assert.AreEqual("permission_denied", doc.RootElement.GetProperty("error").GetString())
@@ -77,54 +96,52 @@ type ToolPermissionTests() =
                         asked.Add access
                         Task.FromResult false }
         let tool =
-            Tool.Create(
-                "multi",
-                "multi",
-                ToolSignature.Text,
-                [ ResourceAccess.File("read", "/a"); ResourceAccess.File("write", "/b") ],
-                fun _ _ -> task { return "ran" })
-        tool.InvokeAsync(ctx, "x").Result |> ignore
+            createTool
+                "multi"
+                "multi"
+                [ ResourceAccess.File("read", "/a"); ResourceAccess.File("write", "/b") ]
+                (fun _ _ -> task { return "ran" })
+        run tool ctx "x" |> ignore
         Assert.AreEqual(1, asked.Count)
 
     [<TestMethod>]
     member _.FourArgCreateThreadsContextToExecute() =
         let seen = ref ""
         let tool =
-            Tool.Create("ctxtool", "ctx", ToolSignature.Text, [], fun ctx _ -> task {
+            createTool "ctxtool" "ctx" [] (fun ctx _ -> task {
                 seen.Value <- ctx.SessionKey
                 return "ok" })
         let ctx, _ = recordingCtx "user/42" true
-        tool.InvokeAsync(ctx, "x").Result |> ignore
+        run tool ctx "x" |> ignore
         Assert.AreEqual("user/42", seen.Value)
 
     [<TestMethod>]
     member _.DynamicRequestInsideExecuteIsHonored() =
         // No static permissions; the tool asks dynamically once it knows its target.
         let tool =
-            Tool.Create("dyn", "dynamic", ToolSignature.Text, [], fun ctx input -> task {
+            createTool "dyn" "dynamic" [] (fun ctx input -> task {
                 let! ok = ctx.RequestPermission (ResourceAccess.File("write", input)) "save" false
                 return (if ok then "wrote" else "blocked") })
         let allowCtx, _ = recordingCtx "" true
         let denyCtx, _ = recordingCtx "" false
-        Assert.AreEqual("wrote", tool.InvokeAsync(allowCtx, "/p").Result)
-        Assert.AreEqual("blocked", tool.InvokeAsync(denyCtx, "/p").Result)
+        Assert.AreEqual("wrote", run tool allowCtx "/p" |> outputOf)
+        Assert.AreEqual("blocked", run tool denyCtx "/p" |> outputOf)
 
     [<TestMethod>]
     member _.AllowAllContextPermitsEverything() =
         let tool =
-            Tool.Create(
-                "w",
-                "w",
-                ToolSignature.Text,
-                [ ResourceAccess.Web("GET", "https://x.com") ],
-                fun _ _ -> task { return "done" })
-        Assert.AreEqual("done", tool.InvokeAsync(AgentContext.allowAll, "x").Result)
+            createTool
+                "w"
+                "w"
+                [ ResourceAccess.Web("GET", "https://x.com") ]
+                (fun _ _ -> task { return "done" })
+        Assert.AreEqual("done", run tool AgentContext.allowAll "x" |> outputOf)
 
     [<TestMethod>]
     member _.CreateHasNoDeclaredPermissionsByDefault() =
-        let tool = Tool.Create("strict", "strict", ToolSignature.Text, (fun input -> task { return input }))
+        let tool = createTool "strict" "strict" [] (fun _ input -> task { return input })
         Assert.AreEqual(0, tool.Permissions.Length)
-        Assert.AreEqual("hi", tool.InvokeAsync(AgentContext.allowAll, "hi").Result)
+        Assert.AreEqual("hi", run tool AgentContext.allowAll "hi" |> outputOf)
 
     [<TestMethod>]
     member _.PermissionDeniedFormatIncludesHintWhenProvided() =

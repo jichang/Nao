@@ -42,19 +42,19 @@ type GraphTraversalResult =
       Relations: GraphRelation list
       PathLength: int option }
 
-/// Interface for graph-based memory (knowledge graph)
-type IGraphMemory =
-    /// Add or update a node
-    abstract member UpsertNodeAsync: GraphNode -> Task<unit>
-    /// Add a relation between entities
-    abstract member AddRelationAsync: GraphRelation -> Task<unit>
-    /// Query the graph
-    abstract member QueryAsync: GraphQuery -> Task<GraphTraversalResult>
-    /// Remove a node and all its relations
-    abstract member RemoveNodeAsync: string -> Task<unit>
-    /// Remove a specific relation
-    abstract member RemoveRelationAsync: subject: string -> predicate: string -> object': string -> Task<unit>
-    /// Get all nodes of a given type
-    abstract member GetByTypeAsync: entityType: string -> Task<GraphNode list>
-    /// Extract and store relations from text (via LLM or pattern matching)
-    abstract member ExtractRelationsAsync: text: string -> Task<GraphRelation list>
+/// Functional graph-based memory (knowledge graph) operations.
+type GraphMemory =
+    { /// Add or update a node
+      UpsertNodeAsync: GraphNode -> Task<unit>
+      /// Add a relation between entities
+      AddRelationAsync: GraphRelation -> Task<unit>
+      /// Query the graph
+      QueryAsync: GraphQuery -> Task<GraphTraversalResult>
+      /// Remove a node and all its relations
+      RemoveNodeAsync: string -> Task<unit>
+      /// Remove a specific relation
+      RemoveRelationAsync: string -> string -> string -> Task<unit>
+      /// Get all nodes of a given type
+      GetByTypeAsync: string -> Task<GraphNode list>
+      /// Extract and store relations from text (via LLM or pattern matching)
+      ExtractRelationsAsync: string -> Task<GraphRelation list> }

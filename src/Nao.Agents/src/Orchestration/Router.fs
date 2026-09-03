@@ -1,47 +1,44 @@
 namespace Nao.Agents
 
+open System
 open System.Threading.Tasks
 
-/// Strategy for selecting which agent handles a request
+/// Strategy for selecting an immutable agent.
 type RoutingStrategy =
     | ByName of string
-    | ByPrompt of IAgent
+    | ByPrompt of Agent
     | RoundRobin
-    | Custom of (string -> IAgent list -> Task<IAgent>)
+    | Custom of (string -> Agent list -> Task<Agent>)
 
-/// Router dispatches input to the most appropriate agent
-type Router =
-    { Agents: IAgent list
-      Strategy: RoutingStrategy }
+/// Functional router definition.
+type Router = { Agents: Agent list; Strategy: RoutingStrategy }
 
+[<RequireQualifiedAccess>]
 module Router =
 
-    /// Create a router with a list of agents and a strategy
-    let create (agents: IAgent list) (strategy: RoutingStrategy) =
-        { Agents = agents; Strategy = strategy }
+    let create agents strategy = { Agents = agents; Strategy = strategy }
 
-    /// Find an agent by name
-    let findAgent (name: string) (router: Router) =
-        router.Agents |> List.tryFind (fun a -> a.Name = name)
+    let findAgent name router =
+        router.Agents |> List.tryFind (fun agent -> agent.Metadata.Name = name)
 
-    /// Route input to an agent and return its response
     let routeAsync (context: AgentContext) (input: string) (router: Router) : Task<string> =
         task {
-            match router.Strategy with
-            | ByName name ->
-                match findAgent name router with
-                | Some agent -> return! agent.RunAsync(context, input)
-                | None -> return sprintf "Agent '%s' not found" name
-            | ByPrompt supervisor ->
-                let! selectedName = supervisor.RunAsync(context, input)
-                match findAgent (selectedName.Trim()) router with
-                | Some agent -> return! agent.RunAsync(context, input)
-                | None -> return sprintf "Agent '%s' not found" (selectedName.Trim())
-            | RoundRobin ->
-                match router.Agents with
-                | agent :: _ -> return! agent.RunAsync(context, input)
-                | [] -> return "No agents available"
-            | Custom selector ->
-                let! agent = selector input router.Agents
-                return! agent.RunAsync(context, input)
+            let! selected =
+                match router.Strategy with
+                | ByName name -> Task.FromResult(findAgent name router)
+                | ByPrompt supervisor ->
+                    task {
+                        let! selectedName = Agent.runAsync context input supervisor
+                        return findAgent (selectedName.Trim()) router
+                    }
+                | RoundRobin -> Task.FromResult(List.tryHead router.Agents)
+                | Custom selector ->
+                    task {
+                        let! agent = selector input router.Agents
+                        return Some agent
+                    }
+
+            match selected with
+            | Some agent -> return! Agent.runAsync context input agent
+            | None -> return "No matching agent available"
         }

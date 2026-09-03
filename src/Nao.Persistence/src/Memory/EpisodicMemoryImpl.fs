@@ -5,36 +5,36 @@ open System.Threading.Tasks
 open System.Collections.Concurrent
 open Nao.Agents
 
-/// In-memory episodic memory implementation
-type InMemoryEpisodicMemory(?embeddingProvider: IEmbeddingProvider) =
-    let episodes = ConcurrentDictionary<string, Episode>()
-    let embeddings = ConcurrentDictionary<string, float array>()
+/// In-memory episodic-memory factory.
+module InMemoryEpisodicMemory =
+    let create (embeddingProvider: EmbeddingProvider option) : EpisodicMemory =
+        let episodes = ConcurrentDictionary<string, Episode>()
+        let embeddings = ConcurrentDictionary<string, float array>()
 
-    let computeEmbedding (text: string) =
-        task {
-            match embeddingProvider with
-            | Some provider ->
-                return! provider.EmbedAsync text
-            | None ->
-                // Simple hash-based pseudo-embedding for testing
-                let words = text.ToLowerInvariant().Split(' ') |> Array.distinct
-                let vec = Array.zeroCreate 64
-                for word in words do
-                    let hash = abs (word.GetHashCode())
-                    let idx = hash % 64
-                    vec.[idx] <- vec.[idx] + 1.0
-                return vec
-        }
+        let computeEmbedding (text: string) =
+            task {
+                match embeddingProvider with
+                | Some provider ->
+                    return! provider.EmbedAsync text
+                | None ->
+                    // Simple hash-based pseudo-embedding for testing
+                    let words = text.ToLowerInvariant().Split(' ') |> Array.distinct
+                    let vec = Array.zeroCreate 64
+                    for word in words do
+                        let hash = abs (word.GetHashCode())
+                        let idx = hash % 64
+                        vec.[idx] <- vec.[idx] + 1.0
+                    return vec
+            }
 
-    interface IEpisodicMemory with
-        member _.RecordAsync(episode: Episode) =
+        { RecordAsync = fun (episode: Episode) ->
             task {
                 episodes.TryAdd(episode.Id, episode) |> ignore
                 let! emb = computeEmbedding (sprintf "%s %s %s" episode.Action episode.Observation episode.Context)
                 embeddings.TryAdd(episode.Id, emb) |> ignore
             }
 
-        member _.QueryAsync(query: EpisodeQuery) =
+          QueryAsync = fun (query: EpisodeQuery) ->
             let collectRelated episodeId maxHops =
                 let rec collect (ids: Set<string>) (visited: Set<string>) (depth: int) =
                     if depth >= maxHops then visited
@@ -110,7 +110,7 @@ type InMemoryEpisodicMemory(?embeddingProvider: IEmbeddingProvider) =
                         |> Seq.toList
             }
 
-        member _.LinkAsync (fromId: string) (toId: string) =
+          LinkAsync = fun (fromId: string) (toId: string) ->
             match episodes.TryGetValue(fromId) with
             | true, ep ->
                 if not (ep.LinkedEpisodes |> List.contains toId) then
@@ -119,7 +119,7 @@ type InMemoryEpisodicMemory(?embeddingProvider: IEmbeddingProvider) =
             | _ -> ()
             task { return () }
 
-        member _.GetChainAsync(episodeId: string) =
+          GetChainAsync = fun (episodeId: string) ->
             let rec walk (id: string) (visited: Set<string>) (acc: Episode list) =
                 if visited.Contains id then acc
                 else
@@ -136,7 +136,7 @@ type InMemoryEpisodicMemory(?embeddingProvider: IEmbeddingProvider) =
                 return walk episodeId Set.empty [] |> List.sortBy (fun ep -> ep.Timestamp)
             }
 
-        member _.SynthesizeAsync(context: string) =
+          SynthesizeAsync = fun (context: string) ->
             task {
                 let! queryEmb = computeEmbedding context
                 let similar =
@@ -167,7 +167,7 @@ type InMemoryEpisodicMemory(?embeddingProvider: IEmbeddingProvider) =
                 return successfulPatterns @ failurePatterns
             }
 
-        member _.ForgetBelowAsync(importanceThreshold: float) =
+          ForgetBelowAsync = fun (importanceThreshold: float) ->
             task {
                 let toForget =
                     episodes.Values
@@ -179,4 +179,4 @@ type InMemoryEpisodicMemory(?embeddingProvider: IEmbeddingProvider) =
                         embeddings.TryRemove(ep.Id) |> ignore
                         count <- count + 1
                 return count
-            }
+            } }

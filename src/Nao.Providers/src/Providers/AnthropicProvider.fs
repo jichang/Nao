@@ -1,4 +1,4 @@
-namespace Nao.Providers
+module Nao.Providers.AnthropicProvider
 
 open System
 open System.Net.Http
@@ -7,8 +7,8 @@ open System.Text.Json
 open System.Threading.Tasks
 open Nao.Agents
 
-/// LLM provider for Anthropic's native Messages API.
-type AnthropicProvider(config: AnthropicConfig, ?httpHandler: HttpMessageHandler) =
+/// Functional provider factory for Anthropic's native Messages API.
+let createWithHandler (config: AnthropicConfig) (httpHandler: HttpMessageHandler option) : LlmProvider =
     let client = new HttpClient(defaultArg httpHandler (new HttpClientHandler()))
 
     do
@@ -46,10 +46,10 @@ type AnthropicProvider(config: AnthropicConfig, ?httpHandler: HttpMessageHandler
             (if String.IsNullOrWhiteSpace systemPrompt then null else systemPrompt)
             messages (List.toArray options.StopSequences)
 
-    let responseUsage (usage: AnthropicUsageDto) =
+    let responseTokens (usage: AnthropicUsageDto) =
         if isNull usage || not usage.InputTokens.HasValue || not usage.OutputTokens.HasValue then
             raise (JsonException("usage.input_tokens and usage.output_tokens are required."))
-        { InputTokens = usage.InputTokens.Value; OutputTokens = usage.OutputTokens.Value }
+        usage.InputTokens.Value + usage.OutputTokens.Value
 
     let parseResponse (json: string) =
         try
@@ -67,8 +67,9 @@ type AnthropicProvider(config: AnthropicConfig, ?httpHandler: HttpMessageHandler
                         Some block.Text
                     else None)
                 |> String.concat ""
-            let usage = responseUsage response.Usage
-            { Content = content; FinishReason = finishReason response.StopReason; TokensUsed = Some(usage.InputTokens + usage.OutputTokens); Usage = Some usage }
+            { Content = content
+              FinishReason = finishReason response.StopReason
+              TokensUsed = Some(responseTokens response.Usage); Usage = None }
         with ex ->
             { Content = sprintf "Parse error: %s" ex.Message; FinishReason = "error"; TokensUsed = None; Usage = None }
 
@@ -91,10 +92,9 @@ type AnthropicProvider(config: AnthropicConfig, ?httpHandler: HttpMessageHandler
             "", Some(finishReason event.Delta.StopReason), None, Some event.Usage.OutputTokens.Value
         | _ -> "", None, None, None
 
-    interface ILlmProvider with
-        member _.Name = sprintf "Anthropic(%s)" config.Model
+    let providerName () = sprintf "Anthropic(%s)" config.Model
 
-        member _.CompleteAsync conversation options : Task<CompletionResult> =
+    let completeAsync conversation options : Task<CompletionResult> =
             task {
                 try
                     use content = new StringContent(buildRequestBody conversation options false, Encoding.UTF8, "application/json")
@@ -108,8 +108,7 @@ type AnthropicProvider(config: AnthropicConfig, ?httpHandler: HttpMessageHandler
                     return { Content = sprintf "Error: %s" ex.Message; FinishReason = "error"; TokensUsed = None; Usage = None }
             }
 
-    interface IStreamingLlmProvider with
-        member _.StreamAsync conversation options onChunk : Task<CompletionResult> =
+    let streamAsync conversation options onChunk : Task<CompletionResult> =
             task {
                 try
                     use request = new HttpRequestMessage(HttpMethod.Post, messagesUrl)
@@ -141,12 +140,15 @@ type AnthropicProvider(config: AnthropicConfig, ?httpHandler: HttpMessageHandler
                                         content.Append(delta) |> ignore
                                         onChunk { Delta = delta; FinishReason = None; TokensUsed = None; Usage = None }
                         let tokens = Some(inputTokens + outputTokens)
-                        let usage = Some { InputTokens = inputTokens; OutputTokens = outputTokens }
-                        onChunk { Delta = ""; FinishReason = Some reason; TokensUsed = tokens; Usage = usage }
-                        return { Content = content.ToString(); FinishReason = reason; TokensUsed = tokens; Usage = usage }
+                        onChunk { Delta = ""; FinishReason = Some reason; TokensUsed = tokens; Usage = None }
+                        return { Content = content.ToString(); FinishReason = reason; TokensUsed = tokens; Usage = None }
                 with ex ->
                     return { Content = sprintf "Error: %s" ex.Message; FinishReason = "error"; TokensUsed = None; Usage = None }
             }
 
-    interface IDisposable with
-        member _.Dispose() = client.Dispose()
+    { Name = providerName
+      CompleteAsync = completeAsync
+      StreamAsync = Some streamAsync
+      Dispose = client.Dispose }
+
+let create config = createWithHandler config None

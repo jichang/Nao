@@ -39,23 +39,40 @@ type CompositionResult =
       StepResults: (string * ToolInvocationResult) list
       TotalDurationMs: int64 }
 
-/// Executes tool compositions against an IToolProtocol
+/// Executes tool compositions against a tool protocol.
 module ToolComposer =
 
-    let private executeStep (protocol: IToolProtocol) (step: ToolStep) (input: string) : Task<ToolInvocationResult> =
+    let private failed message =
+        { Success = false
+          Output = ""
+          Error = Some message
+          Failure = Some { Kind = ToolFailureKind.Execution; Message = message; Retryable = false }
+          DurationMs = 0L
+          HadSideEffects = false }
+
+    let private executeStep (context: AgentContext) (protocol: ToolProtocol) (step: ToolStep) (input: string) : Task<ToolInvocationResult> =
         task {
             let transformedInput =
                 match step.InputTransform with
                 | Some fn -> fn input
                 | None -> input
-            let! result = protocol.InvokeAsync step.ToolName transformedInput
+            let! result =
+                task {
+                    try
+                        let invocation = protocol.InvokeAsync context step.ToolName transformedInput
+                        match step.Timeout with
+                        | Some timeout -> return! invocation.WaitAsync(timeout)
+                        | None -> return! invocation
+                    with :? TimeoutException ->
+                        return failed (sprintf "Tool '%s' timed out." step.ToolName)
+                }
             return
                 match step.OutputTransform with
                 | Some fn -> { result with Output = fn result.Output }
                 | None -> result
         }
 
-    let rec executeAsync (protocol: IToolProtocol) (composition: ToolComposition) (input: string) : Task<CompositionResult> =
+    let rec executeAsync (context: AgentContext) (protocol: ToolProtocol) (composition: ToolComposition) (input: string) : Task<CompositionResult> =
         task {
             let sw = System.Diagnostics.Stopwatch.StartNew()
 
@@ -66,7 +83,7 @@ module ToolComposer =
                 let stepResults = ResizeArray<string * ToolInvocationResult>()
                 for step in steps do
                     if not failed then
-                        let! result = executeStep protocol step currentInput
+                        let! result = executeStep context protocol step currentInput
                         stepResults.Add(step.ToolName, result)
                         if result.Success then
                             currentInput <- result.Output
@@ -83,7 +100,7 @@ module ToolComposer =
                     steps
                     |> List.map (fun step ->
                         task {
-                            let! result = executeStep protocol step input
+                            let! result = executeStep context protocol step input
                             return (step.ToolName, result)
                         })
                 let! results = Task.WhenAll(tasks |> List.toArray)
@@ -102,7 +119,7 @@ module ToolComposer =
                 let branchKey = condition input
                 match branches |> Map.tryFind branchKey with
                 | Some step ->
-                    let! result = executeStep protocol step input
+                    let! result = executeStep context protocol step input
                     sw.Stop()
                     return
                         { FinalOutput = result.Output
@@ -116,7 +133,7 @@ module ToolComposer =
                           TotalDurationMs = sw.ElapsedMilliseconds }
 
             | ToolComposition.Fallback (primary, fallback) ->
-                let! primaryResult = executeStep protocol primary input
+                let! primaryResult = executeStep context protocol primary input
                 if primaryResult.Success then
                     sw.Stop()
                     return
@@ -124,7 +141,7 @@ module ToolComposer =
                           StepResults = [primary.ToolName, primaryResult]
                           TotalDurationMs = sw.ElapsedMilliseconds }
                 else
-                    let! fallbackResult = executeStep protocol fallback input
+                    let! fallbackResult = executeStep context protocol fallback input
                     sw.Stop()
                     return
                         { FinalOutput = fallbackResult.Output
@@ -132,14 +149,15 @@ module ToolComposer =
                           TotalDurationMs = sw.ElapsedMilliseconds }
 
             | ToolComposition.Adaptive (step, router) ->
+                let maxSteps = 32
                 let mutable currentInput = input
                 let stepResults = ResizeArray<string * ToolInvocationResult>()
                 let mutable continueLoop = true
                 let mutable currentStep = Some step
-                while continueLoop do
+                while continueLoop && stepResults.Count < maxSteps do
                     match currentStep with
                     | Some s ->
-                        let! result = executeStep protocol s currentInput
+                        let! result = executeStep context protocol s currentInput
                         stepResults.Add(s.ToolName, result)
                         if result.Success then
                             currentInput <- result.Output
@@ -150,8 +168,11 @@ module ToolComposer =
                             continueLoop <- false
                     | None -> continueLoop <- false
                 sw.Stop()
+                let finalOutput =
+                    if continueLoop then ""
+                    else currentInput
                 return
-                    { FinalOutput = currentInput
+                    { FinalOutput = finalOutput
                       StepResults = stepResults |> Seq.toList
                       TotalDurationMs = sw.ElapsedMilliseconds }
         }

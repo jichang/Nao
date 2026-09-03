@@ -6,12 +6,12 @@ open Nao.Agents
 /// A local in-memory LLM provider for E2E testing.
 /// Routes prompts to simple pattern-matched responses,
 /// simulating tool invocation and final answers.
-type LocalLlmProvider() =
+module LocalLlmProvider =
 
-    interface ILlmProvider with
-        member _.Name = "LocalTest"
-
-        member _.CompleteAsync (conversation: Conversation) (_options: CompletionOptions) : Task<CompletionResult> =
+    let create () =
+        LlmProvider.create
+            (fun () -> "LocalTest")
+            (fun (conversation: Conversation) (_options: CompletionOptions) ->
             let lastMessage =
                 conversation
                 |> List.tryFindBack (fun m -> m.Role = User)
@@ -30,4 +30,4 @@ type LocalLlmProvider() =
                 else
                     sprintf "I can help with that. You said: %s" lastMessage
 
-                        Task.FromResult(CompletionResult.create response "stop" (Some(lastMessage.Length + response.Length)) None)
+            Task.FromResult(CompletionResult.create response "stop" (Some(lastMessage.Length + response.Length)) None))

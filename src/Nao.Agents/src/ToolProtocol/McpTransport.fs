@@ -95,72 +95,93 @@ type McpConnectionState =
     | Connected of McpServerInfo
     | Error of string
 
-/// Interface for an MCP client connection to a single server
-type IMcpClient =
-    /// Initialize the connection and perform capability negotiation
-    abstract member ConnectAsync: unit -> Task<Result<McpServerInfo, string>>
-    /// List available tools from the server
-    abstract member ListToolsAsync: unit -> Task<McpToolDef list>
-    /// List available resources
-    abstract member ListResourcesAsync: unit -> Task<McpResource list>
-    /// Invoke a tool by name with JSON arguments
-    abstract member InvokeToolAsync: name: string -> arguments: string -> Task<Result<string, string>>
-    /// Read a resource by URI
-    abstract member ReadResourceAsync: uri: string -> Task<Result<string, string>>
-    /// Get the current connection state
-    abstract member State: McpConnectionState
-    /// Disconnect and cleanup
-    abstract member DisconnectAsync: unit -> Task<unit>
+/// Functions for an MCP client connection to a single server.
+type McpClient =
+    { /// Initialize the connection and perform capability negotiation.
+      ConnectAsync: unit -> Task<Result<McpServerInfo, string>>
+      /// List available tools from the server.
+      ListToolsAsync: unit -> Task<McpToolDef list>
+      /// List available resources.
+      ListResourcesAsync: unit -> Task<McpResource list>
+      /// Invoke a tool by name with JSON arguments.
+      InvokeToolAsync: string -> string -> Task<Result<string, string>>
+      /// Read a resource by URI.
+      ReadResourceAsync: string -> Task<Result<string, string>>
+      /// Get the current connection state.
+      State: unit -> McpConnectionState
+      /// Disconnect and cleanup.
+      DisconnectAsync: unit -> Task<unit> }
 
-/// Registry of multiple MCP server connections
-type IMcpRegistry =
-    /// Register a new MCP server
-    abstract member RegisterAsync: name: string -> transport: McpTransport -> Task<Result<McpServerInfo, string>>
-    /// Unregister and disconnect a server
-    abstract member UnregisterAsync: name: string -> Task<unit>
-    /// Get all registered servers
-    abstract member GetServers: unit -> (string * McpConnectionState) list
-    /// Get a specific client by server name
-    abstract member GetClient: name: string -> IMcpClient option
-    /// Discover tools from all connected servers
-    abstract member DiscoverToolsAsync: unit -> Task<McpToolDef list>
+/// Adapts remote MCP definitions to the canonical executable tool boundary.
+[<RequireQualifiedAccess>]
+module McpTool =
+    let create exposedName (client: McpClient) (definition: McpToolDef) =
+        let input = ToolCodec.create definition.InputSchema Ok Ok
+        let operation =
+            ToolOperation.create (fun _ arguments -> task {
+                match! client.InvokeToolAsync definition.Name arguments with
+                | Ok output -> return Ok output
+                | Error message -> return Error(ToolExecError.Failed message) })
 
-/// Stdio-based MCP client implementation
-type StdioMcpClient(command: string, args: string list) =
-    let mutable state = McpConnectionState.Disconnected
-    let mutable serverInfo: McpServerInfo option = None
-    let mutable proc: System.Diagnostics.Process option = None
-    let tools = System.Collections.Concurrent.ConcurrentBag<McpToolDef>()
+        Tool.create
+            exposedName
+            (definition.Description |> Option.defaultValue "MCP tool")
+            0
+            [ ResourceAccess.ToolCall exposedName ]
+            input
+            ToolCodec.text
+            operation
 
-    let startProcess () =
-        let psi = System.Diagnostics.ProcessStartInfo(command)
-        for arg in args do
-            psi.ArgumentList.Add(arg)
-        psi.UseShellExecute <- false
-        psi.RedirectStandardInput <- true
-        psi.RedirectStandardOutput <- true
-        psi.RedirectStandardError <- true
-        psi.CreateNoWindow <- true
-        let p = System.Diagnostics.Process.Start(psi)
-        proc <- Some p
-        p
+/// Functions for a registry of multiple MCP server connections.
+type McpRegistry =
+    { /// Register a new MCP server.
+      RegisterAsync: string -> McpTransport -> Task<Result<McpServerInfo, string>>
+      /// Unregister and disconnect a server.
+      UnregisterAsync: string -> Task<unit>
+      /// Get all registered servers.
+      GetServers: unit -> (string * McpConnectionState) list
+      /// Get a specific client by server name.
+      GetClient: string -> McpClient option
+      /// Discover tools from all connected servers.
+      DiscoverToolsAsync: unit -> Task<McpToolDef list> }
 
-    let sendJsonRpc (p: System.Diagnostics.Process) (methodName: string) (parameters: obj) =
-        task {
-            let id = Guid.NewGuid().ToString("N").[..7]
-            let msg = McpJson.serializeRequest id methodName parameters
-            let bytes = System.Text.Encoding.UTF8.GetBytes(msg)
-            let header = sprintf "Content-Length: %d\r\n\r\n" bytes.Length
-            do! p.StandardInput.WriteAsync(header)
-            do! p.StandardInput.WriteAsync(msg)
-            do! p.StandardInput.FlushAsync()
-            // Read response (simplified — production would handle framing properly)
-            let! line = p.StandardOutput.ReadLineAsync()
-            return if isNull line then "" else line
-        }
+/// Stdio-based MCP client construction.
+[<RequireQualifiedAccess>]
+module StdioMcpClient =
+    let create (command: string) (args: string list) : McpClient =
+        let mutable state = McpConnectionState.Disconnected
+        let mutable serverInfo: McpServerInfo option = None
+        let mutable proc: System.Diagnostics.Process option = None
+        let tools = System.Collections.Concurrent.ConcurrentBag<McpToolDef>()
 
-    interface IMcpClient with
-        member _.ConnectAsync() =
+        let startProcess () =
+            let psi = System.Diagnostics.ProcessStartInfo(command)
+            for arg in args do
+                psi.ArgumentList.Add(arg)
+            psi.UseShellExecute <- false
+            psi.RedirectStandardInput <- true
+            psi.RedirectStandardOutput <- true
+            psi.RedirectStandardError <- true
+            psi.CreateNoWindow <- true
+            let p = System.Diagnostics.Process.Start(psi)
+            proc <- Some p
+            p
+
+        let sendJsonRpc (p: System.Diagnostics.Process) (methodName: string) (parameters: obj) =
+            task {
+                let id = Guid.NewGuid().ToString("N").[..7]
+                let msg = McpJson.serializeRequest id methodName parameters
+                let bytes = System.Text.Encoding.UTF8.GetBytes(msg)
+                let header = sprintf "Content-Length: %d\r\n\r\n" bytes.Length
+                do! p.StandardInput.WriteAsync(header)
+                do! p.StandardInput.WriteAsync(msg)
+                do! p.StandardInput.FlushAsync()
+                // Read response (simplified — production would handle framing properly)
+                let! line = p.StandardOutput.ReadLineAsync()
+                return if isNull line then "" else line
+            }
+
+        { ConnectAsync = fun () ->
             task {
                 try
                     state <- McpConnectionState.Connecting
@@ -179,7 +200,7 @@ type StdioMcpClient(command: string, args: string list) =
                     return Error ex.Message
             }
 
-        member _.ListToolsAsync() =
+          ListToolsAsync = fun () ->
             task {
                 match proc with
                 | Some p when not p.HasExited ->
@@ -189,9 +210,9 @@ type StdioMcpClient(command: string, args: string list) =
                 | _ -> return []
             }
 
-        member _.ListResourcesAsync() = Task.FromResult([])
+          ListResourcesAsync = fun () -> Task.FromResult([])
 
-        member _.InvokeToolAsync (name: string) (arguments: string) =
+          InvokeToolAsync = fun (name: string) (arguments: string) ->
             task {
                 match proc with
                 | Some p when not p.HasExited ->
@@ -210,12 +231,12 @@ type StdioMcpClient(command: string, args: string list) =
                 | _ -> return Error "MCP server not connected"
             }
 
-        member _.ReadResourceAsync(_uri: string) =
+          ReadResourceAsync = fun _uri ->
             Task.FromResult(Error "Resources not supported in stdio transport")
 
-        member _.State = state
+          State = fun () -> state
 
-        member _.DisconnectAsync() =
+          DisconnectAsync = fun () ->
             task {
                 match proc with
                 | Some p ->
@@ -226,23 +247,24 @@ type StdioMcpClient(command: string, args: string list) =
                     proc <- None
                 | None -> ()
                 state <- McpConnectionState.Disconnected
-            }
+            } }
 
-/// Registry managing multiple MCP connections
-type McpRegistry() =
-    let clients = System.Collections.Concurrent.ConcurrentDictionary<string, IMcpClient>()
+/// Registry managing multiple MCP connections.
+[<RequireQualifiedAccess>]
+module McpRegistry =
+    let create () : McpRegistry =
+        let clients = System.Collections.Concurrent.ConcurrentDictionary<string, McpClient>()
 
-    interface IMcpRegistry with
-        member _.RegisterAsync (name: string) (transport: McpTransport) =
+        { RegisterAsync = fun (name: string) (transport: McpTransport) ->
             task {
                 let client =
                     match transport with
-                    | McpTransport.Stdio (cmd, args) -> StdioMcpClient(cmd, args) :> IMcpClient
+                    | McpTransport.Stdio (cmd, args) -> StdioMcpClient.create cmd args
                     | McpTransport.Sse _url ->
                         // SSE client would be implemented here
-                        StdioMcpClient("echo", ["not-implemented"]) :> IMcpClient
+                        StdioMcpClient.create "echo" ["not-implemented"]
                     | McpTransport.StreamableHttp (_url, _headers) ->
-                        StdioMcpClient("echo", ["not-implemented"]) :> IMcpClient
+                        StdioMcpClient.create "echo" ["not-implemented"]
                 let! result = client.ConnectAsync()
                 match result with
                 | Ok info ->
@@ -251,28 +273,49 @@ type McpRegistry() =
                 | Error msg -> return Error msg
             }
 
-        member _.UnregisterAsync(name: string) =
+          UnregisterAsync = fun name ->
             task {
                 match clients.TryRemove(name) with
                 | true, client -> do! client.DisconnectAsync()
                 | _ -> ()
             }
 
-        member _.GetServers() =
+          GetServers = fun () ->
             clients
-            |> Seq.map (fun kvp -> (kvp.Key, kvp.Value.State))
+            |> Seq.map (fun kvp -> (kvp.Key, kvp.Value.State()))
             |> Seq.toList
 
-        member _.GetClient(name: string) =
+          GetClient = fun name ->
             match clients.TryGetValue(name) with
             | true, client -> Some client
             | _ -> None
 
-        member _.DiscoverToolsAsync() =
+          DiscoverToolsAsync = fun () ->
             task {
                 let results = ResizeArray<McpToolDef>()
                 for kvp in clients do
                     let! tools = kvp.Value.ListToolsAsync()
                     results.AddRange(tools)
                 return results |> Seq.toList
-            }
+            } }
+
+    /// Discover connected MCP tools as qualified executable tools (`server.tool`).
+    let discoverExecutableToolsAsync (registry: McpRegistry) =
+        task {
+            let tools = ResizeArray<Tool>()
+            for serverName, state in registry.GetServers() do
+                match state, registry.GetClient serverName with
+                | McpConnectionState.Connected _, Some client ->
+                    let! definitions = client.ListToolsAsync()
+                    for definition in definitions do
+                        tools.Add(McpTool.create (sprintf "%s.%s" serverName definition.Name) client definition)
+                | _ -> ()
+            return tools |> Seq.toList
+        }
+
+    /// Build the canonical invocation protocol over all connected MCP tools.
+    let toToolProtocolAsync registry =
+        task {
+            let! tools = discoverExecutableToolsAsync registry
+            return ToolProtocol.fromTools tools
+        }

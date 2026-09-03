@@ -102,12 +102,16 @@ type SandboxTests() =
 [<TestClass>]
 type ExecutionEnvironmentTests() =
 
-    let makeAgent (response: string) : IAgent =
-        let id = { Name = "test"; Description = "test agent" }
-        { new IAgent with
-            member _.Id = id
-            member _.RunAsync(_context, _input) = Task.FromResult response
-            member _.HandleMessageAsync(_context, _msg) = Task.FromResult None }
+    let makeAgent (response: string) =
+        Agent.create
+            "test"
+            "test"
+            "test agent"
+            0
+            []
+            AgentContract.Text
+            (fun _context _input -> Task.FromResult response)
+            (fun _context _message -> Task.FromResult None)
 
     [<TestMethod>]
     member _.LocalEnvironmentExecutesAgent() =

@@ -6,15 +6,12 @@ open Nao.Agents
 open Nao.Eval
 open Nao.Eval.Evaluators
 
-type private CapturingProvider(response: string, capturedPrompt: string ref) =
-    interface ILlmProvider with
-        member _.Name = "capturing"
-        member _.CompleteAsync conversation _options =
-            capturedPrompt.Value <- conversation |> List.last |> _.Content
-            Task.FromResult(CompletionResult.create response "stop" None None)
+module private CapturingProvider =
+    let create response (capturedPrompt: string ref) =
+        LlmProvider.create (fun () -> "capturing") (fun conversation _options -> capturedPrompt.Value <- conversation |> List.last |> _.Content; Task.FromResult ({ Content = response; FinishReason = "stop"; TokensUsed = None; Usage = None } : CompletionResult))
 
 [<TestClass>]
-type ExactMatchEvaluatorTests() =
+type ExactMatchTests() =
 
     [<TestMethod>]
     member _.``ExactMatch passes when output matches expected``() =
@@ -35,7 +32,7 @@ type ExactMatchEvaluatorTests() =
         Assert.AreEqual(EvalVerdict.Fail, verdict)
 
 [<TestClass>]
-type ContainsEvaluatorTests() =
+type ContainsTests() =
 
     [<TestMethod>]
     member _.``Contains passes when output includes expected``() =
@@ -81,7 +78,7 @@ type ContainsEvaluatorTests() =
         Assert.AreEqual(EvalVerdict.Fail, verdict)
 
 [<TestClass>]
-type RegexEvaluatorTests() =
+type RegexTests() =
 
     [<TestMethod>]
     member _.``Regex passes when pattern matches``() =
@@ -98,12 +95,12 @@ type RegexEvaluatorTests() =
         Assert.AreEqual(EvalVerdict.Fail, verdict)
 
 [<TestClass>]
-type LlmJudgeEvaluatorTests() =
+type LlmJudgeTests() =
 
     [<TestMethod>]
     member _.``Prompt example and parser share the DTO contract``() =
         let capturedPrompt = ref ""
-        let provider = CapturingProvider("""{"score":5,"reason":"correct"}""", capturedPrompt) :> ILlmProvider
+        let provider = CapturingProvider.create """{"score":5,"reason":"correct"}""" capturedPrompt
         let evaluator = LlmJudge.create provider
         let case = EvalCase.create "judge" "question" "answer"
 
@@ -116,7 +113,7 @@ type LlmJudgeEvaluatorTests() =
     [<TestMethod>]
     member _.``Missing required response field fails``() =
         let capturedPrompt = ref ""
-        let provider = CapturingProvider("""{"score":5}""", capturedPrompt) :> ILlmProvider
+        let provider = CapturingProvider.create """{"score":5}""" capturedPrompt
         let evaluator = LlmJudge.create provider
         let case = EvalCase.create "judge" "question" "answer"
 
@@ -126,7 +123,28 @@ type LlmJudgeEvaluatorTests() =
         StringAssert.StartsWith(reason, "Parse error:")
 
 [<TestClass>]
-type CompositeEvaluatorTests() =
+type VerificationJudgeTests() =
+
+    [<TestMethod>]
+    member _.``Functional judge preserves partial score and criteria evidence``() =
+        let judge =
+            Judge.create "quality" (fun _trace ->
+                Task.FromResult
+                    { Verdict = JudgementVerdict.Partial 0.65
+                      Explanation = "Mostly correct"
+                      CriteriaScores = Map.ofList [ "grounding", 0.75 ]
+                      Suggestions = [ "Cite the source" ]
+                      JudgeName = "quality" })
+        let evaluator = VerificationJudge.fromJudge judge "agent"
+        let case = EvalCase.create "judge" "question" "reference"
+
+        let verdict, reason = evaluator.EvaluateAsync case "answer" |> _.Result
+
+        Assert.AreEqual(EvalVerdict.Partial 0.65, verdict)
+        Assert.AreEqual("Mostly correct [Criteria: grounding=0.75]", reason)
+
+[<TestClass>]
+type CompositeTests() =
 
     [<TestMethod>]
     member _.``Composite All passes when all evaluators pass``() =

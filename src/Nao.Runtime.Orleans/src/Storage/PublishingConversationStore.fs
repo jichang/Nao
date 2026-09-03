@@ -8,10 +8,10 @@ open Nao.Agents
 /// Tee conversation store: every WRITE is persisted to the wrapped backing store (so history
 /// reads stay correct) and ALSO published to the bus as a `ConversationCaptured` event, so the
 /// transcript stream flows through the same event pipeline as feedback and observability. The
-/// producer (the `SessionGrain`) keeps depending only on `IConversationStore`; swapping the
+/// producer (the `SessionGrain`) keeps depending only on `ConversationStore`; swapping the
 /// backing store for a database/cloud implementation needs no producer change, and any
 /// subscriber can persist or forward the events independently.
-type PublishingConversationStore(bus: IEventBus, inner: IConversationStore) =
+module PublishingConversationStore =
 
     /// Map the runtime's storage record to the transport-neutral event shape.
     let toMessage (m: PersistedMessage) : ConversationMessage =
@@ -43,46 +43,48 @@ type PublishingConversationStore(bus: IEventBus, inner: IConversationStore) =
             | _ -> sessionId, sessionId
         EventScope.Create(userId, sid, conversationName, "", turnId, sessionId)
 
-    interface IConversationStore with
-        member _.AppendAsync (sessionId: string) (conversationName: string) (messages: PersistedMessage array) =
+    let create (bus: EventBus) (inner: ConversationStore) : ConversationStore =
+        let appendAsync (sessionId: string) (conversationName: string) (messages: PersistedMessage array) =
             task {
                 do! inner.AppendAsync sessionId conversationName messages
                 if messages.Length > 0 then
                     let signal = MessagesAppended(conversationName, messages |> Array.map toMessage |> Array.toList)
-                    do! bus.PublishAsync(ConversationCaptured(buildScope sessionId conversationName messages, signal))
+                    do! EventBus.publishAsync (ConversationCaptured(buildScope sessionId conversationName messages, signal)) bus
             }
             :> Task
 
-        member _.SaveAsync (sessionId: string) (conversationName: string) (messages: PersistedMessage array) =
+        let saveAsync (sessionId: string) (conversationName: string) (messages: PersistedMessage array) =
             task {
                 do! inner.SaveAsync sessionId conversationName messages
                 let signal = ConversationSaved(conversationName, messages |> Array.map toMessage |> Array.toList)
-                do! bus.PublishAsync(ConversationCaptured(buildScope sessionId conversationName messages, signal))
+                do! EventBus.publishAsync (ConversationCaptured(buildScope sessionId conversationName messages, signal)) bus
             }
             :> Task
 
-        member _.LoadAsync (sessionId: string) (conversationName: string) =
+        let loadAsync (sessionId: string) (conversationName: string) =
             inner.LoadAsync sessionId conversationName
 
-        member _.ListConversationsAsync(sessionId: string) =
+        let listConversationsAsync (sessionId: string) =
             inner.ListConversationsAsync sessionId
 
-        member _.ListSessionsAsync() = inner.ListSessionsAsync()
+        let listSessionsAsync () = inner.ListSessionsAsync()
 
-        member _.DeleteConversationAsync (sessionId: string) (conversationName: string) =
+        let deleteConversationAsync (sessionId: string) (conversationName: string) =
             task {
                 do! inner.DeleteConversationAsync sessionId conversationName
-                do! bus.PublishAsync(
-                        ConversationCaptured(
+                do! (EventBus.publishAsync
+                        (ConversationCaptured(
                             buildScope sessionId conversationName [||],
-                            ConversationDeleted conversationName))
+                            ConversationDeleted conversationName)) bus)
             }
             :> Task
 
-        member _.DeleteSessionAsync(sessionId: string) =
+        let deleteSessionAsync (sessionId: string) =
             task {
                 do! inner.DeleteSessionAsync sessionId
-                do! bus.PublishAsync(
-                        ConversationCaptured(buildScope sessionId "" [||], SessionConversationsDeleted))
+                do! (EventBus.publishAsync
+                    (ConversationCaptured(buildScope sessionId "" [||], SessionConversationsDeleted)) bus)
             }
             :> Task
+
+        { AppendAsync = appendAsync; SaveAsync = saveAsync; LoadAsync = loadAsync; ListConversationsAsync = listConversationsAsync; ListSessionsAsync = listSessionsAsync; DeleteConversationAsync = deleteConversationAsync; DeleteSessionAsync = deleteSessionAsync }

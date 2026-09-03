@@ -23,10 +23,10 @@ module MemoryAgent =
                   "Finish with respond after the memory task is complete." ] }
 
     let create
-        (factory: IOrchestratorFactory)
-        (provider: ILlmProvider)
-        (tools: ITool list)
-        : IAgent =
+        (factory: OrchestratorFactory)
+        (provider: LlmProvider)
+        (tools: Tool list)
+        : Agent =
         factory.Create
             { Id = id
               Name = name
@@ -46,7 +46,7 @@ module MemoryAgent =
               Bus = EventBus.none
               Scope = EventScope.Empty }
 
-    let asTool (agent: IAgent) : ITool =
+    let asTool (agent: Agent) : Tool =
         AgentTool.create
             "memory"
             "Ask the memory specialist to recall, reconcile, create, or update durable session knowledge. Use it when the current task depends on prior context or the user asks to remember something."

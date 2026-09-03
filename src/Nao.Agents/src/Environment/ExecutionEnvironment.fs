@@ -4,39 +4,31 @@ open System
 open System.Diagnostics
 open System.Threading.Tasks
 
-/// Executes an agent within an environment that enforces execution limits.
-type IExecutionEnvironment =
-    abstract member ExecuteAsync: ExecutionContext -> AgentContext -> IAgent -> string -> Task<Result<string, LimitExceeded>>
-
-/// Default execution environment that runs agents in-process with resource tracking
-type LocalExecutionEnvironment() =
-
-    interface IExecutionEnvironment with
-        member _.ExecuteAsync (ctx: ExecutionContext) (agentContext: AgentContext) (agent: IAgent) (input: string) : Task<Result<string, LimitExceeded>> =
-            task {
-                // Check limits before starting
-                match ctx.CheckLimits() with
-                | Some exceeded -> return Error exceeded
-                | None ->
-                    // Check cancellation
-                    if ctx.CancellationToken.IsCancellationRequested then
-                        return Error LimitExceeded.Duration
-                    else
-                        let! result = agent.RunAsync(agentContext, input)
-
-                        // Check limits after execution
-                        match ctx.CheckLimits() with
-                        | Some exceeded -> return Error exceeded
-                        | None -> return Ok result
-            }
+/// Executable environment capability represented as an immutable function record.
+type ExecutionEnvironment =
+    { ExecuteAsync: ExecutionContext -> AgentContext -> Agent -> string -> Task<Result<string, LimitExceeded>> }
 
 module ExecutionEnvironment =
     /// Create a local (in-process) execution environment
-    let local () : IExecutionEnvironment =
-        LocalExecutionEnvironment() :> IExecutionEnvironment
+    let local () : ExecutionEnvironment =
+        { ExecuteAsync =
+            fun ctx agentContext agent input ->
+                task {
+                    match ctx.CheckLimits() with
+                    | Some exceeded -> return Error exceeded
+                    | None ->
+                        if ctx.CancellationToken.IsCancellationRequested then
+                            return Error LimitExceeded.Duration
+                        else
+                            let! result = Agent.runAsync agentContext input agent
+
+                            match ctx.CheckLimits() with
+                            | Some exceeded -> return Error exceeded
+                            | None -> return Ok result
+                } }
 
     /// Execute with timeout wrapping
-    let executeWithTimeout (env: IExecutionEnvironment) (ctx: ExecutionContext) (agentContext: AgentContext) (agent: IAgent) (input: string) : Task<Result<string, LimitExceeded>> =
+    let executeWithTimeout (env: ExecutionEnvironment) (ctx: ExecutionContext) (agentContext: AgentContext) (agent: Agent) (input: string) : Task<Result<string, LimitExceeded>> =
         task {
             let timeout = ctx.Sandbox.Limits.MaxDuration
             use cts = new System.Threading.CancellationTokenSource(timeout)

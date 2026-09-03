@@ -23,23 +23,17 @@ module ValueFormatError =
         | None -> error.Summary
 
 /// Validates an LLM-produced value and normalizes it into a canonical representation.
-type IValueFormat =
-    abstract member Name: string
-    abstract member MediaType: string
-    abstract member Normalize: input: string -> Result<string, ValueFormatError>
-
-type private FunctionalValueFormat
-    (name: string, mediaType: string, normalize: string -> Result<string, ValueFormatError>) =
-
-    interface IValueFormat with
-        member _.Name = name
-        member _.MediaType = mediaType
-        member _.Normalize input = normalize input
+type ValueFormat =
+    { Name: string
+      MediaType: string
+      Normalize: string -> Result<string, ValueFormatError> }
 
 [<RequireQualifiedAccess>]
 module ValueFormat =
-    let create name mediaType normalize : IValueFormat =
-        FunctionalValueFormat(name, mediaType, normalize)
+    let create name mediaType normalize : ValueFormat =
+        { Name = name
+          MediaType = mediaType
+          Normalize = normalize }
 
 [<RequireQualifiedAccess>]
 module JsonValueFormat =

@@ -3,19 +3,22 @@ namespace Nao.Agents.Tests
 open System
 open System.Threading.Tasks
 open Microsoft.VisualStudio.TestTools.UnitTesting
-open Nao.Agents
 open Nao.Persistence
 open Nao.Agents
 
 [<TestClass>]
 type EtclovgHarnessTests() =
 
-    let makeAgent (response: string) : IAgent =
-        let id = { Name = "test-agent"; Description = "test" }
-        { new IAgent with
-            member _.Id = id
-            member _.RunAsync(_context, _input) = Task.FromResult response
-            member _.HandleMessageAsync(_context, _msg) = Task.FromResult None }
+    let makeAgent (response: string) =
+        Agent.create
+            "test-agent"
+            "test-agent"
+            "test"
+            0
+            []
+            AgentContract.Text
+            (fun _context _input -> Task.FromResult response)
+            (fun _context _message -> Task.FromResult None)
 
     [<TestMethod>]
     member _.SuccessfulExecutionReturnsResponse() =
@@ -53,9 +56,7 @@ type EtclovgHarnessTests() =
     member _.ReadinessCheckFailureBlocksExecution() =
         let agent = makeAgent "response"
         let failCheck =
-            { new IReadinessCheck with
-                member _.Name = "prereq"
-                member _.CheckAsync _ _ = Task.FromResult(ReadinessResult.NotReady ["missing dependency"]) }
+            ReadinessCheck.create "prereq" (fun _ _ -> Task.FromResult(ReadinessResult.NotReady ["missing dependency"]))
         let config = { EtclovgConfig.Default with ReadinessChecks = [ failCheck ] }
         let result = (EtclovgHarness.runAsync config AgentContext.allowAll agent "test").Result
         Assert.IsFalse(result.Success)
@@ -65,13 +66,8 @@ type EtclovgHarnessTests() =
     member _.LifecycleHookCanBlockInit() =
         let agent = makeAgent "response"
         let blockHook =
-            { new ILifecycleHook with
-                member _.OnBeforeInit _ = Task.FromResult(Error "init blocked")
-                member _.OnAfterInit _ = Task.FromResult(())
-                member _.OnBeforeStep _ input = Task.FromResult(Ok input)
-                member _.OnAfterStep _ _ = Task.FromResult(())
-                member _.OnCompleted _ _ = Task.FromResult(())
-                member _.OnFailed _ _ = Task.FromResult(()) }
+            { LifecycleHook.passthrough with
+                OnBeforeInit = fun _ -> Task.FromResult(Error "init blocked") }
         let config = { EtclovgConfig.Default with Lifecycle = [ blockHook ] }
         let result = (EtclovgHarness.runAsync config AgentContext.allowAll agent "test").Result
         Assert.IsFalse(result.Success)
@@ -102,11 +98,11 @@ type EtclovgHarnessTests() =
     [<TestMethod>]
     member _.TraceStoredAfterExecution() =
         let agent = makeAgent "answer"
-        let store = InMemoryTraceStore() :> ITraceStore
+        let store = InMemoryTraceStore.create ()
         let config = { EtclovgConfig.Default with TraceStore = Some store }
         let result = (EtclovgHarness.runAsync config AgentContext.allowAll agent "question").Result
         Assert.IsTrue(result.Success)
-        let agentId = { Name = "test-agent"; Description = "test" }
+        let agentId = "test-agent"
         let traces = (store.GetTracesAsync agentId 10).Result
         Assert.AreEqual(1, traces.Length)
         Assert.IsTrue(traces.[0].Success)
@@ -119,7 +115,7 @@ type EtclovgHarnessTests() =
         let result = (EtclovgHarness.runAsync config AgentContext.allowAll agent "test").Result
         Assert.IsTrue(result.Success)
         Assert.AreEqual(1, result.AuditEntries)
-        let agentId = { Name = "test-agent"; Description = "test" }
+        let agentId = "test-agent"
         let entries = (audit.QueryAsync agentId (DateTimeOffset.UtcNow.AddMinutes(-1.0))).Result
         Assert.IsTrue(entries.Length > 0)
 
@@ -128,13 +124,11 @@ type EtclovgHarnessTests() =
         let agent = makeAgent "safe response"
         let metrics = InMemory.metrics ()
         let tracer = InMemory.tracer ()
-        let store = InMemoryTraceStore() :> ITraceStore
+        let store = InMemoryTraceStore.create ()
         let audit = InMemory.auditLog ()
         let constitution = Constitution.empty "basic" |> Constitution.addRule Constitution.noHarmRule
         let passCheck =
-            { new IReadinessCheck with
-                member _.Name = "ready"
-                member _.CheckAsync _ _ = Task.FromResult ReadinessResult.Ready }
+            ReadinessCheck.create "ready" (fun _ _ -> Task.FromResult ReadinessResult.Ready)
 
         let config =
             { EtclovgConfig.Default with
@@ -144,7 +138,7 @@ type EtclovgHarnessTests() =
                 AuditLog = Some audit
                 Constitution = Some constitution
                 ReadinessChecks = [ passCheck ]
-                Lifecycle = [ PassthroughHook() :> ILifecycleHook ] }
+                Lifecycle = [ LifecycleHook.passthrough ] }
 
         let result = (EtclovgHarness.runAsync config AgentContext.allowAll agent "hello").Result
         Assert.IsTrue(result.Success)

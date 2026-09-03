@@ -4,16 +4,7 @@ open System.Threading.Tasks
 open Nao.Agents
 
 /// Configuration for conversation summarization
-type SummarizationConfig =
-    { /// Maximum messages before triggering summarization
-      Threshold: int
-      /// Number of recent messages to always keep unsummarized
-      KeepRecent: int
-      /// The LLM provider used to generate summaries
-      Provider: ILlmProvider
-      /// Completion options for the summarization call
-      Options: CompletionOptions }
-
+type SummarizationConfig = { Threshold: int; KeepRecent: int; Provider: LlmProvider; Options: CompletionOptions } with
     static member Default provider =
         { Threshold = 20
           KeepRecent = 6
@@ -31,7 +22,7 @@ module Summarizer =
                       "Be brief." ] }
 
     /// Summarize a list of messages into a single condensed message
-    let summarizeAsync (provider: ILlmProvider) (options: CompletionOptions) (messages: Conversation) : Task<Message> =
+    let summarizeAsync (provider: LlmProvider) (options: CompletionOptions) (messages: Conversation) : Task<Message> =
         task {
             let formatted =
                 messages

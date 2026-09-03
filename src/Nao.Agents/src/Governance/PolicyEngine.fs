@@ -58,46 +58,56 @@ and PolicyViolation =
       Enforcement: PolicyEnforcement
       Message: string }
 
-/// Runtime policy engine that evaluates all registered policies
-type PolicyEngine(policies: Policy list) =
+/// Closure-backed policy evaluator.
+[<NoEquality; NoComparison>]
+type PolicyEngine =
+    private
+        { EvaluatePolicy: PolicyContext -> PolicyResult }
 
-    /// Evaluate all policies against a context
-    member _.Evaluate(context: PolicyContext) : PolicyResult =
-        let violations = ResizeArray<PolicyViolation>()
-        let warnings = ResizeArray<string>()
-        let mutable blocked = false
-        let mutable modifiedInput = context.Input
-
-        for policy in policies |> List.sortByDescending (fun p -> match p.Enforcement with PolicyEnforcement.Block -> 3 | PolicyEnforcement.Confirm -> 2 | PolicyEnforcement.Warn -> 1 | PolicyEnforcement.Modify _ -> 0) do
-            match policy.Evaluate context with
-            | Some message ->
-                let violation =
-                    { PolicyId = policy.Id
-                      Description = policy.Description
-                      Enforcement = policy.Enforcement
-                      Message = message }
-                violations.Add(violation)
-
-                match policy.Enforcement with
-                | PolicyEnforcement.Block ->
-                    blocked <- true
-                | PolicyEnforcement.Warn ->
-                    warnings.Add(sprintf "[Policy %s]: %s" policy.Id message)
-                | PolicyEnforcement.Confirm ->
-                    blocked <- true // Requires external confirmation
-                | PolicyEnforcement.Modify transform ->
-                    modifiedInput <- modifiedInput |> Option.map transform
-            | None -> ()
-
-        { Proceed = not blocked
-          Violations = violations |> Seq.toList
-          ModifiedInput = modifiedInput
-          Warnings = warnings |> Seq.toList }
+    /// Evaluate all policies against a context.
+    member engine.Evaluate(context: PolicyContext) = engine.EvaluatePolicy context
 
 module PolicyEngine =
 
     /// Create a policy engine from a list of policies
-    let create (policies: Policy list) : PolicyEngine = PolicyEngine(policies)
+    let create (policies: Policy list) : PolicyEngine =
+        let orderedPolicies =
+            policies
+            |> List.sortByDescending (fun policy ->
+                match policy.Enforcement with
+                | PolicyEnforcement.Block -> 3
+                | PolicyEnforcement.Confirm -> 2
+                | PolicyEnforcement.Warn -> 1
+                | PolicyEnforcement.Modify _ -> 0)
+
+        { EvaluatePolicy = fun context ->
+            let violations = ResizeArray<PolicyViolation>()
+            let warnings = ResizeArray<string>()
+            let mutable blocked = false
+            let mutable modifiedInput = context.Input
+
+            for policy in orderedPolicies do
+                match policy.Evaluate context with
+                | Some message ->
+                    violations.Add
+                        { PolicyId = policy.Id
+                          Description = policy.Description
+                          Enforcement = policy.Enforcement
+                          Message = message }
+
+                    match policy.Enforcement with
+                    | PolicyEnforcement.Block
+                    | PolicyEnforcement.Confirm -> blocked <- true
+                    | PolicyEnforcement.Warn ->
+                        warnings.Add(sprintf "[Policy %s]: %s" policy.Id message)
+                    | PolicyEnforcement.Modify transform ->
+                        modifiedInput <- modifiedInput |> Option.map transform
+                | None -> ()
+
+            { Proceed = not blocked
+              Violations = violations |> Seq.toList
+              ModifiedInput = modifiedInput
+              Warnings = warnings |> Seq.toList } }
 
     /// Cost budget policy: blocks when estimated cost exceeds budget
     let costBudgetPolicy (maxUsd: decimal) : Policy =

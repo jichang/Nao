@@ -45,7 +45,7 @@ Optional vendor integrations should not add dependencies to core contract packag
 - Modules: PascalCase, often matching their primary type
 - Functions: camelCase, for example `routeAsync`
 - Discriminated-union cases: PascalCase
-- Interfaces: `I` prefix, for example `ILlmProvider`
+- Functional capabilities: domain nouns such as `Agent` and `LlmProvider`
 
 ## F# design
 
@@ -127,6 +127,8 @@ When adding documentation:
 - Keep examples compilable and add automated snippet coverage where practical.
 - Distinguish current behavior from roadmap behavior.
 - Avoid claiming a security, durability, or scalability guarantee based only on an interface or configuration type.
+
+Every release and every pull request that changes a public capability must also review the [capability inventory](capabilities.md). Update its status, source/test evidence, limitations, ownership, roadmap mapping, and known gaps in the same change. The documentation workflow validates source links before generation and generated links afterward.
 
 ## Definition of done
 

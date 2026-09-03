@@ -138,106 +138,110 @@ module private MemorySearch =
         let valueScore = Set.intersect wanted (words entry.Value) |> Set.count
         keyScore + tagScore + valueScore
 
-type private MemorySearchTool(config: MemoryToolConfig, store: IMemoryStore, owner: unit -> string) =
-    inherit TypedTool<MemorySearchInput, string * MemoryEntry list>(
-        "memory_search",
-        "Deliberately search durable session memory when the request depends on prior preferences, decisions, people, projects, or earlier work not present in the conversation.",
-        1000,
-        [],
-        ToolParameter.create
-            "object\n  - query (required): string - Concrete words, names, or facts to find.\n  - intent (required): string - Why this prior information is needed for the current task.\n  - tags (optional): string[] - Restrict results to memories carrying at least one tag.\n  - limit (optional): positive integer - Maximum results, bounded by host policy."
-            (fun _ -> Error "Tool inputs are not encoded by the runtime.")
-            MemoryToolJson.decodeSearch,
-        ToolParameter.create
-            "object\n  - intent (required): string\n  - entries (required): array of { key, value, timestamp, tags }"
-            (fun (intent, entries) -> MemoryToolJson.encodeSearchResult intent entries)
-            (fun _ -> Error "Tool outputs are not decoded by the runtime."))
+module private MemoryTool =
+    let search (config: MemoryToolConfig) (store: MemoryStore) (owner: unit -> string) =
+        let input =
+            ToolCodec.create
+                "object\n  - query (required): string - Concrete words, names, or facts to find.\n  - intent (required): string - Why this prior information is needed for the current task.\n  - tags (optional): string[] - Restrict results to memories carrying at least one tag.\n  - limit (optional): positive integer - Maximum results, bounded by host policy."
+                (fun _ -> Error "Tool inputs are not encoded by the runtime.")
+                MemoryToolJson.decodeSearch
+        let output =
+            ToolCodec.create
+                "object\n  - intent (required): string\n  - entries (required): array of { key, value, timestamp, tags }"
+                (fun (intent, entries) -> MemoryToolJson.encodeSearchResult intent entries)
+                (fun _ -> Error "Tool outputs are not decoded by the runtime.")
+        let operation =
+            ToolOperation.create (fun _ (search: MemorySearchInput) ->
+                task {
+                    let! all = store.RecallAllAsync(owner())
+                    let filtered =
+                        if search.Tags.IsEmpty then all
+                        else
+                            all
+                            |> List.filter (fun entry ->
+                                entry.Tags
+                                |> List.exists (fun tag ->
+                                    search.Tags
+                                    |> List.exists (fun requested -> String.Equals(tag, requested, StringComparison.OrdinalIgnoreCase))))
+                    let limit = min config.MaxSearchResults (defaultArg search.Limit config.MaxSearchResults)
+                    let results =
+                        filtered
+                        |> List.map (fun entry -> entry, MemorySearch.rank search entry)
+                        |> List.filter (fun (_, score) -> score > 0)
+                        |> List.sortByDescending (fun (entry, score) -> score, entry.Timestamp)
+                        |> List.truncate limit
+                        |> List.map (fun (entry, _) ->
+                            let value =
+                                if entry.Value.Length <= config.MaxEntryChars then entry.Value
+                                else entry.Value.Substring(0, config.MaxEntryChars)
+                            { entry with Value = value })
+                    return Ok(search.Intent, results)
+                })
+        Tool.create
+            "memory_search"
+            "Deliberately search durable session memory when the request depends on prior preferences, decisions, people, projects, or earlier work not present in the conversation."
+            1000 [] input output operation
 
-    override _.ExecuteAsync(_context, search) =
-        task {
-            let! all = store.RecallAllAsync(owner())
-            let filtered =
-                if search.Tags.IsEmpty then all
-                else
-                    all
-                    |> List.filter (fun entry ->
-                        entry.Tags
-                        |> List.exists (fun tag ->
-                            search.Tags
-                            |> List.exists (fun requested -> String.Equals(tag, requested, StringComparison.OrdinalIgnoreCase))))
-            let limit = min config.MaxSearchResults (defaultArg search.Limit config.MaxSearchResults)
-            let results =
-                filtered
-                |> List.map (fun entry -> entry, MemorySearch.rank search entry)
-                |> List.filter (fun (_, score) -> score > 0)
-                |> List.sortByDescending (fun (entry, score) -> score, entry.Timestamp)
-                |> List.truncate limit
-                |> List.map (fun (entry, _) ->
-                    let value =
-                        if entry.Value.Length <= config.MaxEntryChars then entry.Value
-                        else entry.Value.Substring(0, config.MaxEntryChars)
-                    { entry with Value = value })
-            return Ok(search.Intent, results)
-        }
+    let remember (store: MemoryStore) (owner: unit -> string) =
+        let input =
+            ToolCodec.create
+                "object\n  - key (required): string - Stable descriptive identifier.\n  - value (required): string - Durable fact, preference, or decision to retain.\n  - tags (optional): string[] - Retrieval classifications."
+                (fun _ -> Error "Tool inputs are not encoded by the runtime.")
+                MemoryToolJson.decodeRemember
+        let output =
+            ToolCodec.create
+                "object\n  - key (required): string - Stored memory key."
+                MemoryToolJson.encodeRemembered
+                (fun _ -> Error "Tool outputs are not decoded by the runtime.")
+        let operation =
+            ToolOperation.create (fun _ (memory: MemoryRememberInput) ->
+                task {
+                    let entry =
+                        { Key = memory.Key
+                          Value = memory.Value
+                          Timestamp = DateTimeOffset.UtcNow
+                          Tags = memory.Tags }
+                    do! store.SaveAsync (owner()) entry
+                    return Ok memory.Key
+                })
+        Tool.create
+            "memory_remember"
+            "Save a durable session fact, preference, or decision when the user explicitly asks to remember it or it will clearly matter in later work; do not store transient task details."
+            1000 [] input output operation
 
-type private MemoryRememberTool(store: IMemoryStore, owner: unit -> string) =
-    inherit TypedTool<MemoryRememberInput, string>(
-        "memory_remember",
-        "Save a durable session fact, preference, or decision when the user explicitly asks to remember it or it will clearly matter in later work; do not store transient task details.",
-        1000,
-        [],
-        ToolParameter.create
-            "object\n  - key (required): string - Stable descriptive identifier.\n  - value (required): string - Durable fact, preference, or decision to retain.\n  - tags (optional): string[] - Retrieval classifications."
-            (fun _ -> Error "Tool inputs are not encoded by the runtime.")
-            MemoryToolJson.decodeRemember,
-        ToolParameter.create
-            "object\n  - key (required): string - Stored memory key."
-            MemoryToolJson.encodeRemembered
-            (fun _ -> Error "Tool outputs are not decoded by the runtime."))
-
-    override _.ExecuteAsync(_context, memory) =
-        task {
-            let entry =
-                { Key = memory.Key
-                  Value = memory.Value
-                  Timestamp = DateTimeOffset.UtcNow
-                  Tags = memory.Tags }
-            do! store.SaveAsync (owner()) entry
-            return Ok memory.Key
-        }
-
-type private MemoryForgetTool(store: IMemoryStore, owner: unit -> string) =
-    inherit TypedTool<MemoryForgetInput, string>(
-        "memory_forget",
-        "Delete one durable memory by exact key only when the user explicitly requested forgetting it.",
-        1000,
-        [],
-        ToolParameter.create
-            "object\n  - key (required): string - Exact stored key to delete.\n  - reason (required): string - Why deletion is requested.\n  - confirmedByUser (required): boolean - Must be true only when the user explicitly requested this deletion."
-            (fun _ -> Error "Tool inputs are not encoded by the runtime.")
-            MemoryToolJson.decodeForget,
-        ToolParameter.create
-            "object\n  - key (required): string - Deleted memory key."
-            MemoryToolJson.encodeRemembered
-            (fun _ -> Error "Tool outputs are not decoded by the runtime."))
-
-    override _.ExecuteAsync(_context, request) =
-        task {
-            if not request.ConfirmedByUser then
-                return Error(ToolExecError.InvalidInput "Memory deletion requires explicit user confirmation.")
-            else
-                do! store.ForgetAsync (owner()) request.Key
-                return Ok request.Key
-        }
+    let forget (store: MemoryStore) (owner: unit -> string) =
+        let input =
+            ToolCodec.create
+                "object\n  - key (required): string - Exact stored key to delete.\n  - reason (required): string - Why deletion is requested.\n  - confirmedByUser (required): boolean - Must be true only when the user explicitly requested this deletion."
+                (fun _ -> Error "Tool inputs are not encoded by the runtime.")
+                MemoryToolJson.decodeForget
+        let output =
+            ToolCodec.create
+                "object\n  - key (required): string - Deleted memory key."
+                MemoryToolJson.encodeRemembered
+                (fun _ -> Error "Tool outputs are not decoded by the runtime.")
+        let operation =
+            ToolOperation.create (fun _ (request: MemoryForgetInput) ->
+                task {
+                    if not request.ConfirmedByUser then
+                        return Error(ToolExecError.InvalidInput "Memory deletion requires explicit user confirmation.")
+                    else
+                        do! store.ForgetAsync (owner()) request.Key
+                        return Ok request.Key
+                })
+        Tool.create
+            "memory_forget"
+            "Delete one durable memory by exact key only when the user explicitly requested forgetting it."
+            1000 [] input output operation
 
 [<RequireQualifiedAccess>]
 module MemoryTools =
     let names = Set.ofList [ "memory"; "memory_search"; "memory_remember"; "memory_forget" ]
 
-    let isMemoryTool (tool: ITool) = names.Contains tool.Name
+    let isMemoryTool (tool: Tool) = names.Contains tool.Name
 
     /// Creates the memory tools enabled by host policy for one runtime owner scope.
-    let create (config: MemoryToolConfig) (store: IMemoryStore) (owner: unit -> string) : ITool list =
-        [ if config.SearchEnabled then MemorySearchTool(config, store, owner) :> ITool
-          if config.RememberEnabled then MemoryRememberTool(store, owner) :> ITool
-          if config.ForgetEnabled then MemoryForgetTool(store, owner) :> ITool ]
+    let create (config: MemoryToolConfig) (store: MemoryStore) (owner: unit -> string) : Tool list =
+        [ if config.SearchEnabled then MemoryTool.search config store owner
+          if config.RememberEnabled then MemoryTool.remember store owner
+          if config.ForgetEnabled then MemoryTool.forget store owner ]

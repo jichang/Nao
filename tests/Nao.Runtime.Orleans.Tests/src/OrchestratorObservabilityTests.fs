@@ -6,25 +6,28 @@ open Microsoft.VisualStudio.TestTools.UnitTesting
 open Nao.Agents
 open Nao.Persistence
 
-type private EchoTool() =
-    inherit TypedTool<string, string>("echo", "Echoes input.", [], ToolParameter.text, ToolParameter.text)
+module private TestTools =
+    let echo =
+        Tool.create
+            "echo"
+            "Echoes input."
+            0
+            []
+            ToolCodec.text
+            ToolCodec.text
+            (ToolOperation.create (fun _ input -> Task.FromResult(Ok input)))
 
-    override _.ExecuteAsync(_, input) = Task.FromResult(Ok input)
+module private ScriptedProvider =
+    let create (responses: string list) =
+        let responses = Queue<string>(responses)
+        LlmProvider.create (fun () -> "scripted") (fun _ _ -> Task.FromResult(CompletionResult.create (responses.Dequeue()) "stop" None None))
 
-type private ScriptedProvider(responses: string list) =
-    let responses = Queue<string>(responses)
-
-    interface ILlmProvider with
-        member _.Name = "scripted"
-
-        member _.CompleteAsync _ _ =
-            Task.FromResult(CompletionResult.create (responses.Dequeue()) "stop" None None)
-
-type private TestOrchestrator(config: OrchestratorConfig, parse: string -> AgentAction list) =
-    inherit OrchestratorBase(config)
-
-    override _.GenerateReasoningPrompt(conversation) = Task.FromResult conversation
-    override _.ParseActions(response) = parse response
+module private TestOrchestrator =
+    let create config parse =
+        let definition =
+            { OrchestratorDefinition.create Task.FromResult with
+                ParseActions = parse }
+        Orchestrator.create config definition
 
 [<TestClass>]
 type OrchestratorObservabilityTests() =
@@ -48,15 +51,14 @@ type OrchestratorObservabilityTests() =
 
     [<TestMethod>]
     member _.``harness records tool metrics and successful execution``() =
-        let provider = ScriptedProvider([ "invoke"; "done" ]) :> ILlmProvider
-        let tool = EchoTool() :> ITool
+        let provider = ScriptedProvider.create [ "invoke"; "done" ]
+        let tool = TestTools.echo
         let agent =
-            TestOrchestrator(
-                config provider [ tool ] EventBus.none,
-                function
+            TestOrchestrator.create
+                (config provider [ tool ] EventBus.none)
+                (function
                 | "invoke" -> [ InvokeTool("echo", "hello") ]
                 | response -> [ Respond response ])
-            :> IAgent
         let metrics = InMemory.metrics ()
         let journal = InMemory.executionJournal ()
         let harnessConfig =
@@ -75,34 +77,60 @@ type OrchestratorObservabilityTests() =
         Assert.AreEqual("hello", history.Head.Output)
 
     [<TestMethod>]
+    member _.``orchestrator executes tools through injected protocol middleware``() =
+        let provider = ScriptedProvider.create [ "invoke"; "done" ]
+        let mutable beforeCalls = 0
+        let middleware =
+            { BeforeExecute = fun _ _ ->
+                  beforeCalls <- beforeCalls + 1
+                  Task.FromResult(Error "blocked by middleware")
+              AfterExecute = fun _ result -> Task.FromResult result }
+        let protocol =
+            ToolProtocol.fromTools [ TestTools.echo ]
+            |> ToolProtocol.withMiddleware middleware
+        let definition =
+            { OrchestratorDefinition.create Task.FromResult with
+                ParseActions = function
+                    | "invoke" -> [ InvokeTool("echo", "hello") ]
+                    | response -> [ Respond response ] }
+        let agent =
+            Orchestrator.createWithProtocol
+                protocol
+                (config provider [ TestTools.echo ] EventBus.none)
+                definition
+
+        let result = EtclovgHarness.runAsync EtclovgConfig.Default AgentContext.allowAll agent "start" |> _.Result
+
+        Assert.IsTrue(result.Success)
+        Assert.AreEqual(Some "done", result.Response)
+        Assert.AreEqual(1, beforeCalls)
+
+    [<TestMethod>]
     member _.``agent-backed tool inherits active event context``() =
         let events = ResizeArray<NaoEvent>()
         let bus = InMemory.eventBus ()
         let consumer =
-            { new IEventConsumer with
-                member _.HandleAsync event =
-                    events.Add event
-                    Task.CompletedTask }
-        bus.Subscribe consumer
+            EventConsumer.create (fun event ->
+                events.Add event
+                Task.CompletedTask)
+        EventBus.subscribe consumer bus
 
-        let childProvider = ScriptedProvider([ "child done" ]) :> ILlmProvider
-        let child = TestOrchestrator(config childProvider [] EventBus.none, fun response -> [ Respond response ])
+        let childProvider = ScriptedProvider.create [ "child done" ]
+        let child = TestOrchestrator.create (config childProvider [] bus) (fun response -> [ Respond response ])
         let childTool = AgentTool.create "memory" "Memory specialist." 1000 "string" "string" child
-        let parentProvider = ScriptedProvider([ "invoke"; "parent done" ]) :> ILlmProvider
+        let parentProvider = ScriptedProvider.create [ "invoke"; "parent done" ]
         let parent =
-            TestOrchestrator(
-                config parentProvider [ childTool ] bus,
-                function
+            TestOrchestrator.create
+                (config parentProvider [ childTool ] bus)
+                (function
                 | "invoke" -> [ InvokeTool("memory", "recall") ]
                 | response -> [ Respond response ])
-            :> IAgent
         let tracer = InMemory.tracer ()
         let harnessConfig = { EtclovgConfig.Default with Tracer = Some tracer }
 
         let result = EtclovgHarness.runAsync harnessConfig AgentContext.allowAll parent "start" |> _.Result
 
         Assert.IsTrue(result.Success)
-        Assert.IsTrue(child.TraceContext.IsSome)
         Assert.IsTrue(
             events
             |> Seq.exists (function

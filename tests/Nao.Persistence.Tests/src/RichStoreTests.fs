@@ -5,12 +5,11 @@ open System.IO
 open Microsoft.VisualStudio.TestTools.UnitTesting
 open Microsoft.Data.Sqlite
 open Nao.Agents
-open Nao.Agents
 open Nao.Persistence
 
 let private agent = "rich-agent"
 
-let private sqliteFactory () : IDbConnectionFactory =
+let private sqliteFactory () : DbConnectionFactory =
     let path = Path.Combine(Path.GetTempPath(), sprintf "nao-rich-%s.db" (Guid.NewGuid().ToString("N")))
     let cs = sprintf "Data Source=%s" path
     DbConnectionFactory.ofFunc (fun () -> new SqliteConnection(cs) :> Data.Common.DbConnection)
@@ -36,7 +35,7 @@ let private episode id action =
 
 [<TestClass>]
 type EpisodicTests() =
-    let exercise (make: unit -> IEpisodicMemory) =
+    let exercise (make: unit -> EpisodicMemory) =
         task {
             let first = make ()
             do! first.RecordAsync(episode "e1" "act-one")
@@ -77,7 +76,7 @@ let private relation s p o =
 
 [<TestClass>]
 type GraphTests() =
-    let exercise (make: unit -> IGraphMemory) =
+    let exercise (make: unit -> GraphMemory) =
         task {
             let first = make ()
             do! first.UpsertNodeAsync(node "a")
@@ -112,7 +111,7 @@ let private tieredEntry key =
 
 [<TestClass>]
 type TieredTests() =
-    let exercise (make: unit -> ITieredMemory) =
+    let exercise (make: unit -> TieredMemory) =
         task {
             let first = make ()
             do! first.StoreAsync(tieredEntry "k1")
@@ -149,7 +148,7 @@ let private wmItem key =
 
 [<TestClass>]
 type WorkingMemoryTests() =
-    let exercise (make: unit -> IWorkingMemory) =
+    let exercise (make: unit -> WorkingMemory) =
         task {
             let first = make ()
             do! first.SetAsync(wmItem "w1")
@@ -177,7 +176,7 @@ type WorkingMemoryTests() =
 
 [<TestClass>]
 type MetricsTests() =
-    let exercise (make: unit -> IMetricsCollector) =
+    let exercise (make: unit -> MetricsCollector) =
         let first = make ()
         first.RecordLlmCall 10 20 100L
         first.RecordLlmCall 5 5 50L
@@ -214,7 +213,7 @@ let private executionTrace () =
 
 [<TestClass>]
 type TraceStoreTests() =
-    let exercise (make: unit -> ITraceStore) =
+    let exercise (make: unit -> TraceStore) =
         task {
             let first = make ()
             do! first.SaveAsync(executionTrace ())
@@ -238,7 +237,7 @@ type TraceStoreTests() =
 
 [<TestClass>]
 type TracerTests() =
-    let exercise (make: unit -> ITracer) =
+    let exercise (make: unit -> Tracer) =
         let first = make ()
         let root = first.StartTrace "op"
         let child = first.StartSpan root "child"

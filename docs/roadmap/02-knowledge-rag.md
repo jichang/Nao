@@ -8,9 +8,9 @@ This workstream creates a reusable knowledge subsystem for ingestion, indexing, 
 
 ## Existing baseline
 
-- [x] `ISemanticMemory` and embedding-provider abstractions exist.
+- [x] Functional `SemanticMemory` and `EmbeddingProvider` capability records exist.
 - [x] In-memory, file, and ADO.NET semantic-memory implementations exist.
-- [x] `IGraphMemory` and graph-query abstractions exist.
+- [x] Functional `GraphMemory` and graph-query contracts exist.
 - [x] Conversation compaction and tiered agent memory exist.
 - [ ] A source-to-index knowledge lifecycle exists.
 - [ ] Retrieval has production indexing, authorization, citations, and quality gates.

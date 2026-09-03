@@ -21,7 +21,7 @@
     <ProjectReference Include="..\..\src\Nao.Providers\Nao.Providers.fsproj" />
     <ProjectReference Include="..\..\src\Nao.Runtime.Orleans\Nao.Runtime.Orleans.fsproj" />
     <ProjectReference Include="..\..\src\Nao.Persistence\Nao.Persistence.fsproj" />
-    <ProjectReference Include="..\..\..\Assistant\Nao.Assistant.Server\Nao.Assistant.Server.fsproj" />
+    <ProjectReference Include="..\..\..\Assistant\src\SignedByte.Assistant.Server\SignedByte.Assistant.Server.fsproj" />
   </ItemGroup>
   <Import Project="..\..\.paket\Paket.Restore.targets" />
 </Project>

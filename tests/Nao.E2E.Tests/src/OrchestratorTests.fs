@@ -3,35 +3,35 @@ namespace Nao.E2E.Tests
 open System.Threading.Tasks
 open Microsoft.VisualStudio.TestTools.UnitTesting
 open Nao.Agents
-open Nao.Agents
 
 // --- Specialized sub-agents for orchestration demos ---
 
-/// A weather-specialist agent that only handles weather queries
-type WeatherAgent() =
-    let id = { Name = "weather-agent"; Description = "Handles weather queries" }
-    let tool = DemoTools.getWeather
+/// Functional sample agents used by the orchestration demos.
+module SampleAgents =
+    let private runTool context input (tool: Tool) =
+        task {
+            match! tool.RunAsync context input with
+            | Ok output -> return output
+            | Error failure -> return failure.Message
+        }
 
-    interface IAgent with
-        member _.Id = id
-        member _.RunAsync(context: AgentContext, input: string) =
+    let private createToolAgent id description (prepareInput: string -> string) (tool: Tool) =
+        let execute context input =
+            runTool context (prepareInput input) tool
+
+        let handleMessage context (message: AgentMessage) =
             task {
-                let! result = tool.Execute context input
-                return result
-            }
-        member _.HandleMessageAsync(context: AgentContext, msg: AgentMessage) =
-            task {
-                let! result = tool.Execute context msg.Content
-                return Some (AgentMessage.create id msg.From result)
+                let! result = runTool context (prepareInput message.Content) tool
+                return Some(AgentMessage.create id message.From result)
             }
 
-/// A math-specialist agent that only handles calculations
-type MathAgent() =
-    let id = { Name = "math-agent"; Description = "Handles math calculations" }
-    let tool = DemoTools.calculator
+        Agent.create id id description 0 [] AgentContract.Text execute handleMessage
+
+    let weather () =
+        createToolAgent "weather-agent" "Handles weather queries" id DemoTools.getWeather
 
     /// Extract a math expression from natural language input
-    let extractExpression (input: string) =
+    let private extractExpression (input: string) =
         // Try to find a pattern like "X op Y" in the input
         let parts = input.Split(' ')
         let ops = [| "+"; "-"; "*"; "/" |]
@@ -41,60 +41,34 @@ type MathAgent() =
                 result <- sprintf "%s %s %s" parts.[i] parts.[i + 1] parts.[i + 2]
         result
 
-    interface IAgent with
-        member _.Id = id
-        member _.RunAsync(context: AgentContext, input: string) =
-            task {
-                let expr = extractExpression input
-                let! result = tool.Execute context expr
-                return result
-            }
-        member _.HandleMessageAsync(context: AgentContext, msg: AgentMessage) =
-            task {
-                let expr = extractExpression msg.Content
-                let! result = tool.Execute context expr
-                return Some (AgentMessage.create id msg.From result)
-            }
+    let math () =
+        createToolAgent "math-agent" "Handles math calculations" extractExpression DemoTools.calculator
 
-/// A greeting-specialist agent
-type GreetingAgent() =
-    let id = { Name = "greeting-agent"; Description = "Handles greetings and introductions" }
-    let tool = DemoTools.greeter
+    let greeting () =
+        createToolAgent "greeting-agent" "Handles greetings and introductions" id DemoTools.greeter
 
-    interface IAgent with
-        member _.Id = id
-        member _.RunAsync(context: AgentContext, input: string) =
-            task {
-                let! result = tool.Execute context input
-                return result
-            }
-        member _.HandleMessageAsync(context: AgentContext, msg: AgentMessage) =
-            task {
-                let! result = tool.Execute context msg.Content
-                return Some (AgentMessage.create id msg.From result)
-            }
-
-/// A summarizer agent that reformats input into a summary
-type SummarizerAgent() =
-    let id = { Name = "summarizer"; Description = "Summarizes and reformats text" }
-
-    interface IAgent with
-        member _.Id = id
-        member _.RunAsync(_context: AgentContext, input: string) =
+    let summarizer () =
+        let summarize (input: string) =
             let summary = sprintf "Summary: %s" (input.Substring(0, min 50 input.Length))
             Task.FromResult(summary)
-        member _.HandleMessageAsync(_context: AgentContext, msg: AgentMessage) =
-            let summary = sprintf "Summary: %s" (msg.Content.Substring(0, min 50 msg.Content.Length))
-            Task.FromResult(Some (AgentMessage.create id msg.From summary))
 
-/// An orchestrator agent that decides which sub-agent to route to.
-/// Simulates the "general agent that accepts user input and decides what to do" pattern.
-type OrchestratorRoutingAgent() =
-    let id = { Name = "orchestrator"; Description = "Routes requests to the appropriate specialist" }
+        Agent.create
+            "summarizer"
+            "summarizer"
+            "Summarizes and reformats text"
+            0
+            []
+            AgentContract.Text
+            (fun _context input -> summarize input)
+            (fun _context message ->
+                task {
+                    let! summary = summarize message.Content
+                    return Some(AgentMessage.create "summarizer" message.From summary)
+                })
 
-    interface IAgent with
-        member _.Id = id
-        member _.RunAsync(_context: AgentContext, input: string) =
+    /// An orchestrator agent that decides which sub-agent to route to.
+    let router () =
+        let execute _context (input: string) =
             // The orchestrator's job: analyze input and return the name of the best sub-agent
             let agentName =
                 if input.Contains("weather") || input.Contains("temperature") then
@@ -106,8 +80,15 @@ type OrchestratorRoutingAgent() =
                 else
                     "weather-agent" // default fallback
             Task.FromResult(agentName)
-        member _.HandleMessageAsync(_context: AgentContext, msg: AgentMessage) =
-            Task.FromResult(None)
+
+        Agent.createContextual
+            "orchestrator"
+            "orchestrator"
+            "Routes requests to the appropriate specialist"
+            0
+            []
+            AgentContract.Text
+            execute
 
 
 // =============================================================================
@@ -117,10 +98,10 @@ type OrchestratorRoutingAgent() =
 [<TestClass>]
 type OrchestratorByPromptTests() =
 
-    let weatherAgent = WeatherAgent() :> IAgent
-    let mathAgent = MathAgent() :> IAgent
-    let greetingAgent = GreetingAgent() :> IAgent
-    let orchestrator = OrchestratorRoutingAgent() :> IAgent
+    let weatherAgent = SampleAgents.weather ()
+    let mathAgent = SampleAgents.math ()
+    let greetingAgent = SampleAgents.greeting ()
+    let orchestrator = SampleAgents.router ()
 
     let router =
         Router.create
@@ -152,19 +133,19 @@ type OrchestratorByPromptTests() =
 [<TestClass>]
 type OrchestratorCustomRoutingTests() =
 
-    let weatherAgent = WeatherAgent() :> IAgent
-    let mathAgent = MathAgent() :> IAgent
-    let greetingAgent = GreetingAgent() :> IAgent
+    let weatherAgent = SampleAgents.weather ()
+    let mathAgent = SampleAgents.math ()
+    let greetingAgent = SampleAgents.greeting ()
 
     /// Custom routing: keyword-based selector that returns the best agent
-    let keywordRouter (input: string) (agents: IAgent list) : Task<IAgent> =
+    let keywordRouter (input: string) (agents: Agent list) : Task<Agent> =
         let selected =
             if input.Contains("weather") then
-                agents |> List.find (fun a -> a.Id.Name = "weather-agent")
+                agents |> List.find (fun agent -> agent.Metadata.Name = "weather-agent")
             elif input.Contains("calculate") || input.Contains("math") then
-                agents |> List.find (fun a -> a.Id.Name = "math-agent")
+                agents |> List.find (fun agent -> agent.Metadata.Name = "math-agent")
             else
-                agents |> List.find (fun a -> a.Id.Name = "greeting-agent")
+                agents |> List.find (fun agent -> agent.Metadata.Name = "greeting-agent")
         Task.FromResult(selected)
 
     let router =
@@ -196,8 +177,8 @@ type OrchestratorCustomRoutingTests() =
 [<TestClass>]
 type OrchestratorByNameTests() =
 
-    let weatherAgent = WeatherAgent() :> IAgent
-    let mathAgent = MathAgent() :> IAgent
+    let weatherAgent = SampleAgents.weather ()
+    let mathAgent = SampleAgents.math ()
 
     let router =
         Router.create
@@ -223,8 +204,8 @@ type OrchestratorByNameTests() =
 [<TestClass>]
 type PipelineOrchestratorTests() =
 
-    let weatherAgent = WeatherAgent() :> IAgent
-    let summarizer = SummarizerAgent() :> IAgent
+    let weatherAgent = SampleAgents.weather ()
+    let summarizer = SampleAgents.summarizer ()
 
     [<TestMethod>]
     member _.PipelineRunsAgentsSequentially() =
@@ -250,8 +231,8 @@ type PipelineOrchestratorTests() =
 [<TestClass>]
 type AgentGroupOrchestratorTests() =
 
-    let weatherAgent = WeatherAgent() :> IAgent
-    let mathAgent = MathAgent() :> IAgent
+    let weatherAgent = SampleAgents.weather ()
+    let mathAgent = SampleAgents.math ()
 
     [<TestMethod>]
     member _.GroupTerminatesAfterMaxRounds() =
@@ -276,7 +257,7 @@ type AgentGroupOrchestratorTests() =
         let group = AgentGroup.create [ weatherAgent ] (MaxRounds 1)
         let history = (AgentGroup.runAsync AgentContext.allowAll "test input" group).Result
         let firstMsg = history |> List.head
-        Assert.AreEqual("user", firstMsg.From.Name)
+        Assert.AreEqual("user", firstMsg.From)
         Assert.AreEqual("test input", firstMsg.Content)
 
 
@@ -293,12 +274,12 @@ type FullOrchestratorPatternTests() =
     [<TestMethod>]
     member _.OrchestratorAcceptsInputAndDelegatesToCorrectSpecialist() =
         // Setup: specialized sub-agents
-        let weatherAgent = WeatherAgent() :> IAgent
-        let mathAgent = MathAgent() :> IAgent
-        let greetingAgent = GreetingAgent() :> IAgent
+        let weatherAgent = SampleAgents.weather ()
+        let mathAgent = SampleAgents.math ()
+        let greetingAgent = SampleAgents.greeting ()
 
         // The orchestrator agent decides routing
-        let orchestrator = OrchestratorRoutingAgent() :> IAgent
+        let orchestrator = SampleAgents.router ()
 
         // Router uses the orchestrator's LLM to pick the right sub-agent
         let router = Router.create [ weatherAgent; mathAgent; greetingAgent ] (ByPrompt orchestrator)
@@ -317,9 +298,9 @@ type FullOrchestratorPatternTests() =
     [<TestMethod>]
     member _.OrchestratorThenPipelineForPostProcessing() =
         // Pattern: orchestrator routes to specialist, then result goes through a pipeline
-        let weatherAgent = WeatherAgent() :> IAgent
-        let summarizer = SummarizerAgent() :> IAgent
-        let orchestrator = OrchestratorRoutingAgent() :> IAgent
+        let weatherAgent = SampleAgents.weather ()
+        let summarizer = SampleAgents.summarizer ()
+        let orchestrator = SampleAgents.router ()
 
         let router = Router.create [ weatherAgent ] (ByPrompt orchestrator)
 

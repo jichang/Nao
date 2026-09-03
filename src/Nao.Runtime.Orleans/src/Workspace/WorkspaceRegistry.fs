@@ -3,12 +3,12 @@ namespace Nao.Runtime.Orleans
 open Nao.Agents
 
 /// Code-defined workspace contents registered by the host application.
-/// Agents and tools are concrete .NET objects; the runtime does not load JSON definitions
+/// Agents and tools are code-defined values; the runtime does not load JSON definitions
 /// or assemblies dynamically.
 type WorkspaceDefinitions =
     {
-        Agents: IAgent list
-        Tools: ITool list
+        Agents: Agent list
+        Tools: Tool list
         Constitutions: Constitution list
     }
 
@@ -19,7 +19,7 @@ type WorkspaceDefinitions =
 
 module WorkspaceDefinitions =
 
-    let create (agents: IAgent list) (tools: ITool list) (constitutions: Constitution list) =
+    let create (agents: Agent list) (tools: Tool list) (constitutions: Constitution list) =
         { Agents = agents
           Tools = tools
           Constitutions = constitutions }
@@ -57,61 +57,46 @@ module WorkspaceId =
     /// Lets two versions of the same logical workspace coexist as distinct entries.
     let versioned (key: string) (version: string) = { Key = sprintf "%s@%s" key version }
 
-/// Registry that manages multiple workspaces within a single silo.
-/// Customers register code-defined workspaces at silo startup.
-/// Grains resolve workspace definitions by key on each request.
-type IWorkspaceRegistry =
+/// Functional registry that manages multiple workspaces within a single silo.
+type WorkspaceRegistry =
     /// Get a workspace by key. Returns None if not registered.
-    abstract member TryGet: WorkspaceId -> WorkspaceDefinitions option
+    { TryGet: WorkspaceId -> WorkspaceDefinitions option
     /// Get a workspace by key, throwing if not found.
-    abstract member Get: WorkspaceId -> WorkspaceDefinitions
+      Get: WorkspaceId -> WorkspaceDefinitions
     /// List all registered workspace keys.
-    abstract member ListKeys: unit -> WorkspaceId list
+      ListKeys: unit -> WorkspaceId list
     /// Register or update a workspace. Thread-safe.
-    abstract member Register: WorkspaceId * WorkspaceDefinitions -> unit
+      Register: WorkspaceId * WorkspaceDefinitions -> unit
     /// Remove a workspace from the registry.
-    abstract member Remove: WorkspaceId -> bool
-
-/// In-memory workspace registry backed by a concurrent dictionary.
-/// Designed to be registered as a singleton in the Orleans DI container.
-type WorkspaceRegistry() =
-    let workspaces = System.Collections.Concurrent.ConcurrentDictionary<string, WorkspaceDefinitions>()
-
-    /// Register a code-defined workspace.
-    member _.Register(id: WorkspaceId, defs: WorkspaceDefinitions) =
-        workspaces.[id.Key] <- defs
-
-    interface IWorkspaceRegistry with
-        member _.TryGet(id: WorkspaceId) =
-            match workspaces.TryGetValue(id.Key) with
-            | true, defs -> Some defs
-            | _ -> None
-
-        member this.Get(id: WorkspaceId) =
-            match (this :> IWorkspaceRegistry).TryGet(id) with
-            | Some defs -> defs
-            | None -> failwithf "Workspace '%s' not registered" id.Key
-
-        member _.ListKeys() =
-            workspaces.Keys |> Seq.map WorkspaceId.create |> Seq.toList
-
-        member _.Register(id: WorkspaceId, defs: WorkspaceDefinitions) =
-            workspaces.[id.Key] <- defs
-
-        member _.Remove(id: WorkspaceId) =
-            workspaces.TryRemove(id.Key) |> fst
+      Remove: WorkspaceId -> bool }
 
 module WorkspaceRegistry =
 
+    /// Create an in-memory registry backed by a concurrent dictionary.
+    let create () : WorkspaceRegistry =
+        let workspaces = System.Collections.Concurrent.ConcurrentDictionary<string, WorkspaceDefinitions>()
+        let tryGet (id: WorkspaceId) =
+            match workspaces.TryGetValue(id.Key) with
+            | true, defs -> Some defs
+            | _ -> None
+        { TryGet = tryGet
+          Get = fun id ->
+              match tryGet id with
+              | Some defs -> defs
+              | None -> failwithf "Workspace '%s' not registered" id.Key
+          ListKeys = fun () -> workspaces.Keys |> Seq.map WorkspaceId.create |> Seq.toList
+          Register = fun (id, defs) -> workspaces.[id.Key] <- defs
+          Remove = fun id -> workspaces.TryRemove(id.Key) |> fst }
+
     /// Create a registry and register a default code-defined workspace.
     let fromWorkspace (defs: WorkspaceDefinitions) : WorkspaceRegistry =
-        let reg = WorkspaceRegistry()
+        let reg = create ()
         reg.Register(WorkspaceId.defaultId, defs)
         reg
 
     /// Create a registry from multiple named code-defined workspaces.
     let fromWorkspaces (workspaces: (string * WorkspaceDefinitions) list) : WorkspaceRegistry =
-        let reg = WorkspaceRegistry()
+        let reg = create ()
         for (key, defs) in workspaces do
             reg.Register(WorkspaceId.create key, defs)
         reg
@@ -120,7 +105,7 @@ module WorkspaceRegistry =
     /// Each entry is (key, version, defs); registered under the id "key@version"
     /// so multiple versions of the same logical workspace coexist side by side.
     let fromVersionedWorkspaces (workspaces: (string * string * WorkspaceDefinitions) list) : WorkspaceRegistry =
-        let reg = WorkspaceRegistry()
+        let reg = create ()
         for (key, version, defs) in workspaces do
             reg.Register(WorkspaceId.versioned key version, defs)
         reg

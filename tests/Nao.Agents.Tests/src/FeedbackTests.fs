@@ -16,16 +16,10 @@ let private tempDir () =
     Directory.CreateDirectory d |> ignore
     d
 
-let private sqliteFactory () : IDbConnectionFactory =
+let private sqliteFactory () : DbConnectionFactory =
     let path = Path.Combine(Path.GetTempPath(), sprintf "nao-feedback-%s.db" (Guid.NewGuid().ToString("N")))
     let cs = sprintf "Data Source=%s" path
     DbConnectionFactory.ofFunc (fun () -> new SqliteConnection(cs) :> System.Data.Common.DbConnection)
-
-type private EchoTool(name: string) =
-    inherit TypedTool<string, string>(name, "Echoes its input.", [], ToolParameter.text, ToolParameter.text)
-    override _.ExecuteAsync(_context, input) = Task.FromResult(Ok(sprintf "echo:%s" input))
-
-let private echoTool name : ITool = EchoTool(name)
 
 [<TestClass>]
 type TurnRecorderTests() =
@@ -34,16 +28,16 @@ type TurnRecorderTests() =
     member _.``Pairs tool invocations with their results in order``() =
         let recorder =
             TurnRecorder.create("t1", "s1", "u1", "ws", "agent", "hello")
-        let consumer = recorder :> IEventConsumer
+        let consumer = recorder.Consumer
         let scope = EventScope.Create("u1", "s1", "", "ws", "t1", "u1/s1")
-        let send signal = consumer.HandleAsync(NaoEvent.TurnProgress(scope, signal)).Wait()
+        let send signal = EventConsumer.handleAsync (NaoEvent.TurnProgress(scope, signal)) consumer |> _.Wait()
         send (ToolInvoked("search", "query"))
         send (ToolCompleted("search", "results"))
         send (SubAgentInvoked("helper", "subtask"))
         send (SubAgentCompleted("helper", "done"))
         send (AnswerProduced("final answer"))
 
-        let snap = recorder.Snapshot()
+        let snap = TurnRecorder.snapshot recorder
         Assert.AreEqual(1, snap.ToolCalls.Length)
         Assert.AreEqual("search", snap.ToolCalls.[0].Name)
         Assert.AreEqual("query", snap.ToolCalls.[0].Input)
@@ -57,12 +51,12 @@ type TurnRecorderTests() =
     member _.``Records tool calls from progress events``() =
         let recorder =
             TurnRecorder.create("t1", "s1", "u1", "ws", "agent", "hi")
-        let consumer = recorder :> IEventConsumer
+        let consumer = recorder.Consumer
         let scope = EventScope.Create("u1", "s1", "", "ws", "t1", "u1/s1")
-        let send signal = consumer.HandleAsync(NaoEvent.TurnProgress(scope, signal)).Wait()
+        let send signal = EventConsumer.handleAsync (NaoEvent.TurnProgress(scope, signal)) consumer |> _.Wait()
         send (ToolInvoked("search", "q"))
         send (ToolCompleted("search", "r"))
-        let snap = recorder.Snapshot()
+        let snap = TurnRecorder.snapshot recorder
         Assert.AreEqual("search", snap.ToolCalls.[0].Name)
 
 [<TestClass>]
@@ -72,16 +66,20 @@ type FileStoreTests() =
     member _.``Turn store round-trips via JSONL``() =
         (task {
             let dir = tempDir ()
-            let store = FileTurnStore dir :> ITurnStore
+            let store = FileTurnStore.create dir
             let turn =
                 { TurnRecord.Empty with
                     TurnId = "t1"; SessionId = "s1"
                     ToolCalls = [ { Name = "search"; Input = "q"; Output = "r" } ] }
             do! store.SaveAsync turn
+            do! store.SaveAsync { turn with Output = "latest" }
             let! loaded = store.GetAsync "t1"
             Assert.IsTrue(loaded.IsSome)
+            Assert.AreEqual("latest", loaded.Value.Output)
             Assert.AreEqual(1, loaded.Value.ToolCalls.Length)
             Assert.AreEqual("search", loaded.Value.ToolCalls.[0].Name)
+            let! forSession = store.GetForSessionAsync "s1"
+            Assert.AreEqual(2, forSession.Length, "File storage remains append-only")
         }).GetAwaiter().GetResult()
 
 /// Same coverage as FileStoreTests but against the ADO.NET (SQLite) backend, proving
@@ -93,14 +91,16 @@ type DatabaseStoreTests() =
     member _.``Turn store round-trips via ADO.NET``() =
         (task {
             let factory = sqliteFactory ()
-            let store = AdoTurnStore factory :> ITurnStore
+            let store = AdoTurnStore.create factory
             let turn =
                 { TurnRecord.Empty with
                     TurnId = "t1"; SessionId = "s1"
                     ToolCalls = [ { Name = "search"; Input = "q"; Output = "r" } ] }
             do! store.SaveAsync turn
+            do! store.SaveAsync { turn with Output = "latest" }
             let! loaded = store.GetAsync "t1"
             Assert.IsTrue(loaded.IsSome)
+            Assert.AreEqual("latest", loaded.Value.Output)
             Assert.AreEqual(1, loaded.Value.ToolCalls.Length)
             Assert.AreEqual("search", loaded.Value.ToolCalls.[0].Name)
             let! forSession = store.GetForSessionAsync "s1"
@@ -113,7 +113,7 @@ type FeedbackServiceTests() =
     [<TestMethod>]
     member _.``Submitting feedback stores it for the turn``() =
         (task {
-            let svc = FeedbackService.InMemory()
+            let svc = inMemory ()
             let turn =
                 { TurnRecord.Empty with
                     TurnId = "t1"; SessionId = "s1"
@@ -129,7 +129,7 @@ type FeedbackServiceTests() =
     [<TestMethod>]
     member _.``SubmitFeedback records feedback even for an unknown turn``() =
         (task {
-            let svc = FeedbackService.InMemory()
+            let svc = inMemory ()
             let feedback =
                 { Id = Guid.NewGuid(); TurnId = "missing"; SessionId = "s1"; UserId = "u1"
                   Sentiment = FeedbackSentiment.Negative; Comment = None

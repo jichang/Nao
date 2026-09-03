@@ -3,6 +3,7 @@
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <OtherFlags>$(OtherFlags) --strict-indentation-</OtherFlags>
   </PropertyGroup>
 
   <ItemGroup>
@@ -12,11 +13,11 @@
     <Compile Include="src/Infrastructure/Serialization.fs" />
     <!-- Event-sourced persistence infrastructure -->
     <Compile Include="src/Infrastructure/EventStore.fs" />
-    <!-- Normalized interface implementations (ADO.NET + FileSystem) -->
+    <!-- Normalized functional record implementations (ADO.NET + FileSystem) -->
     <Compile Include="src/Memory/MemoryStore.fs" />
-    <Compile Include="src/Observability/ExecutionJournalStore.fs" />
-    <Compile Include="src/Memory/SemanticMemory.fs" />
-    <Compile Include="src/Observability/AuditLog.fs" />
+    <Compile Include="src/Observability/FunctionalExecutionJournal.fs" />
+    <Compile Include="src/Memory/SemanticMemoryFunctional.fs" />
+    <Compile Include="src/Observability/FunctionalAuditLog.fs" />
     <!-- In-memory reference implementations (moved out of Nao.Agents) -->
     <Compile Include="src/Memory/EpisodicMemoryImpl.fs" />
     <Compile Include="src/Memory/GraphMemoryImpl.fs" />
@@ -27,7 +28,7 @@
     <Compile Include="src/Memory/GraphMemory.fs" />
     <Compile Include="src/Memory/TieredMemory.fs" />
     <Compile Include="src/Memory/WorkingMemory.fs" />
-    <Compile Include="src/Observability/Observability.fs" />
+    <Compile Include="src/Observability/FunctionalObservability.fs" />
     <!-- Backend selection + host-injectable service bundle -->
     <Compile Include="src/Composition/Registration.fs" />
     <!-- ADO.NET-backed feedback stores + backend factories -->

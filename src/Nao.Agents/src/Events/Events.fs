@@ -89,8 +89,8 @@ type NaoEvent =
     | LlmExchangeRecorded of EventScope * LlmExchange
 
 /// One fine-grained observability write produced by the agent harness during a turn. These
-/// mirror the sink interfaces (ITracer / IMetricsCollector / IExecutionJournal / ITraceStore
-/// / IAuditLog) so a consumer can route each to whatever store it chooses.
+/// mirror the functional sink records (Tracer / MetricsCollector / ExecutionJournal / TraceStore
+/// / AuditLog) so a consumer can route each to whatever store it chooses.
 and ObservabilitySignal =
     /// A trace span was started (root trace or child span).
     | SpanStarted of Span
@@ -146,23 +146,45 @@ and ConversationSignal =
     | SessionConversationsDeleted
 
 /// A subscriber that receives every published event and persists/forwards it.
-type IEventConsumer =
-    abstract member HandleAsync: NaoEvent -> Task
+/// Its opaque identity is stable even when the record value is passed between modules.
+type EventConsumer =
+    { Identity: obj
+      Handle: NaoEvent -> Task }
+
+module EventConsumer =
+
+  let create handle =
+    { Identity = obj ()
+      Handle = handle }
+
+  let handleAsync event consumer = consumer.Handle event
+
+  let sameIdentity left right =
+    obj.ReferenceEquals(left.Identity, right.Identity)
 
 /// The single dispatch service producers publish to. Fans each event out to all
 /// subscribed consumers; producers hold only this — never a concrete storage type.
-type IEventBus =
-    abstract member PublishAsync: NaoEvent -> Task
-    abstract member Subscribe: IEventConsumer -> unit
-    /// Detach a previously-subscribed consumer (e.g. a per-turn recorder once its turn ends).
-    abstract member Unsubscribe: IEventConsumer -> unit
+type EventBus =
+  private
+    { Publish: NaoEvent -> Task
+      Add: EventConsumer -> unit
+      Remove: EventConsumer -> unit }
 
 /// Composable event bus helpers.
 module EventBus =
 
+  let create publishAsync subscribe unsubscribe =
+    { Publish = publishAsync
+      Add = subscribe
+      Remove = unsubscribe }
+
+  let publishAsync event bus = bus.Publish event
+
+  let subscribe consumer bus = bus.Add consumer
+
+  /// Detach the first subscription with the consumer's identity.
+  let unsubscribe consumer bus = bus.Remove consumer
+
     /// A bus that drops every event and has no subscribers (library/test default).
-    let none : IEventBus =
-        { new IEventBus with
-            member _.PublishAsync _ = Task.CompletedTask
-            member _.Subscribe _ = ()
-            member _.Unsubscribe _ = () }
+  let none : EventBus =
+    create (fun _ -> Task.CompletedTask) ignore ignore

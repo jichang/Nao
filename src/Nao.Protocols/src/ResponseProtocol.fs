@@ -54,29 +54,21 @@ module ResponseParseError =
         |> String.concat " "
 
 /// Owns one swappable LLM response protocol from prompting through resilient parsing.
-type IResponseProtocol<'Action> =
-    abstract member Descriptor: ResponseProtocolDescriptor
-    abstract member Parse: response: string -> Result<'Action list, ResponseParseError>
-    abstract member BuildRepairMessage: error: ResponseParseError -> string
-
-type private FunctionalResponseProtocol<'Action>
-    (descriptor: ResponseProtocolDescriptor,
-     parse: string -> Result<'Action list, ResponseParseError>,
-     buildRepairMessage: ResponseParseError -> string) =
-
-    interface IResponseProtocol<'Action> with
-        member _.Descriptor = descriptor
-        member _.Parse response = parse response
-        member _.BuildRepairMessage error = buildRepairMessage error
+type ResponseProtocol<'Action> =
+    { Descriptor: ResponseProtocolDescriptor
+      Parse: string -> Result<'Action list, ResponseParseError>
+      BuildRepairMessage: ResponseParseError -> string }
 
 [<RequireQualifiedAccess>]
 module ResponseProtocol =
     /// Create a protocol from pure functions, making agent-specific formats easy to compose.
-    let create descriptor parse buildRepairMessage : IResponseProtocol<'Action> =
-        FunctionalResponseProtocol<'Action>(descriptor, parse, buildRepairMessage)
+    let create descriptor parse buildRepairMessage : ResponseProtocol<'Action> =
+        { Descriptor = descriptor
+          Parse = parse
+          BuildRepairMessage = buildRepairMessage }
 
     /// Render the protocol contract for inclusion in a system prompt.
-    let promptInstructions (protocol: IResponseProtocol<'Action>) =
+    let promptInstructions (protocol: ResponseProtocol<'Action>) =
         let descriptor = protocol.Descriptor
         [ yield sprintf "# Response Protocol: %s" descriptor.Name
           yield descriptor.Description

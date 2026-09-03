@@ -69,21 +69,21 @@ type ExecutionMetrics =
             TotalCostUsd = usage.EstimatedCostUsd
             TotalDuration = usage.ElapsedTime }
 
-/// Interface for metrics collection
-type IMetricsCollector =
-    /// Record an LLM call with token counts and latency
-    abstract member RecordLlmCall: inputTokens: int -> outputTokens: int -> latencyMs: int64 -> unit
-    /// Record a tool invocation with duration
-    abstract member RecordToolCall: toolName: string -> durationMs: int64 -> success: bool -> unit
-    /// Record a custom metric point
-    abstract member RecordMetric: MetricPoint -> unit
-    /// Get aggregated metrics
-    abstract member GetMetrics: unit -> ExecutionMetrics
-    /// Calculate cost using a cost model
-    abstract member EstimateCost: CostModel -> decimal
+/// Functional metrics collection operations.
+type MetricsCollector =
+    { /// Record an LLM call with token counts and latency
+      RecordLlmCall: int -> int -> int64 -> unit
+      /// Record a tool invocation with duration
+      RecordToolCall: string -> int64 -> bool -> unit
+      /// Record a custom metric point
+      RecordMetric: MetricPoint -> unit
+      /// Get aggregated metrics
+      GetMetrics: unit -> ExecutionMetrics
+      /// Calculate cost using a cost model
+      EstimateCost: CostModel -> decimal }
 
 module internal RuntimeMetrics =
-    let private current = AsyncLocal<IMetricsCollector option>()
+    let private current = AsyncLocal<MetricsCollector option>()
 
     let get () = current.Value
     let set value = current.Value <- value

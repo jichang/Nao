@@ -1,19 +1,15 @@
 namespace Nao.Eval.Evaluators
 
 open System
-open System.Threading.Tasks
 open Nao.Agents
 open Nao.Eval
 
-/// Adapter: Wraps an IJudge (Verification layer) as an IEvaluator (Eval layer).
-/// This bridges the richer judgement system (criteria scores, suggestions) into
-/// the evaluation framework for dataset-level analysis and regression detection.
-type VerificationJudgeAdapter(judge: IJudge, agentId: string) =
+/// Functions that adapt verification judges to evaluators.
+module VerificationJudge =
 
-    interface IEvaluator with
-        member _.Name = sprintf "judge:%s" judge.Name
-
-        member _.EvaluateAsync (case: EvalCase) (actual: string) =
+    /// Create an evaluator from a verification judge.
+    let fromJudge (judge: Judge) (agentId: string) =
+        Evaluator.create (sprintf "judge:%s" judge.Name) (fun (case: EvalCase) (actual: string) ->
             task {
                 // Create an execution trace from the eval case output
                 let trace =
@@ -21,7 +17,7 @@ type VerificationJudgeAdapter(judge: IJudge, agentId: string) =
                     |> Verification.addStep (TraceAction.LlmCall "unknown") case.Input actual 0L
                     |> Verification.complete actual
 
-                let! judgement = judge.JudgeAsync trace
+                let! judgement = Judge.judgeAsync trace judge
 
                 let verdict =
                     match judgement.Verdict with
@@ -37,11 +33,4 @@ type VerificationJudgeAdapter(judge: IJudge, agentId: string) =
                 let reason = sprintf "%s [Criteria: %s]" judgement.Explanation (criteriaStr.TrimEnd())
 
                 return (verdict, reason)
-            }
-
-/// Module for creating VerificationJudge evaluators
-module VerificationJudge =
-
-    /// Create an IEvaluator from an IJudge
-    let fromJudge (judge: IJudge) (agentId: string) : IEvaluator =
-        VerificationJudgeAdapter(judge, agentId) :> IEvaluator
+            })

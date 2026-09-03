@@ -2,6 +2,8 @@
 
 Nao distinguishes conversation context, agent memory, source-backed knowledge, and produced artifacts. Treating all four as “memory” creates incorrect trust, retention, and deletion behavior.
 
+The memory layer exposes eight functional capability records rather than interfaces: `MemoryStore`, `EmbeddingProvider`, `SemanticMemory`, `EpisodicMemory`, `GraphMemory`, `TieredMemory`, `WorkingMemory`, and `MemoryConsolidation`. Concrete in-memory, file-system, and ADO.NET behavior lives in `Nao.Persistence` where applicable.
+
 ## Data categories
 
 | Category | Purpose | Typical lifetime | Authority |
@@ -28,10 +30,10 @@ Summaries are derived content. They should retain the source-message range and m
 
 ## Key-value and working memory
 
-`IMemoryStore` supports structured entries scoped to an owner. Hosts provide the owner scope; agents and tools should not be able to select arbitrary users or tenants.
+`MemoryStore` is a functional capability record for structured entries scoped to an owner. Hosts provide the owner scope; agents and tools should not be able to select arbitrary users or tenants.
 
 ```fsharp
-let store = InMemoryStore() :> IMemoryStore
+let store = InMemoryStore.create ()
 let! _ = store.SaveAsync agentId entry
 let! matches = store.RecallAsync agentId "user"
 ```
@@ -52,11 +54,10 @@ Storage operations remain deterministic even when an LLM interprets vague memory
 
 ## Semantic memory
 
-`ISemanticMemory` provides embedding-based storage and retrieval:
+`SemanticMemory` is a functional capability record for embedding-based storage and retrieval:
 
 ```fsharp
-let memory =
-    InMemorySemanticMemory(embeddingProvider) :> ISemanticMemory
+let memory = InMemorySemanticMemory.create embeddingProvider
 
 let! _ =
     memory.StoreAsync agentId "fact-1" "The capital of France is Paris"
@@ -69,7 +70,7 @@ Current implementations are useful foundations but do not constitute a productio
 
 ## Graph memory
 
-`IGraphMemory` represents nodes, relations, and basic entity, predicate, neighborhood, property, and path queries. It is a property-graph-style memory abstraction; it is not an RDF/OWL ontology model and does not imply description-logic reasoning.
+`GraphMemory` represents functional operations over nodes, relations, and basic entity, predicate, neighborhood, property, and path queries. It is a property-graph-style memory abstraction; it is not an RDF/OWL ontology model and does not imply description-logic reasoning.
 
 Graph records require stronger production semantics around identity, relation removal, cascading deletion, provenance, confidence, authorization, indexing, and durable rebuilds. These tasks are tracked in the [ontology and reasoning roadmap](roadmap/05-ontology-logic.md).
 

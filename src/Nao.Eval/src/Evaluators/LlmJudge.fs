@@ -27,26 +27,17 @@ module internal LlmJudgeResponse =
         JsonSerializer.Deserialize<LlmJudgeResponseDto>(json.Trim())
 
 /// Configuration for the LLM-as-judge evaluator
-type LlmJudgeConfig =
-    { /// The LLM provider used as judge
-      Provider: ILlmProvider
-      /// Completion options for the judge
-      Options: CompletionOptions
-      /// Custom grading criteria (injected into the judge prompt)
-      Criteria: string
-      /// Score scale description (e.g. "1-5" or "pass/fail")
-      ScaleDescription: string }
-
+type LlmJudgeConfig = { Provider: LlmProvider; Options: CompletionOptions; Criteria: string; ScaleDescription: string } with
     static member Default provider =
         { Provider = provider
           Options = { CompletionOptions.Default with Temperature = 0.0 }
           Criteria = "correctness, completeness, and relevance"
           ScaleDescription = "1-5 where 1=completely wrong, 3=partially correct, 5=perfect" }
 
-/// Evaluator that uses an LLM to judge agent output quality
-type LlmJudgeEvaluator(config: LlmJudgeConfig) =
+/// Evaluators that use an LLM to judge agent output quality.
+module LlmJudge =
 
-    let buildPrompt (case: EvalCase) (actual: string) =
+    let private buildPrompt config (case: EvalCase) (actual: string) =
         let expectedPart =
             match case.Expected with
             | Some exp -> sprintf "\n\nReference Answer:\n%s" exp
@@ -73,7 +64,7 @@ Where score is a number on the scale described above."""
             actual
             (LlmJudgeResponse.example ())
 
-    let parseScore (response: string) =
+    let private parseScore (response: string) =
         try
             let parsed = LlmJudgeResponse.deserialize response
             if isNull parsed || not parsed.Score.HasValue then
@@ -87,11 +78,11 @@ Where score is a number on the scale described above."""
         with ex ->
             (0.0, sprintf "Parse error: %s" ex.Message)
 
-    interface IEvaluator with
-        member _.Name = "LlmJudge"
-        member _.EvaluateAsync (case: EvalCase) (actual: string) =
+    /// Create an evaluator from the complete judge configuration.
+    let withConfig config =
+        Evaluator.create "LlmJudge" (fun (case: EvalCase) (actual: string) ->
             task {
-                let prompt = buildPrompt case actual
+                let prompt = buildPrompt config case actual
                 let system =
                     Prompt.render
                         { Prompt.Empty with
@@ -110,13 +101,9 @@ Where score is a number on the scale described above."""
                     else EvalVerdict.Partial score
 
                 return (verdict, reason)
-            }
+            })
 
-module LlmJudge =
-
-    let create provider = LlmJudgeEvaluator(LlmJudgeConfig.Default provider) :> IEvaluator
+    let create provider = LlmJudgeConfig.Default provider |> withConfig
 
     let withCriteria criteria provider =
-        LlmJudgeEvaluator({ LlmJudgeConfig.Default provider with Criteria = criteria }) :> IEvaluator
-
-    let withConfig config = LlmJudgeEvaluator(config) :> IEvaluator
+        { LlmJudgeConfig.Default provider with Criteria = criteria } |> withConfig

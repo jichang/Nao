@@ -1,6 +1,5 @@
 namespace Nao.Eval.Evaluators
 
-open System.Threading.Tasks
 open Nao.Eval
 
 /// Evaluator that combines multiple evaluators with configurable logic
@@ -13,11 +12,12 @@ type CompositeMode =
     /// Average score across all evaluators
     | Average
 
-type CompositeEvaluator(evaluators: IEvaluator list, mode: CompositeMode) =
+/// Functions for composing evaluators.
+module Composite =
 
-    interface IEvaluator with
-        member _.Name = sprintf "Composite(%A)" mode
-        member _.EvaluateAsync (case: EvalCase) (actual: string) =
+    /// Create a composite evaluator using the requested combination mode.
+    let create mode evaluators =
+        Evaluator.create (sprintf "Composite(%A)" mode) (fun (case: EvalCase) (actual: string) ->
             task {
                 let! results =
                     evaluators
@@ -57,12 +57,10 @@ type CompositeEvaluator(evaluators: IEvaluator list, mode: CompositeMode) =
                         elif avgScore <= 0.2 then EvalVerdict.Fail
                         else EvalVerdict.Partial avgScore
                     return (verdict, sprintf "Average score: %.2f (%s)" avgScore reasons)
-            }
+            })
 
-module Composite =
+    let all evaluators = create CompositeMode.All evaluators
 
-    let all evaluators = CompositeEvaluator(evaluators, CompositeMode.All) :> IEvaluator
+    let any evaluators = create CompositeMode.Any evaluators
 
-    let any evaluators = CompositeEvaluator(evaluators, CompositeMode.Any) :> IEvaluator
-
-    let average evaluators = CompositeEvaluator(evaluators, CompositeMode.Average) :> IEvaluator
+    let average evaluators = create CompositeMode.Average evaluators

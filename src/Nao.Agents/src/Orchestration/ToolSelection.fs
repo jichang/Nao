@@ -1,5 +1,7 @@
 namespace Nao.Agents
 
+open System
+open System.Text.RegularExpressions
 open System.Threading.Tasks
 
 /// Limits applied when selecting tool schemas for an LLM context window.
@@ -11,42 +13,80 @@ type ToolSelectionConfig =
         { MaxTools = 20
           RelevanceThreshold = 0.1 }
 
-/// Selects the tools relevant to a task and available context budget.
-type IToolSelector =
-    abstract member SelectAsync:
-        taskDescription: string ->
-        availableTokenBudget: int ->
-        tools: ITool list ->
-        Task<ITool list>
+/// Functional capability for selecting tools relevant to a task and context budget.
+type ToolSelection = {
+    Available: Tool list
+    Selected: Tool list
+}
 
-/// Keyword-based tool selector with no registry or persistent state.
-type ToolSelector(config: ToolSelectionConfig) =
-    let relevance (query: string) (tool: ITool) =
-        let queryWords = query.ToLowerInvariant().Split(' ') |> Set.ofArray
-        let toolWords =
-            (sprintf "%s %s" tool.Name tool.Description).ToLowerInvariant().Split(' ')
-            |> Set.ofArray
-        let overlap = Set.intersect queryWords toolWords |> Set.count
-        float overlap / float (max 1 queryWords.Count)
+/// Functional capability for discovering and selecting tools relevant to a task and context budget.
+type ToolSelector = {
+    SelectAsync: string -> int -> ToolProtocol -> Task<ToolSelection>
+}
 
-    let estimateTokens tool =
-        let rendered = Tool.render tool
-        (rendered.Length + 3) / 4
+[<RequireQualifiedAccess>]
+module ToolSelector =
+    /// Creates a keyword-based selector with no registry or persistent state.
+    let create (config: ToolSelectionConfig) =
+        let terms text =
+            if String.IsNullOrWhiteSpace text then
+                Set.empty
+            else
+                Regex.Replace(text, "([a-z0-9])([A-Z])", "$1 $2")
+                |> fun value -> Regex.Split(value.ToLowerInvariant(), "[^a-z0-9]+")
+                |> Seq.filter (String.IsNullOrWhiteSpace >> not)
+                |> Set.ofSeq
 
-    interface IToolSelector with
-        member _.SelectAsync taskDescription availableTokenBudget tools =
-            let ranked =
-                tools
-                |> List.map (fun tool -> tool, relevance taskDescription tool)
-                |> List.filter (fun (_, score) -> score >= config.RelevanceThreshold)
-                |> List.sortByDescending snd
+        let relevance queryTerms (tool: Tool) =
+            if Set.isEmpty queryTerms then
+                0.0
+            else
+                let weightedCoverage weight text =
+                    Set.intersect queryTerms (terms text)
+                    |> Set.count
+                    |> float
+                    |> (*) weight
 
-            let mutable remainingTokens = availableTokenBudget
-            let selected = ResizeArray<ITool>()
-            for tool, _ in ranked do
-                let tokens = estimateTokens tool
-                if selected.Count < config.MaxTools && tokens <= remainingTokens then
-                    selected.Add tool
-                    remainingTokens <- remainingTokens - tokens
+                let weightedMatches =
+                    weightedCoverage 1.0 tool.Name
+                    + weightedCoverage 0.65 tool.Description
+                    + weightedCoverage 0.5 tool.Schema.Input
+                    + weightedCoverage 0.35 tool.Schema.Output
 
-            selected |> Seq.toList |> Task.FromResult
+                weightedMatches / float queryTerms.Count
+
+        let estimateTokens tool =
+            let rendered = Tool.render tool
+            (rendered.Length + 3) / 4
+
+        let selectAsync taskDescription availableTokenBudget (protocol: ToolProtocol) =
+            task {
+                let! tools = protocol.ListTools()
+                let queryTerms = terms taskDescription
+                let ranked =
+                    tools
+                    |> List.map (fun tool -> tool, relevance queryTerms tool)
+                    |> List.sortBy (fun (tool, score) -> -score, -tool.Priority, tool.Name)
+
+                let relevant =
+                    ranked
+                    |> List.filter (fun (_, score) -> score >= config.RelevanceThreshold && score > 0.0)
+
+                let candidates =
+                    if List.isEmpty relevant then ranked |> List.truncate 1
+                    else relevant
+
+                let mutable remainingTokens = max 0 availableTokenBudget
+                let selected = ResizeArray<Tool>()
+                for tool, _ in candidates do
+                    let tokens = estimateTokens tool
+                    if selected.Count < max 0 config.MaxTools && tokens <= remainingTokens then
+                        selected.Add tool
+                        remainingTokens <- remainingTokens - tokens
+
+                return
+                    { Available = tools
+                      Selected = selected |> Seq.toList }
+            }
+
+        { SelectAsync = selectAsync }

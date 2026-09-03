@@ -9,6 +9,19 @@ open Nao.Assistant
 open Nao.Agents
 open Nao.Providers
 
+module private TestTools =
+    let text name description execute =
+        Tool.create
+            name
+            description
+            0
+            []
+            ToolCodec.text
+            ToolCodec.text
+            (ToolOperation.create (fun _ input -> task {
+                let! output = execute input
+                return Ok output }))
+
 /// Helper to check if a local LLM is available
 module LocalLlm =
     let endpoint =
@@ -32,8 +45,8 @@ module LocalLlm =
         with _ -> false
 
     let createProvider () =
-        let config = { OllamaConfig.Default with BaseUrl = endpoint; Model = model }
-        new OllamaProvider(config) :> ILlmProvider
+        let config = { OllamaConfig.Default with BaseUrl = endpoint; Model = model } in
+        OllamaProvider.create config
 
 
 /// E2E tests using a real local LLM (Ollama) with the Orchestrator.
@@ -48,23 +61,21 @@ type OrchestratorWithLocalLlmTests() =
         if skipTests then Assert.Inconclusive("Local LLM (Ollama) not available. Run scripts/start-local-llm.sh first.")
 
     let tools = [
-        Tool.Create("get_weather", "Get the current weather for a city. Input: city name.",
-            ToolSignature.Text, (fun city ->
-                Task.FromResult(sprintf """{"city":"%s","temp_c":22,"condition":"partly cloudy","humidity":65}""" city)))
+        TestTools.text "get_weather" "Get the current weather for a city. Input: city name."
+            (fun city -> Task.FromResult(sprintf """{"city":"%s","temp_c":22,"condition":"partly cloudy","humidity":65}""" city))
 
-        Tool.Create("calculate", "Evaluate a math expression. Input: a math expression like '2 + 2' or '15 * 3'.",
-            ToolSignature.Text, (fun expr ->
+        TestTools.text "calculate" "Evaluate a math expression. Input: a math expression like '2 + 2' or '15 * 3'."
+            (fun expr ->
                 let result =
-                    match expr.Trim() with
-                    | "2 + 2" -> "4"
-                    | "15 * 3" -> "45"
-                    | "100 / 4" -> "25"
-                    | "7 * 8" -> "56"
-                    | _ -> sprintf "Result of %s = (computed)" expr
-                Task.FromResult(result)))
+                    if expr.Contains("2 + 2") then "4"
+                    elif expr.Contains("15 * 3") then "45"
+                    elif expr.Contains("100 / 4") then "25"
+                    elif expr.Contains("7 * 8") then "56"
+                    else sprintf "Result of %s = (computed)" expr
+                Task.FromResult(result))
 
-        Tool.Create("lookup_capital", "Look up the capital city of a country. Input: country name.",
-            ToolSignature.Text, (fun country ->
+        TestTools.text "lookup_capital" "Look up the capital city of a country. Input: country name."
+            (fun country ->
                 let capital =
                     match country.Trim().ToLower() with
                     | "france" -> "Paris"
@@ -72,7 +83,7 @@ type OrchestratorWithLocalLlmTests() =
                     | "brazil" -> "Brasilia"
                     | "australia" -> "Canberra"
                     | c -> sprintf "Unknown capital for %s" c
-                Task.FromResult(capital)))
+                Task.FromResult(capital))
     ]
 
     [<TestMethod>]
@@ -80,7 +91,7 @@ type OrchestratorWithLocalLlmTests() =
         shouldSkip ()
         let provider = LocalLlm.createProvider()
         let orchestrator = NaoOrchestrator.create provider tools []
-        let result = (orchestrator.RunAsync(AgentContext.allowAll, "What is the weather in Tokyo?")).Result
+        let result = (Agent.runAsync AgentContext.allowAll "What is the weather in Tokyo?" orchestrator).Result
         // The orchestrator should have invoked the weather tool and produced a response
         Assert.IsTrue(
             result.Contains("22") || result.Contains("Tokyo") || result.Contains("cloudy"),
@@ -91,7 +102,7 @@ type OrchestratorWithLocalLlmTests() =
         shouldSkip ()
         let provider = LocalLlm.createProvider()
         let orchestrator = NaoOrchestrator.create provider tools []
-        let result = (orchestrator.RunAsync(AgentContext.allowAll, "What is 15 * 3?")).Result
+        let result = (Agent.runAsync AgentContext.allowAll "What is 15 * 3?" orchestrator).Result
         Assert.IsTrue(
             result.Contains("45"),
             sprintf "Expected '45' in response, got: %s" result)
@@ -101,7 +112,7 @@ type OrchestratorWithLocalLlmTests() =
         shouldSkip ()
         let provider = LocalLlm.createProvider()
         let orchestrator = NaoOrchestrator.create provider tools []
-        let result = (orchestrator.RunAsync(AgentContext.allowAll, "What is the capital of France?")).Result
+        let result = (Agent.runAsync AgentContext.allowAll "What is the capital of France?" orchestrator).Result
         Assert.IsTrue(
             result.Contains("Paris"),
             sprintf "Expected 'Paris' in response, got: %s" result)
@@ -111,7 +122,7 @@ type OrchestratorWithLocalLlmTests() =
         shouldSkip ()
         let provider = LocalLlm.createProvider()
         let orchestrator = NaoOrchestrator.create provider tools []
-        let result = (orchestrator.RunAsync(AgentContext.allowAll, "Say hello")).Result
+        let result = (Agent.runAsync AgentContext.allowAll "Say hello" orchestrator).Result
         // Should respond without invoking any tool
         Assert.IsTrue(result.Length > 0, "Expected non-empty response")
         Assert.IsFalse(
@@ -125,14 +136,20 @@ type OrchestratorWithLocalLlmTests() =
 
         // Create a specialist sub-agent
         let specialist =
-            { new IAgent with
-                member _.Id = { Name = "poetry-agent"; Description = "Writes short poems on any topic" }
-                member _.RunAsync(_context: AgentContext, input: string) =
+            Agent.create
+                "poetry-agent"
+                "poetry-agent"
+                "Writes short poems on any topic"
+                0
+                []
+                AgentContract.Text
+                (fun _context input ->
                     Task.FromResult(sprintf "Roses are red, violets are blue, %s is great, and so are you." input)
-                member _.HandleMessageAsync(_context: AgentContext, _msg: AgentMessage) = Task.FromResult(None) }
+                )
+                (fun _context _message -> Task.FromResult None)
 
         let orchestrator = NaoOrchestrator.create provider tools [ specialist ]
-        let result = (orchestrator.RunAsync(AgentContext.allowAll, "Write me a poem about coding")).Result
+        let result = (Agent.runAsync AgentContext.allowAll "Write me a poem about coding" orchestrator).Result
         // The LLM may or may not delegate; if it does, the poem agent output will be in the result
         // Either way, we should get a non-empty response
         Assert.IsTrue(result.Length > 0, "Expected non-empty response")
@@ -145,9 +162,9 @@ type OrchestratorWithMockProviderTests() =
 
     /// A mock provider that simulates orchestrator-style tool calls
     let mockProvider =
-        { new ILlmProvider with
-            member _.Name = "MockOrchestrator"
-            member _.CompleteAsync (conversation: Conversation) (_options: CompletionOptions) =
+        LlmProvider.create
+            (fun () -> "MockOrchestrator")
+            (fun (conversation: Conversation) (_options: CompletionOptions) ->
                 let lastMsg =
                     conversation
                     |> List.tryFindBack (fun m -> m.Role = User)
@@ -168,47 +185,53 @@ type OrchestratorWithMockProviderTests() =
                     else
                         "I can help you with that directly."
 
-                Task.FromResult(CompletionResult.create response "stop" (Some 10) None) }
+                Task.FromResult(CompletionResult.create response "stop" (Some 10) None))
 
     let tools = [
-        Tool.Create("get_weather", "Get weather for a city",
-            ToolSignature.Text, (fun city -> Task.FromResult(sprintf "Sunny, 20°C in %s" city)))
-        Tool.Create("lookup_capital", "Look up capital of a country",
-            ToolSignature.Text, (fun country -> Task.FromResult(sprintf "The capital of %s is Paris" country)))
+        TestTools.text "get_weather" "Get weather for a city"
+            (fun city -> Task.FromResult(sprintf "Sunny, 20°C in %s" city))
+        TestTools.text "lookup_capital" "Look up capital of a country"
+            (fun country -> Task.FromResult(sprintf "The capital of %s is Paris" country))
     ]
 
     let poetryAgent =
-        { new IAgent with
-            member _.Id = { Name = "poetry-agent"; Description = "Writes poems" }
-            member _.RunAsync(_context: AgentContext, input: string) =
+        Agent.create
+            "poetry-agent"
+            "poetry-agent"
+            "Writes poems"
+            0
+            []
+            AgentContract.Text
+            (fun _context input ->
                 Task.FromResult(sprintf "A poem about %s: roses are red..." input)
-            member _.HandleMessageAsync(_context: AgentContext, _msg: AgentMessage) = Task.FromResult(None) }
+            )
+            (fun _context _message -> Task.FromResult None)
 
     [<TestMethod>]
     member _.OrchestratorInvokesToolAndReturnsResult() =
         let orchestrator = NaoOrchestrator.create mockProvider tools [ poetryAgent ]
-        let result = (orchestrator.RunAsync(AgentContext.allowAll, "What is the weather in London?")).Result
+        let result = (Agent.runAsync AgentContext.allowAll "What is the weather in London?" orchestrator).Result
         Assert.IsTrue(result.Contains("Sunny") || result.Contains("20°C"), sprintf "Got: %s" result)
 
     [<TestMethod>]
     member _.OrchestratorDelegatesAndReturnsAgentResult() =
         let orchestrator = NaoOrchestrator.create mockProvider tools [ poetryAgent ]
-        let result = (orchestrator.RunAsync(AgentContext.allowAll, "Write a poem about trees")).Result
+        let result = (Agent.runAsync AgentContext.allowAll "Write a poem about trees" orchestrator).Result
         Assert.IsTrue(result.Contains("poem") || result.Contains("roses"), sprintf "Got: %s" result)
 
     [<TestMethod>]
     member _.OrchestratorRespondsDirectlyWhenAppropriate() =
         let orchestrator = NaoOrchestrator.create mockProvider tools [ poetryAgent ]
-        let result = (orchestrator.RunAsync(AgentContext.allowAll, "Hello there")).Result
+        let result = (Agent.runAsync AgentContext.allowAll "Hello there" orchestrator).Result
         Assert.AreEqual("I can help you with that directly.", result)
 
     [<TestMethod>]
     member _.OrchestratorHandlesUnknownTool() =
         // Provider that references a tool that doesn't exist
         let badProvider =
-            { new ILlmProvider with
-                member _.Name = "Bad"
-                member _.CompleteAsync (conversation: Conversation) (_options: CompletionOptions) =
+            LlmProvider.create
+                (fun () -> "Bad")
+                (fun (conversation: Conversation) (_options: CompletionOptions) ->
                     let lastMsg =
                         conversation
                         |> List.tryFindBack (fun m -> m.Role = User)
@@ -219,10 +242,10 @@ type OrchestratorWithMockProviderTests() =
                             "Sorry, I couldn't find that tool. Let me answer directly: I don't know."
                         else
                             """{"action":"tool","name":"nonexistent","input":"test"}"""
-                    Task.FromResult(CompletionResult.create response "stop" (Some 5) None) }
+                    Task.FromResult(CompletionResult.create response "stop" (Some 5) None))
 
         let orchestrator = NaoOrchestrator.create badProvider tools []
-        let result = (orchestrator.RunAsync(AgentContext.allowAll, "Do something")).Result
+        let result = (Agent.runAsync AgentContext.allowAll "Do something" orchestrator).Result
         // Should gracefully handle the error and produce a response
         Assert.IsTrue(result.Length > 0)
 
@@ -230,14 +253,14 @@ type OrchestratorWithMockProviderTests() =
     member _.OrchestratorRespectsMaxRounds() =
         // Provider that always returns tool calls (infinite loop scenario)
         let loopProvider =
-            { new ILlmProvider with
-                member _.Name = "Loop"
-                member _.CompleteAsync (_conversation: Conversation) (_options: CompletionOptions) =
-                                        Task.FromResult(CompletionResult.create """{"action":"tool","name":"get_weather","input":"London"}""" "stop" (Some 5) None) }
+            LlmProvider.create
+                (fun () -> "Loop")
+                (fun (_conversation: Conversation) (_options: CompletionOptions) ->
+                    Task.FromResult(CompletionResult.create """{"action":"tool","name":"get_weather","input":"London"}""" "stop" (Some 5) None))
 
         let config : OrchestratorConfig = { Id = { Name = "orchestrator"; Description = "test orchestrator" }; Provider = loopProvider; Tools = tools; SubAgents = []; Prompt = Prompt.Empty; Options = CompletionOptions.Default; MaxRounds = 3; Bus = EventBus.none; Scope = EventScope.Empty }
 
         let orchestrator = NaoOrchestrator.createWithConfig config
-        let result = (orchestrator.RunAsync(AgentContext.allowAll, "Loop me")).Result
+        let result = (Agent.runAsync AgentContext.allowAll "Loop me" orchestrator).Result
         // Should stop after max rounds and force a final answer
         Assert.IsTrue(result.Length > 0)

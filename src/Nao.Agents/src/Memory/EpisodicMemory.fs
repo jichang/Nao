@@ -41,17 +41,17 @@ type EpisodeQuery =
     /// Find episodes matching success/failure
     | ByOutcome of success: bool * topK: int
 
-/// Interface for episodic memory — stores sequences of experiences
-type IEpisodicMemory =
-    /// Record a new episode
-    abstract member RecordAsync: Episode -> Task<unit>
-    /// Query episodes
-    abstract member QueryAsync: EpisodeQuery -> Task<Episode list>
-    /// Link two episodes (causal or temporal relationship)
-    abstract member LinkAsync: fromId: string -> toId: string -> Task<unit>
-    /// Get the full episode chain starting from a given episode
-    abstract member GetChainAsync: episodeId: string -> Task<Episode list>
-    /// Compute lessons learned from similar episodes (pattern recognition)
-    abstract member SynthesizeAsync: context: string -> Task<string list>
-    /// Forget episodes below importance threshold
-    abstract member ForgetBelowAsync: importanceThreshold: float -> Task<int>
+/// Functional episodic memory — stores sequences of experiences.
+type EpisodicMemory =
+        { /// Record a new episode
+            RecordAsync: Episode -> Task<unit>
+            /// Query episodes
+            QueryAsync: EpisodeQuery -> Task<Episode list>
+            /// Link two episodes (causal or temporal relationship)
+            LinkAsync: string -> string -> Task<unit>
+            /// Get the full episode chain starting from a given episode
+            GetChainAsync: string -> Task<Episode list>
+            /// Compute lessons learned from similar episodes (pattern recognition)
+            SynthesizeAsync: string -> Task<string list>
+            /// Forget episodes below importance threshold
+            ForgetBelowAsync: float -> Task<int> }

@@ -9,7 +9,7 @@ open Nao.Persistence
 [<TestClass>]
 type VerificationTests() =
 
-    let agentId = { Name = "test-agent"; Description = "test" }
+    let agentId = "test-agent"
 
     [<TestMethod>]
     member _.StartTraceCreatesNewTrace() =
@@ -49,26 +49,18 @@ type VerificationTests() =
     [<TestMethod>]
     member _.CheckReadinessAllPass() =
         let check1 =
-            { new IReadinessCheck with
-                member _.Name = "check1"
-                member _.CheckAsync _ _ = Task.FromResult ReadinessResult.Ready }
+            ReadinessCheck.create "check1" (fun _ _ -> Task.FromResult ReadinessResult.Ready)
         let check2 =
-            { new IReadinessCheck with
-                member _.Name = "check2"
-                member _.CheckAsync _ _ = Task.FromResult ReadinessResult.Ready }
+            ReadinessCheck.create "check2" (fun _ _ -> Task.FromResult ReadinessResult.Ready)
         let result = (Verification.checkReadiness [ check1; check2 ] agentId "input").Result
         Assert.AreEqual(ReadinessResult.Ready, result)
 
     [<TestMethod>]
     member _.CheckReadinessCollectsFailures() =
         let passCheck =
-            { new IReadinessCheck with
-                member _.Name = "pass"
-                member _.CheckAsync _ _ = Task.FromResult ReadinessResult.Ready }
+            ReadinessCheck.create "pass" (fun _ _ -> Task.FromResult ReadinessResult.Ready)
         let failCheck =
-            { new IReadinessCheck with
-                member _.Name = "fail"
-                member _.CheckAsync _ _ = Task.FromResult(ReadinessResult.NotReady ["missing tool"]) }
+            ReadinessCheck.create "fail" (fun _ _ -> Task.FromResult(ReadinessResult.NotReady ["missing tool"]))
         let result = (Verification.checkReadiness [ passCheck; failCheck ] agentId "input").Result
         match result with
         | ReadinessResult.NotReady reasons ->
@@ -76,10 +68,55 @@ type VerificationTests() =
             Assert.AreEqual("missing tool", reasons.[0])
         | ReadinessResult.Ready -> Assert.Fail("Expected NotReady")
 
+    [<TestMethod>]
+    member _.CheckReadinessRunsInParallelAndPreservesReasonOrder() =
+        let firstStarted = TaskCompletionSource<unit>(TaskCreationOptions.RunContinuationsAsynchronously)
+        let secondStarted = TaskCompletionSource<unit>(TaskCreationOptions.RunContinuationsAsynchronously)
+        let release = TaskCompletionSource<unit>(TaskCreationOptions.RunContinuationsAsynchronously)
+
+        let check name (started: TaskCompletionSource<unit>) reason =
+            ReadinessCheck.create name (fun _ _ ->
+                task {
+                    started.SetResult()
+                    do! release.Task
+                    return ReadinessResult.NotReady [ reason ]
+                })
+
+        let pending =
+            Verification.checkReadiness
+                [ check "first" firstStarted "first reason"
+                  check "second" secondStarted "second reason" ]
+                agentId
+                "input"
+
+        Assert.IsTrue(firstStarted.Task.Wait(TimeSpan.FromSeconds 1.0))
+        Assert.IsTrue(secondStarted.Task.Wait(TimeSpan.FromSeconds 1.0))
+        release.SetResult()
+
+        Assert.AreEqual(
+            ReadinessResult.NotReady [ "first reason"; "second reason" ],
+            pending.Result)
+
+    [<TestMethod>]
+    member _.CheckReadinessPropagatesCheckErrors() : Task =
+        task {
+            let expected = InvalidOperationException("readiness failed")
+            let check =
+                ReadinessCheck.create "throws" (fun _ _ ->
+                    Task.FromException<ReadinessResult>(expected))
+
+            try
+                let! _ = Verification.checkReadiness [ check ] agentId "input"
+                Assert.Fail("Expected readiness failure")
+            with :? InvalidOperationException as actual ->
+                Assert.AreSame(expected, actual)
+        }
+        :> Task
+
 [<TestClass>]
 type RegressionTests() =
 
-    let agentId = { Name = "test"; Description = "" }
+    let agentId = "test"
 
     let makeTrace success steps duration =
         let startedAt = DateTimeOffset.UtcNow.AddMilliseconds(- duration)
@@ -120,7 +157,7 @@ type RegressionTests() =
 
     [<TestMethod>]
     member _.InMemoryTraceStoreSavesAndRetrieves() =
-        let store = InMemoryTraceStore() :> ITraceStore
+        let store = InMemoryTraceStore.create ()
         let trace = makeTrace true 2 500.0
         store.SaveAsync(trace).Wait()
         let retrieved = (store.GetTracesAsync agentId 10).Result
@@ -129,7 +166,7 @@ type RegressionTests() =
 
     [<TestMethod>]
     member _.GetBaselineReturnsLatestSuccessful() =
-        let store = InMemoryTraceStore() :> ITraceStore
+        let store = InMemoryTraceStore.create ()
         let old = { makeTrace true 2 2000.0 with StartedAt = DateTimeOffset.UtcNow.AddHours(-2.0) }
         let recent = { makeTrace true 3 1000.0 with StartedAt = DateTimeOffset.UtcNow.AddMinutes(-5.0) }
         let failed = { makeTrace false 1 500.0 with StartedAt = DateTimeOffset.UtcNow }

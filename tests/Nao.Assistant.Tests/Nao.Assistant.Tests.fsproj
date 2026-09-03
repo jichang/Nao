@@ -23,8 +23,8 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\Nao.Agents\Nao.Agents.fsproj" />
-    <ProjectReference Include="..\..\..\Assistant\Nao.Assistant.Server\Nao.Assistant.Server.fsproj" />
-    <ProjectReference Include="..\..\..\Assistant\Nao.Assistant.Desktop\Nao.Assistant.Desktop.fsproj" />
+    <ProjectReference Include="..\..\..\Assistant\src\SignedByte.Assistant.Server\SignedByte.Assistant.Server.fsproj" />
+    <ProjectReference Include="..\..\..\Assistant\src\SignedByte.Assistant.Desktop\SignedByte.Assistant.Desktop.fsproj" />
     <ProjectReference Include="..\..\src\Nao.Persistence\Nao.Persistence.fsproj" />
   </ItemGroup>
   <Import Project="..\..\.paket\Paket.Restore.targets" />

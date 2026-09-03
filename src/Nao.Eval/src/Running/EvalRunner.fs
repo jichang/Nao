@@ -32,17 +32,17 @@ type EvalRunnerConfig =
 module EvalRunner =
 
     /// Run a single eval case against an agent with a given evaluator
-    let runCaseAsync (evaluator: IEvaluator) (agent: IAgent) (case: EvalCase) : Task<EvalResult> =
+    let runCaseAsync (evaluator: Evaluator) (agent: Agent) (case: EvalCase) : Task<EvalResult> =
         task {
             let sw = Stopwatch.StartNew()
-            let! output = agent.RunAsync(AgentContext.allowAll, case.Input)
+            let! output = Agent.runAsync AgentContext.allowAll case.Input agent
             sw.Stop()
 
             let! (verdict, reason) = evaluator.EvaluateAsync case output
 
             // Capture execution trace for the agent call
             let trace =
-                Verification.startTrace agent.Id case.Input
+                Verification.startTrace agent.Metadata.Id case.Input
                 |> Verification.addStep (TraceAction.LlmCall "unknown") case.Input output sw.ElapsedMilliseconds
                 |> Verification.complete output
 
@@ -58,10 +58,10 @@ module EvalRunner =
         }
 
     /// Run a single eval case without trace capture (lightweight)
-    let runCaseLightAsync (evaluator: IEvaluator) (agent: IAgent) (case: EvalCase) : Task<EvalResult> =
+    let runCaseLightAsync (evaluator: Evaluator) (agent: Agent) (case: EvalCase) : Task<EvalResult> =
         task {
             let sw = Stopwatch.StartNew()
-            let! output = agent.RunAsync(AgentContext.allowAll, case.Input)
+            let! output = Agent.runAsync AgentContext.allowAll case.Input agent
             sw.Stop()
 
             let! (verdict, reason) = evaluator.EvaluateAsync case output
@@ -80,8 +80,8 @@ module EvalRunner =
     /// Run all cases in a dataset against an agent
     let runDatasetAsync
         (config: EvalRunnerConfig)
-        (evaluator: IEvaluator)
-        (agent: IAgent)
+        (evaluator: Evaluator)
+        (agent: Agent)
         (dataset: EvalDataset)
         : Task<EvalReport> =
         task {
@@ -117,8 +117,8 @@ module EvalRunner =
     /// Run cases with multiple evaluators and combine results
     let runWithMultipleEvaluatorsAsync
         (config: EvalRunnerConfig)
-        (evaluators: IEvaluator list)
-        (agent: IAgent)
+        (evaluators: Evaluator list)
+        (agent: Agent)
         (dataset: EvalDataset)
         : Task<EvalReport> =
         task {
@@ -136,8 +136,8 @@ module EvalRunner =
     /// Compare two agents on the same dataset
     let compareAgentsAsync
         (config: EvalRunnerConfig)
-        (evaluator: IEvaluator)
-        (agents: (string * IAgent) list)
+        (evaluator: Evaluator)
+        (agents: (string * Agent) list)
         (dataset: EvalDataset)
         : Task<(string * EvalReport) list> =
         task {

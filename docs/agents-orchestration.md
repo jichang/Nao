@@ -2,9 +2,26 @@
 
 Agents are typed executable capabilities inside the broader Nao platform. They are not the ownership boundary for durable state, identity, policy, or knowledge.
 
-## Agent contract
+## Functional agent programs
 
-An `IAgent` has an explicit identity, description, priority, instructions, transport contract, and context-aware execution method. `TypedContextualAgent<'Input, 'Output>` decodes and encodes domain values through host-supplied codecs.
+New orchestration code uses `Agent`, an immutable record containing metadata and
+execution functions. Programs are ordinary values: they can be created, copied, decorated,
+stored in graphs, and tested without inheritance or interface implementations.
+
+```fsharp
+let summarizer =
+    Agent.createContextual
+        "summarizer"
+        "Summarizer"
+        "Produces a concise summary"
+        0
+        [ "summarization" ]
+        AgentContract.Text
+        (fun context input -> summarizeAsync context input)
+```
+
+An `Agent` has an explicit identity, description, priority, responsibilities, transport contract,
+and context-aware execution function.
 
 Nao deliberately avoids:
 
@@ -29,6 +46,9 @@ The action representation allows tracing, policy checks, progress events, tool e
 
 ## Router
 
+`Router` selects one immutable `Agent`. Its strategy is data represented by the
+`RoutingStrategy` union.
+
 A router selects one specialist:
 
 ```fsharp
@@ -38,12 +58,14 @@ let router =
         (ByPrompt supervisor)
 
 let! result =
-    Router.routeAsync AgentContext.allowAll "What's the weather?" router
+    Router.routeAsync agentContext "What's the weather?" router
 ```
 
 Supported strategies include explicit name, prompt-based selection, round robin, and custom selection.
 
 ## Pipeline
+
+`Pipeline` composes immutable agents as a linear execution graph.
 
 A pipeline runs agents sequentially, passing each output to the next stage:
 
@@ -52,12 +74,16 @@ let pipeline =
     Pipeline.create [ fetcher; summarizer; formatter ]
 
 let! result =
-    Pipeline.runAsync AgentContext.allowAll input pipeline
+    Pipeline.runAsync agentContext input pipeline
 ```
 
 Pipelines are useful when stage order is deterministic. They should not be replaced with model planning when ordinary composition is sufficient.
 
 ## Collaborative groups
+
+`AgentGroup` provides functional collaborative execution. It terminates when its
+configured condition is met or when a complete pass produces no messages, preventing an empty
+or stalled group from spinning indefinitely.
 
 `AgentGroup` supports bounded multi-agent conversations with termination conditions such as maximum rounds, content predicates, or custom checks.
 
@@ -66,18 +92,18 @@ let group =
     AgentGroup.create [ analyst; critic ] (MaxRounds 5)
 
 let! history =
-    AgentGroup.runAsync AgentContext.allowAll "Analyze this data" group
+    AgentGroup.runAsync agentContext "Analyze this data" group
 ```
 
 A collaborative agent group is different from an organizational tenant/group directory. Current source supports the former; organizational group lifecycle is roadmap work.
 
 ## Agent-as-tool delegation
 
-An agent can be exposed as an `ITool` so a parent orchestrator can delegate specialist work through the same action pipeline. Delegated calls should inherit identity, permissions, remaining budgets, causation, and trace context.
+An agent can be exposed as a functional `Tool` value so a parent orchestrator can delegate specialist work through the same action pipeline. Delegated calls should inherit identity, permissions, remaining budgets, causation, and trace context.
 
 ## Custom orchestrators
 
-`OrchestratorBase` owns the iterative loop:
+`Orchestrator.create` owns the iterative loop and consumes an `OrchestratorDefinition`:
 
 1. Generate model messages.
 2. Call the provider.
@@ -88,28 +114,61 @@ An agent can be exposed as an `ITool` so a parent orchestrator can delegate spec
 7. Append results to the running conversation.
 8. Stop with a response or bounded fallback.
 
-A subclass supplies prompting and response interpretation:
+A definition supplies prompting and response interpretation. `PrepareRound` can atomically bind
+the prompt, parser, validation, and repair behavior to one tool-catalog snapshot:
 
 ```fsharp
 open Nao.Protocols
 
-type MyOrchestrator(config: OrchestratorConfig) =
-    inherit OrchestratorBase(config)
+let prepareRound conversation =
+    task {
+        let! selection = selector.SelectAsync taskDescription tokenBudget toolProtocol
+        let responseProtocol = createResponseProtocol selection.Available
+        let system = buildSystemPrompt selection.Selected responseProtocol
 
-    override _.GenerateReasoningPrompt(conversation) =
+        return
+            { Messages = system :: conversation
+              ResponseProtocol = Some responseProtocol
+              ParseActions = responseProtocol.Parse >> Result.defaultValue []
+              ValidateResponse = validate responseProtocol
+              BuildRepairMessage = buildRepairMessage }
+    }
+
+let definition =
+    { OrchestratorDefinition.create (fun conversation ->
         task {
-            let system =
-                { Role = System
-                  Content = "Use the declared response protocol." }
+            let! round = prepareRound conversation
+            return round.Messages
+        }) with
+        PrepareRound = Some prepareRound }
 
-            return system :: conversation
-        }
-
-    override _.ResponseProtocol =
-        Some myProtocol
+let agent =
+    Orchestrator.createWithProtocol toolProtocol config definition
 ```
 
-Hosts register an `IOrchestratorFactory` through dependency injection when runtime sessions should use a custom orchestrator.
+Each orchestrator agent may capture a different `ToolProtocol`, including different middleware,
+permission policy, local tools, or MCP registry. The protocol is the authoritative discovery and
+execution boundary. `ToolSelector` creates a bounded candidate set from that protocol; the
+orchestrator's LLM makes the final contextual choice among the advertised tools.
+
+## Loop engineering
+
+`LoopDefinition<'State, 'Output>` models one bounded state machine. Each step returns either
+`Continue` with the next immutable state or `Complete` with an output. `Loop.runAsync` owns the
+iteration limit and reports `IterationLimitReached` rather than allowing an unbounded cycle.
+
+`LoopAgent.create` packages a domain-specific loop as an `Agent` that can be composed with
+other functional orchestration primitives.
+
+## Graph engineering
+
+`ExecutionGraph` makes workflow topology explicit through agent nodes and conditional edges.
+Edges are evaluated in declaration order, cycles are allowed only within `MaxSteps`, and every
+successful run returns its ordered path. `ExecutionGraph.asAgent` packages a graph as an
+`Agent`.
+
+The ETCLOVG harness remains the outer governance, lifecycle, observability, and verification
+boundary. Loops govern iteration; graphs govern topology; the harness governs execution.
 
 ## Response protocols
 
@@ -125,7 +184,7 @@ The orchestrator can use parse failures to request a corrected response. Repair 
 
 ## Progress and observability
 
-`OrchestratorBase` provides consistent signals around:
+`Orchestrator` provides consistent signals around:
 
 - Reasoning rounds
 - Planning spans
@@ -134,7 +193,7 @@ The orchestrator can use parse failures to request a corrected response. Repair 
 - Sub-agent invocation and completion
 - Repair and fallback calls
 
-Subclasses should not need to reimplement those operational concerns.
+Planner definitions do not need to reimplement those operational concerns.
 
 ## Design guidance
 

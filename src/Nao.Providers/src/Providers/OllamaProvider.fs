@@ -1,4 +1,4 @@
-namespace Nao.Providers
+module Nao.Providers.OllamaProvider
 
 open System
 open System.Net.Http
@@ -7,16 +7,11 @@ open System.Text.Json
 open System.Threading.Tasks
 open Nao.Agents
 
-/// LLM provider that connects to an Ollama server via its OpenAI-compatible API.
-/// Ollama exposes /v1/chat/completions for chat-style completions.
-type OllamaProvider(config: OllamaConfig, ?httpHandler: HttpMessageHandler) =
-    let client =
-        match httpHandler with
-        | Some handler -> new HttpClient(handler, true)
-        | None -> new HttpClient()
+/// Functional provider factory for an Ollama server's OpenAI-compatible API.
+let create (config: OllamaConfig) : LlmProvider =
+    let client = new HttpClient(BaseAddress = Uri(config.BaseUrl))
 
     do
-        client.BaseAddress <- Uri(config.BaseUrl)
         config.TimeoutSeconds
         |> Option.iter (fun seconds -> client.Timeout <- TimeSpan.FromSeconds(float seconds))
 
@@ -35,16 +30,10 @@ type OllamaProvider(config: OllamaConfig, ?httpHandler: HttpMessageHandler) =
             config.Model messages options.Temperature streaming options.MaxTokens
             (List.toArray options.StopSequences) (Option.toObj config.ReasoningEffort)
 
-    let tokenUsage (usage: OpenAIUsageDto) =
-        if isNull usage then None
-        elif usage.PromptTokens.HasValue && usage.CompletionTokens.HasValue then
-            Some { InputTokens = usage.PromptTokens.Value; OutputTokens = usage.CompletionTokens.Value }
-        else None
-
-    // Parse one streamed SSE JSON object into text, finish reason, total tokens, and split usage.
+    // Parse one streamed SSE JSON object into (text delta, finish reason, total tokens).
     // Any of the three may be absent in a given chunk (deltas carry text; the penultimate
     // chunk carries finish_reason; an optional trailing chunk carries usage).
-    let parseStreamChunk (json: string) : (string * string option * int option * TokenUsage option) =
+    let parseStreamChunk (json: string) : (string * string option * int option) =
         let response = OpenAIChatDto.deserializeResponse json
         if isNull response then
             raise (JsonException("The response body must be a JSON object."))
@@ -66,7 +55,7 @@ type OllamaProvider(config: OllamaConfig, ?httpHandler: HttpMessageHandler) =
             if isNull response.Usage then None
             elif response.Usage.TotalTokens.HasValue then Some response.Usage.TotalTokens.Value
             else raise (JsonException("usage.total_tokens is required when usage is present."))
-        delta, finish, tokens, tokenUsage response.Usage
+        delta, finish, tokens
 
     let parseResponse (json: string) : CompletionResult =
         try
@@ -84,14 +73,17 @@ type OllamaProvider(config: OllamaConfig, ?httpHandler: HttpMessageHandler) =
                 if isNull response.Usage then None
                 elif response.Usage.TotalTokens.HasValue then Some response.Usage.TotalTokens.Value
                 else raise (JsonException("usage.total_tokens is required when usage is present."))
-            CompletionResult.create choice.Message.Content choice.FinishReason totalTokens (tokenUsage response.Usage)
+            { Content = choice.Message.Content
+              FinishReason = choice.FinishReason
+              TokensUsed = totalTokens; Usage = None }
         with ex ->
-            CompletionResult.create (sprintf "Parse error: %s" ex.Message) "error" None None
+            { Content = sprintf "Parse error: %s" ex.Message
+              FinishReason = "error"
+              TokensUsed = None; Usage = None }
 
-    interface ILlmProvider with
-        member _.Name = sprintf "Ollama(%s)" config.Model
+    let providerName () = sprintf "Ollama(%s)" config.Model
 
-        member _.CompleteAsync (conversation: Conversation) (options: CompletionOptions) : Task<CompletionResult> =
+    let completeAsync (conversation: Conversation) (options: CompletionOptions) : Task<CompletionResult> =
             task {
                 let body = buildRequestBody conversation options false
                 let content = new StringContent(body, Encoding.UTF8, "application/json")
@@ -100,13 +92,15 @@ type OllamaProvider(config: OllamaConfig, ?httpHandler: HttpMessageHandler) =
                 let! responseBody = response.Content.ReadAsStringAsync()
 
                 if not response.IsSuccessStatusCode then
-                    return CompletionResult.create (sprintf "Error: %d - %s" (int response.StatusCode) responseBody) "error" None None
+                    return
+                        { Content = sprintf "Error: %d - %s" (int response.StatusCode) responseBody
+                          FinishReason = "error"
+                          TokensUsed = None; Usage = None }
                 else
                     return parseResponse responseBody
             }
 
-    interface IStreamingLlmProvider with
-        member _.StreamAsync (conversation: Conversation) (options: CompletionOptions) (onChunk: CompletionChunk -> unit) : Task<CompletionResult> =
+    let streamAsync (conversation: Conversation) (options: CompletionOptions) (onChunk: CompletionChunk -> unit) : Task<CompletionResult> =
             task {
                 try
                     let body = buildRequestBody conversation options true
@@ -118,14 +112,16 @@ type OllamaProvider(config: OllamaConfig, ?httpHandler: HttpMessageHandler) =
                     let! response = client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead)
                     if not response.IsSuccessStatusCode then
                         let! errorBody = response.Content.ReadAsStringAsync()
-                        return CompletionResult.create (sprintf "Error: %d - %s" (int response.StatusCode) errorBody) "error" None None
+                        return
+                            { Content = sprintf "Error: %d - %s" (int response.StatusCode) errorBody
+                              FinishReason = "error"
+                              TokensUsed = None; Usage = None }
                     else
                         use! responseStream = response.Content.ReadAsStreamAsync()
                         use reader = new System.IO.StreamReader(responseStream)
                         let builder = StringBuilder()
                         let mutable finishReason = None
                         let mutable tokens = None
-                        let mutable usage = None
                         let mutable reading = true
                         while reading do
                             let! line = reader.ReadLineAsync()
@@ -138,21 +134,28 @@ type OllamaProvider(config: OllamaConfig, ?httpHandler: HttpMessageHandler) =
                                     if payload = "[DONE]" then
                                         reading <- false
                                     elif payload <> "" then
-                                        let delta, finish, tk, reportedUsage = parseStreamChunk payload
+                                        let delta, finish, tk = parseStreamChunk payload
                                         match finish with Some reason -> finishReason <- Some reason | None -> ()
                                         match tk with Some _ -> tokens <- tk | None -> ()
-                                        match reportedUsage with Some _ -> usage <- reportedUsage | None -> ()
                                         if delta <> "" then
                                             builder.Append(delta) |> ignore
-                                            onChunk (CompletionChunk.create delta None None None)
+                                            onChunk { Delta = delta; FinishReason = None; TokensUsed = None; Usage = None }
                         let finishReason =
                             finishReason
                             |> Option.defaultWith (fun () -> raise (JsonException("The stream ended without a finish_reason.")))
-                        onChunk (CompletionChunk.create "" (Some finishReason) tokens usage)
-                        return CompletionResult.create (builder.ToString()) finishReason tokens usage
+                        onChunk { Delta = ""; FinishReason = Some finishReason; TokensUsed = tokens; Usage = None }
+                        return
+                            { Content = builder.ToString()
+                              FinishReason = finishReason
+                              TokensUsed = tokens; Usage = None }
                 with ex ->
-                    return CompletionResult.create (sprintf "Error: %s" ex.Message) "error" None None
+                    return
+                        { Content = sprintf "Error: %s" ex.Message
+                          FinishReason = "error"
+                          TokensUsed = None; Usage = None }
             }
 
-    interface IDisposable with
-        member _.Dispose() = client.Dispose()
+    { Name = providerName
+      CompleteAsync = completeAsync
+      StreamAsync = Some streamAsync
+      Dispose = client.Dispose }

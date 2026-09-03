@@ -14,19 +14,15 @@ type MemoryEntry =
       /// Optional classification tags for filtering
       Tags: string list }
 
-/// Interface for persisting and retrieving agent memories
-type IMemoryStore =
-    /// Save a memory entry for an agent
-    abstract member SaveAsync: string -> MemoryEntry -> Task<unit>
-
-    /// Recall memories by key prefix match
-    abstract member RecallAsync: string -> string -> Task<MemoryEntry list>
-
-    /// Recall all memories for an agent
-    abstract member RecallAllAsync: string -> Task<MemoryEntry list>
-
-    /// Forget (delete) a memory by key
-    abstract member ForgetAsync: string -> string -> Task<unit>
-
-    /// Clear all memories for an agent
-    abstract member ClearAsync: string -> Task<unit>
+/// Functional operations for persisting and retrieving agent memories.
+type MemoryStore =
+    { /// Save a memory entry for an agent
+      SaveAsync: string -> MemoryEntry -> Task<unit>
+      /// Recall memories by key prefix match
+      RecallAsync: string -> string -> Task<MemoryEntry list>
+      /// Recall all memories for an agent
+      RecallAllAsync: string -> Task<MemoryEntry list>
+      /// Forget (delete) a memory by key
+      ForgetAsync: string -> string -> Task<unit>
+      /// Clear all memories for an agent
+      ClearAsync: string -> Task<unit> }

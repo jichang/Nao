@@ -164,7 +164,7 @@ type ResilienceTests() =
     [<TestMethod>]
     member _.CircuitBreakerOpensAfterThreshold() =
         let config = CircuitBreakerConfig.Default
-        let cb = CircuitBreaker(config)
+        let cb = CircuitBreaker.create config
         Assert.IsTrue(cb.CanExecute())
         // Record failures to open the circuit
         for _ in 1 .. config.FailureThreshold do
@@ -174,7 +174,7 @@ type ResilienceTests() =
     [<TestMethod>]
     member _.CircuitBreakerClosesAfterSuccesses() =
         let config = { CircuitBreakerConfig.Default with FailureThreshold = 1; OpenDuration = TimeSpan.FromMilliseconds(50.0); SuccessThreshold = 1 }
-        let cb = CircuitBreaker(config)
+        let cb = CircuitBreaker.create config
         cb.RecordFailure() // opens circuit
         Assert.IsFalse(cb.CanExecute()) // open, not enough time passed
         // Wait for open duration to expire

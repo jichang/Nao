@@ -12,7 +12,7 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="src/MSTestSettings.fs" />
-    <Compile Include="src/Test1.fs" />
+    <Compile Include="src/ProviderTests.fs" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\Nao.Providers\Nao.Providers.fsproj" />

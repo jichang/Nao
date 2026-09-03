@@ -5,72 +5,32 @@ open System.Diagnostics
 open System.Threading.Tasks
 open Nao.Agents
 
-/// Pluggable observability + governance services that a host (Orleans silo, ASP.NET
-/// app, test fixture, ...) injects into the harness. Each capability is optional so a
-/// host can supply only what it needs; `None` means that capability is disabled.
-/// This is the seam that lets callers choose in-memory (testing) vs persistent
-/// (production) backends without the harness/runtime knowing the concrete type.
-type IHarnessServices =
-    abstract member Tracer: ITracer option
-    abstract member Metrics: IMetricsCollector option
-    abstract member ExecutionJournal: IExecutionJournal option
-    abstract member TraceStore: ITraceStore option
-    abstract member AuditLog: IAuditLog option
+/// Pluggable observability and governance capabilities injected into the harness.
+type HarnessServices = { Tracer: Tracer option; Metrics: MetricsCollector option; ExecutionJournal: ExecutionJournal option; TraceStore: TraceStore option; AuditLog: AuditLog option }
 
-/// Helpers for constructing IHarnessServices values.
+/// Helpers for constructing harness-service records.
 module HarnessServices =
 
     /// Services with nothing configured — every capability disabled.
-    let none: IHarnessServices =
-        { new IHarnessServices with
-            member _.Tracer = None
-            member _.Metrics = None
-            member _.ExecutionJournal = None
-            member _.TraceStore = None
-            member _.AuditLog = None }
+    let none: HarnessServices =
+        { Tracer = None
+          Metrics = None
+          ExecutionJournal = None
+          TraceStore = None
+          AuditLog = None }
 
     /// Build services from explicit optional components.
     let create
-        (tracer: ITracer option)
-        (metrics: IMetricsCollector option)
-        (executionJournal: IExecutionJournal option)
-        (traceStore: ITraceStore option)
-        (auditLog: IAuditLog option)
-        : IHarnessServices =
-        { new IHarnessServices with
-            member _.Tracer = tracer
-            member _.Metrics = metrics
-            member _.ExecutionJournal = executionJournal
-            member _.TraceStore = traceStore
-            member _.AuditLog = auditLog }
+        (tracer: Tracer option)
+        (metrics: MetricsCollector option)
+        (executionJournal: ExecutionJournal option)
+        (traceStore: TraceStore option)
+        (auditLog: AuditLog option)
+        : HarnessServices =
+        { Tracer = tracer; Metrics = metrics; ExecutionJournal = executionJournal; TraceStore = traceStore; AuditLog = auditLog }
 
 /// Complete ETCLOVG harness configuration wiring all seven layers together
-type EtclovgConfig =
-    { /// E — Execution Environment: sandbox and resource limits
-      Execution: SandboxConfig
-      /// T — Tool Interface: protocol for tool discovery and invocation
-      ToolProtocol: IToolProtocol option
-      /// T — Execution journal for tracking tool calls (revert support)
-      ExecutionJournal: IExecutionJournal option
-      /// L — Lifecycle: hooks and pipeline stages
-      Lifecycle: ILifecycleHook list
-      /// O — Observability: tracer, metrics, and resilience
-      Tracer: ITracer option
-      Metrics: IMetricsCollector option
-      Resilience: ResilienceConfig
-      /// V — Verification: readiness checks, trace store, and judge
-      ReadinessChecks: IReadinessCheck list
-      TraceStore: ITraceStore option
-      Judge: IJudge option
-      /// G — Governance: permissions, constitution, audit, policies
-      Constitution: Constitution option
-      AuditLog: IAuditLog option
-      PolicyEngine: PolicyEngine option
-      /// Durable event bus turn-progress signals are published to
-      Bus: IEventBus
-      /// Scope identifying the turn whose progress signals are published (ActionId = turnId)
-      Scope: EventScope }
-
+type EtclovgConfig = { Execution: SandboxConfig; ToolProtocol: ToolProtocol option; ExecutionJournal: ExecutionJournal option; Lifecycle: LifecycleHook list; Tracer: Tracer option; Metrics: MetricsCollector option; Resilience: ResilienceConfig; ReadinessChecks: ReadinessCheck list; TraceStore: TraceStore option; Judge: Judge option; Constitution: Constitution option; AuditLog: AuditLog option; PolicyEngine: PolicyEngine option; Bus: EventBus; Scope: EventScope } with
     static member Default =
         { Execution = SandboxConfig.Default
           ToolProtocol = None
@@ -88,12 +48,12 @@ type EtclovgConfig =
           Bus = EventBus.none
           Scope = EventScope.Empty }
 
-    static member WithObservability (tracer: ITracer) (metrics: IMetricsCollector) =
+    static member WithObservability (tracer: Tracer) (metrics: MetricsCollector) =
         { EtclovgConfig.Default with Tracer = Some tracer; Metrics = Some metrics }
 
     /// Overlay host-provided pluggable services onto this config. A service that is
     /// `Some` overrides the current value; `None` leaves the existing value intact.
-    member this.WithServices(services: IHarnessServices) =
+    member this.WithServices(services: HarnessServices) =
         { this with
             Tracer = services.Tracer |> Option.orElse this.Tracer
             Metrics = services.Metrics |> Option.orElse this.Metrics
@@ -129,7 +89,7 @@ type EtclovgResult =
 /// The ETCLOVG Harness — integrates all seven layers into a unified execution pipeline
 module EtclovgHarness =
 
-    let private failResult (harnessError: HarnessError) (usage: ResourceUsage) (trace: ExecutionTrace) (policyViolations: PolicyViolation list) (constitutionViolations: ConstitutionViolation list) (metrics: IMetricsCollector option) (auditEntries: int) : EtclovgResult =
+    let private failResult (harnessError: HarnessError) (usage: ResourceUsage) (trace: ExecutionTrace) (policyViolations: PolicyViolation list) (constitutionViolations: ConstitutionViolation list) (metrics: MetricsCollector option) (auditEntries: int) : EtclovgResult =
           { Response = None
             Success = false
             HarnessError = Some harnessError
@@ -143,10 +103,10 @@ module EtclovgHarness =
             ConstitutionViolations = constitutionViolations }
 
     /// Run an agent through the full ETCLOVG harness
-    let runAsync (config: EtclovgConfig) (agentContext: AgentContext) (agent: IAgent) (input: string) : Task<EtclovgResult> =
+    let runAsync (config: EtclovgConfig) (agentContext: AgentContext) (agent: Agent) (input: string) : Task<EtclovgResult> =
         task {
             let execCtx = ExecutionContext.Create config.Execution
-            let mutable trace = Verification.startTrace agent.Id input
+            let mutable trace = Verification.startTrace agent.Metadata.Id input
             let mutable policyViolations = []
             let mutable constitutionViolations = []
 
@@ -154,7 +114,7 @@ module EtclovgHarness =
             let policyBlocked =
                 match config.PolicyEngine with
                 | Some engine ->
-                    let ctx = PolicyContext.FromExecutionContext agent.Id "execute" (Some input) execCtx
+                    let ctx = PolicyContext.FromExecutionContext agent.Metadata.Id "execute" (Some input) execCtx
                     let result = engine.Evaluate(ctx)
                     policyViolations <- result.Violations
                     if not result.Proceed then
@@ -170,7 +130,7 @@ module EtclovgHarness =
             // === V: Verification — Readiness checks ===
             let! readiness =
                 if config.ReadinessChecks.Length > 0 then
-                    Verification.checkReadiness config.ReadinessChecks agent.Id input
+                    Verification.checkReadiness config.ReadinessChecks agent.Metadata.Id input
                 else
                     Task.FromResult ReadinessResult.Ready
 
@@ -181,7 +141,7 @@ module EtclovgHarness =
 
             // === L: Lifecycle — Initialize ===
             let lifecycle = AgentLifecycle.create () |> AgentLifecycle.withHooks config.Lifecycle
-            let! initResult = AgentLifecycle.initializeAsync agent.Id lifecycle
+            let! initResult = AgentLifecycle.initializeAsync agent.Metadata.Id lifecycle
 
             match initResult with
             | Error msg ->
@@ -189,14 +149,14 @@ module EtclovgHarness =
             | Ok initializedLc ->
 
             // === L: Lifecycle — Start ===
-            let! _startedLc = AgentLifecycle.startAsync agent.Id input initializedLc
+            let! _startedLc = AgentLifecycle.startAsync agent.Metadata.Id input initializedLc
 
             // === O: Observability — Start trace span ===
             let rootSpan =
                 config.Tracer
                 |> Option.map (fun t ->
-                    let s = t.StartTrace(sprintf "harness:%s" agent.Name)
-                    t.SetAttributes s (Map.ofList ["agent.name", agent.Name; "input", input; "execution.id", string execCtx.ExecutionId])
+                    let s = t.StartTrace(sprintf "harness:%s" agent.Metadata.Name)
+                    t.SetAttributes s (Map.ofList ["agent.name", agent.Metadata.Name; "input", input; "execution.id", string execCtx.ExecutionId])
                     s)
 
             // === T: Tool Protocol — Record available tools in span ===
@@ -218,9 +178,6 @@ module EtclovgHarness =
                 | _ -> None
             // O: hand the orchestrator a tracing context so every tool it invokes is recorded
             // as a child span (tool name, parameters, round) under agent.execute.
-            match box agent, execSpan, config.Tracer with
-            | (:? OrchestratorBase as orch), Some parent, Some tracer -> orch.TraceContext <- Some (tracer, parent)
-            | _ -> ()
             let previousMetrics = RuntimeMetrics.get ()
             let previousJournal = RuntimeExecutionJournal.get ()
             RuntimeMetrics.set config.Metrics
@@ -231,9 +188,6 @@ module EtclovgHarness =
                     try
                         return! env.ExecuteAsync execCtx agentContext agent input
                     finally
-                        match box agent with
-                        | :? OrchestratorBase as orch -> orch.TraceContext <- None
-                        | _ -> ()
                         RuntimeMetrics.set previousMetrics
                         RuntimeExecutionJournal.set previousJournal
                 }
@@ -249,7 +203,7 @@ module EtclovgHarness =
 
             match execResult with
             | Error limitExceeded ->
-                let! _ = AgentLifecycle.failAsync agent.Id (exn (sprintf "Limit exceeded: %A" limitExceeded)) _startedLc
+                let! _ = AgentLifecycle.failAsync agent.Metadata.Id (exn (sprintf "Limit exceeded: %A" limitExceeded)) _startedLc
                 trace <- trace |> Verification.fail (sprintf "Limit exceeded: %A" limitExceeded)
                 match config.TraceStore with
                 | Some store -> do! store.SaveAsync trace
@@ -275,9 +229,9 @@ module EtclovgHarness =
                     match config.AuditLog with
                     | Some audit ->
                         let violationNames = constitutionViolations |> List.map (fun v -> v.RuleId)
-                        do! audit.RecordAsync (AuditLog.constitutionCheck agent.Id violationNames (Some execCtx.ExecutionId))
+                        do! audit.RecordAsync (AuditLog.constitutionCheck agent.Metadata.Id violationNames (Some execCtx.ExecutionId))
                     | None -> ()
-                    let! _ = AgentLifecycle.failAsync agent.Id (exn "Constitution violation") _startedLc
+                    let! _ = AgentLifecycle.failAsync agent.Metadata.Id (exn "Constitution violation") _startedLc
                     // End root span on constitution violation
                     match rootSpan, config.Tracer with
                     | Some s, Some tracer -> tracer.EndSpan s (SpanStatus.Error "Constitution violation")
@@ -298,7 +252,7 @@ module EtclovgHarness =
                 else
 
                 // === L: Lifecycle — Complete ===
-                let! _ = AgentLifecycle.completeAsync agent.Id response _startedLc
+                let! _ = AgentLifecycle.completeAsync agent.Metadata.Id response _startedLc
 
                 // === V: Complete trace and store ===
                 trace <- trace |> Verification.addStep (TraceAction.LlmCall "unknown") input response sw.ElapsedMilliseconds
@@ -309,7 +263,7 @@ module EtclovgHarness =
                     match config.Judge with
                     | Some judge ->
                         task {
-                            let! j = judge.JudgeAsync trace
+                            let! j = Judge.judgeAsync trace judge
                             return Some j
                         }
                     | None -> Task.FromResult None
@@ -319,7 +273,7 @@ module EtclovgHarness =
                     match config.TraceStore with
                     | Some store ->
                         task {
-                            let! baseline = store.GetBaselineAsync agent.Id input
+                            let! baseline = store.GetBaselineAsync agent.Metadata.Id input
                             match baseline with
                             | Some b -> return Some (Regression.detect b trace)
                             | None -> return None
@@ -334,7 +288,7 @@ module EtclovgHarness =
                 // === G: Audit ===
                 match config.AuditLog with
                 | Some audit ->
-                    do! audit.RecordAsync (AuditLog.llmCall agent.Id "unknown" (Some execCtx.ExecutionId))
+                    do! audit.RecordAsync (AuditLog.llmCall agent.Metadata.Id "unknown" (Some execCtx.ExecutionId))
                 | None -> ()
 
                 // === O: End root span ===
@@ -344,7 +298,7 @@ module EtclovgHarness =
                     tracer.EndSpan s SpanStatus.Ok
                 | _ -> ()
 
-                config.Bus.PublishAsync(NaoEvent.TurnProgress(config.Scope, ProgressSignal.AnswerProduced response)) |> ignore
+                EventBus.publishAsync (NaoEvent.TurnProgress(config.Scope, ProgressSignal.AnswerProduced response)) config.Bus |> ignore
 
                 return
                     { Response = Some response

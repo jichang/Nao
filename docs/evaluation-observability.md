@@ -4,22 +4,24 @@ Quality, safety, latency, reliability, and cost are runtime properties. Nao's ev
 
 ## Current evaluation model
 
-`Nao.Eval` provides evaluation cases, datasets, evaluators, runners, and reports.
+`Nao.Eval` provides evaluation cases, datasets, functional `Evaluator` records, runners, and reports. Built-in modules construct and compose evaluators without implementation classes.
 
 ```fsharp
 let dataset =
     { Name = "math"
-      Cases = [ EvalCase.create "1" "2+2" (Some "4") ] }
+    Cases = [ EvalCase.create "1" "2+2" "4" ] }
+
+let evaluator = ExactMatch.evaluator
 
 let! report =
     EvalRunner.runDatasetAsync
+    EvalRunnerConfig.Default
         evaluator
         agent
         dataset
-        EvalRunnerConfig.Default
 ```
 
-Built-in evaluation approaches include exact match, containment, regular expressions, composites, verification, and LLM judges.
+Built-in evaluation approaches include exact match, containment, regular expressions, composites, verification, and LLM judges. Verification uses immutable `Judge` records; `VerificationJudge.fromJudge` adapts one to an `Evaluator`, while `Nao.Agents.LlmJudge.create` constructs the execution-trace judge without a class or interface implementation.
 
 ## Evaluator selection
 

@@ -10,11 +10,11 @@ type CompactionStrategy =
     /// Drop oldest messages (simple truncation)
     | DropOldest
     /// Summarize old messages using LLM
-    | Summarize of provider: ILlmProvider * options: CompletionOptions
+    | Summarize of provider: LlmProvider * options: CompletionOptions
     /// Keep only messages matching a relevance filter
     | RelevanceFilter of scorer: (Message -> float) * threshold: float
     /// Hierarchical: summarize in chunks, then summarize summaries
-    | Hierarchical of chunkSize: int * provider: ILlmProvider * options: CompletionOptions
+    | Hierarchical of chunkSize: int * provider: LlmProvider * options: CompletionOptions
     /// Composite: apply multiple strategies in sequence
     | Composite of strategies: CompactionStrategy list
 
@@ -72,7 +72,7 @@ module ContextCompaction =
               Summary = None }
 
     /// Summarize a chunk of messages using LLM
-    let summarizeChunkAsync (provider: ILlmProvider) (options: CompletionOptions) (messages: Message list) : Task<string> =
+    let summarizeChunkAsync (provider: LlmProvider) (options: CompletionOptions) (messages: Message list) : Task<string> =
         task {
             let content =
                 messages
@@ -90,7 +90,7 @@ module ContextCompaction =
     /// Apply hierarchical summarization: chunk -> summarize -> combine
     let hierarchicalCompactAsync
         (chunkSize: int)
-        (provider: ILlmProvider)
+        (provider: LlmProvider)
         (options: CompletionOptions)
         (tokenBudget: int)
         (conversation: Conversation)

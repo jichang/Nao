@@ -94,6 +94,7 @@ Hosts configure identities, policies, workspaces, models, secrets, persistence, 
 
 ## Read next
 
+- [Capability inventory](capabilities.md)
 - [Architecture and ETCLOVG](architecture.md)
 - [Agents and orchestration](agents-orchestration.md)
 - [Tools, security, and governance](tools-governance.md)

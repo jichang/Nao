@@ -66,12 +66,6 @@ type OpenAIChoiceDto() =
 
 [<AllowNullLiteral>]
 type OpenAIUsageDto() =
-    [<JsonPropertyName("prompt_tokens")>]
-    member val PromptTokens = Nullable<int>() with get, set
-
-    [<JsonPropertyName("completion_tokens")>]
-    member val CompletionTokens = Nullable<int>() with get, set
-
     [<JsonPropertyName("total_tokens")>]
     member val TotalTokens = Nullable<int>() with get, set
 

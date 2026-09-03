@@ -6,7 +6,6 @@ open System.Text.Json
 open Microsoft.VisualStudio.TestTools.UnitTesting
 open Microsoft.Data.Sqlite
 open Nao.Agents
-open Nao.Agents
 open Nao.Persistence
 
 let private agent = "test-agent"
@@ -30,7 +29,7 @@ let private memEntry key value =
 
 // ---------------- MemoryStore ----------------
 
-let private runMemoryStoreRoundTrip (store: IMemoryStore) =
+let private runMemoryStoreRoundTrip (store: MemoryStore) =
     task {
         do! store.SaveAsync agent (memEntry "alpha" "v1")
         do! store.SaveAsync agent (memEntry "beta" "v2")
@@ -73,14 +72,14 @@ type MemoryStoreTests() =
 [<TestClass>]
 type MemoryToolTests() =
 
-    let runTool (tool: ITool) input =
-        match tool.RunAsync(AgentContext.allowAll, input).GetAwaiter().GetResult() with
+    let runTool (tool: Tool) input =
+        match tool.RunAsync AgentContext.allowAll input |> fun task -> task.GetAwaiter().GetResult() with
         | Ok output -> output
         | Error failure -> Assert.Fail(failure.Message); ""
 
     [<TestMethod>]
     member _.RememberedFactCanBeDeliberatelySearched() =
-        let store = InMemoryStore() :> IMemoryStore
+        let store = InMemoryStore.create ()
         let owner = "session:user/one"
         let tools = MemoryTools.create MemoryToolConfig.Default store (fun () -> owner)
         let remember = tools |> List.find (fun tool -> tool.Name = "memory_remember")
@@ -96,7 +95,7 @@ type MemoryToolTests() =
 
     [<TestMethod>]
     member _.SearchIsBoundedAndOwnerScoped() =
-        let store = InMemoryStore() :> IMemoryStore
+        let store = InMemoryStore.create ()
         let owner = "session:user/active"
         let otherOwner = "session:user/other"
         let itemCount = Random.Shared.Next(3, 8)
@@ -116,7 +115,7 @@ type MemoryToolTests() =
 
     [<TestMethod>]
     member _.ForgetRequiresPolicyAndExplicitConfirmation() =
-        let store = InMemoryStore() :> IMemoryStore
+        let store = InMemoryStore.create ()
         let owner = "session:user/forget"
         (store.SaveAsync owner (memEntry "obsolete-decision" "Use the old format")).GetAwaiter().GetResult()
 
@@ -125,7 +124,7 @@ type MemoryToolTests() =
 
         let config = { MemoryToolConfig.Default with ForgetEnabled = true }
         let forget = MemoryTools.create config store (fun () -> owner) |> List.find (fun tool -> tool.Name = "memory_forget")
-        match forget.RunAsync(AgentContext.allowAll, "{\"key\":\"obsolete-decision\",\"reason\":\"Replace old decision\",\"confirmedByUser\":false}").GetAwaiter().GetResult() with
+        match forget.RunAsync AgentContext.allowAll "{\"key\":\"obsolete-decision\",\"reason\":\"Replace old decision\",\"confirmedByUser\":false}" |> fun task -> task.GetAwaiter().GetResult() with
         | Ok _ -> Assert.Fail("Unconfirmed deletion unexpectedly succeeded.")
         | Error failure -> Assert.AreEqual(ToolFailureKind.InputContract, failure.Kind)
 
@@ -143,7 +142,7 @@ let private execRecord (tool: string) (at: DateTimeOffset) =
       Reverted = false
       Metadata = Map.ofList [ "m", "1" ] }
 
-let private runJournalRoundTrip (journal: IExecutionJournal) =
+let private runJournalRoundTrip (journal: ExecutionJournal) =
     task {
         let t0 = DateTimeOffset.UtcNow
         let r1 = execRecord "tool-a" (t0.AddSeconds 1.0)
@@ -181,7 +180,7 @@ type ExecutionJournalTests() =
 
 // ---------------- SemanticMemory ----------------
 
-let private runSemanticRoundTrip (memory: ISemanticMemory) =
+let private runSemanticRoundTrip (memory: SemanticMemory) =
     task {
         do! memory.StoreAsync agent "doc1" "the quick brown fox"
         do! memory.StoreAsync agent "doc2" "lazy dog sleeps"
@@ -200,13 +199,13 @@ type SemanticMemoryTests() =
     [<TestMethod>]
     member _.AdoSemanticMemory_RoundTrips() =
         let factory, _ = sqliteFactory ()
-        let provider = SimpleEmbeddingProvider() :> IEmbeddingProvider
+        let provider = SimpleEmbeddingProvider.create ()
         (runSemanticRoundTrip (SemanticMemories.ado provider factory)).GetAwaiter().GetResult()
 
     [<TestMethod>]
     member _.FileSemanticMemory_RoundTrips() =
         let dir = tempDir ()
-        let provider = SimpleEmbeddingProvider() :> IEmbeddingProvider
+        let provider = SimpleEmbeddingProvider.create ()
         (runSemanticRoundTrip (SemanticMemories.file provider dir)).GetAwaiter().GetResult()
 
 // ---------------- AuditLog ----------------
@@ -214,7 +213,7 @@ type SemanticMemoryTests() =
 let private auditEntry permitted execId : AuditEntry =
     { Id = Guid.NewGuid(); Timestamp = DateTimeOffset.UtcNow; AgentId = agent; Action = AuditAction.ToolInvocation "search"; Input = Some "query"; Output = Some "result"; Permitted = permitted; Decision = PermissionDecision.Allow; ConstitutionViolations = [ "none" ]; ExecutionId = execId; Metadata = Map.ofList [ "src", "test" ] }
 
-let private runAuditRoundTrip (log: IAuditLog) =
+let private runAuditRoundTrip (log: AuditLog) =
     task {
         let exec = Guid.NewGuid()
         let since = DateTimeOffset.UtcNow.AddMinutes -1.0

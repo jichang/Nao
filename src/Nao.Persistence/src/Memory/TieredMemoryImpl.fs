@@ -5,63 +5,63 @@ open System.Threading.Tasks
 open System.Collections.Concurrent
 open Nao.Agents
 
-/// In-memory implementation of ITieredMemory with promotion, demotion, and eviction
-type InMemoryTieredMemory(config: TieredMemoryConfig, ?embeddingProvider: IEmbeddingProvider) =
-    let entries = ConcurrentDictionary<string, TieredMemoryEntry>()
+/// In-memory tiered-memory factory with promotion, demotion, and eviction.
+module InMemoryTieredMemory =
+    let create (config: TieredMemoryConfig) (embeddingProvider: EmbeddingProvider option) : TieredMemory =
+        let entries = ConcurrentDictionary<string, TieredMemoryEntry>()
 
-    let tierOf (entry: TieredMemoryEntry) = entry.Tier
+        let tierOf (entry: TieredMemoryEntry) = entry.Tier
 
-    let entriesInTier tier =
-        entries.Values
-        |> Seq.filter (fun e -> e.Tier = tier)
-        |> Seq.toList
+        let entriesInTier tier =
+            entries.Values
+            |> Seq.filter (fun e -> e.Tier = tier)
+            |> Seq.toList
 
-    let capacityFor tier =
-        match tier with
-        | MemoryTier.ShortTerm -> config.ShortTermCapacity
-        | MemoryTier.MidTerm -> config.MidTermCapacity
-        | MemoryTier.LongTerm -> Int32.MaxValue
+        let capacityFor tier =
+            match tier with
+            | MemoryTier.ShortTerm -> config.ShortTermCapacity
+            | MemoryTier.MidTerm -> config.MidTermCapacity
+            | MemoryTier.LongTerm -> Int32.MaxValue
 
-    let shouldPromote (entry: TieredMemoryEntry) =
-        match config.PromotionPolicy with
-        | MemoryPromotionPolicy.AccessThreshold count -> entry.AccessCount >= count
-        | MemoryPromotionPolicy.RecencyBased maxAge ->
-            (DateTimeOffset.UtcNow - entry.Timestamp) <= maxAge
-        | MemoryPromotionPolicy.Manual -> false
+        let shouldPromote (entry: TieredMemoryEntry) =
+            match config.PromotionPolicy with
+            | MemoryPromotionPolicy.AccessThreshold count -> entry.AccessCount >= count
+            | MemoryPromotionPolicy.RecencyBased maxAge ->
+                (DateTimeOffset.UtcNow - entry.Timestamp) <= maxAge
+            | MemoryPromotionPolicy.Manual -> false
 
-    let nextTier tier =
-        match tier with
-        | MemoryTier.ShortTerm -> Some MemoryTier.MidTerm
-        | MemoryTier.MidTerm -> Some MemoryTier.LongTerm
-        | MemoryTier.LongTerm -> None
+        let nextTier tier =
+            match tier with
+            | MemoryTier.ShortTerm -> Some MemoryTier.MidTerm
+            | MemoryTier.MidTerm -> Some MemoryTier.LongTerm
+            | MemoryTier.LongTerm -> None
 
-    let isExpired (entry: TieredMemoryEntry) =
-        match entry.Tier, config.MidTermTtl with
-        | MemoryTier.MidTerm, Some ttl ->
-            (DateTimeOffset.UtcNow - entry.Timestamp) > ttl
-        | _ -> false
+        let isExpired (entry: TieredMemoryEntry) =
+            match entry.Tier, config.MidTermTtl with
+            | MemoryTier.MidTerm, Some ttl ->
+                (DateTimeOffset.UtcNow - entry.Timestamp) > ttl
+            | _ -> false
 
-    let evictFromTier tier =
-        let inTier = entriesInTier tier
-        let capacity = capacityFor tier
-        if inTier.Length > capacity then
-            let toEvict =
-                inTier
-                |> List.sortBy (fun e -> e.AccessCount, e.Timestamp)
-                |> List.take (inTier.Length - capacity)
-            for e in toEvict do
-                entries.TryRemove(e.Key) |> ignore
-            toEvict.Length
-        else 0
+        let evictFromTier tier =
+            let inTier = entriesInTier tier
+            let capacity = capacityFor tier
+            if inTier.Length > capacity then
+                let toEvict =
+                    inTier
+                    |> List.sortBy (fun e -> e.AccessCount, e.Timestamp)
+                    |> List.take (inTier.Length - capacity)
+                for e in toEvict do
+                    entries.TryRemove(e.Key) |> ignore
+                toEvict.Length
+            else 0
 
-    interface ITieredMemory with
-        member _.StoreAsync(entry: TieredMemoryEntry) =
+        { StoreAsync = fun (entry: TieredMemoryEntry) ->
             entries.AddOrUpdate(entry.Key, entry, fun _ _ -> entry) |> ignore
             if config.AutoEvict then
                 evictFromTier entry.Tier |> ignore
             task { return () }
 
-        member _.RetrieveAsync (query: string) (maxResults: int) =
+          RetrieveAsync = fun (query: string) (maxResults: int) ->
             task {
                 let allEntries = entries.Values |> Seq.toList
                 let! ranked =
@@ -109,13 +109,13 @@ type InMemoryTieredMemory(config: TieredMemoryConfig, ?embeddingProvider: IEmbed
                 return results
             }
 
-        member _.RetrieveFromTierAsync (tier: MemoryTier) (maxResults: int) =
+          RetrieveFromTierAsync = fun (tier: MemoryTier) (maxResults: int) ->
             entriesInTier tier
             |> List.sortByDescending (fun e -> e.Timestamp)
             |> List.truncate maxResults
             |> Task.FromResult
 
-        member _.PromoteAsync (key: string) (targetTier: MemoryTier) =
+          PromoteAsync = fun (key: string) (targetTier: MemoryTier) ->
             match entries.TryGetValue(key) with
             | true, entry ->
                 let promoted = { entry with Tier = targetTier; Timestamp = DateTimeOffset.UtcNow }
@@ -123,7 +123,7 @@ type InMemoryTieredMemory(config: TieredMemoryConfig, ?embeddingProvider: IEmbed
             | false, _ -> ()
             task { return () }
 
-        member _.EvictAsync() =
+          EvictAsync = fun () ->
             let mutable totalEvicted = 0
             // Evict expired mid-term entries
             let expired =
@@ -136,4 +136,4 @@ type InMemoryTieredMemory(config: TieredMemoryConfig, ?embeddingProvider: IEmbed
             // Evict overflow from each tier
             totalEvicted <- totalEvicted + evictFromTier MemoryTier.ShortTerm
             totalEvicted <- totalEvicted + evictFromTier MemoryTier.MidTerm
-            task { return totalEvicted }
+            task { return totalEvicted } }

@@ -9,21 +9,24 @@ module ProviderFactory =
     let private optionalKey (key: string) =
         if String.IsNullOrWhiteSpace key then None else Some key
 
-    let create (providerType: ProviderType) : ILlmProvider =
+    let private openAi name baseUrl model apiKey timeout =
+        OpenAICompatibleProvider.create name baseUrl model apiKey timeout
+
+    let create (providerType: ProviderType) : LlmProvider =
         match providerType with
         // These providers all speak the same OpenAI-compatible
         // /v1/chat/completions API, so they share one client.
         | OpenAI config ->
-            new OpenAICompatibleProvider("OpenAI", config.BaseUrl, config.Model, optionalKey config.ApiKey, ?timeoutSeconds = config.TimeoutSeconds) :> ILlmProvider
+            openAi "OpenAI" config.BaseUrl config.Model (optionalKey config.ApiKey) config.TimeoutSeconds
         | DeepSeek config ->
-            new OpenAICompatibleProvider("DeepSeek", config.BaseUrl, config.Model, optionalKey config.ApiKey, ?timeoutSeconds = config.TimeoutSeconds) :> ILlmProvider
+            openAi "DeepSeek" config.BaseUrl config.Model (optionalKey config.ApiKey) config.TimeoutSeconds
         | Kimi config ->
-            new OpenAICompatibleProvider("Kimi", config.BaseUrl, config.Model, optionalKey config.ApiKey, ?timeoutSeconds = config.TimeoutSeconds) :> ILlmProvider
+            openAi "Kimi" config.BaseUrl config.Model (optionalKey config.ApiKey) config.TimeoutSeconds
         | Vllm config ->
-            new OpenAICompatibleProvider("vLLM", config.BaseUrl, config.Model, config.ApiKey, ?timeoutSeconds = config.TimeoutSeconds) :> ILlmProvider
+            openAi "vLLM" config.BaseUrl config.Model config.ApiKey config.TimeoutSeconds
         | LlamaCpp config ->
-            new OpenAICompatibleProvider("llama.cpp", config.BaseUrl, config.Model, None, ?timeoutSeconds = config.TimeoutSeconds) :> ILlmProvider
+            openAi "llama.cpp" config.BaseUrl config.Model None config.TimeoutSeconds
         | Ollama config ->
-            new OllamaProvider(config) :> ILlmProvider
+            OllamaProvider.create config
         | Anthropic config ->
-            new AnthropicProvider(config) :> ILlmProvider
+            AnthropicProvider.create config

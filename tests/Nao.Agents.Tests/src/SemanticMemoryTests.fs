@@ -7,14 +7,14 @@ open Nao.Persistence
 [<TestClass>]
 type SemanticMemoryTests() =
 
-    let agentId = { Name = "semantic-agent"; Description = "test" }
-    let embeddingProvider = SimpleEmbeddingProvider() :> IEmbeddingProvider
+    let agentId = "semantic-agent"
+    let embeddingProvider = SimpleEmbeddingProvider.create ()
 
     [<TestMethod>]
     member _.StoreAndRetrieve_FindsRelevantMemory() =
         // Use a fresh embedding provider so all entries share the same vocabulary
-        let provider = SimpleEmbeddingProvider() :> IEmbeddingProvider
-        let memory = InMemorySemanticMemory(provider) :> ISemanticMemory
+        let provider = SimpleEmbeddingProvider.create ()
+        let memory = InMemorySemanticMemory.create provider
 
         // Store entries with distinct vocabulary
         (memory.StoreAsync agentId "cat-fact" "cats are fluffy animals that purr").Result
@@ -28,7 +28,7 @@ type SemanticMemoryTests() =
 
     [<TestMethod>]
     member _.StoreAndRetrieve_TopKLimitsResults() =
-        let memory = InMemorySemanticMemory(embeddingProvider) :> ISemanticMemory
+        let memory = InMemorySemanticMemory.create embeddingProvider
         (memory.StoreAsync agentId "a" "first memory content").Result
         (memory.StoreAsync agentId "b" "second memory content").Result
         (memory.StoreAsync agentId "c" "third memory content").Result
@@ -38,7 +38,7 @@ type SemanticMemoryTests() =
 
     [<TestMethod>]
     member _.Remove_DeletesMemory() =
-        let memory = InMemorySemanticMemory(embeddingProvider) :> ISemanticMemory
+        let memory = InMemorySemanticMemory.create embeddingProvider
         (memory.StoreAsync agentId "temp" "temporary data").Result
         (memory.RemoveAsync agentId "temp").Result
 
@@ -47,7 +47,7 @@ type SemanticMemoryTests() =
 
     [<TestMethod>]
     member _.Store_OverwritesExistingKey() =
-        let memory = InMemorySemanticMemory(embeddingProvider) :> ISemanticMemory
+        let memory = InMemorySemanticMemory.create embeddingProvider
         (memory.StoreAsync agentId "fact" "old value").Result
         (memory.StoreAsync agentId "fact" "new updated value").Result
 
@@ -57,15 +57,15 @@ type SemanticMemoryTests() =
 
     [<TestMethod>]
     member _.Retrieve_ReturnsEmptyWhenNoMemories() =
-        let memory = InMemorySemanticMemory(embeddingProvider) :> ISemanticMemory
+        let memory = InMemorySemanticMemory.create embeddingProvider
         let results = (memory.RetrieveAsync agentId "anything" 5).Result
         Assert.AreEqual(0, results.Length)
 
     [<TestMethod>]
     member _.IsolatesBetweenAgents() =
-        let memory = InMemorySemanticMemory(embeddingProvider) :> ISemanticMemory
-        let agent1 = { Name = "agent-1"; Description = "" }
-        let agent2 = { Name = "agent-2"; Description = "" }
+        let memory = InMemorySemanticMemory.create embeddingProvider
+        let agent1 = "agent-1"
+        let agent2 = "agent-2"
 
         (memory.StoreAsync agent1 "secret" "agent 1 secret data").Result
         (memory.StoreAsync agent2 "secret" "agent 2 secret data").Result

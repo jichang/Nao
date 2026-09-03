@@ -10,22 +10,20 @@ open System.Threading.Tasks
 /// supply a factory backed by any provider (Microsoft.Data.Sqlite, Npgsql,
 /// Microsoft.Data.SqlClient, MySqlConnector, ...). This keeps a single unified
 /// implementation that works against any ADO.NET-compatible database.
-type IDbConnectionFactory =
+type DbConnectionFactory =
     /// Create a brand new (closed) connection.
-    abstract member Create: unit -> DbConnection
+    { Create: unit -> DbConnection }
 
 /// Helpers for building connection factories.
 module DbConnectionFactory =
 
     /// Build a factory from a plain function (e.g. fun () -> new SqliteConnection(cs)).
-    let ofFunc (create: unit -> DbConnection) : IDbConnectionFactory =
-        { new IDbConnectionFactory with
-            member _.Create() = create () }
+    let ofFunc (create: unit -> DbConnection) : DbConnectionFactory =
+        { Create = create }
 
     /// Build a factory from a DbProviderFactory + connection string.
-    let ofProvider (provider: DbProviderFactory) (connectionString: string) : IDbConnectionFactory =
-        { new IDbConnectionFactory with
-            member _.Create() =
+    let ofProvider (provider: DbProviderFactory) (connectionString: string) : DbConnectionFactory =
+        { Create = fun () ->
                 let conn = provider.CreateConnection()
                 conn.ConnectionString <- connectionString
                 conn }
@@ -44,7 +42,7 @@ module Ado =
         cmd.Parameters.Add(p) |> ignore
 
     /// Execute a non-query statement, returning affected row count.
-    let executeNonQuery (factory: IDbConnectionFactory) (sql: string) (parameters: (string * obj) list) : Task<int> =
+    let executeNonQuery (factory: DbConnectionFactory) (sql: string) (parameters: (string * obj) list) : Task<int> =
         task {
             use conn = factory.Create()
             do! conn.OpenAsync()
@@ -56,7 +54,7 @@ module Ado =
         }
 
     /// Execute several statements inside a single transaction.
-    let executeTransaction (factory: IDbConnectionFactory) (statements: (string * (string * obj) list) list) : Task<unit> =
+    let executeTransaction (factory: DbConnectionFactory) (statements: (string * (string * obj) list) list) : Task<unit> =
         task {
             use conn = factory.Create()
             do! conn.OpenAsync()
@@ -73,7 +71,7 @@ module Ado =
         }
 
     /// Run a query and project each row with the supplied mapper.
-    let query (factory: IDbConnectionFactory) (sql: string) (parameters: (string * obj) list) (map: DbDataReader -> 'a) : Task<'a list> =
+    let query (factory: DbConnectionFactory) (sql: string) (parameters: (string * obj) list) (map: DbDataReader -> 'a) : Task<'a list> =
         task {
             use conn = factory.Create()
             do! conn.OpenAsync()

@@ -56,49 +56,65 @@ type ResilienceConfig =
           Fallback = FallbackStrategy.None
           AttemptTimeout = None }
 
-/// Mutable circuit breaker state tracker
-type CircuitBreaker(config: CircuitBreakerConfig) =
-    let mutable failures = 0
-    let mutable successes = 0
-    let mutable state = CircuitState.Closed
-    let mutable openedAt = DateTimeOffset.MinValue
+/// Closure-backed circuit breaker state tracker.
+[<NoEquality; NoComparison>]
+type CircuitBreaker =
+    private
+        { CurrentState: unit -> CircuitState
+          RecordSuccessOperation: unit -> unit
+          RecordFailureOperation: unit -> unit
+          CanExecuteOperation: unit -> bool }
 
-    member _.State = state
+    member breaker.State = breaker.CurrentState ()
+    member breaker.RecordSuccess() = breaker.RecordSuccessOperation ()
+    member breaker.RecordFailure() = breaker.RecordFailureOperation ()
+    member breaker.CanExecute() = breaker.CanExecuteOperation ()
 
-    member _.RecordSuccess() =
-        match state with
-        | CircuitState.HalfOpen ->
-            successes <- successes + 1
-            if successes >= config.SuccessThreshold then
-                state <- CircuitState.Closed
-                failures <- 0
+[<RequireQualifiedAccess>]
+module CircuitBreaker =
+    let create (config: CircuitBreakerConfig) : CircuitBreaker =
+        let mutable failures = 0
+        let mutable successes = 0
+        let mutable state = CircuitState.Closed
+
+        let recordSuccess () =
+            match state with
+            | CircuitState.HalfOpen ->
+                successes <- successes + 1
+                if successes >= config.SuccessThreshold then
+                    state <- CircuitState.Closed
+                    failures <- 0
+                    successes <- 0
+            | CircuitState.Closed -> failures <- 0
+            | CircuitState.Open _ -> ()
+
+        let recordFailure () =
+            match state with
+            | CircuitState.Closed ->
+                failures <- failures + 1
+                if failures >= config.FailureThreshold then
+                    state <- CircuitState.Open(DateTimeOffset.UtcNow + config.OpenDuration)
+            | CircuitState.HalfOpen ->
+                state <- CircuitState.Open(DateTimeOffset.UtcNow + config.OpenDuration)
                 successes <- 0
-        | CircuitState.Closed ->
-            failures <- 0
-        | _ -> ()
+            | CircuitState.Open _ -> ()
 
-    member _.RecordFailure() =
-        match state with
-        | CircuitState.Closed ->
-            failures <- failures + 1
-            if failures >= config.FailureThreshold then
-                state <- CircuitState.Open (DateTimeOffset.UtcNow + config.OpenDuration)
-                openedAt <- DateTimeOffset.UtcNow
-        | CircuitState.HalfOpen ->
-            state <- CircuitState.Open (DateTimeOffset.UtcNow + config.OpenDuration)
-            successes <- 0
-        | _ -> ()
+        let canExecute () =
+            match state with
+            | CircuitState.Closed
+            | CircuitState.HalfOpen -> true
+            | CircuitState.Open until ->
+                if DateTimeOffset.UtcNow >= until then
+                    state <- CircuitState.HalfOpen
+                    successes <- 0
+                    true
+                else
+                    false
 
-    member _.CanExecute() =
-        match state with
-        | CircuitState.Closed -> true
-        | CircuitState.HalfOpen -> true
-        | CircuitState.Open until ->
-            if DateTimeOffset.UtcNow >= until then
-                state <- CircuitState.HalfOpen
-                successes <- 0
-                true
-            else false
+        { CurrentState = fun () -> state
+          RecordSuccessOperation = recordSuccess
+          RecordFailureOperation = recordFailure
+          CanExecuteOperation = canExecute }
 
 /// Resilience module for executing with retry, circuit breaker, and fallback
 module Resilience =

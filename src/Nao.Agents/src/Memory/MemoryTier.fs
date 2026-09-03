@@ -60,15 +60,15 @@ type TieredMemoryConfig =
           MidTermTtl = Some (TimeSpan.FromHours 24.0)
           AutoEvict = true }
 
-/// Interface for tiered memory management
-type ITieredMemory =
-    /// Store a memory at a specific tier
-    abstract member StoreAsync: TieredMemoryEntry -> Task<unit>
-    /// Retrieve relevant memories across all tiers
-    abstract member RetrieveAsync: query: string -> maxResults: int -> Task<TieredMemoryEntry list>
-    /// Retrieve memories from a specific tier
-    abstract member RetrieveFromTierAsync: MemoryTier -> maxResults: int -> Task<TieredMemoryEntry list>
-    /// Promote a memory to a higher tier
-    abstract member PromoteAsync: key: string -> targetTier: MemoryTier -> Task<unit>
-    /// Evict memories that exceed capacity or TTL
-    abstract member EvictAsync: unit -> Task<int>
+/// Functional tiered-memory operations.
+type TieredMemory =
+    { /// Store a memory at a specific tier
+      StoreAsync: TieredMemoryEntry -> Task<unit>
+      /// Retrieve relevant memories across all tiers
+      RetrieveAsync: string -> int -> Task<TieredMemoryEntry list>
+      /// Retrieve memories from a specific tier
+      RetrieveFromTierAsync: MemoryTier -> int -> Task<TieredMemoryEntry list>
+      /// Promote a memory to a higher tier
+      PromoteAsync: string -> MemoryTier -> Task<unit>
+      /// Evict memories that exceed capacity or TTL
+      EvictAsync: unit -> Task<int> }

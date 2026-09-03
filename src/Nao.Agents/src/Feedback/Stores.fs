@@ -23,18 +23,18 @@ module FeedbackJson =
     let indentedOptions = options
     let serializeIndented (value: 'a) : string = serialize value
 
-// ─── Store interfaces ───
+// ─── Store capabilities ───
 
 /// Persists completed turn records so feedback can be analysed against them later.
-type ITurnStore =
-    abstract member SaveAsync: TurnRecord -> Task
-    abstract member GetAsync: turnId: string -> Task<TurnRecord option>
-    abstract member GetForSessionAsync: sessionId: string -> Task<TurnRecord list>
+type TurnStore =
+    { SaveAsync: TurnRecord -> Task
+      GetAsync: string -> Task<TurnRecord option>
+      GetForSessionAsync: string -> Task<TurnRecord list> }
 
 /// Persists user feedback entries.
-type IFeedbackStore =
-    abstract member SaveAsync: Feedback -> Task
-    abstract member GetForTurnAsync: turnId: string -> Task<Feedback list>
-    abstract member GetForSessionAsync: sessionId: string -> Task<Feedback list>
+type FeedbackStore =
+    { SaveAsync: Feedback -> Task
+      GetForTurnAsync: string -> Task<Feedback list>
+      GetForSessionAsync: string -> Task<Feedback list>
     /// Every feedback entry across all sessions — the input to cross-session aggregation.
-    abstract member GetAllAsync: unit -> Task<Feedback list>
+      GetAllAsync: unit -> Task<Feedback list> }

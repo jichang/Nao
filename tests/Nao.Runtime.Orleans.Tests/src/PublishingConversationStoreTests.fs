@@ -9,19 +9,26 @@ open Nao.Persistence
 open Nao.Runtime.Orleans
 
 /// Records the events published to the bus.
-type private ConvRecordingConsumer() =
-    let received = ResizeArray<NaoEvent>()
-    member _.Received = received
-    member _.Signals =
-        received
-        |> Seq.choose (function
-            | ConversationCaptured(_, s) -> Some s
-            | _ -> None)
-        |> List.ofSeq
-    interface IEventConsumer with
-        member _.HandleAsync(evt) =
-            received.Add evt
-            Task.CompletedTask
+type private ConvRecordingConsumer =
+    { Consumer: EventConsumer
+      Received: ResizeArray<NaoEvent>
+      Signals: unit -> ConversationSignal list }
+
+module private PublishingConversationStoreTestHelpers =
+    let convRecordingConsumer () =
+        let received = ResizeArray<NaoEvent>()
+        let signals () =
+            received
+            |> Seq.choose (function
+                | ConversationCaptured(_, s) -> Some s
+                | _ -> None)
+            |> List.ofSeq
+        let consumer = EventConsumer.create (fun evt ->
+                received.Add evt
+                Task.CompletedTask)
+        { Consumer = consumer; Received = received; Signals = signals }
+
+open PublishingConversationStoreTestHelpers
 
 [<TestClass>]
 type PublishingConversationStoreTests() =
@@ -45,10 +52,10 @@ type PublishingConversationStoreTests() =
 
     /// Build a tee over a real FileConversationStore + a subscribed recorder.
     let setup (root: string) =
-        let bus = InMemoryEventBus() :> IEventBus
-        let recorder = ConvRecordingConsumer()
-        bus.Subscribe(recorder :> IEventConsumer)
-        let store = PublishingConversationStore(bus, FileConversationStore(root)) :> IConversationStore
+        let bus = InMemoryEventBus.create ()
+        let recorder = convRecordingConsumer ()
+        EventBus.subscribe recorder.Consumer bus
+        let store = FileConversationStore.create root |> PublishingConversationStore.create bus
         store, recorder
 
     [<TestMethod>]
@@ -68,7 +75,7 @@ type PublishingConversationStoreTests() =
             Assert.IsFalse(persistedJson.Contains('\r'), "Persisted conversation JSON must remain compact")
 
             // ...and the write was teed to the bus.
-            match recorder.Signals with
+            match recorder.Signals () with
             | [ MessagesAppended("default", msgs) ] ->
                 Assert.AreEqual(1, msgs.Length)
                 Assert.AreEqual("hi", msgs.[0].Content)
@@ -113,7 +120,7 @@ type PublishingConversationStoreTests() =
             store.SaveAsync "dev/s1" "default" [| message "User" "a" "t1"; message "Assistant" "b" "t1" |]
             |> fun t -> t.Wait()
 
-            match recorder.Signals with
+            match recorder.Signals () with
             | [ ConversationSaved("default", msgs) ] -> Assert.AreEqual(2, msgs.Length)
             | other -> Assert.Fail(sprintf "expected ConversationSaved, got %A" other)
         finally
@@ -127,7 +134,7 @@ type PublishingConversationStoreTests() =
             store.AppendAsync "dev/s1" "default" [| message "User" "hi" "t1" |] |> fun t -> t.Wait()
             store.DeleteConversationAsync "dev/s1" "default" |> fun t -> t.Wait()
 
-            Assert.IsTrue(recorder.Signals |> List.contains (ConversationDeleted "default"))
+            Assert.IsTrue(recorder.Signals () |> List.contains (ConversationDeleted "default"))
         finally
             cleanup root
 
@@ -139,6 +146,30 @@ type PublishingConversationStoreTests() =
             store.AppendAsync "dev/s1" "default" [| message "User" "hi" "t1" |] |> fun t -> t.Wait()
             store.DeleteSessionAsync "dev/s1" |> fun t -> t.Wait()
 
-            Assert.IsTrue(recorder.Signals |> List.contains SessionConversationsDeleted)
+            Assert.IsTrue(recorder.Signals () |> List.contains SessionConversationsDeleted)
         finally
             cleanup root
+
+[<TestClass>]
+type WorkspaceRegistryTests() =
+
+    [<TestMethod>]
+    member _.Register_ReplacesAndRemovePreservesRegistrySemantics() =
+        let registry = WorkspaceRegistry.create ()
+        let id = WorkspaceId.create "workspace"
+        let first = WorkspaceDefinitions.Empty
+        let replacement = { WorkspaceDefinitions.Empty with Tools = [] }
+
+        Assert.IsTrue(registry.TryGet id |> Option.isNone)
+        registry.Register(id, first)
+        registry.Register(id, replacement)
+        Assert.AreSame(replacement, registry.Get id)
+        CollectionAssert.AreEquivalent([| id |], registry.ListKeys() |> List.toArray)
+        Assert.IsTrue(registry.Remove id)
+        Assert.IsFalse(registry.Remove id)
+        let throwsWhenMissing =
+            try
+                registry.Get id |> ignore
+                false
+            with _ -> true
+        Assert.IsTrue(throwsWhenMissing)

@@ -5,47 +5,47 @@ open System.Threading.Tasks
 open System.Collections.Concurrent
 open Nao.Agents
 
-/// In-memory knowledge graph implementation
-type InMemoryGraphMemory(?relationExtractor: string -> Task<GraphRelation list>) =
-    let nodes = ConcurrentDictionary<string, GraphNode>()
-    let relations = ConcurrentBag<GraphRelation>()
+/// In-memory knowledge-graph factory.
+module InMemoryGraphMemory =
+    let create (relationExtractor: (string -> Task<GraphRelation list>) option) : GraphMemory =
+        let nodes = ConcurrentDictionary<string, GraphNode>()
+        let relations = ConcurrentBag<GraphRelation>()
 
-    let getRelations () = relations |> Seq.toList
+        let getRelations () = relations |> Seq.toList
 
-    let findPaths (from': string) (to': string) (maxHops: int) =
-        let rec bfs (frontier: string list list) (visited: Set<string>) (depth: int) =
-            if depth > maxHops || frontier.IsEmpty then []
-            else
-                let nextFrontier = ResizeArray<string list>()
-                let mutable found = []
-                for path in frontier do
-                    let current = List.head path
-                    if current = to' then
-                        found <- (List.rev path) :: found
-                    else
-                        let neighbors =
-                            getRelations ()
-                            |> List.collect (fun r ->
-                                if r.Subject = current && not (Set.contains r.Object visited) then [r.Object]
-                                elif r.Object = current && not (Set.contains r.Subject visited) then [r.Subject]
-                                else [])
-                        for n in neighbors do
-                            nextFrontier.Add(n :: path)
-                if not found.IsEmpty then found
+        let findPaths (from': string) (to': string) (maxHops: int) =
+            let rec bfs (frontier: string list list) (visited: Set<string>) (depth: int) =
+                if depth > maxHops || frontier.IsEmpty then []
                 else
-                    let newVisited = frontier |> List.map List.head |> Set.ofList |> Set.union visited
-                    bfs (nextFrontier |> Seq.toList) newVisited (depth + 1)
-        bfs [[from']] (Set.singleton from') 0
+                    let nextFrontier = ResizeArray<string list>()
+                    let mutable found = []
+                    for path in frontier do
+                        let current = List.head path
+                        if current = to' then
+                            found <- (List.rev path) :: found
+                        else
+                            let neighbors =
+                                getRelations ()
+                                |> List.collect (fun r ->
+                                    if r.Subject = current && not (Set.contains r.Object visited) then [ r.Object ]
+                                    elif r.Object = current && not (Set.contains r.Subject visited) then [ r.Subject ]
+                                    else [])
+                            for n in neighbors do
+                                nextFrontier.Add(n :: path)
+                    if not found.IsEmpty then found
+                    else
+                        let newVisited = frontier |> List.map List.head |> Set.ofList |> Set.union visited
+                        bfs (nextFrontier |> Seq.toList) newVisited (depth + 1)
+            bfs [ [ from' ] ] (Set.singleton from') 0
 
-    interface IGraphMemory with
-        member _.UpsertNodeAsync(node: GraphNode) =
+        { UpsertNodeAsync = fun (node: GraphNode) ->
             nodes.AddOrUpdate(node.Id, node, fun _ existing ->
                 { node with
                     AccessCount = existing.AccessCount + 1
                     CreatedAt = existing.CreatedAt }) |> ignore
             task { return () }
 
-        member _.AddRelationAsync(relation: GraphRelation) =
+          AddRelationAsync = fun (relation: GraphRelation) ->
             // Deduplicate
             let exists =
                 getRelations ()
@@ -57,7 +57,7 @@ type InMemoryGraphMemory(?relationExtractor: string -> Task<GraphRelation list>)
                 relations.Add(relation)
             task { return () }
 
-        member _.QueryAsync(query: GraphQuery) =
+          QueryAsync = fun (query: GraphQuery) ->
             let result =
                 match query with
                 | GraphQuery.ByEntity entity ->
@@ -132,23 +132,23 @@ type InMemoryGraphMemory(?relationExtractor: string -> Task<GraphRelation list>)
                     { Nodes = foundNodes; Relations = rels; PathLength = None }
             Task.FromResult result
 
-        member _.RemoveNodeAsync(nodeId: string) =
+          RemoveNodeAsync = fun (nodeId: string) ->
             nodes.TryRemove(nodeId) |> ignore
             // Note: ConcurrentBag doesn't support removal, so we rebuild
             // In production, use a proper data structure
             task { return () }
 
-        member _.RemoveRelationAsync (subject: string) (predicate: string) (object': string) =
+          RemoveRelationAsync = fun (_subject: string) (_predicate: string) (_object': string) ->
             // ConcurrentBag limitation - in production use a different structure
             task { return () }
 
-        member _.GetByTypeAsync(entityType: string) =
+          GetByTypeAsync = fun (entityType: string) ->
             nodes.Values
             |> Seq.filter (fun n -> n.EntityType = entityType)
             |> Seq.toList
             |> Task.FromResult
 
-        member _.ExtractRelationsAsync(text: string) =
+          ExtractRelationsAsync = fun (text: string) ->
             task {
                 match relationExtractor with
                 | Some extractor ->
@@ -181,4 +181,4 @@ type InMemoryGraphMemory(?relationExtractor: string -> Task<GraphRelation list>)
                                     results.Add(rel)
                                     relations.Add(rel)
                     return results |> Seq.toList
-            }
+            } }

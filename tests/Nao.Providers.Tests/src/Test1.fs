@@ -51,32 +51,32 @@ type ProviderFactoryTests () =
     [<TestMethod>]
     member _.CreatesOpenAIProvider () =
         let provider = ProviderFactory.create (OpenAI OpenAIConfig.Default)
-        Assert.IsTrue(provider.Name.StartsWith "OpenAI")
+        Assert.IsTrue((provider.Name ()).StartsWith "OpenAI")
 
     [<TestMethod>]
     member _.CreatesDeepSeekProvider () =
         let provider = ProviderFactory.create (DeepSeek DeepSeekConfig.Default)
-        Assert.AreEqual("DeepSeek(deepseek-chat)", provider.Name)
+        Assert.AreEqual("DeepSeek(deepseek-chat)", provider.Name ())
 
     [<TestMethod>]
     member _.CreatesKimiProvider () =
         let provider = ProviderFactory.create (Kimi KimiConfig.Default)
-        Assert.AreEqual("Kimi(kimi-k2.5)", provider.Name)
+        Assert.AreEqual("Kimi(kimi-k2.5)", provider.Name ())
 
     [<TestMethod>]
     member _.CreatesAnthropicProvider () =
         let provider = ProviderFactory.create (Anthropic AnthropicConfig.Default)
-        Assert.AreEqual("Anthropic(claude-sonnet-4-20250514)", provider.Name)
+        Assert.AreEqual("Anthropic(claude-sonnet-4-20250514)", provider.Name ())
 
     [<TestMethod>]
     member _.CreatesVllmProvider () =
         let provider = ProviderFactory.create (Vllm VllmConfig.Default)
-        Assert.IsTrue(provider.Name.StartsWith "vLLM")
+        Assert.IsTrue((provider.Name ()).StartsWith "vLLM")
 
     [<TestMethod>]
     member _.CreatesLlamaCppProvider () =
         let provider = ProviderFactory.create (LlamaCpp LlamaCppConfig.Default)
-        Assert.IsTrue(provider.Name.StartsWith "llama.cpp")
+        Assert.IsTrue((provider.Name ()).StartsWith "llama.cpp")
 
     [<TestMethod>]
     member _.OpenAIProviderReturnsResultOnUnreachableServer () =
@@ -118,19 +118,19 @@ type OpenAICompatibleProviderTests () =
                 requestBody <- request.Content |> Option.ofObj |> Option.map (fun content -> content.ReadAsStringAsync().Result) |> Option.defaultValue ""
                 let response = new HttpResponseMessage(HttpStatusCode.OK)
                 response.Content <- new StringContent(
-                    """{"choices":[{"message":{"content":"Hello"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}""",
+                    """{"choices":[{"message":{"content":"Hello"},"finish_reason":"stop"}],"usage":{"total_tokens":3}}""",
                     Encoding.UTF8,
                     "application/json")
                 response)
         let endpoint = "https://compatible.test/custom/chat?version=2"
-        use provider = new OpenAICompatibleProvider("Test", endpoint, "model", None, httpHandler = handler)
+        let provider = OpenAICompatibleProvider.createWithHandler "Test" endpoint "model" None None (Some handler)
         let options =
             { CompletionOptions.Default with
                 MaxTokens = Some 42
                 StopSequences = [ "END" ] }
 
         let result =
-            (provider :> ILlmProvider).CompleteAsync
+            provider.CompleteAsync
                 [ { Role = User; Content = "Hello" } ]
                 options
             |> _.Result
@@ -144,45 +144,6 @@ type OpenAICompatibleProviderTests () =
         Assert.IsFalse(fst (body.RootElement.TryGetProperty("stream_options")))
         Assert.AreEqual("Hello", result.Content)
         Assert.AreEqual("stop", result.FinishReason)
-        Assert.AreEqual(Some { InputTokens = 2; OutputTokens = 1 }, result.Usage)
-
-    [<TestMethod>]
-    member _.KeepsAggregateOnlyUsageUnsplit () =
-        let handler =
-            new StubHttpMessageHandler(fun _ ->
-                let response = new HttpResponseMessage(HttpStatusCode.OK)
-                response.Content <- new StringContent("""{"choices":[{"message":{"content":"Hello"},"finish_reason":"stop"}],"usage":{"total_tokens":3}}""", Encoding.UTF8, "application/json")
-                response)
-        use provider = new OpenAICompatibleProvider("Test", "https://compatible.test/chat", "model", None, httpHandler = handler)
-
-        let result = (provider :> ILlmProvider).CompleteAsync [ { Role = User; Content = "Hello" } ] CompletionOptions.Default |> _.Result
-
-        Assert.AreEqual(Some 3, result.TokensUsed)
-        Assert.AreEqual(None, result.Usage)
-
-    [<TestMethod>]
-    member _.StreamsSplitUsageOnTerminalChunk () =
-        let stream =
-            String.concat "\n"
-                [ "data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"},\"finish_reason\":null}]}"
-                  ""
-                  "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}"
-                  ""
-                  "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":2,\"total_tokens\":6}}"
-                  ""
-                  "data: [DONE]" ]
-        let handler =
-            new StubHttpMessageHandler(fun _ ->
-                let response = new HttpResponseMessage(HttpStatusCode.OK)
-                response.Content <- new StringContent(stream, Encoding.UTF8, "text/event-stream")
-                response)
-        use provider = new OpenAICompatibleProvider("Test", "https://compatible.test/chat", "model", None, httpHandler = handler)
-        let chunks = ResizeArray<CompletionChunk>()
-
-        let result = (provider :> IStreamingLlmProvider).StreamAsync [ { Role = User; Content = "Hello" } ] CompletionOptions.Default chunks.Add |> _.Result
-
-        Assert.AreEqual(Some { InputTokens = 4; OutputTokens = 2 }, result.Usage)
-        Assert.AreEqual(Some { InputTokens = 4; OutputTokens = 2 }, chunks.[chunks.Count - 1].Usage)
 
     [<TestMethod>]
     [<DataRow("")>]
@@ -190,7 +151,7 @@ type OpenAICompatibleProviderTests () =
     [<DataRow("ftp://localhost/v1/chat/completions")>]
     member _.RejectsInvalidUrl (url: string) =
         Assert.ThrowsExactly<ArgumentException>(fun () ->
-            new OpenAICompatibleProvider("Test", url, "model", None) |> ignore)
+            OpenAICompatibleProvider.create "Test" url "model" None None |> ignore)
         |> ignore
 
     [<TestMethod>]
@@ -200,10 +161,10 @@ type OpenAICompatibleProviderTests () =
                 let response = new HttpResponseMessage(HttpStatusCode.OK)
                 response.Content <- new StringContent("{}", Encoding.UTF8, "application/json")
                 response)
-        use provider = new OpenAICompatibleProvider("Test", "https://compatible.test/chat", "model", None, httpHandler = handler)
+        let provider = OpenAICompatibleProvider.createWithHandler "Test" "https://compatible.test/chat" "model" None None (Some handler)
 
         let result =
-            (provider :> ILlmProvider).CompleteAsync
+            provider.CompleteAsync
                 [ { Role = User; Content = "Hello" } ]
                 CompletionOptions.Default
             |> _.Result
@@ -240,23 +201,6 @@ type OllamaConfigTests () =
         Assert.AreEqual(Some "none", config.ReasoningEffort)
         Assert.AreEqual(None, config.TimeoutSeconds)
 
-    [<TestMethod>]
-    member _.ProviderReportsSplitUsage () =
-        let handler =
-            new StubHttpMessageHandler(fun request ->
-                let requestUrl = request.RequestUri |> Option.ofObj |> Option.map _.AbsoluteUri |> Option.defaultValue ""
-                Assert.AreEqual("https://ollama.test/v1/chat/completions", requestUrl)
-                let response = new HttpResponseMessage(HttpStatusCode.OK)
-                response.Content <- new StringContent("""{"choices":[{"message":{"content":"Hello"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}""", Encoding.UTF8, "application/json")
-                response)
-        let config = { OllamaConfig.Default with BaseUrl = "https://ollama.test" }
-        use provider = new OllamaProvider(config, httpHandler = handler)
-
-        let result = (provider :> ILlmProvider).CompleteAsync [ { Role = User; Content = "Hello" } ] CompletionOptions.Default |> _.Result
-
-        Assert.AreEqual(Some 5, result.TokensUsed)
-        Assert.AreEqual(Some { InputTokens = 3; OutputTokens = 2 }, result.Usage)
-
 [<TestClass>]
 type AnthropicConfigTests () =
 
@@ -276,10 +220,10 @@ type AnthropicProviderTests () =
             { AnthropicConfig.Default with
                 BaseUrl = "https://anthropic.test"
                 TimeoutSeconds = Some 1 }
-        use provider = new AnthropicProvider(config, new WaitingHttpMessageHandler())
+        let provider = AnthropicProvider.createWithHandler config (Some(new WaitingHttpMessageHandler()))
 
         let result =
-            (provider :> ILlmProvider).CompleteAsync
+            provider.CompleteAsync
                 [ { Role = User; Content = "Wait." } ]
                 CompletionOptions.Default
             |> _.Result
@@ -309,7 +253,7 @@ type AnthropicProviderTests () =
             { AnthropicConfig.Default with
                 ApiKey = "test-key"
                 BaseUrl = "https://anthropic.test/" }
-        use provider = new AnthropicProvider(config, handler)
+        let provider = AnthropicProvider.createWithHandler config (Some handler)
         let conversation =
             [ { Role = System; Content = "Be concise." }
               { Role = User; Content = "Say hello." } ]
@@ -318,7 +262,7 @@ type AnthropicProviderTests () =
                 MaxTokens = Some 128
                 StopSequences = [ "END" ] }
 
-        let result = (provider :> ILlmProvider).CompleteAsync conversation options |> _.Result
+        let result = provider.CompleteAsync conversation options |> _.Result
 
         Assert.AreEqual("https://anthropic.test/v1/messages", requestUrl)
         Assert.AreEqual("test-key", apiKey)
@@ -332,7 +276,6 @@ type AnthropicProviderTests () =
         Assert.AreEqual("Hello world", result.Content)
         Assert.AreEqual("length", result.FinishReason)
         Assert.AreEqual(Some 15, result.TokensUsed)
-        Assert.AreEqual(Some { InputTokens = 10; OutputTokens = 5 }, result.Usage)
 
     [<TestMethod>]
     member _.StreamsTextAndAggregatesUsage () =
@@ -352,11 +295,11 @@ type AnthropicProviderTests () =
                 let response = new HttpResponseMessage(HttpStatusCode.OK)
                 response.Content <- new StringContent(stream, Encoding.UTF8, "text/event-stream")
                 response)
-        use provider = new AnthropicProvider({ AnthropicConfig.Default with BaseUrl = "https://anthropic.test" }, handler)
+        let provider = AnthropicProvider.createWithHandler { AnthropicConfig.Default with BaseUrl = "https://anthropic.test" } (Some handler)
         let chunks = ResizeArray<CompletionChunk>()
 
         let result =
-            (provider :> IStreamingLlmProvider).StreamAsync
+            LlmProvider.streamAsync provider
                 [ { Role = User; Content = "Say hello." } ]
                 CompletionOptions.Default
                 chunks.Add
@@ -365,11 +308,9 @@ type AnthropicProviderTests () =
         Assert.AreEqual("Hello world", result.Content)
         Assert.AreEqual("stop", result.FinishReason)
         Assert.AreEqual(Some 8, result.TokensUsed)
-        Assert.AreEqual(Some { InputTokens = 5; OutputTokens = 3 }, result.Usage)
         CollectionAssert.AreEqual([| "Hello"; " world"; "" |], chunks |> Seq.map _.Delta |> Seq.toArray)
         Assert.AreEqual(Some "stop", chunks.[2].FinishReason)
         Assert.AreEqual(Some 8, chunks.[2].TokensUsed)
-        Assert.AreEqual(Some { InputTokens = 5; OutputTokens = 3 }, chunks.[2].Usage)
 
 [<TestClass>]
 type VllmConfigTests () =

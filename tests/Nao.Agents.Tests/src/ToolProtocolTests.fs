@@ -8,9 +8,21 @@ open Nao.Agents
 [<TestClass>]
 type ToolProtocolTests() =
 
+    let textTool name description execute =
+        Tool.create
+            name
+            description
+            0
+            []
+            ToolCodec.text
+            ToolCodec.text
+            (ToolOperation.create (fun _ input -> task {
+                let! output = execute input
+                return Ok output }))
+
     let tools =
-        [ Tool.Create("add", "Add numbers", ToolSignature.Text, (fun input -> Task.FromResult (sprintf "result:%s" input)))
-          Tool.Create("sub", "Subtract numbers", ToolSignature.Text, (fun _ -> Task.FromResult "subtracted")) ]
+        [ textTool "add" "Add numbers" (fun input -> Task.FromResult (sprintf "result:%s" input))
+          textTool "sub" "Subtract numbers" (fun _ -> Task.FromResult "subtracted") ]
 
     [<TestMethod>]
     member _.FromToolsListsAll() =
@@ -41,7 +53,7 @@ type ToolProtocolTests() =
     [<TestMethod>]
     member _.InvokeAsyncCallsCorrectTool() =
         let protocol = ToolProtocol.fromTools tools
-        let result = (protocol.InvokeAsync "add" "5").Result
+        let result = (protocol.InvokeAsync AgentContext.allowAll "add" "5").Result
         Assert.IsTrue(result.Success)
         Assert.AreEqual("result:5", result.Output)
         Assert.IsTrue(result.DurationMs >= 0L)
@@ -49,16 +61,16 @@ type ToolProtocolTests() =
     [<TestMethod>]
     member _.InvokeAsyncReturnsErrorForMissingTool() =
         let protocol = ToolProtocol.fromTools tools
-        let result = (protocol.InvokeAsync "unknown" "x").Result
+        let result = (protocol.InvokeAsync AgentContext.allowAll "unknown" "x").Result
         Assert.IsFalse(result.Success)
         Assert.IsTrue(result.Error.IsSome)
         Assert.IsTrue(result.Error.Value.Contains("not found"))
 
     [<TestMethod>]
     member _.InvokeAsyncHandlesException() =
-        let failTools = [ Tool.Create("fail", "Fails", ToolSignature.Text, (fun _ -> failwith "boom")) ]
+        let failTools = [ textTool "fail" "Fails" (fun _ -> failwith "boom") ]
         let protocol = ToolProtocol.fromTools failTools
-        let result = (protocol.InvokeAsync "fail" "x").Result
+        let result = (protocol.InvokeAsync AgentContext.allowAll "fail" "x").Result
         Assert.IsFalse(result.Success)
         Assert.IsTrue(result.Error.Value.Contains("boom"))
 
@@ -71,11 +83,10 @@ type ToolProtocolTests() =
     [<TestMethod>]
     member _.WithMiddlewareBlocksOnBeforeError() =
         let blockMiddleware =
-            { new IToolMiddleware with
-                member _.BeforeExecute _name _input = Task.FromResult(Error "blocked")
-                member _.AfterExecute _name result = Task.FromResult result }
+            { BeforeExecute = fun _name _input -> Task.FromResult(Error "blocked")
+              AfterExecute = fun _name result -> Task.FromResult result }
         let protocol = ToolProtocol.fromTools tools |> ToolProtocol.withMiddleware blockMiddleware
-        let result = (protocol.InvokeAsync "add" "5").Result
+        let result = (protocol.InvokeAsync AgentContext.allowAll "add" "5").Result
         Assert.IsFalse(result.Success)
         Assert.AreEqual(Some "blocked", result.Error)
 
@@ -86,4 +97,74 @@ type ToolProtocolTests() =
         match result with
         | Ok v -> Assert.AreEqual("input", v)
         | Error _ -> Assert.Fail("Should be allowed")
+
+    [<TestMethod>]
+    member _.InvokeAsyncUsesProvidedPermissionContext() =
+        let ran = ref false
+        let permission = ResourceAccess.File("write", "/tmp/protocol.txt")
+        let permissionedTool =
+            Tool.create
+                "writer"
+                "Writes a file"
+                0
+                [ permission ]
+                ToolCodec.text
+                ToolCodec.text
+                (ToolOperation.create (fun _ input -> task {
+                    ran.Value <- true
+                    return Ok input }))
+        let asked = ResizeArray<ResourceAccess>()
+        let context =
+            { AgentContext.allowAll with
+                RequestPermission = fun access _ _ ->
+                    asked.Add access
+                    Task.FromResult false }
+        let protocol = ToolProtocol.fromTools [ permissionedTool ]
+
+        let result = (protocol.InvokeAsync context "writer" "content").Result
+
+        Assert.IsFalse(result.Success)
+        Assert.IsFalse(ran.Value)
+        Assert.AreEqual<ResourceAccess>(permission, asked[0])
+        Assert.AreEqual(Some ToolFailureKind.PermissionDenied, result.Failure |> Option.map _.Kind)
+
+    [<TestMethod>]
+    member _.CompositionPassesContextAndChainsOutputs() =
+        let protocol = ToolProtocol.fromTools tools
+        let composition =
+            ToolComposition.Chain [ ToolStep.Of "add"; ToolStep.Of "sub" ]
+
+        let result =
+            ToolComposer.executeAsync AgentContext.allowAll protocol composition "5"
+            |> fun task -> task.Result
+
+        Assert.AreEqual("subtracted", result.FinalOutput)
+        Assert.AreEqual(2, result.StepResults.Length)
+
+    [<TestMethod>]
+    member _.McpToolUsesQualifiedNameAndRemoteDefinition() =
+        let mutable invoked = None
+        let client =
+            { ConnectAsync = fun () -> Task.FromResult(Error "unused")
+              ListToolsAsync = fun () -> Task.FromResult([])
+              ListResourcesAsync = fun () -> Task.FromResult([])
+              InvokeToolAsync = fun name arguments ->
+                  invoked <- Some(name, arguments)
+                  Task.FromResult(Ok "remote-result")
+              ReadResourceAsync = fun _ -> Task.FromResult(Error "unused")
+              State = fun () -> McpConnectionState.Disconnected
+              DisconnectAsync = fun () -> Task.FromResult(()) }
+        let definition =
+            { Name = "search"
+              Description = Some "Search remotely"
+              InputSchema = "{\"type\":\"object\"}"
+              Annotations = Map.empty }
+        let tool = McpTool.create "docs.search" client definition
+
+        let result = tool.RunAsync AgentContext.allowAll "{\"query\":\"Nao\"}" |> fun task -> task.Result
+
+        Assert.AreEqual("docs.search", tool.Name)
+        Assert.AreEqual(definition.InputSchema, tool.Schema.Input)
+        Assert.AreEqual(Some("search", "{\"query\":\"Nao\"}"), invoked)
+        Assert.AreEqual(Ok "remote-result", result)
 

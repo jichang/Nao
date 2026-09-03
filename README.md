@@ -13,6 +13,7 @@ Nao connects models, agents, tools, memory, knowledge, distributed execution, go
 | Document | Purpose |
 |---|---|
 | [Platform overview](docs/platform.md) | Vision, current status, platform architecture, principles, and project boundaries |
+| [Capability inventory](docs/capabilities.md) | Source- and test-backed status, limitations, ownership, known gaps, and non-goals |
 | [Getting started](docs/getting-started.md) | Restore, build, test, define an agent, use the harness, and register a workspace |
 | [AI platform roadmap](docs/roadmap.md) | Prioritized milestones, trackable tasks, dependencies, and acceptance criteria |
 | [Development and contributing](docs/development.md) | Repository conventions, testing, compatibility, security, and roadmap workflow |

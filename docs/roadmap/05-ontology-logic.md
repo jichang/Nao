@@ -8,7 +8,7 @@ This optional workstream adds formal knowledge representation and deterministic 
 
 ## Existing baseline
 
-- [x] `IGraphMemory` represents graph nodes, relations, and basic graph queries.
+- [x] Functional `GraphMemory` represents graph nodes, relations, and basic graph queries.
 - [x] In-memory graph traversal and persistent graph support exist.
 - [x] Constitution and policy primitives can evaluate operational rules.
 - [ ] Graph memory provides RDF/OWL semantics or SPARQL.

@@ -6,43 +6,21 @@ open Nao.Agents
 open Nao.Eval
 open Nao.Eval.Evaluators
 
-/// A simple deterministic agent for testing the eval runner
-type EchoAgent(prefix: string) =
-    let id = "echo"
+module private TestAgents =
+    let echo prefix =
+        Agent.createContextual "echo" "Echo" "Echoes input with a prefix" 0 [] AgentContract.Text
+            (fun _ input -> Task.FromResult(sprintf "%s: %s" prefix input))
 
-    interface IAgent with
-        member _.Id = id
-        member _.Name = "Echo"
-        member _.Description = "Echoes input with a prefix"
-
-        member _.Priority = 0
-        member _.Contract = AgentContract.Text
-        member _.Responsibilities = []
-        member _.RunAsync(_context: AgentContext, input: string) =
-            Task.FromResult(sprintf "%s: %s" prefix input)
-        member _.HandleMessageAsync(_context: AgentContext, _msg: AgentMessage) =
-            Task.FromResult(None)
-
-/// Agent that returns a fixed response regardless of input
-type FixedAgent(response: string) =
-    let id = "fixed"
-
-    interface IAgent with
-        member _.Id = id
-        member _.Name = "Fixed"
-        member _.Description = "Returns fixed response"
-        member _.Priority = 0
-        member _.Contract = AgentContract.Text
-        member _.Responsibilities = []
-        member _.RunAsync(_context: AgentContext, _input: string) = Task.FromResult(response)
-        member _.HandleMessageAsync(_context: AgentContext, _msg: AgentMessage) = Task.FromResult(None)
+    let fixedResponse response =
+        Agent.createContextual "fixed" "Fixed" "Returns fixed response" 0 [] AgentContract.Text
+            (fun _ _ -> Task.FromResult response)
 
 [<TestClass>]
 type EvalRunnerTests() =
 
     [<TestMethod>]
     member _.``RunCaseAsync evaluates a single case``() =
-        let agent = FixedAgent("The answer is 42") :> IAgent
+        let agent = TestAgents.fixedResponse "The answer is 42"
         let case = EvalCase.create "q1" "What is the answer?" "42"
         let evaluator = Contains.evaluator
         let result = (EvalRunner.runCaseAsync evaluator agent case).Result
@@ -52,7 +30,7 @@ type EvalRunnerTests() =
 
     [<TestMethod>]
     member _.``RunDatasetAsync produces a complete report``() =
-        let agent = EchoAgent("Reply") :> IAgent
+        let agent = TestAgents.echo "Reply"
         let dataset = EvalDataset.create "basic" [
             EvalCase.create "c1" "hello" "hello" |> EvalCase.withTags ["greeting"]
             EvalCase.create "c2" "world" "world" |> EvalCase.withTags ["greeting"]
@@ -68,7 +46,7 @@ type EvalRunnerTests() =
 
     [<TestMethod>]
     member _.``RunDatasetAsync with parallel config works``() =
-        let agent = FixedAgent("hello world") :> IAgent
+        let agent = TestAgents.fixedResponse "hello world"
         let dataset = EvalDataset.create "parallel" [
             EvalCase.create "p1" "a" "hello"
             EvalCase.create "p2" "b" "hello"
@@ -83,8 +61,8 @@ type EvalRunnerTests() =
 
     [<TestMethod>]
     member _.``CompareAgentsAsync returns per-agent reports``() =
-        let agent1 = FixedAgent("The weather is sunny") :> IAgent
-        let agent2 = FixedAgent("I don't know") :> IAgent
+        let agent1 = TestAgents.fixedResponse "The weather is sunny"
+        let agent2 = TestAgents.fixedResponse "I don't know"
         let dataset = EvalDataset.create "comparison" [
             EvalCase.create "w1" "What's the weather?" "sunny"
         ]
@@ -99,7 +77,7 @@ type EvalRunnerTests() =
 
     [<TestMethod>]
     member _.``EvalReport format produces readable output``() =
-        let agent = FixedAgent("42") :> IAgent
+        let agent = TestAgents.fixedResponse "42"
         let dataset = EvalDataset.create "format-test" [
             EvalCase.create "f1" "question" "42"
         ]
@@ -112,7 +90,7 @@ type EvalRunnerTests() =
 
     [<TestMethod>]
     member _.``Tag breakdown correctly groups results``() =
-        let agent = EchoAgent("Reply") :> IAgent
+        let agent = TestAgents.echo "Reply"
         let dataset = EvalDataset.create "tags" [
             EvalCase.create "t1" "hello" "hello" |> EvalCase.withTags ["math"]
             EvalCase.create "t2" "world" "world" |> EvalCase.withTags ["math"]

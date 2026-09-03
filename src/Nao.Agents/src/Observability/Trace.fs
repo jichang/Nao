@@ -48,17 +48,17 @@ and SpanEvent =
       Timestamp: DateTimeOffset
       Attributes: Map<string, string> }
 
-/// Interface for trace collection
-type ITracer =
-    /// Start a new root trace
-    abstract member StartTrace: operationName: string -> Span
-    /// Start a child span under an existing span
-    abstract member StartSpan: parentSpan: Span -> operationName: string -> Span
-    /// End a span
-    abstract member EndSpan: Span -> SpanStatus -> unit
-    /// Add an event to the current span
-    abstract member AddEvent: Span -> name: string -> attributes: Map<string, string> -> unit
-    /// Set attributes on a span
-    abstract member SetAttributes: Span -> Map<string, string> -> unit
-    /// Get all completed spans for a trace
-    abstract member GetTrace: TraceId -> Span list
+/// Functional trace collection operations.
+type Tracer =
+    { /// Start a new root trace
+      StartTrace: string -> Span
+      /// Start a child span under an existing span
+      StartSpan: Span -> string -> Span
+      /// End a span
+      EndSpan: Span -> SpanStatus -> unit
+      /// Add an event to the current span
+      AddEvent: Span -> string -> Map<string, string> -> unit
+      /// Set attributes on a span
+      SetAttributes: Span -> Map<string, string> -> unit
+      /// Get all completed spans for a trace
+      GetTrace: TraceId -> Span list }

@@ -18,18 +18,18 @@ This workstream establishes an accurate baseline, stable platform vocabulary, pa
 
 ## FND-01 — Capability inventory
 
-- [ ] Map every README feature to its source type, implementation status, and tests.
-- [ ] Classify each capability as `implemented`, `partial`, `experimental`, `planned`, or `application-owned`.
-- [ ] Reconcile documentation claims about group-directory support with current source.
-- [ ] Document intentionally unsupported features and non-goals.
-- [ ] Record known correctness gaps, including incomplete graph mutation behavior and host-owned enforcement points.
-- [ ] Add a lightweight process for updating the inventory with every release.
+- [x] Map every README feature to its source type, implementation status, and tests.
+- [x] Classify each capability as `implemented`, `partial`, `experimental`, `planned`, or `application-owned`.
+- [x] Reconcile documentation claims about group-directory support with current source.
+- [x] Document intentionally unsupported features and non-goals.
+- [x] Record known correctness gaps, including incomplete graph mutation behavior and host-owned enforcement points.
+- [x] Add a lightweight process for updating the inventory with every release.
 
 **Acceptance criteria**
 
-- [ ] No advertised capability lacks a source or plan reference.
-- [ ] Partial behavior is not described as production-complete.
-- [ ] CI detects broken documentation links to source-controlled roadmap pages.
+- [x] No advertised capability lacks a source or plan reference.
+- [x] Partial behavior is not described as production-complete.
+- [x] CI detects broken documentation links to source-controlled roadmap pages.
 
 ## FND-02 — Solution and test-surface hygiene
 

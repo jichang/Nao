@@ -32,12 +32,17 @@ type ConvertDocumentTests() =
     member private _.WriteSource (name: string) (content: string) =
         File.WriteAllText(Path.Combine(workspace, name), content)
 
-    member private _.Convert (input: string) =
-        let json = (AssistantTools.convertDocument.Execute AgentContext.allowAll input).GetAwaiter().GetResult()
+    member private _.RunTool (tool: Tool) (input: string) =
+        match tool.RunAsync AgentContext.allowAll input |> fun task -> task.GetAwaiter().GetResult() with
+        | Ok output -> output
+        | Error failure -> Assert.Fail(failure.Message); ""
+
+    member private this.Convert (input: string) =
+        let json = this.RunTool AssistantTools.convertDocument input
         JsonDocument.Parse(json).RootElement
 
-    member private _.WriteDocument (input: string) =
-        let json = (AssistantTools.writeDocument.Execute AgentContext.allowAll input).GetAwaiter().GetResult()
+    member private this.WriteDocument (input: string) =
+        let json = this.RunTool AssistantTools.writeDocument input
         JsonDocument.Parse(json).RootElement
 
     [<TestMethod>]

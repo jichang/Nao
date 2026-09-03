@@ -12,7 +12,7 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="src/MSTestSettings.fs" />
-    <Compile Include="src/Test1.fs" />
+    <Compile Include="src/PromptAndAgentMessageTests.fs" />
     <Compile Include="src/PromptPatchTests.fs" />
     <Compile Include="src/LlmTypeTests.fs" />
     <Compile Include="src/ConversationWindowTests.fs" />
@@ -21,7 +21,9 @@
     <Compile Include="src/SemanticMemoryTests.fs" />
     <Compile Include="src/EnvironmentTests.fs" />
     <Compile Include="src/ToolProtocolTests.fs" />
+    <Compile Include="src/ToolSelectionTests.fs" />
     <Compile Include="src/ContextCompactionTests.fs" />
+    <Compile Include="src/OrchestrationEngineeringTests.fs" />
     <Compile Include="src/LifecycleTests.fs" />
     <Compile Include="src/ObservabilityTests.fs" />
     <Compile Include="src/VerificationTests.fs" />
@@ -39,7 +41,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Nao.Agents\Nao.Agents.fsproj" />
     <ProjectReference Include="..\..\src\Nao.Persistence\Nao.Persistence.fsproj" />
-    <ProjectReference Include="..\..\..\Assistant\Nao.Assistant.Server\Nao.Assistant.Server.fsproj" />
+    <ProjectReference Include="..\..\..\Assistant\src\SignedByte.Assistant.Server\SignedByte.Assistant.Server.fsproj" />
   </ItemGroup>
   <Import Project="..\..\.paket\Paket.Restore.targets" />
 </Project>

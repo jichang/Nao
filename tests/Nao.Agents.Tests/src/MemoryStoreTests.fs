@@ -8,7 +8,7 @@ open Nao.Persistence
 [<TestClass>]
 type MemoryStoreTests() =
 
-    let agentId = { Name = "test-agent"; Description = "test" }
+    let agentId = "test-agent"
 
     let makeEntry key value =
         { Key = key
@@ -18,7 +18,7 @@ type MemoryStoreTests() =
 
     [<TestMethod>]
     member _.SaveAndRecall_ReturnsSavedEntry() =
-        let store = InMemoryStore() :> IMemoryStore
+        let store = InMemoryStore.create ()
         let entry = makeEntry "user-name" "Alice"
         store.SaveAsync agentId entry |> fun t -> t.Wait()
 
@@ -28,7 +28,7 @@ type MemoryStoreTests() =
 
     [<TestMethod>]
     member _.SaveMultiple_RecallsByPrefix() =
-        let store = InMemoryStore() :> IMemoryStore
+        let store = InMemoryStore.create ()
         store.SaveAsync agentId (makeEntry "user-name" "Alice") |> fun t -> t.Wait()
         store.SaveAsync agentId (makeEntry "user-email" "alice@example.com") |> fun t -> t.Wait()
         store.SaveAsync agentId (makeEntry "preference-theme" "dark") |> fun t -> t.Wait()
@@ -41,7 +41,7 @@ type MemoryStoreTests() =
 
     [<TestMethod>]
     member _.Save_OverwritesExistingKey() =
-        let store = InMemoryStore() :> IMemoryStore
+        let store = InMemoryStore.create ()
         store.SaveAsync agentId (makeEntry "name" "Alice") |> fun t -> t.Wait()
         store.SaveAsync agentId (makeEntry "name" "Bob") |> fun t -> t.Wait()
 
@@ -51,7 +51,7 @@ type MemoryStoreTests() =
 
     [<TestMethod>]
     member _.Forget_RemovesEntry() =
-        let store = InMemoryStore() :> IMemoryStore
+        let store = InMemoryStore.create ()
         store.SaveAsync agentId (makeEntry "temp" "value") |> fun t -> t.Wait()
         store.ForgetAsync agentId "temp" |> fun t -> t.Wait()
 
@@ -60,7 +60,7 @@ type MemoryStoreTests() =
 
     [<TestMethod>]
     member _.Clear_RemovesAllEntries() =
-        let store = InMemoryStore() :> IMemoryStore
+        let store = InMemoryStore.create ()
         store.SaveAsync agentId (makeEntry "a" "1") |> fun t -> t.Wait()
         store.SaveAsync agentId (makeEntry "b" "2") |> fun t -> t.Wait()
         store.ClearAsync agentId |> fun t -> t.Wait()
@@ -70,7 +70,7 @@ type MemoryStoreTests() =
 
     [<TestMethod>]
     member _.RecallAll_ReturnsAllEntries() =
-        let store = InMemoryStore() :> IMemoryStore
+        let store = InMemoryStore.create ()
         store.SaveAsync agentId (makeEntry "x" "1") |> fun t -> t.Wait()
         store.SaveAsync agentId (makeEntry "y" "2") |> fun t -> t.Wait()
         store.SaveAsync agentId (makeEntry "z" "3") |> fun t -> t.Wait()
@@ -80,9 +80,9 @@ type MemoryStoreTests() =
 
     [<TestMethod>]
     member _.IsolatesBetweenAgents() =
-        let store = InMemoryStore() :> IMemoryStore
-        let agent1 = { Name = "agent-1"; Description = "" }
-        let agent2 = { Name = "agent-2"; Description = "" }
+        let store = InMemoryStore.create ()
+        let agent1 = "agent-1"
+        let agent2 = "agent-2"
 
         store.SaveAsync agent1 (makeEntry "data" "from-1") |> fun t -> t.Wait()
         store.SaveAsync agent2 (makeEntry "data" "from-2") |> fun t -> t.Wait()

@@ -8,7 +8,7 @@
   <ItemGroup>
     <Compile Include="src/Core/EvalCase.fs" />
     <Compile Include="src/Core/EvalResult.fs" />
-    <Compile Include="src/Core/IEvaluator.fs" />
+    <Compile Include="src/Core/Evaluator.fs" />
     <Compile Include="src/Evaluators/ExactMatch.fs" />
     <Compile Include="src/Evaluators/Contains.fs" />
     <Compile Include="src/Evaluators/Regex.fs" />

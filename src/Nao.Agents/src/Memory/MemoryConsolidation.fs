@@ -10,7 +10,7 @@ type ConsolidationStrategy =
     /// Merge similar memories into a single entry
     | MergeSimilar of similarityThreshold: float
     /// Summarize clusters of related memories
-    | Summarize of provider: ILlmProvider * options: CompletionOptions
+    | Summarize of provider: LlmProvider * options: CompletionOptions
     /// Remove redundant memories (subsumed by others)
     | Deduplicate
     /// Decay importance of old, unaccessed memories
@@ -26,14 +26,14 @@ type ConsolidationResult =
       TotalBefore: int
       TotalAfter: int }
 
-/// Interface for memory consolidation (background process)
-type IMemoryConsolidation =
-    /// Run a consolidation pass
-    abstract member ConsolidateAsync: ConsolidationStrategy -> Task<ConsolidationResult>
-    /// Get consolidation statistics
-    abstract member GetStatsAsync: unit -> Task<ConsolidationResult>
+/// Functional memory-consolidation capability (background process).
+type MemoryConsolidation =
+        { /// Run a consolidation pass
+            ConsolidateAsync: ConsolidationStrategy -> Task<ConsolidationResult>
+            /// Get consolidation statistics
+            GetStatsAsync: unit -> Task<ConsolidationResult> }
 
-/// Memory consolidation operating on IMemoryStore
+/// Memory consolidation operating on `MemoryStore`.
 module MemoryConsolidation =
 
     let private textSimilarity (a: string) (b: string) =
@@ -44,7 +44,7 @@ module MemoryConsolidation =
         if union = 0.0 then 0.0 else intersection / union
 
     let mergeSimilarAsync
-        (store: IMemoryStore)
+        (store: MemoryStore)
         (agentId: string)
         (threshold: float)
         : Task<int> =
@@ -85,7 +85,7 @@ module MemoryConsolidation =
         }
 
     let deduplicateAsync
-        (store: IMemoryStore)
+        (store: MemoryStore)
         (agentId: string)
         : Task<int> =
         task {
@@ -103,7 +103,7 @@ module MemoryConsolidation =
         }
 
     let importanceDecayAsync
-        (store: IMemoryStore)
+        (store: MemoryStore)
         (agentId: string)
         (decayFactor: float)
         (minAge: TimeSpan)
@@ -137,9 +137,9 @@ module MemoryConsolidation =
         }
 
     let summarizeClusterAsync
-        (provider: ILlmProvider)
+        (provider: LlmProvider)
         (options: CompletionOptions)
-        (store: IMemoryStore)
+        (store: MemoryStore)
         (agentId: string)
         : Task<int> =
         task {
@@ -180,7 +180,7 @@ module MemoryConsolidation =
         }
 
     let rec consolidateAsync
-        (store: IMemoryStore)
+        (store: MemoryStore)
         (agentId: string)
         (strategy: ConsolidationStrategy)
         : Task<ConsolidationResult> =

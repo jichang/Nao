@@ -144,19 +144,19 @@ type ISessionGrain =
     /// Permanently destroy the session and all its data
     abstract member DestroyAsync: unit -> Task
 
-/// Self-contained session grain. Resolves workspaces from IWorkspaceRegistry,
+/// Self-contained session grain. Resolves workspaces from WorkspaceRegistry,
 /// manages multiple conversation contexts and memory through Orleans persistence.
 type SessionGrain
     (
         [<PersistentState("sessionState", "sessionStore")>] persistentState: IPersistentState<SessionGrainState>,
-        registry: IWorkspaceRegistry,
-        provider: ILlmProvider,
-        orchestratorFactory: IOrchestratorFactory,
-        conversationStore: IConversationStore,
-        harnessServicesFactory: Func<string, string, IHarnessServices>,
+        registry: WorkspaceRegistry,
+        provider: LlmProvider,
+        orchestratorFactory: OrchestratorFactory,
+        conversationStore: ConversationStore,
+        harnessServicesFactory: Func<string, string, HarnessServices>,
         feedbackFactory: Func<string, FeedbackService>,
-        eventBus: IEventBus,
-        memoryStore: IMemoryStore,
+        eventBus: EventBus,
+        memoryStore: MemoryStore,
         memoryToolConfig: MemoryToolConfig
     ) as this =
     inherit Grain()
@@ -187,7 +187,7 @@ type SessionGrain
             info.UserId, info.SessionId, info.ActiveConversation, info.WorkspaceKey,
             actionId, sessionKey)
 
-    let buildHarnessConfig (workspace: WorkspaceDefinitions) (tools: ITool list) (scope: EventScope) (services: IHarnessServices) : EtclovgConfig =
+    let buildHarnessConfig (workspace: WorkspaceDefinitions) (tools: Tool list) (scope: EventScope) (services: HarnessServices) : EtclovgConfig =
         let constitution = WorkspaceDefinitions.mergedConstitution workspace
         let toolProtocol =
             if tools.Length > 0 then
@@ -314,17 +314,17 @@ type SessionGrain
 
     // ─── Tool resolution ───
 
-    let resolveTool (workspace: WorkspaceDefinitions) (name: string) : ITool option =
+    let resolveTool (workspace: WorkspaceDefinitions) (name: string) : Tool option =
         workspace.Tools
         |> List.tryFind (fun tool -> tool.Name = name)
 
-    let resolveTools (workspace: WorkspaceDefinitions) (names: string list) : ITool list =
+    let resolveTools (workspace: WorkspaceDefinitions) (names: string list) : Tool list =
         names |> List.choose (resolveTool workspace)
 
     // ─── Agent resolution ───
 
-    let findBuiltAgent (workspace: WorkspaceDefinitions) (name: string) : IAgent option =
-        workspace.Agents |> List.tryFind (fun agent -> agent.Name = name)
+    let findBuiltAgent (workspace: WorkspaceDefinitions) (name: string) : Agent option =
+        workspace.Agents |> List.tryFind (fun agent -> agent.Metadata.Name = name)
 
     let agentExists (workspace: WorkspaceDefinitions) (name: string) : bool =
         (findBuiltAgent workspace name).IsSome
@@ -333,7 +333,7 @@ type SessionGrain
     /// though the session's selected agent and other runtime settings may change.
     let memoryOwner () = sprintf "session:%s" (this.GetPrimaryKeyString())
 
-    let addMemoryAgentTool (tools: ITool list) =
+    let addMemoryAgentTool (tools: Tool list) =
         let existingNames = tools |> List.map _.Name |> Set.ofList
         let memoryTools = MemoryTools.create memoryToolConfig memoryStore memoryOwner
         if memoryTools.IsEmpty || existingNames.Contains "memory" then
@@ -342,21 +342,8 @@ type SessionGrain
             let memoryAgent = MemoryAgent.create orchestratorFactory provider memoryTools
             MemoryAgent.asTool memoryAgent :: tools
 
-    let rec bindSessionAgent (agent: IAgent) : IAgent =
-        match agent with
-        | :? OrchestratorBase as orchestrator ->
-            let template = orchestrator.Config
-            let subAgents = template.SubAgents |> List.map bindSessionAgent
-            let tools = if subAgents.IsEmpty then addMemoryAgentTool template.Tools else template.Tools
-            orchestratorFactory.Create
-                { template with
-                    Tools = tools
-                    SubAgents = subAgents }
-        | _ -> agent
-
-    let createAgentAsync (workspace: WorkspaceDefinitions) (name: string) : Task<IAgent option> =
+    let createAgentAsync (workspace: WorkspaceDefinitions) (name: string) : Task<Agent option> =
         findBuiltAgent workspace name
-        |> Option.map bindSessionAgent
         |> Task.FromResult
 
     /// Core turn processing. `llmInput` is the prompt the agent sees (may contain embedded
@@ -484,7 +471,7 @@ type SessionGrain
             let publishData data : Task =
                 (task {
                     lock contextData (fun () -> contextData.Add data)
-                    do! eventBus.PublishAsync(TurnProgress(turnScope, ToolDataPublished data))
+                    do! EventBus.publishAsync (TurnProgress(turnScope, ToolDataPublished data)) eventBus
                 } :> Task)
             let agentContext : AgentContext =
                 { SessionKey = sessionKey
@@ -495,15 +482,12 @@ type SessionGrain
                   PublishData = publishData }
             try
                 // Subscribe the recorder for this turn's progress signals; detached in finally.
-                eventBus.Subscribe(recorder :> IEventConsumer)
+                EventBus.subscribe recorder.Consumer eventBus
                 let! agentOpt = createAgentAsync workspace agentName
                 match agentOpt with
                 | None ->
                     return sprintf "[Error] Agent '%s' not found in workspace '%s'" agentName persistentState.State.Info.WorkspaceKey
                 | Some agent ->
-                    match agent with
-                    | :? IRuntimeAgentContext as contextual -> contextual.SetEventContext eventBus turnScope
-                    | _ -> ()
                     let harnessServices = harnessServicesFactory.Invoke(sessionKey, turnId)
                     let harnessConfig = buildHarnessConfig workspace tools turnScope harnessServices
                     let! result = EtclovgHarness.runAsync harnessConfig agentContext agent contextualInput
@@ -512,12 +496,12 @@ type SessionGrain
                     | true, Some response ->
                         // Emit the completed turn; a subscribed storage strategy persists it
                         // so feedback can later be analysed against it.
-                        let turnRecord = { recorder.Snapshot() with Output = response }
-                        do! eventBus.PublishAsync(TurnCompleted(makeScope turnId, turnRecord))
+                        let turnRecord = { TurnRecorder.snapshot recorder with Output = response }
+                        do! EventBus.publishAsync (TurnCompleted(makeScope turnId, turnRecord)) eventBus
 
                         // Persist a CLEAN, user-facing transcript: the display text (no embedded
                         // attachment content) plus one assistant message carrying the process.
-                        do! appendTurnAsync displayText attachmentNames response turnId recorder.Steps recorder.Data
+                        do! appendTurnAsync displayText attachmentNames response turnId (TurnRecorder.steps recorder) (TurnRecorder.data recorder)
                         info.LastTurnId <- turnId
 
                         persistentState.State.Info.LastActiveAt <- DateTimeOffset.UtcNow
@@ -531,7 +515,7 @@ type SessionGrain
                             | None -> "[Error] Unknown harness failure"
                         return errorMsg
             finally
-                eventBus.Unsubscribe(recorder :> IEventConsumer)
+                EventBus.unsubscribe recorder.Consumer eventBus
                 currentRecorder <- None
         }
     // ─── Activation ───
@@ -595,7 +579,7 @@ type SessionGrain
         member _.GetLiveStepsAsync() : Task<TurnStepRecord[]> =
             match currentRecorder with
             | Some recorder ->
-                Task.FromResult(recorder.Steps |> List.map toStepRecord |> List.toArray)
+                Task.FromResult(TurnRecorder.steps recorder |> List.map toStepRecord |> List.toArray)
             | None -> Task.FromResult([||])
 
         member _.SubmitFeedbackAsync(sentiment: string, comment: string) : Task<string array> =

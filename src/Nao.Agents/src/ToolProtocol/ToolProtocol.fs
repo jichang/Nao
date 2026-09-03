@@ -10,50 +10,60 @@ type ToolInvocationResult =
       Output: string
       /// Error message if failed
       Error: string option
+      /// Structured failure returned by the executable tool boundary
+      Failure: ToolFailure option
       /// How long the invocation took in milliseconds
       DurationMs: int64
       /// Whether the tool produced side effects
       HadSideEffects: bool }
 
-/// Middleware that wraps tool execution (pre/post processing)
-type IToolMiddleware =
-    /// Called before tool execution — can modify input or short-circuit
-    abstract member BeforeExecute: string -> string -> Task<Result<string, string>>
-    /// Called after tool execution — can modify output
-    abstract member AfterExecute: string -> ToolInvocationResult -> Task<ToolInvocationResult>
+/// Middleware functions that wrap tool execution (pre/post processing).
+type ToolMiddleware =
+    { /// Called before tool execution — can modify input or short-circuit.
+      BeforeExecute: string -> string -> Task<Result<string, string>>
+      /// Called after tool execution — can modify output.
+      AfterExecute: string -> ToolInvocationResult -> Task<ToolInvocationResult> }
 
-/// Protocol for tool discovery and invocation (MCP-inspired)
-type IToolProtocol =
-    /// List all available tools.
-    abstract member ListTools: unit -> Task<ITool list>
-    /// Get a specific tool by name.
-    abstract member GetTool: string -> Task<ITool option>
-    /// Invoke a tool by name with input
-    abstract member InvokeAsync: string -> string -> Task<ToolInvocationResult>
-    /// Check if a tool is available and ready
-    abstract member IsAvailable: string -> Task<bool>
+/// Functions for tool discovery and invocation (MCP-inspired).
+type ToolProtocol = {
+        /// List all available tools.
+        ListTools: unit -> Task<Tool list>
+        /// Get a specific tool by name.
+        GetTool: string -> Task<Tool option>
+        /// Invoke a tool by name with input.
+        InvokeAsync: AgentContext -> string -> string -> Task<ToolInvocationResult>
+        /// Check if a tool is available and ready.
+        IsAvailable: string -> Task<bool>
+}
 
 /// Routes tool invocations through middleware and protocol
 module ToolProtocol =
     open System.Diagnostics
 
-    /// Create a protocol from a list of tools
-    let fromTools (tools: ITool list) : IToolProtocol =
-        { new IToolProtocol with
-            member _.ListTools() = Task.FromResult tools
+    let private failed duration failure =
+        { Success = false
+          Output = ""
+          Error = Some failure.Message
+          Failure = Some failure
+          DurationMs = duration
+          HadSideEffects = false }
 
-            member _.GetTool(name) =
+    /// Create a protocol from a list of tools
+    let fromTools (tools: Tool list) : ToolProtocol =
+        { ListTools = fun () -> Task.FromResult tools
+
+          GetTool = fun name ->
                 tools
                 |> List.tryFind (fun tool -> tool.Name = name)
                 |> Task.FromResult
 
-            member _.InvokeAsync (name: string) (input: string) =
+          InvokeAsync = fun (context: AgentContext) (name: string) (input: string) ->
                 task {
                     let sw = Stopwatch.StartNew()
                     match tools |> List.tryFind (fun tool -> tool.Name = name) with
                     | Some tool ->
                         try
-                            let! result = tool.RunAsync(AgentContext.allowAll, input)
+                            let! result = tool.RunAsync context input
                             sw.Stop()
                             match result with
                             | Ok output ->
@@ -61,62 +71,44 @@ module ToolProtocol =
                                     { Success = true
                                       Output = output
                                       Error = None
+                                      Failure = None
                                       DurationMs = sw.ElapsedMilliseconds
                                       HadSideEffects = false }
                             | Error failure ->
-                                return
-                                    { Success = false
-                                      Output = ""
-                                      Error = Some failure.Message
-                                      DurationMs = sw.ElapsedMilliseconds
-                                      HadSideEffects = false }
+                                return failed sw.ElapsedMilliseconds failure
                         with ex ->
                             sw.Stop()
-                            return
-                                { Success = false
-                                  Output = ""
-                                  Error = Some ex.Message
-                                  DurationMs = sw.ElapsedMilliseconds
-                                  HadSideEffects = false }
+                            return failed sw.ElapsedMilliseconds { Kind = ToolFailureKind.Execution; Message = ex.Message; Retryable = false }
                     | None ->
                         sw.Stop()
-                        return
-                            { Success = false
-                              Output = ""
-                              Error = Some (sprintf "Tool '%s' not found" name)
-                              DurationMs = sw.ElapsedMilliseconds
-                              HadSideEffects = false }
+                        return failed sw.ElapsedMilliseconds { Kind = ToolFailureKind.Execution; Message = sprintf "Tool '%s' not found" name; Retryable = false }
                 }
 
-            member _.IsAvailable(name: string) =
+          IsAvailable = fun name ->
                 tools |> List.exists (fun tool -> tool.Name = name) |> Task.FromResult }
 
     /// Wrap a protocol with middleware
-    let withMiddleware (middleware: IToolMiddleware) (protocol: IToolProtocol) : IToolProtocol =
-        { new IToolProtocol with
-            member _.ListTools() = protocol.ListTools()
-            member _.GetTool(name) = protocol.GetTool(name)
-            member _.IsAvailable(name) = protocol.IsAvailable(name)
-            member _.InvokeAsync (name: string) (input: string) =
+    let withMiddleware (middleware: ToolMiddleware) (protocol: ToolProtocol) : ToolProtocol =
+                {
+                    ListTools = protocol.ListTools
+                    GetTool = protocol.GetTool
+                    IsAvailable = protocol.IsAvailable
+                    InvokeAsync =
+                        fun (context: AgentContext) (name: string) (input: string) ->
                 task {
                     match! middleware.BeforeExecute name input with
                     | Error msg ->
-                        return
-                            { Success = false
-                              Output = ""
-                              Error = Some msg
-                              DurationMs = 0L
-                              HadSideEffects = false }
+                                                return failed 0L { Kind = ToolFailureKind.Execution; Message = msg; Retryable = false }
                     | Ok modifiedInput ->
-                        let! result = protocol.InvokeAsync name modifiedInput
+                        let! result = protocol.InvokeAsync context name modifiedInput
                         return! middleware.AfterExecute name result
-                } }
+                                }
+                }
 
     /// Create a rate-limiting middleware
-    let rateLimitMiddleware (maxCallsPerMinute: int) : IToolMiddleware =
+    let rateLimitMiddleware (maxCallsPerMinute: int) : ToolMiddleware =
         let calls = System.Collections.Concurrent.ConcurrentQueue<System.DateTimeOffset>()
-        { new IToolMiddleware with
-            member _.BeforeExecute (_name: string) (input: string) =
+        { BeforeExecute = fun (_name: string) (input: string) ->
                 task {
                     let now = System.DateTimeOffset.UtcNow
                     let cutoff = now.AddMinutes(-1.0)
@@ -130,5 +122,4 @@ module ToolProtocol =
                         calls.Enqueue(now)
                         return Ok input
                 }
-            member _.AfterExecute (_name: string) (result: ToolInvocationResult) : Task<ToolInvocationResult> =
-                Task.FromResult result }
+          AfterExecute = fun (_name: string) (result: ToolInvocationResult) -> Task.FromResult result }

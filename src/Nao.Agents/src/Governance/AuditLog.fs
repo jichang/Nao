@@ -40,16 +40,16 @@ and [<RequireQualifiedAccess>] AuditAction =
     | ConstitutionCheck
     | LifecycleTransition of fromState: string * toState: string
 
-/// Interface for audit logging
-type IAuditLog =
-    /// Record an audit entry
-    abstract member RecordAsync: AuditEntry -> Task<unit>
-    /// Query audit entries for an agent
-    abstract member QueryAsync: string -> since: DateTimeOffset -> Task<AuditEntry list>
-    /// Query all entries for an execution
-    abstract member QueryByExecutionAsync: Guid -> Task<AuditEntry list>
-    /// Get a count of denied actions for an agent
-    abstract member GetDeniedCountAsync: string -> since: DateTimeOffset -> Task<int>
+/// Functional audit logging operations.
+type AuditLog =
+    { /// Record an audit entry
+      RecordAsync: AuditEntry -> Task<unit>
+      /// Query audit entries for an agent
+      QueryAsync: string -> DateTimeOffset -> Task<AuditEntry list>
+      /// Query all entries for an execution
+      QueryByExecutionAsync: Guid -> Task<AuditEntry list>
+      /// Get a count of denied actions for an agent
+      GetDeniedCountAsync: string -> DateTimeOffset -> Task<int> }
 
 module AuditLog =
 

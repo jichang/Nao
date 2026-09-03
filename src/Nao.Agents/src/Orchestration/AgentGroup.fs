@@ -1,5 +1,6 @@
 namespace Nao.Agents
 
+open System
 open System.Threading.Tasks
 
 /// Termination condition for a collaborative group conversation
@@ -8,56 +9,50 @@ type TerminationCondition =
     | ContentContains of string
     | Custom of (AgentMessage list -> bool)
 
-/// A collaborative group where agents communicate via messages
+/// Functional collaborative group definition.
 type AgentGroup =
-    { Agents: IAgent list
-      Moderator: IAgent option
+    { Agents: Agent list
+      Moderator: Agent option
       Termination: TerminationCondition }
 
+[<RequireQualifiedAccess>]
 module AgentGroup =
 
-    /// Create a group with agents and a termination condition
-    let create (agents: IAgent list) (termination: TerminationCondition) =
-        { Agents = agents
-          Moderator = None
-          Termination = termination }
+    let create agents termination =
+        { Agents = agents; Moderator = None; Termination = termination }
 
-    /// Create a moderated group where a moderator coordinates turns
-    let createModerated (agents: IAgent list) (moderator: IAgent) (termination: TerminationCondition) =
-        { Agents = agents
-          Moderator = Some moderator
-          Termination = termination }
+    let createModerated agents moderator termination =
+        { Agents = agents; Moderator = Some moderator; Termination = termination }
 
-    /// Check if the conversation should terminate
     let shouldTerminate (history: AgentMessage list) (group: AgentGroup) =
         match group.Termination with
-        | MaxRounds maxRounds -> history.Length >= maxRounds * group.Agents.Length
-        | ContentContains keyword ->
-            history
-            |> List.exists (fun m -> m.Content.Contains(keyword))
+        | MaxRounds maxRounds ->
+            group.Agents.IsEmpty || history.Length >= 1 + max 0 maxRounds * group.Agents.Length
+        | ContentContains keyword -> history |> List.exists (fun message -> message.Content.Contains(keyword))
         | Custom predicate -> predicate history
 
-    /// Run a collaborative conversation starting with an initial input
     let runAsync (context: AgentContext) (input: string) (group: AgentGroup) : Task<AgentMessage list> =
         task {
             let history = ResizeArray<AgentMessage>()
+            history.Add(AgentMessage.broadcast "user" input)
 
-            let seedId = "user"
-            let seed = AgentMessage.broadcast seedId input
-            history.Add(seed)
+            let mutable finished = shouldTerminate (history |> Seq.toList) group
 
-            let mutable finished = false
             while not finished do
+                let mutable progressed = false
+
                 for agent in group.Agents do
                     if not finished then
-                        let lastMessage = history.[history.Count - 1]
-                        let! reply = agent.HandleMessageAsync(context, lastMessage)
+                        let! reply = Agent.handleMessageAsync context history.[history.Count - 1] agent
+
                         match reply with
-                        | Some msg ->
-                            history.Add(msg)
-                            if shouldTerminate (history |> Seq.toList) group then
-                                finished <- true
+                        | Some message ->
+                            progressed <- true
+                            history.Add message
+                            finished <- shouldTerminate (history |> Seq.toList) group
                         | None -> ()
+
+                if not progressed then finished <- true
 
             return history |> Seq.toList
         }

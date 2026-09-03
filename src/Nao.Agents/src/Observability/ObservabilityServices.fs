@@ -18,120 +18,106 @@ module private Observability =
     /// Fire-and-forget publish for the synchronous (unit-returning) sinks. Safe to ignore:
     /// reads always go to the wrapped backing store, and InMemoryEventBus isolates a failing
     /// consumer, so a subscriber can never break the producer's turn.
-    let emit (bus: IEventBus) (sessionKey: string) (turnId: string) (signal: ObservabilitySignal) =
-        bus.PublishAsync(ObservabilityCaptured(buildScope sessionKey turnId, signal)) |> ignore
+    let emit (bus: EventBus) (sessionKey: string) (turnId: string) (signal: ObservabilitySignal) =
+        EventBus.publishAsync (ObservabilityCaptured(buildScope sessionKey turnId, signal)) bus |> ignore
 
-/// Tee tracer: writes go to the real backing tracer (so span threading and GetTrace stay
-/// correct) and ALSO publish a span signal to the bus. Reads delegate to the backing.
-type private PublishingTracer(sessionKey: string, turnId: string, bus: IEventBus, inner: ITracer) =
-    interface ITracer with
-        member _.StartTrace(operationName) =
+/// Functional publishing decorators for observability capabilities.
+module private Publishing =
+  let tracer sessionKey turnId bus (inner: Tracer) : Tracer =
+    { StartTrace = fun operationName ->
             let span = inner.StartTrace operationName
             Observability.emit bus sessionKey turnId (SpanStarted span)
             span
-        member _.StartSpan parentSpan operationName =
+      StartSpan = fun parentSpan operationName ->
             let span = inner.StartSpan parentSpan operationName
             Observability.emit bus sessionKey turnId (SpanStarted span)
             span
-        member _.EndSpan span status =
+      EndSpan = fun span status ->
             inner.EndSpan span status
             Observability.emit bus sessionKey turnId (SpanEnded(span, status))
-        member _.AddEvent span name attributes =
+      AddEvent = fun span name attributes ->
             inner.AddEvent span name attributes
             Observability.emit bus sessionKey turnId (SpanEventAdded(span, name, attributes))
-        member _.SetAttributes span attributes =
+      SetAttributes = fun span attributes ->
             inner.SetAttributes span attributes
             Observability.emit bus sessionKey turnId (SpanAttributesSet(span, attributes))
-        member _.GetTrace traceId = inner.GetTrace traceId
+      GetTrace = inner.GetTrace }
 
-/// Tee metrics collector: records to the backing collector (so GetMetrics/EstimateCost
-/// aggregations stay correct) and publishes a metric signal.
-type private PublishingMetrics(sessionKey: string, turnId: string, bus: IEventBus, inner: IMetricsCollector) =
-    interface IMetricsCollector with
-        member _.RecordLlmCall inputTokens outputTokens latencyMs =
+  let metrics sessionKey turnId bus (inner: MetricsCollector) : MetricsCollector =
+    { RecordLlmCall = fun inputTokens outputTokens latencyMs ->
             inner.RecordLlmCall inputTokens outputTokens latencyMs
             Observability.emit bus sessionKey turnId (LlmCallRecorded(inputTokens, outputTokens, latencyMs))
-        member _.RecordToolCall toolName durationMs success =
+      RecordToolCall = fun toolName durationMs success ->
             inner.RecordToolCall toolName durationMs success
             Observability.emit bus sessionKey turnId (ToolCallRecorded(toolName, durationMs, success))
-        member _.RecordMetric point =
+      RecordMetric = fun point ->
             inner.RecordMetric point
             Observability.emit bus sessionKey turnId (MetricRecorded point)
-        member _.GetMetrics() = inner.GetMetrics()
-        member _.EstimateCost costModel = inner.EstimateCost costModel
+      GetMetrics = inner.GetMetrics
+      EstimateCost = inner.EstimateCost }
 
-/// Tee execution journal: persists to the backing journal (so revert reads work) and
-/// publishes a record/revert signal after the write completes.
-type private PublishingJournal(sessionKey: string, turnId: string, bus: IEventBus, inner: IExecutionJournal) =
-    interface IExecutionJournal with
-        member _.RecordAsync record =
+  let journal sessionKey turnId bus (inner: ExecutionJournal) : ExecutionJournal =
+    { RecordAsync = fun record ->
             task {
                 do! inner.RecordAsync record
-                do! bus.PublishAsync(ObservabilityCaptured(Observability.buildScope sessionKey turnId, ExecutionRecorded record))
+                do! EventBus.publishAsync (ObservabilityCaptured(Observability.buildScope sessionKey turnId, ExecutionRecorded record)) bus
             }
             :> Task
-        member _.GetHistoryAsync() = inner.GetHistoryAsync()
-        member _.GetRevertibleAsync() = inner.GetRevertibleAsync()
-        member _.MarkRevertedAsync record =
+      GetHistoryAsync = inner.GetHistoryAsync
+      GetRevertibleAsync = inner.GetRevertibleAsync
+      MarkRevertedAsync = fun record ->
             task {
                 do! inner.MarkRevertedAsync record
-                do! bus.PublishAsync(ObservabilityCaptured(Observability.buildScope sessionKey turnId, ExecutionReverted record))
+                do! EventBus.publishAsync (ObservabilityCaptured(Observability.buildScope sessionKey turnId, ExecutionReverted record)) bus
             }
-            :> Task
+            :> Task }
 
-/// Tee trace store: saves to the backing store (so GetBaselineAsync regression reads work)
-/// and publishes a trace-saved signal.
-type private PublishingTraceStore(sessionKey: string, turnId: string, bus: IEventBus, inner: ITraceStore) =
-    interface ITraceStore with
-        member _.SaveAsync trace =
+  let traceStore sessionKey turnId bus (inner: TraceStore) : TraceStore =
+    { SaveAsync = fun trace ->
             task {
                 do! inner.SaveAsync trace
-                do! bus.PublishAsync(ObservabilityCaptured(Observability.buildScope sessionKey turnId, TraceSaved trace))
+                do! EventBus.publishAsync (ObservabilityCaptured(Observability.buildScope sessionKey turnId, TraceSaved trace)) bus
             }
-        member _.GetBaselineAsync agentId taskPattern = inner.GetBaselineAsync agentId taskPattern
-        member _.GetTracesAsync agentId limit = inner.GetTracesAsync agentId limit
+      GetBaselineAsync = inner.GetBaselineAsync
+      GetTracesAsync = inner.GetTracesAsync }
 
-/// Tee audit log: records to the backing log (so queries work) and publishes an
-/// audit-recorded signal.
-type private PublishingAuditLog(sessionKey: string, turnId: string, bus: IEventBus, inner: IAuditLog) =
-    interface IAuditLog with
-        member _.RecordAsync entry =
+  let auditLog sessionKey turnId bus (inner: AuditLog) : AuditLog =
+    { RecordAsync = fun entry ->
             task {
                 do! inner.RecordAsync entry
-                do! bus.PublishAsync(ObservabilityCaptured(Observability.buildScope sessionKey turnId, AuditRecorded entry))
+                do! EventBus.publishAsync (ObservabilityCaptured(Observability.buildScope sessionKey turnId, AuditRecorded entry)) bus
             }
-        member _.QueryAsync agentId since = inner.QueryAsync agentId since
-        member _.QueryByExecutionAsync executionId = inner.QueryByExecutionAsync executionId
-        member _.GetDeniedCountAsync agentId since = inner.GetDeniedCountAsync agentId since
+      QueryAsync = inner.QueryAsync
+      QueryByExecutionAsync = inner.QueryByExecutionAsync
+      GetDeniedCountAsync = inner.GetDeniedCountAsync }
 
-/// An IHarnessServices bundle whose every write is teed to the bus as an ObservabilityCaptured
+/// Build a harness-services bundle whose every write is teed to the bus as an ObservabilityCaptured
 /// event while reads delegate to the wrapped backing bundle. The grain hands this to the agent
 /// harness, so the full observability stream flows through the bus without the producer ever
 /// deciding where it is stored.
-type PublishingHarnessServices(sessionKey: string, turnId: string, bus: IEventBus, backing: IHarnessServices) =
-    let tracer = backing.Tracer |> Option.map (fun t -> PublishingTracer(sessionKey, turnId, bus, t) :> ITracer)
-    let metrics = backing.Metrics |> Option.map (fun m -> PublishingMetrics(sessionKey, turnId, bus, m) :> IMetricsCollector)
-    let journal = backing.ExecutionJournal |> Option.map (fun j -> PublishingJournal(sessionKey, turnId, bus, j) :> IExecutionJournal)
-    let traceStore = backing.TraceStore |> Option.map (fun s -> PublishingTraceStore(sessionKey, turnId, bus, s) :> ITraceStore)
-    let auditLog = backing.AuditLog |> Option.map (fun a -> PublishingAuditLog(sessionKey, turnId, bus, a) :> IAuditLog)
+module PublishingHarnessServices =
+    let create sessionKey turnId bus (backing: HarnessServices) : HarnessServices =
+                let tracer = backing.Tracer |> Option.map (Publishing.tracer sessionKey turnId bus)
+                let metrics = backing.Metrics |> Option.map (Publishing.metrics sessionKey turnId bus)
+                let journal = backing.ExecutionJournal |> Option.map (Publishing.journal sessionKey turnId bus)
+                let traceStore = backing.TraceStore |> Option.map (Publishing.traceStore sessionKey turnId bus)
+                let auditLog = backing.AuditLog |> Option.map (Publishing.auditLog sessionKey turnId bus)
+                HarnessServices.create tracer metrics journal traceStore auditLog
 
-    interface IHarnessServices with
-        member _.Tracer = tracer
-        member _.Metrics = metrics
-        member _.ExecutionJournal = journal
-        member _.TraceStore = traceStore
-        member _.AuditLog = auditLog
+/// Functional facade for obtaining per-turn harness services.
+type ObservabilityServices =
+    { ServicesFor: string -> string -> HarnessServices }
 
-/// Builds the per-turn IHarnessServices bundle handed to the agent harness. Each session's
+/// Builds the per-turn harness-services bundle handed to the agent harness. Each session's
 /// observability lives in its own backing bundle (e.g. sessions/<key>/observability/), built
 /// lazily by `backingFactory` and memoised; the returned bundle tees every write to the bus
 /// while reads delegate to that backing store. Where the data lands is the store-level swap
 /// point (the backing factory), so producers never change.
-type ObservabilityServices(bus: IEventBus, backingFactory: string -> IHarnessServices) =
-    let backings = ConcurrentDictionary<string, IHarnessServices>()
-    let backingFor (sessionKey: string) = backings.GetOrAdd(sessionKey, fun k -> backingFactory k)
+module ObservabilityServices =
+    let create (bus: EventBus) (backingFactory: string -> HarnessServices) =
+        let backings = ConcurrentDictionary<string, HarnessServices>()
+        let backingFor sessionKey = backings.GetOrAdd(sessionKey, fun key -> backingFactory key)
 
-    /// The per-turn harness-services bundle for a session: writes are teed to the bus, reads
-    /// hit the session's backing store. `turnId` stamps each published signal with its turn.
-    member _.ServicesFor(sessionKey: string, turnId: string) : IHarnessServices =
-        PublishingHarnessServices(sessionKey, turnId, bus, backingFor sessionKey) :> IHarnessServices
+        { ServicesFor =
+            fun sessionKey turnId ->
+                PublishingHarnessServices.create sessionKey turnId bus (backingFor sessionKey) }

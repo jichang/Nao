@@ -1,27 +1,25 @@
 namespace Nao.Eval.Evaluators
 
 open System.Text.RegularExpressions
-open System.Threading.Tasks
 open Nao.Eval
 
-/// Evaluator that checks if the output matches a regular expression pattern
-type RegexEvaluator(pattern: string, ?options: RegexOptions) =
-    let regexOpts = defaultArg options RegexOptions.IgnoreCase
-    let regex = Regex(pattern, regexOpts ||| RegexOptions.Compiled)
+/// Regular-expression evaluators.
+module RegexEval =
 
-    interface IEvaluator with
-        member _.Name = "Regex"
-        member _.EvaluateAsync (_case: EvalCase) (actual: string) =
+    /// Create a regular-expression evaluator with the supplied options.
+    let create options pattern =
+        let regex = Regex(pattern, options ||| RegexOptions.Compiled)
+        Evaluator.create "Regex" (fun (_case: EvalCase) (actual: string) ->
             task {
                 if regex.IsMatch(actual) then
                     return (EvalVerdict.Pass, sprintf "Output matches pattern '%s'" pattern)
                 else
                     return (EvalVerdict.Fail, sprintf "Output does not match pattern '%s'" pattern)
-            }
+            })
 
-module RegexEval =
+    /// Match a pattern while ignoring case.
+    let matches pattern = create RegexOptions.IgnoreCase pattern
 
-    let matches pattern = RegexEvaluator(pattern) :> IEvaluator
-
+    /// Match a pattern case-sensitively.
     let matchesCaseSensitive pattern =
-        RegexEvaluator(pattern, RegexOptions.None) :> IEvaluator
+        create RegexOptions.None pattern

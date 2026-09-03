@@ -78,13 +78,8 @@ type LifecycleTests() =
     [<TestMethod>]
     member _.HookCanBlockInitialization() =
         let blockHook =
-            { new ILifecycleHook with
-                member _.OnBeforeInit _ = Task.FromResult(Error "blocked by policy")
-                member _.OnAfterInit _ = Task.FromResult(())
-                member _.OnBeforeStep _ input = Task.FromResult(Ok input)
-                member _.OnAfterStep _ _ = Task.FromResult(())
-                member _.OnCompleted _ _ = Task.FromResult(())
-                member _.OnFailed _ _ = Task.FromResult(()) }
+            { LifecycleHook.passthrough with
+                OnBeforeInit = fun _ -> Task.FromResult(Error "blocked by policy") }
         let lc = AgentLifecycle.create () |> AgentLifecycle.withHooks [ blockHook ]
         let result = (AgentLifecycle.initializeAsync agentId lc).Result
         match result with
@@ -92,8 +87,8 @@ type LifecycleTests() =
         | Ok _ -> Assert.Fail("Expected Error")
 
     [<TestMethod>]
-    member _.PassthroughHookAllowsAll() =
-        let lc = AgentLifecycle.create () |> AgentLifecycle.withHooks [ PassthroughHook() :> ILifecycleHook ]
+    member _.PassthroughLifecycleHookAllowsAll() =
+        let lc = AgentLifecycle.create () |> AgentLifecycle.withHooks [ LifecycleHook.passthrough ]
         let result = (AgentLifecycle.initializeAsync agentId lc).Result
         match result with
         | Ok initialized -> Assert.AreEqual(LifecycleState.Ready, initialized.State)

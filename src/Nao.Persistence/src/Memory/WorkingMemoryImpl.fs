@@ -5,23 +5,23 @@ open System.Threading.Tasks
 open System.Collections.Concurrent
 open Nao.Agents
 
-/// In-memory implementation of working memory
-type InMemoryWorkingMemory(config: WorkingMemoryConfig) =
-    let items = ConcurrentDictionary<string, WorkingMemoryItem>()
+/// In-memory working-memory factory.
+module InMemoryWorkingMemory =
+    let create (config: WorkingMemoryConfig) : WorkingMemory =
+        let items = ConcurrentDictionary<string, WorkingMemoryItem>()
 
-    let evictOverCapacity () =
-        if items.Count > config.Capacity then
-            let toEvict =
-                items.Values
-                |> Seq.filter (fun i -> not i.Pinned)
-                |> Seq.sortBy (fun i -> i.Attention)
-                |> Seq.truncate (items.Count - config.Capacity)
-                |> Seq.toList
-            for item in toEvict do
-                items.TryRemove(item.Key) |> ignore
+        let evictOverCapacity () =
+            if items.Count > config.Capacity then
+                let toEvict =
+                    items.Values
+                    |> Seq.filter (fun i -> not i.Pinned)
+                    |> Seq.sortBy (fun i -> i.Attention)
+                    |> Seq.truncate (items.Count - config.Capacity)
+                    |> Seq.toList
+                for item in toEvict do
+                    items.TryRemove(item.Key) |> ignore
 
-    interface IWorkingMemory with
-        member _.SetAsync(item: WorkingMemoryItem) =
+        { SetAsync = fun (item: WorkingMemoryItem) ->
             let withExpiry =
                 match item.ExpiresAt with
                 | Some _ -> item
@@ -30,7 +30,7 @@ type InMemoryWorkingMemory(config: WorkingMemoryConfig) =
             evictOverCapacity ()
             task { return () }
 
-        member _.GetAsync(key: string) =
+          GetAsync = fun (key: string) ->
             match items.TryGetValue(key) with
             | true, item ->
                 // Boost attention on access
@@ -39,20 +39,20 @@ type InMemoryWorkingMemory(config: WorkingMemoryConfig) =
                 Task.FromResult(Some boosted)
             | false, _ -> Task.FromResult(None)
 
-        member _.GetAllAsync() =
+          GetAllAsync = fun () ->
             items.Values
             |> Seq.sortByDescending (fun i -> i.Attention)
             |> Seq.toList
             |> Task.FromResult
 
-        member _.GetActiveAsync(minAttention: float) =
+          GetActiveAsync = fun (minAttention: float) ->
             items.Values
             |> Seq.filter (fun i -> i.Attention >= minAttention)
             |> Seq.sortByDescending (fun i -> i.Attention)
             |> Seq.toList
             |> Task.FromResult
 
-        member _.FocusAsync (key: string) (boost: float) =
+          FocusAsync = fun (key: string) (boost: float) ->
             match items.TryGetValue(key) with
             | true, item ->
                 let focused = { item with Attention = min 1.0 (item.Attention + boost) }
@@ -60,7 +60,7 @@ type InMemoryWorkingMemory(config: WorkingMemoryConfig) =
             | false, _ -> ()
             task { return () }
 
-        member _.DecayAsync() =
+          DecayAsync = fun () ->
             task {
                 let now = DateTimeOffset.UtcNow
                 let mutable evicted = 0
@@ -84,14 +84,14 @@ type InMemoryWorkingMemory(config: WorkingMemoryConfig) =
                 return evicted
             }
 
-        member _.PinAsync(key: string) =
+          PinAsync = fun (key: string) ->
             match items.TryGetValue(key) with
             | true, item ->
                 items.TryUpdate(key, { item with Pinned = true; ExpiresAt = None }, item) |> ignore
             | false, _ -> ()
             task { return () }
 
-        member _.UnpinAsync(key: string) =
+          UnpinAsync = fun (key: string) ->
             match items.TryGetValue(key) with
             | true, item ->
                 let unpinned =
@@ -102,15 +102,15 @@ type InMemoryWorkingMemory(config: WorkingMemoryConfig) =
             | false, _ -> ()
             task { return () }
 
-        member _.RemoveAsync(key: string) =
+          RemoveAsync = fun (key: string) ->
             items.TryRemove(key) |> ignore
             task { return () }
 
-        member _.ClearAsync() =
+          ClearAsync = fun () ->
             items.Clear()
             task { return () }
 
-        member _.RenderContextAsync(topK: int) =
+          RenderContextAsync = fun (topK: int) ->
             let active =
                 items.Values
                 |> Seq.sortByDescending (fun i -> i.Attention)
@@ -121,4 +121,4 @@ type InMemoryWorkingMemory(config: WorkingMemoryConfig) =
                 |> List.mapi (fun idx item ->
                     sprintf "[%d] (%s, attention=%.2f) %s" (idx + 1) item.Source item.Attention item.Content)
                 |> String.concat "\n"
-            Task.FromResult(rendered)
+            Task.FromResult(rendered) }

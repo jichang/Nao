@@ -10,14 +10,17 @@
     <Compile Include="src/Llm/Message.fs" />
     <Compile Include="src/Llm/CompletionOptions.fs" />
     <Compile Include="src/Llm/CompletionResult.fs" />
-    <Compile Include="src/Llm/ILlmProvider.fs" />
+     <Compile Include="src/Llm/LlmProvider.fs" />
      <!-- Core agent and tool contracts -->
     <Compile Include="src/Core/Permission.fs" />
     <Compile Include="src/Core/AgentContext.fs" />
-    <Compile Include="src/Core/Tool.fs" />
+     <Compile Include="src/Core/ToolSchema.fs" />
+     <Compile Include="src/Core/ToolCodec.fs" />
+     <Compile Include="src/Core/ToolOperation.fs" />
+     <Compile Include="src/Core/ExecutableTool.fs" />
     <Compile Include="src/Core/AgentAction.fs" />
     <Compile Include="src/Core/AgentMessage.fs" />
-    <Compile Include="src/Core/IAgent.fs" />
+     <Compile Include="src/Core/Agent.fs" />
     <Compile Include="src/Core/RetryPolicy.fs" />
     <Compile Include="src/Prompts/PromptExample.fs" />
     <Compile Include="src/Prompts/OutputFormat.fs" />
@@ -45,6 +48,8 @@
     <Compile Include="src/Memory/ContextCompaction.fs" />
     <!-- L: Lifecycle & Orchestration -->
     <Compile Include="src/Lifecycle/Lifecycle.fs" />
+     <Compile Include="src/Orchestration/Loop.fs" />
+     <Compile Include="src/Orchestration/ExecutionGraph.fs" />
     <Compile Include="src/Orchestration/ToolSelection.fs" />
     <Compile Include="src/Orchestration/Router.fs" />
     <Compile Include="src/Orchestration/Pipeline.fs" />

@@ -1,21 +1,19 @@
 namespace Nao.Eval.Evaluators
 
 open System
-open System.Threading.Tasks
 open Nao.Eval
 
-/// Evaluator that checks for exact string match (case-insensitive by default)
-type ExactMatchEvaluator(?caseSensitive: bool) =
-    let sensitive = defaultArg caseSensitive false
+/// Evaluators that check for an exact string match.
+module ExactMatch =
 
-    interface IEvaluator with
-        member _.Name = "ExactMatch"
-        member _.EvaluateAsync (case: EvalCase) (actual: string) =
+    /// Create an exact-match evaluator with configurable case sensitivity.
+    let create caseSensitive =
+        Evaluator.create "ExactMatch" (fun (case: EvalCase) (actual: string) ->
             task {
                 match case.Expected with
                 | Some expected ->
                     let matches =
-                        if sensitive then actual.Trim() = expected.Trim()
+                        if caseSensitive then actual.Trim() = expected.Trim()
                         else String.Equals(actual.Trim(), expected.Trim(), StringComparison.OrdinalIgnoreCase)
                     if matches then
                         return (EvalVerdict.Pass, "Output exactly matches expected")
@@ -23,10 +21,10 @@ type ExactMatchEvaluator(?caseSensitive: bool) =
                         return (EvalVerdict.Fail, sprintf "Expected '%s' but got '%s'" expected actual)
                 | None ->
                     return (EvalVerdict.Fail, "ExactMatch requires an expected value")
-            }
+            })
 
-module ExactMatch =
+    /// Case-insensitive exact matching.
+    let evaluator = create false
 
-    let evaluator = ExactMatchEvaluator() :> IEvaluator
-
-    let caseSensitive = ExactMatchEvaluator(caseSensitive = true) :> IEvaluator
+    /// Case-sensitive exact matching.
+    let caseSensitive = create true

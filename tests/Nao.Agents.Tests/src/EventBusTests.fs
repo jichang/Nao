@@ -8,16 +8,18 @@ open Nao.Agents
 open Nao.Persistence
 open Nao.Agents
 
-/// Test consumer that records the events it receives (and can optionally throw).
-type private RecordingConsumer(?fail: bool) =
-    let received = ResizeArray<NaoEvent>()
-    let shouldFail = defaultArg fail false
-    member _.Received = received
-    interface IEventConsumer with
-        member _.HandleAsync(evt) =
-            if shouldFail then failwith "boom"
-            received.Add evt
-            Task.CompletedTask
+module private EventBusTestHelpers =
+    /// Test consumer that records the events it receives (and can optionally throw).
+    let recordingConsumer shouldFail =
+        let received = ResizeArray<NaoEvent>()
+        let consumer =
+            EventConsumer.create (fun evt ->
+                if shouldFail then failwith "boom"
+                received.Add evt
+                Task.CompletedTask)
+        consumer, received
+
+open EventBusTestHelpers
 
 [<TestClass>]
 type EventBusTests() =
@@ -47,38 +49,107 @@ type EventBusTests() =
 
     [<TestMethod>]
     member _.PublishAsync_FansOutToAllConsumers() =
-        let bus = InMemoryEventBus() :> IEventBus
-        let a = RecordingConsumer()
-        let b = RecordingConsumer()
-        bus.Subscribe(a :> IEventConsumer)
-        bus.Subscribe(b :> IEventConsumer)
+        let bus = InMemoryEventBus.create ()
+        let a, aReceived = recordingConsumer false
+        let b, bReceived = recordingConsumer false
+        EventBus.subscribe a bus
+        EventBus.subscribe b bus
 
-        bus.PublishAsync(TurnCompleted(scope (), sampleTurn ())).Wait()
+        EventBus.publishAsync (TurnCompleted(scope (), sampleTurn ())) bus |> _.Wait()
 
-        Assert.AreEqual(1, a.Received.Count)
-        Assert.AreEqual(1, b.Received.Count)
+        Assert.AreEqual(1, aReceived.Count)
+        Assert.AreEqual(1, bReceived.Count)
 
     [<TestMethod>]
     member _.PublishAsync_IsolatesAFailingConsumer() =
-        let bus = InMemoryEventBus() :> IEventBus
-        let failing = RecordingConsumer(fail = true)
-        let healthy = RecordingConsumer()
-        bus.Subscribe(failing :> IEventConsumer)
-        bus.Subscribe(healthy :> IEventConsumer)
+        let bus = InMemoryEventBus.create ()
+        let failing, _ = recordingConsumer true
+        let healthy, healthyReceived = recordingConsumer false
+        EventBus.subscribe failing bus
+        EventBus.subscribe healthy bus
 
         // Must not throw even though one consumer fails...
-        bus.PublishAsync(TurnCompleted(scope (), sampleTurn ())).Wait()
+        EventBus.publishAsync (TurnCompleted(scope (), sampleTurn ())) bus |> _.Wait()
 
         // ...and the healthy consumer still receives the event.
-        Assert.AreEqual(1, healthy.Received.Count)
+        Assert.AreEqual(1, healthyReceived.Count)
+
+    [<TestMethod>]
+    member _.DuplicateSubscriptionsAndFirstMatchUnsubscribeArePreserved() =
+        let bus = InMemoryEventBus.create ()
+        let consumer, received = recordingConsumer false
+        EventBus.subscribe consumer bus
+        EventBus.subscribe consumer bus
+
+        EventBus.unsubscribe consumer bus
+        EventBus.publishAsync (TurnCompleted(scope (), sampleTurn ())) bus |> _.Wait()
+
+        Assert.AreEqual(1, received.Count)
+
+    [<TestMethod>]
+    member _.UnsubscribeUsesConsumerIdentity() =
+        let bus = InMemoryEventBus.create ()
+        let received = ResizeArray<NaoEvent>()
+        let handle evt = received.Add evt; Task.CompletedTask
+        let first = EventConsumer.create handle
+        let second = EventConsumer.create handle
+        EventBus.subscribe first bus
+        EventBus.subscribe second bus
+
+        EventBus.unsubscribe first bus
+        EventBus.publishAsync (TurnCompleted(scope (), sampleTurn ())) bus |> _.Wait()
+
+        Assert.AreEqual(1, received.Count)
+
+    [<TestMethod>]
+    member _.PublishUsesSubscriptionSnapshot() =
+        let bus = InMemoryEventBus.create ()
+        let late, received = recordingConsumer false
+        let subscribing =
+            EventConsumer.create (fun _ ->
+                EventBus.subscribe late bus
+                Task.CompletedTask)
+        EventBus.subscribe subscribing bus
+
+        EventBus.publishAsync (TurnCompleted(scope (), sampleTurn ())) bus |> _.Wait()
+        Assert.AreEqual(0, received.Count)
+        EventBus.publishAsync (TurnCompleted(scope (), sampleTurn ())) bus |> _.Wait()
+        Assert.AreEqual(1, received.Count)
+
+    [<TestMethod>]
+    member _.PublishAwaitsConsumersSequentially() =
+        let bus = InMemoryEventBus.create ()
+        let order = ResizeArray<string>()
+        let release = TaskCompletionSource<unit>(TaskCreationOptions.RunContinuationsAsynchronously)
+        let first =
+            EventConsumer.create (fun _ ->
+                task {
+                    order.Add "first-start"
+                    do! release.Task
+                    order.Add "first-end"
+                } :> Task)
+        let second =
+            EventConsumer.create (fun _ ->
+                order.Add "second"
+                Task.CompletedTask)
+        EventBus.subscribe first bus
+        EventBus.subscribe second bus
+
+        let publishing = EventBus.publishAsync (TurnCompleted(scope (), sampleTurn ())) bus
+        CollectionAssert.AreEqual([| "first-start" |], order.ToArray())
+        Assert.IsFalse(publishing.IsCompleted)
+
+        release.SetResult()
+        publishing.Wait()
+        CollectionAssert.AreEqual([| "first-start"; "first-end"; "second" |], order.ToArray())
 
     [<TestMethod>]
     member _.RoutesTurnToPerSessionFolder() =
         let root = tempDir ()
-        let consumer = FeedbackEventConsumer(fun key -> Path.Combine(root, key.Replace("/", "_"), "feedback"))
+        let consumer = FeedbackEventConsumer.create (fun key -> Path.Combine(root, key.Replace("/", "_"), "feedback"))
         let evt = TurnCompleted(scope (), sampleTurn ())
 
-        (consumer :> IEventConsumer).HandleAsync(evt).Wait()
+        EventConsumer.handleAsync evt consumer.Consumer |> _.Wait()
 
         let expected = Path.Combine(root, "dev_s1", "feedback", "turns.jsonl")
         Assert.IsTrue(File.Exists expected, sprintf "expected turns file at %s" expected)
@@ -86,14 +157,14 @@ type EventBusTests() =
     [<TestMethod>]
     member _.SeparatesDistinctSessions() =
         let root = tempDir ()
-        let consumer = FeedbackEventConsumer(fun key -> Path.Combine(root, key.Replace("/", "_"), "feedback"))
+        let consumer = FeedbackEventConsumer.create (fun key -> Path.Combine(root, key.Replace("/", "_"), "feedback"))
         let scopeA =
             EventScope.Create("dev", "s1", "c1", "ws", "turn-a", "dev/s1")
         let scopeB =
             EventScope.Create("dev", "s2", "c1", "ws", "turn-b", "dev/s2")
 
-        (consumer :> IEventConsumer).HandleAsync(TurnCompleted(scopeA, sampleTurn ())).Wait()
-        (consumer :> IEventConsumer).HandleAsync(TurnCompleted(scopeB, sampleTurn ())).Wait()
+        EventConsumer.handleAsync (TurnCompleted(scopeA, sampleTurn ())) consumer.Consumer |> _.Wait()
+        EventConsumer.handleAsync (TurnCompleted(scopeB, sampleTurn ())) consumer.Consumer |> _.Wait()
 
         Assert.IsTrue(File.Exists(Path.Combine(root, "dev_s1", "feedback", "turns.jsonl")))
         Assert.IsTrue(File.Exists(Path.Combine(root, "dev_s2", "feedback", "turns.jsonl")))
@@ -101,8 +172,8 @@ type EventBusTests() =
     [<TestMethod>]
     member _.FeedbackFor_ReturnsServiceForReads() =
         let root = tempDir ()
-        let consumer = FeedbackEventConsumer(fun key -> Path.Combine(root, key.Replace("/", "_"), "feedback"))
+        let consumer = FeedbackEventConsumer.create (fun key -> Path.Combine(root, key.Replace("/", "_"), "feedback"))
 
-        let svc = consumer.FeedbackFor "dev/s1"
+        let svc = FeedbackEventConsumer.feedbackFor "dev/s1" consumer
 
         Assert.IsNotNull(box svc)
