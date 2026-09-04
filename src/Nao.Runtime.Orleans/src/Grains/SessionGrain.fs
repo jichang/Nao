@@ -16,6 +16,7 @@ open Nao.Runtime.Orleans
 
 // Allow the Orleans C# codegen project to access internal F# DU backing fields.
 [<assembly: System.Runtime.CompilerServices.InternalsVisibleTo("Nao.Runtime.Orleans.Codegen")>]
+[<assembly: System.Runtime.CompilerServices.InternalsVisibleTo("Nao.Runtime.Orleans.Tests")>]
 do ()
 
 /// Metadata about a session
@@ -100,6 +101,9 @@ type SessionGrainState() =
     /// Resource-access grants the user approved for this session ("remember for session").
     [<Id(4u)>]
     member val GrantedPermissions: ResizeArray<PermissionGrantRecord> = ResizeArray() with get, set
+
+    [<Id(5u)>]
+    member val SchemaVersion: int = 0 with get, set
 
 /// Options for starting or reconfiguring a session
 [<GenerateSerializer>]
@@ -679,6 +683,12 @@ type SessionGrain
     /// Resolve this session's per-session observability and feedback stores from the grain
     /// key ("userId/sessionId") so each session writes them under its own sessions/<key>/.
     override this.OnActivateAsync(cancellationToken: System.Threading.CancellationToken) : Task =
+        GrainStateVersion.prepare
+            "Session state"
+            persistentState.RecordExists
+            persistentState.State.SchemaVersion
+            (fun version -> persistentState.State.SchemaVersion <- version)
+
         let key = this.GetPrimaryKeyString()
         feedback <- feedbackFactory.Invoke key
         base.OnActivateAsync(cancellationToken)

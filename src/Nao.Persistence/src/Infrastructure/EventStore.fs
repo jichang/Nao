@@ -81,16 +81,15 @@ module EventStore =
             if not initialized then
                 lock sync (fun () ->
                     if not initialized then
+                        AdoSchema.ensureVersionedTable
+                            factory
+                            "events"
+                            "nao_events"
+                            "CREATE TABLE IF NOT EXISTS nao_events (stream TEXT NOT NULL, ord INTEGER NOT NULL, payload TEXT NOT NULL, PRIMARY KEY (stream, ord))"
+                        |> fun operation -> operation.GetAwaiter().GetResult()
+
                         use conn = factory.Create()
                         conn.Open()
-
-                        use create =
-                            exec
-                                conn
-                                "CREATE TABLE IF NOT EXISTS nao_events (stream TEXT NOT NULL, ord INTEGER NOT NULL, payload TEXT NOT NULL, PRIMARY KEY (stream, ord))"
-                                []
-
-                        create.ExecuteNonQuery() |> ignore
 
                         use maxCmd =
                             exec
@@ -136,3 +135,27 @@ module EventStore =
                 List.ofSeq results)
 
         { Append = append; LoadAll = loadAll }
+
+/// Strict decoding for current-version event streams.
+module EventStream =
+    let loadCurrent context expectedVersion decode getVersion getEvent (store: EventStore) =
+        store.LoadAll()
+        |> List.mapi (fun index line ->
+            try
+                let document = decode line
+                let version = getVersion document
+
+                if version <> expectedVersion then
+                    raise (JsonException(sprintf "Expected schema version %d." expectedVersion))
+
+                getEvent document
+            with ex ->
+                raise (
+                    InvalidDataException(
+                        sprintf
+                            "Event stream '%s' is invalid at event %d. Follow docs/migrations before writing."
+                            context
+                            (index + 1),
+                        ex
+                    )
+                ))

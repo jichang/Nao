@@ -4,6 +4,7 @@ open System
 open System.Collections.Generic
 open System.Globalization
 open System.IO
+open System.Text
 open System.Text.Json
 open System.Text.Json.Serialization
 open Nao.Agents
@@ -313,3 +314,61 @@ module FileJson =
             Directory.CreateDirectory dir |> ignore
 
         File.WriteAllText(path, Json.serialize value)
+
+/// Strict current-schema JSON documents for durable file stores.
+module VersionedFileJson =
+    let read<'value> kind currentVersion (path: string) (fallback: 'value) : 'value =
+        if not (File.Exists path) then
+            fallback
+        else
+            try
+                use document = JsonDocument.Parse(File.ReadAllText path)
+                let root = document.RootElement
+
+                if root.ValueKind <> JsonValueKind.Object then
+                    raise (JsonException("The document must be a JSON object."))
+
+                let version = root.GetProperty("schemaVersion").GetInt32()
+
+                if version <> currentVersion then
+                    raise (
+                        InvalidDataException(
+                            sprintf
+                                "%s at '%s' uses unsupported schema version %d; expected %d. Follow docs/migrations before writing."
+                                kind
+                                path
+                                version
+                                currentVersion
+                        )
+                    )
+
+                root.GetProperty("value").GetRawText() |> Json.deserialize<'value>
+            with
+            | :? InvalidDataException -> reraise ()
+            | ex ->
+                raise (
+                    InvalidDataException(
+                        sprintf
+                            "%s at '%s' is invalid. Restore or remove the data by following docs/migrations before writing."
+                            kind
+                            path,
+                        ex
+                    )
+                )
+
+    let write (currentVersion: int) (path: string) (value: 'value) =
+        let directory = Path.GetDirectoryName path
+
+        if not (String.IsNullOrEmpty directory) then
+            Directory.CreateDirectory directory |> ignore
+
+        use stream = new MemoryStream()
+
+        use writer = new Utf8JsonWriter(stream)
+        writer.WriteStartObject()
+        writer.WriteNumber("schemaVersion", currentVersion)
+        writer.WritePropertyName("value")
+        JsonSerializer.Serialize(writer, value, Json.options)
+        writer.WriteEndObject()
+        writer.Flush()
+        File.WriteAllText(path, Encoding.UTF8.GetString(stream.ToArray()))

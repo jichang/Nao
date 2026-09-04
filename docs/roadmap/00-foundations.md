@@ -86,19 +86,22 @@ The project graph is acyclic and enforced by `scripts/validate-project-dependenc
 
 ## FND-05 — Public contract compatibility
 
-- [ ] Define semantic-versioning rules for F# records, discriminated unions, interfaces, and serialized contracts.
-- [ ] Version durable events, Orleans state, knowledge records, traces, and evaluation reports.
-- [ ] Define unknown-field and unknown-case behavior.
-- [ ] Add golden compatibility fixtures for supported persisted versions.
-- [ ] Add migration hooks and dry-run validation.
-- [ ] Define deprecation periods and release-note requirements.
-- [ ] Test rolling upgrade compatibility where multiple runtime versions can coexist.
+- [x] Define pre-release breaking-change policy and post-release semantic-versioning decisions for F# records, discriminated unions, interfaces, and serialized contracts.
+- [x] Version durable events, Orleans state, knowledge records, traces, and evaluation reports.
+- [x] Define unknown-field and unknown-case behavior.
+- [x] Require migration guides for breaking API and durable-format changes.
+- [x] Define when migration code, deprecation periods, and major versions are required.
+- [x] Inventory every current durable format and identify fail-fast/versioning gaps.
+- [x] Verify every incompatible or corrupt format fails before mutation.
+- [x] Document mixed-version runtime support as unsupported until a stable multi-version deployment contract exists.
 
 **Acceptance criteria**
 
-- [ ] Supported old state can be read or migrated by the current release.
-- [ ] Incompatible state fails with an actionable diagnostic before mutation.
-- [ ] Public breaking changes require an explicit major-version decision.
+- [x] Pre-release breaking changes use explicit external migration or reset instructions instead of embedded legacy readers.
+- [x] Incompatible state fails with an actionable diagnostic before mutation.
+- [x] Every public breaking change requires a migration guide; stable releases additionally require an explicit semantic-version decision.
+
+Nao currently makes no backward-compatibility or rolling-upgrade promise. The migration policy favors clean current contracts and documented external transformation over runtime compatibility branches. Implemented event streams, traces, evaluation archives, Orleans session state, file documents, and ADO.NET tables carry explicit current-schema versions and reject incompatible or corrupt state before mutation. Knowledge-record persistence is not yet implemented and must define these guarantees with its first durable contract. FND-05 is complete.
 
 ## FND-06 — Stable identity and correlation model
 

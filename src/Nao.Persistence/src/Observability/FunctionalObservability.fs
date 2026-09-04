@@ -1,6 +1,9 @@
 namespace Nao.Persistence
 
 open System
+open System.IO
+open System.Text.Json
+open System.Text.Json.Serialization
 open System.Threading.Tasks
 open Nao.Agents
 
@@ -12,8 +15,8 @@ module private TracerState =
             spans.[span.Id] <- span
 
         let upsert (span: Span) =
-            spans.[span.Id] <- span
             persist span
+            spans.[span.Id] <- span
 
         { StartTrace =
             fun operationName ->
@@ -253,18 +256,57 @@ module InMemoryTraceStore =
           DeleteOwnerAsync = deleteOwnerAsync
           DeleteExpiredAsync = deleteExpiredAsync }
 
+type TracerDocument =
+    { [<JsonPropertyName("schemaVersion")>]
+      SchemaVersion: int
+      [<JsonPropertyName("value")>]
+      Value: Span }
+
 module PersistentTracer =
-    let create (store: EventStore) =
-        store.LoadAll()
-        |> Seq.map FSharpJson.deserialize<Span>
-        |> TracerState.create (FSharpJson.serialize >> store.Append)
+    [<Literal>]
+    let private CurrentSchemaVersion = 1
+
+    let private decode context lineNumber line =
+        try
+            let document = FSharpJson.deserialize<TracerDocument> line
+
+            if isNull (box document) || document.SchemaVersion <> CurrentSchemaVersion then
+                raise (JsonException(sprintf "Expected schema version %d." CurrentSchemaVersion))
+
+            document.Value
+        with ex ->
+            raise (
+                InvalidDataException(
+                    sprintf
+                        "Tracer stream '%s' is invalid at span %d. Follow docs/migrations before writing."
+                        context
+                        lineNumber,
+                    ex
+                )
+            )
+
+    let create context (store: EventStore) =
+        let loadSpans () =
+            store.LoadAll() |> List.mapi (fun index line -> decode context (index + 1) line)
+
+        let persist span =
+            loadSpans () |> ignore
+
+            store.Append(
+                FSharpJson.serialize
+                    { SchemaVersion = CurrentSchemaVersion
+                      Value = span }
+            )
+
+        loadSpans () |> TracerState.create persist
 
 module Tracers =
     let ado factory =
-        PersistentTracer.create (EventStore.db factory "tracer")
+        PersistentTracer.create "tracer" (EventStore.db factory "tracer")
 
     let file baseDir =
-        PersistentTracer.create (EventStore.file (System.IO.Path.Combine(baseDir, "tracer.jsonl")))
+        let path = System.IO.Path.Combine(baseDir, "tracer.jsonl")
+        PersistentTracer.create path (EventStore.file path)
 
 [<RequireQualifiedAccess>]
 type MetricsEvent =
@@ -275,16 +317,33 @@ type MetricsEvent =
 type MetricsDocument = { Version: int; Event: MetricsEvent }
 
 module PersistentMetricsCollector =
-    let create (store: EventStore) : MetricsCollector =
-        let inner = InMemoryMetricsCollector.create ()
-
-        for line in store.LoadAll() do
+    let private decode context lineNumber line =
+        try
             let document = FSharpJson.deserialize<MetricsDocument> line
 
-            if document.Version <> 1 then
-                invalidOp (sprintf "Unsupported metrics document version %d." document.Version)
+            if isNull (box document) || document.Version <> 1 then
+                raise (JsonException("Expected metrics schema version 1."))
 
-            match document.Event with
+            document.Event
+        with ex ->
+            raise (
+                InvalidDataException(
+                    sprintf
+                        "Metrics stream '%s' is invalid at event %d. Follow docs/migrations before writing."
+                        context
+                        lineNumber,
+                    ex
+                )
+            )
+
+    let create context (store: EventStore) : MetricsCollector =
+        let inner = InMemoryMetricsCollector.create ()
+
+        let loadEvents () =
+            store.LoadAll() |> List.mapi (fun index line -> decode context (index + 1) line)
+
+        for event in loadEvents () do
+            match event with
             | MetricsEvent.Accepted metric -> inner.Record metric
             | MetricsEvent.DeleteOwner owner -> inner.DeleteOwnerAsync(owner).GetAwaiter().GetResult() |> ignore
             | MetricsEvent.DeleteExpired(owner, before) ->
@@ -296,7 +355,8 @@ module PersistentMetricsCollector =
 
         let persist event operation =
             task {
-                let! result = operation
+                loadEvents () |> ignore
+                let! result = operation ()
 
                 match result with
                 | Error failure -> return Error failure
@@ -310,21 +370,24 @@ module PersistentMetricsCollector =
 
         { Record =
             fun metric ->
+                loadEvents () |> ignore
                 inner.Record metric
                 append (MetricsEvent.Accepted metric)
           GetMetrics = inner.GetMetrics
           EstimateCost = inner.EstimateCost
-          DeleteOwnerAsync = fun owner -> persist (MetricsEvent.DeleteOwner owner) (inner.DeleteOwnerAsync owner)
+          DeleteOwnerAsync =
+            fun owner -> persist (MetricsEvent.DeleteOwner owner) (fun () -> inner.DeleteOwnerAsync owner)
           DeleteExpiredAsync =
             fun owner before ->
-                persist (MetricsEvent.DeleteExpired(owner, before)) (inner.DeleteExpiredAsync owner before) }
+                persist (MetricsEvent.DeleteExpired(owner, before)) (fun () -> inner.DeleteExpiredAsync owner before) }
 
 module MetricsCollectors =
     let ado factory =
-        PersistentMetricsCollector.create (EventStore.db factory "metrics")
+        PersistentMetricsCollector.create "metrics" (EventStore.db factory "metrics")
 
     let file baseDir =
-        PersistentMetricsCollector.create (EventStore.file (System.IO.Path.Combine(baseDir, "metrics.jsonl")))
+        let path = System.IO.Path.Combine(baseDir, "metrics.jsonl")
+        PersistentMetricsCollector.create path (EventStore.file path)
 
 [<RequireQualifiedAccess>]
 type TraceStoreEvent =
@@ -332,12 +395,50 @@ type TraceStoreEvent =
     | DeleteOwner of string
     | DeleteExpired of string * DateTimeOffset
 
+type TraceStoreDocument =
+    { [<JsonPropertyName("schemaVersion")>]
+      SchemaVersion: int
+      [<JsonPropertyName("event")>]
+      Event: TraceStoreEvent }
+
 module PersistentTraceStore =
-    let create (store: EventStore) : TraceStore =
+    [<Literal>]
+    let private CurrentSchemaVersion = 1
+
+    let private decode context lineNumber line =
+        try
+            let document = FSharpJson.deserialize<TraceStoreDocument> line
+
+            if isNull (box document) || document.SchemaVersion <> CurrentSchemaVersion then
+                raise (JsonException(sprintf "Expected schema version %d." CurrentSchemaVersion))
+
+            document.Event
+        with ex ->
+            raise (
+                InvalidDataException(
+                    sprintf
+                        "Trace store '%s' is invalid at event %d. Follow docs/migrations before writing."
+                        context
+                        lineNumber,
+                    ex
+                )
+            )
+
+    let create context (store: EventStore) : TraceStore =
         let inner = InMemoryTraceStore.create ()
 
-        for line in store.LoadAll() do
-            match FSharpJson.deserialize<TraceStoreEvent> line with
+        let loadEvents () =
+            store.LoadAll() |> List.mapi (fun index line -> decode context (index + 1) line)
+
+        let append event =
+            store.Append(
+                FSharpJson.serialize
+                    { SchemaVersion = CurrentSchemaVersion
+                      Event = event }
+            )
+
+        for event in loadEvents () do
+            match event with
             | TraceStoreEvent.Save trace -> inner.SaveAsync(trace).GetAwaiter().GetResult()
             | TraceStoreEvent.DeleteOwner owner -> inner.DeleteOwnerAsync(owner).GetAwaiter().GetResult() |> ignore
             | TraceStoreEvent.DeleteExpired(owner, before) ->
@@ -346,13 +447,14 @@ module PersistentTraceStore =
 
         let persist event operation =
             task {
+                loadEvents () |> ignore
                 let! result = operation
 
                 match result with
                 | Error failure -> return Error failure
                 | Ok count ->
                     try
-                        store.Append(FSharpJson.serialize event)
+                        append event
                         return Ok count
                     with ex ->
                         return Error(TraceOperations.failure ex)
@@ -360,8 +462,9 @@ module PersistentTraceStore =
 
         let saveAsync trace =
             task {
+                loadEvents () |> ignore
                 do! inner.SaveAsync trace
-                store.Append(FSharpJson.serialize (TraceStoreEvent.Save trace))
+                append (TraceStoreEvent.Save trace)
             }
 
         let deleteOwnerAsync owner =
@@ -378,7 +481,8 @@ module PersistentTraceStore =
 
 module TraceStores =
     let ado factory =
-        PersistentTraceStore.create (EventStore.db factory "trace-store")
+        PersistentTraceStore.create "trace-store" (EventStore.db factory "trace-store")
 
     let file baseDir =
-        PersistentTraceStore.create (EventStore.file (System.IO.Path.Combine(baseDir, "trace-store.jsonl")))
+        let path = System.IO.Path.Combine(baseDir, "trace-store.jsonl")
+        PersistentTraceStore.create path (EventStore.file path)

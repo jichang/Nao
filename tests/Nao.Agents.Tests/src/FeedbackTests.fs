@@ -127,6 +127,23 @@ type FileStoreTests() =
         | :? InvalidDataException -> ()
         | :? AggregateException as error -> Assert.IsTrue(error.InnerException :? InvalidDataException)
 
+    [<TestMethod>]
+    member _.``Turn store rejects corrupt history before save``() =
+        let dir = tempDir ()
+        let path = Path.Combine(dir, "turns.jsonl")
+        File.WriteAllText(path, "{invalid" + Environment.NewLine)
+        let before = File.ReadAllBytes path
+        let store = FileTurnStore.create dir
+
+        let error =
+            Assert.ThrowsExactly<InvalidDataException>(fun () ->
+                store.SaveAsync TurnRecord.Empty |> _.GetAwaiter().GetResult())
+
+        StringAssert.Contains(error.Message, path)
+        StringAssert.Contains(error.Message, "line 1")
+        StringAssert.Contains(error.Message, "docs/migrations")
+        CollectionAssert.AreEqual(before, File.ReadAllBytes path)
+
 [<TestClass>]
 type TurnStoreLifecycleTests() =
 
@@ -221,6 +238,66 @@ type DatabaseStoreTests() =
 
 [<TestClass>]
 type FeedbackStoreLifecycleTests() =
+
+    [<TestMethod>]
+    member _.``Feedback store rejects corrupt history before save``() =
+        let dir = tempDir ()
+        let path = Path.Combine(dir, "feedback.jsonl")
+        File.WriteAllText(path, "{invalid" + Environment.NewLine)
+        let before = File.ReadAllBytes path
+        let store = FileFeedbackStore.create dir
+
+        let feedback =
+            { Id = Guid.NewGuid()
+              TurnId = "turn"
+              SessionId = "session"
+              UserId = "user"
+              Sentiment = FeedbackSentiment.Neutral
+              Comment = None
+              CreatedAt = DateTimeOffset.UtcNow
+              Metadata = Map.empty }
+
+        let error =
+            Assert.ThrowsExactly<InvalidDataException>(fun () -> store.SaveAsync feedback |> _.GetAwaiter().GetResult())
+
+        StringAssert.Contains(error.Message, path)
+        StringAssert.Contains(error.Message, "line 1")
+        CollectionAssert.AreEqual(before, File.ReadAllBytes path)
+
+    [<TestMethod>]
+    member _.``ADO feedback store rejects corrupt row before save``() =
+        let factory = sqliteFactory ()
+        let store = AdoFeedbackStore.create factory
+        store.GetAllAsync().Wait()
+
+        Ado.executeNonQuery
+            factory
+            "INSERT INTO nao_feedback_entries (item_id, payload) VALUES ('corrupt-feedback', '{invalid')"
+            []
+        |> _.Wait()
+
+        let feedback =
+            { Id = Guid.NewGuid()
+              TurnId = "turn"
+              SessionId = "session"
+              UserId = "user"
+              Sentiment = FeedbackSentiment.Neutral
+              Comment = None
+              CreatedAt = DateTimeOffset.UtcNow
+              Metadata = Map.empty }
+
+        let error =
+            Assert.ThrowsExactly<InvalidDataException>(fun () -> store.SaveAsync feedback |> _.GetAwaiter().GetResult())
+
+        StringAssert.Contains(error.Message, "corrupt-feedback")
+        StringAssert.Contains(error.Message, "docs/migrations")
+
+        let rows =
+            Ado.query factory "SELECT item_id FROM nao_feedback_entries" [] (fun reader ->
+                Ado.getString reader "item_id")
+            |> _.GetAwaiter().GetResult()
+
+        CollectionAssert.AreEqual([| "corrupt-feedback" |], rows |> List.toArray)
 
     [<TestMethod>]
     member _.``Purges feedback by user across backends``() =

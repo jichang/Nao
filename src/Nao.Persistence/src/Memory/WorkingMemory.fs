@@ -19,8 +19,17 @@ type WorkingMemoryDocument =
       Event: WorkingMemoryEvent }
 
 module PersistentWorkingMemory =
-    let create (store: EventStore) (config: WorkingMemoryConfig) : WorkingMemory =
+    let create context (store: EventStore) (config: WorkingMemoryConfig) : WorkingMemory =
         let inner = InMemoryWorkingMemory.create config
+
+        let loadEvents () =
+            EventStream.loadCurrent
+                context
+                1
+                FSharpJson.deserialize<WorkingMemoryDocument>
+                (fun document -> document.Version)
+                (fun document -> document.Event)
+                store
 
         let replay event =
             match event with
@@ -38,14 +47,7 @@ module PersistentWorkingMemory =
             | WorkingMemoryEvent.DeleteExpired(owner, before) ->
                 inner.DeleteExpiredAsync owner before |> _.GetAwaiter().GetResult() |> ignore
 
-        do
-            store.LoadAll()
-            |> Seq.map FSharpJson.deserialize<WorkingMemoryDocument>
-            |> Seq.iter (fun document ->
-                if document.Version <> 1 then
-                    invalidOp (sprintf "Unsupported working-memory document version: %d." document.Version)
-
-                replay document.Event)
+        do loadEvents () |> List.iter replay
 
         let append event =
             store.Append(FSharpJson.serialize { Version = 1; Event = event })
@@ -61,13 +63,15 @@ module PersistentWorkingMemory =
 
         let appendAfter operation event =
             task {
-                do! operation
+                loadEvents () |> ignore
+                do! operation ()
                 append event
             }
 
         let deleteAfter operation event =
             task {
-                let! result = operation
+                loadEvents () |> ignore
+                let! result = operation ()
 
                 match result with
                 | Ok _ -> append event
@@ -76,42 +80,50 @@ module PersistentWorkingMemory =
                 return result
             }
 
-        { SetAsync =
-            fun item ->
-                task {
-                    let normalized = normalize item
-                    do! inner.SetAsync normalized
-                    append (WorkingMemoryEvent.Set normalized)
-                }
+        let setAsync item =
+            task {
+                loadEvents () |> ignore
+                let normalized = normalize item
+                do! inner.SetAsync normalized
+                append (WorkingMemoryEvent.Set normalized)
+            }
+
+        let decayAsync owner asOf =
+            task {
+                loadEvents () |> ignore
+                let! count = inner.DecayAsync owner asOf
+                append (WorkingMemoryEvent.Decay(owner, asOf))
+                return count
+            }
+
+        { SetAsync = setAsync
           GetAsync = inner.GetAsync
           GetAllAsync = inner.GetAllAsync
           GetActiveAsync = inner.GetActiveAsync
           FocusAsync =
             fun owner key boost ->
-                appendAfter (inner.FocusAsync owner key boost) (WorkingMemoryEvent.Focus(owner, key, boost))
-          DecayAsync =
-            fun owner asOf ->
-                task {
-                    let! count = inner.DecayAsync owner asOf
-                    append (WorkingMemoryEvent.Decay(owner, asOf))
-                    return count
-                }
-          PinAsync = fun owner key -> appendAfter (inner.PinAsync owner key) (WorkingMemoryEvent.Pin(owner, key))
+                appendAfter (fun () -> inner.FocusAsync owner key boost) (WorkingMemoryEvent.Focus(owner, key, boost))
+          DecayAsync = decayAsync
+          PinAsync =
+            fun owner key -> appendAfter (fun () -> inner.PinAsync owner key) (WorkingMemoryEvent.Pin(owner, key))
           UnpinAsync =
             fun owner key asOf ->
-                appendAfter (inner.UnpinAsync owner key asOf) (WorkingMemoryEvent.Unpin(owner, key, asOf))
+                appendAfter (fun () -> inner.UnpinAsync owner key asOf) (WorkingMemoryEvent.Unpin(owner, key, asOf))
           RemoveAsync =
-            fun owner key -> appendAfter (inner.RemoveAsync owner key) (WorkingMemoryEvent.Remove(owner, key))
+            fun owner key -> appendAfter (fun () -> inner.RemoveAsync owner key) (WorkingMemoryEvent.Remove(owner, key))
           DeleteOwnerAsync =
-            fun owner -> deleteAfter (inner.DeleteOwnerAsync owner) (WorkingMemoryEvent.DeleteOwner owner)
+            fun owner -> deleteAfter (fun () -> inner.DeleteOwnerAsync owner) (WorkingMemoryEvent.DeleteOwner owner)
           DeleteExpiredAsync =
             fun owner before ->
-                deleteAfter (inner.DeleteExpiredAsync owner before) (WorkingMemoryEvent.DeleteExpired(owner, before))
+                deleteAfter
+                    (fun () -> inner.DeleteExpiredAsync owner before)
+                    (WorkingMemoryEvent.DeleteExpired(owner, before))
           RenderContextAsync = inner.RenderContextAsync }
 
 module WorkingMemories =
     let ado (factory: DbConnectionFactory) (config: WorkingMemoryConfig) : WorkingMemory =
-        PersistentWorkingMemory.create (EventStore.db factory "working") config
+        PersistentWorkingMemory.create "working" (EventStore.db factory "working") config
 
     let file (baseDir: string) (config: WorkingMemoryConfig) : WorkingMemory =
-        PersistentWorkingMemory.create (EventStore.file (System.IO.Path.Combine(baseDir, "working.jsonl"))) config
+        let path = System.IO.Path.Combine(baseDir, "working.jsonl")
+        PersistentWorkingMemory.create path (EventStore.file path) config

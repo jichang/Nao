@@ -14,8 +14,17 @@ type EpisodicEvent =
 type EpisodicDocument = { Version: int; Event: EpisodicEvent }
 
 module PersistentEpisodicMemory =
-    let create (store: EventStore) (embeddingProvider: EmbeddingProvider option) : EpisodicMemory =
+    let create context (store: EventStore) (embeddingProvider: EmbeddingProvider option) : EpisodicMemory =
         let inner = InMemoryEpisodicMemory.create embeddingProvider
+
+        let loadEvents () =
+            EventStream.loadCurrent
+                context
+                1
+                FSharpJson.deserialize<EpisodicDocument>
+                (fun document -> document.Version)
+                (fun document -> document.Event)
+                store
 
         let replay event =
             match event with
@@ -27,34 +36,30 @@ module PersistentEpisodicMemory =
             | EpisodicEvent.DeleteExpired(owner, before) ->
                 inner.DeleteExpiredAsync owner before |> _.GetAwaiter().GetResult() |> ignore
 
-        do
-            store.LoadAll()
-            |> Seq.map FSharpJson.deserialize<EpisodicDocument>
-            |> Seq.iter (fun document ->
-                if document.Version <> 1 then
-                    invalidOp (sprintf "Unsupported episodic-memory document version: %d." document.Version)
-
-                replay document.Event)
+        do loadEvents () |> List.iter replay
 
         let append event =
             store.Append(FSharpJson.serialize { Version = 1; Event = event })
 
         let appendAfter operation event =
             task {
-                do! operation
+                loadEvents () |> ignore
+                do! operation ()
                 append event
             }
 
         let countAfter operation event =
             task {
-                let! count = operation
+                loadEvents () |> ignore
+                let! count = operation ()
                 append event
                 return count
             }
 
         let deleteAfter operation event =
             task {
-                let! result = operation
+                loadEvents () |> ignore
+                let! result = operation ()
 
                 match result with
                 | Ok _ -> append event
@@ -63,26 +68,31 @@ module PersistentEpisodicMemory =
                 return result
             }
 
-        { RecordAsync = fun episode -> appendAfter (inner.RecordAsync episode) (EpisodicEvent.Record episode)
+        let linkAsync owner fromId toId =
+            appendAfter (fun () -> inner.LinkAsync owner fromId toId) (EpisodicEvent.Link(owner, fromId, toId))
+
+        let forgetBelowAsync owner threshold =
+            countAfter (fun () -> inner.ForgetBelowAsync owner threshold) (EpisodicEvent.ForgetBelow(owner, threshold))
+
+        let deleteOwnerAsync owner =
+            deleteAfter (fun () -> inner.DeleteOwnerAsync owner) (EpisodicEvent.DeleteOwner owner)
+
+        let deleteExpiredAsync owner before =
+            deleteAfter (fun () -> inner.DeleteExpiredAsync owner before) (EpisodicEvent.DeleteExpired(owner, before))
+
+        { RecordAsync = fun episode -> appendAfter (fun () -> inner.RecordAsync episode) (EpisodicEvent.Record episode)
           QueryAsync = inner.QueryAsync
-          LinkAsync =
-            fun owner fromId toId ->
-                appendAfter (inner.LinkAsync owner fromId toId) (EpisodicEvent.Link(owner, fromId, toId))
+          LinkAsync = linkAsync
           GetChainAsync = inner.GetChainAsync
           SynthesizeAsync = inner.SynthesizeAsync
-          ForgetBelowAsync =
-            fun owner threshold ->
-                countAfter (inner.ForgetBelowAsync owner threshold) (EpisodicEvent.ForgetBelow(owner, threshold))
-          DeleteOwnerAsync = fun owner -> deleteAfter (inner.DeleteOwnerAsync owner) (EpisodicEvent.DeleteOwner owner)
-          DeleteExpiredAsync =
-            fun owner before ->
-                deleteAfter (inner.DeleteExpiredAsync owner before) (EpisodicEvent.DeleteExpired(owner, before)) }
+          ForgetBelowAsync = forgetBelowAsync
+          DeleteOwnerAsync = deleteOwnerAsync
+          DeleteExpiredAsync = deleteExpiredAsync }
 
 module EpisodicMemories =
     let ado (factory: DbConnectionFactory) (embeddingProvider: EmbeddingProvider option) : EpisodicMemory =
-        PersistentEpisodicMemory.create (EventStore.db factory "episodic") embeddingProvider
+        PersistentEpisodicMemory.create "episodic" (EventStore.db factory "episodic") embeddingProvider
 
     let file (baseDir: string) (embeddingProvider: EmbeddingProvider option) : EpisodicMemory =
-        PersistentEpisodicMemory.create
-            (EventStore.file (System.IO.Path.Combine(baseDir, "episodic.jsonl")))
-            embeddingProvider
+        let path = System.IO.Path.Combine(baseDir, "episodic.jsonl")
+        PersistentEpisodicMemory.create path (EventStore.file path) embeddingProvider

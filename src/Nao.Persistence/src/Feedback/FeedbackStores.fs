@@ -63,26 +63,45 @@ module private FeedbackOperations =
 /// against any ADO.NET provider supplied via <see cref="DbConnectionFactory"/>.
 module private AdoPayload =
 
+    let schemaKey table =
+        match table with
+        | "nao_feedback_turns" -> "feedback-turns"
+        | "nao_feedback_entries" -> "feedback-entries"
+        | _ -> invalidArg (nameof table) (sprintf "Unknown feedback table '%s'." table)
+
     let ensure (factory: DbConnectionFactory) (table: string) : Task =
-        Ado.executeNonQuery
+        AdoSchema.ensureVersionedTable
             factory
+            (schemaKey table)
+            table
             (sprintf "CREATE TABLE IF NOT EXISTS %s (item_id TEXT NOT NULL PRIMARY KEY, payload TEXT NOT NULL)" table)
-            []
-        :> Task
 
     let getAll<'a> (factory: DbConnectionFactory) (table: string) : Task<'a list> =
         task {
             do! ensure factory table
 
             return!
-                Ado.query factory (sprintf "SELECT payload FROM %s" table) [] (fun r ->
-                    FeedbackJson.deserialize<'a> (Ado.getString r "payload"))
+                Ado.query factory (sprintf "SELECT item_id, payload FROM %s" table) [] (fun reader ->
+                    let id = Ado.getString reader "item_id"
+
+                    try
+                        FeedbackJson.deserialize<'a> (Ado.getString reader "payload")
+                    with ex ->
+                        raise (
+                            InvalidDataException(
+                                sprintf
+                                    "Feedback table '%s' row '%s' is invalid. Follow docs/migrations before writing."
+                                    table
+                                    id,
+                                ex
+                            )
+                        ))
         }
 
     /// Insert-or-replace a single artifact by primary key (DELETE + INSERT in one tx).
     let upsert (factory: DbConnectionFactory) (table: string) (id: string) (item: 'a) : Task =
         task {
-            do! ensure factory table
+            let! _ = getAll<'a> factory table
 
             do!
                 Ado.executeTransaction
@@ -269,6 +288,20 @@ type private FeedbackStoreEvent =
     | DeleteExpired of string * DateTimeOffset
 
 module private LifecycleEnvelope =
+    let readAt path lineNumber decode line =
+        try
+            decode lineNumber line
+        with ex ->
+            raise (
+                InvalidDataException(
+                    sprintf
+                        "Lifecycle event file '%s' is invalid at line %d. Follow docs/migrations before writing."
+                        path
+                        lineNumber,
+                    ex
+                )
+            )
+
     let turn event =
         match event with
         | TurnStoreEvent.Save record ->
@@ -350,7 +383,8 @@ module FileTurnStore =
             else
                 File.ReadAllLines path
                 |> Array.filter (String.IsNullOrWhiteSpace >> not)
-                |> Array.mapi (fun index line -> LifecycleEnvelope.readTurn (index + 1) line)
+                |> Array.mapi (fun index line ->
+                    LifecycleEnvelope.readAt path (index + 1) LifecycleEnvelope.readTurn line)
                 |> Array.toList
 
         let load () =
@@ -373,6 +407,7 @@ module FileTurnStore =
             turns.Values |> Seq.toList
 
         let saveAsync (turn: TurnRecord) =
+            readEvents () |> ignore
             Jsonl.append path (FeedbackJson.serialize (LifecycleEnvelope.turn (TurnStoreEvent.Save turn)))
             Task.CompletedTask
 
@@ -415,7 +450,8 @@ module FileFeedbackStore =
             else
                 File.ReadAllLines path
                 |> Array.filter (String.IsNullOrWhiteSpace >> not)
-                |> Array.mapi (fun index line -> LifecycleEnvelope.readFeedback (index + 1) line)
+                |> Array.mapi (fun index line ->
+                    LifecycleEnvelope.readAt path (index + 1) LifecycleEnvelope.readFeedback line)
                 |> Array.toList
 
         let load () =
@@ -438,6 +474,7 @@ module FileFeedbackStore =
             entries.Values |> Seq.toList
 
         let saveAsync (feedback: Feedback) =
+            readEvents () |> ignore
             Jsonl.append path (FeedbackJson.serialize (LifecycleEnvelope.feedback (FeedbackStoreEvent.Save feedback)))
             Task.CompletedTask
 

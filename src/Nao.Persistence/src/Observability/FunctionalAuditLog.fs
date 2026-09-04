@@ -79,30 +79,46 @@ module InMemoryAuditLog =
 
 module private AdoAudit =
     let ensureAsync factory =
-        Ado.executeNonQuery
+        AdoSchema.ensureVersionedTable
             factory
+            "audit"
+            "nao_audit"
             "CREATE TABLE IF NOT EXISTS nao_audit (audit_id TEXT NOT NULL PRIMARY KEY, audit_ts TEXT NOT NULL, agent_name TEXT NOT NULL, agent_desc TEXT NOT NULL, action_json TEXT NOT NULL, audit_input TEXT NULL, audit_output TEXT NULL, permitted INTEGER NOT NULL, permission_level TEXT NOT NULL, violations TEXT NOT NULL, execution_id TEXT NULL, metadata TEXT NOT NULL)"
-            []
-        :> Task
 
     let mapEntry (reader: DbDataReader) : AuditEntry =
-        { Id = Guid.Parse(Ado.getString reader "audit_id")
-          Timestamp = Time.fromIso (Ado.getString reader "audit_ts")
-          AgentId = Ado.getString reader "agent_name"
-          Action = AuditActionCodec.fromJson (Ado.getString reader "action_json")
-          Input = Ado.getStringOpt reader "audit_input"
-          Output = Ado.getStringOpt reader "audit_output"
-          Permitted = Ado.getBool reader "permitted"
-          Decision = PermissionDecisionCodec.fromString (Ado.getString reader "permission_level")
-          ConstitutionViolations = Json.tagsFromJson (Ado.getString reader "violations")
-          ExecutionId = Ado.getStringOpt reader "execution_id" |> Option.map Guid.Parse
-          Metadata = Json.mapFromJson (Ado.getString reader "metadata") }
+        let id = Ado.getString reader "audit_id"
+
+        try
+            { Id = Guid.Parse id
+              Timestamp = Time.fromIso (Ado.getString reader "audit_ts")
+              AgentId = Ado.getString reader "agent_name"
+              Action = AuditActionCodec.fromJson (Ado.getString reader "action_json")
+              Input = Ado.getStringOpt reader "audit_input"
+              Output = Ado.getStringOpt reader "audit_output"
+              Permitted = Ado.getBool reader "permitted"
+              Decision = PermissionDecisionCodec.fromString (Ado.getString reader "permission_level")
+              ConstitutionViolations = Json.tagsFromJson (Ado.getString reader "violations")
+              ExecutionId = Ado.getStringOpt reader "execution_id" |> Option.map Guid.Parse
+              Metadata = Json.mapFromJson (Ado.getString reader "metadata") }
+        with ex ->
+            raise (
+                InvalidDataException(sprintf "Audit row '%s' is invalid. Follow docs/migrations before writing." id, ex)
+            )
 
     let columns =
         "audit_id, audit_ts, agent_name, agent_desc, action_json, audit_input, audit_output, permitted, permission_level, violations, execution_id, metadata"
 
 module AdoAuditLog =
     let create (factory: DbConnectionFactory) : AuditLog =
+        let validateAsync () =
+            task {
+                do! AdoAudit.ensureAsync factory
+
+                let! _ = Ado.query factory ("SELECT " + AdoAudit.columns + " FROM nao_audit") [] AdoAudit.mapEntry
+
+                return ()
+            }
+
         let byAgent agentId =
             Ado.query
                 factory
@@ -112,7 +128,7 @@ module AdoAuditLog =
 
         let recordAsync (entry: AuditEntry) =
             task {
-                do! AdoAudit.ensureAsync factory
+                do! validateAsync ()
 
                 let value option =
                     match option with
@@ -180,7 +196,7 @@ module AdoAuditLog =
 
         let delete sql parameters =
             task {
-                do! AdoAudit.ensureAsync factory
+                do! validateAsync ()
                 return! Ado.executeNonQuery factory sql parameters
             }
 
@@ -202,14 +218,18 @@ module AdoAuditLog =
           DeleteExpiredAsync = deleteExpiredAsync }
 
 module FileAuditLog =
+    [<Literal>]
+    let private CurrentSchemaVersion = 1
+
     let create baseDir : AuditLog =
         let sync = obj ()
         let file = Path.Combine(baseDir, "audit-log.json")
 
         let load () : Dto.AuditEntryDto list =
-            FileJson.read<Dto.AuditEntryDto list> file []
+            VersionedFileJson.read<Dto.AuditEntryDto list> "Audit log" CurrentSchemaVersion file []
 
-        let save entries = FileJson.write file entries
+        let save entries =
+            VersionedFileJson.write CurrentSchemaVersion file entries
 
         let delete predicate =
             task {

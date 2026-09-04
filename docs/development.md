@@ -146,10 +146,17 @@ Before changing a public F# record, union, interface, Orleans state type, event,
 
 - Determine source and binary compatibility effects.
 - Determine serialized-state compatibility effects.
-- Add versioning or migration behavior.
-- Add compatibility fixtures.
-- Update documentation and release notes.
-- Follow the versioning policy established by the foundations roadmap.
+- Keep durable formats explicitly versioned and reject unsupported versions before mutation.
+- Prefer a clean current contract; do not add dual reads, fallback deserialization, or compatibility shims by default.
+- Add or update a guide under `docs/migrations/` with backup, external transformation or reset, validation, and rollback instructions.
+- Update documentation and release notes with the breaking surface.
+- Follow the migration policy in `docs/migrations/README.md` and the versioning policy established by the foundations roadmap.
+
+Before a stable release, breaking changes do not require embedded migration code. After a stable release, any compatibility implementation, deprecation period, or major-version decision must follow an explicit support commitment.
+
+### Mixed-version deployments
+
+Mixed-version and rolling-upgrade operation is unsupported until Nao defines and tests a stable multi-version deployment contract. All processes sharing durable state must run the same Nao build and current schema. For an upgrade, stop every writer, back up and externally migrate or reset affected state, deploy the new build everywhere, and validate before resuming traffic. Rollback requires stopping all writers and restoring the matching pre-upgrade state; do not run old binaries against state written by a newer build.
 
 ## Security-sensitive changes
 

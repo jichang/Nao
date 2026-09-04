@@ -1,10 +1,29 @@
 namespace Nao.Runtime.Orleans.Grains
 
 open System
+open System.IO
 open Orleans
 open Nao.Agents
 open Nao.Agents
 open Nao.Runtime.Orleans
+
+module internal GrainStateVersion =
+    [<Literal>]
+    let Current = 1
+
+    let prepare kind recordExists version setVersion =
+        if not recordExists then
+            setVersion Current
+        elif version <> Current then
+            raise (
+                InvalidDataException(
+                    sprintf
+                        "%s uses unsupported Orleans state version %d; expected %d. Follow docs/migrations before activation."
+                        kind
+                        version
+                        Current
+                )
+            )
 
 /// Serializable record for a conversation message
 [<GenerateSerializer>]

@@ -2,6 +2,7 @@ namespace Nao.Runtime.Orleans
 
 open System
 open System.IO
+open System.Text
 open System.Text.Json
 open System.Text.Json.Serialization
 open System.Threading.Tasks
@@ -25,6 +26,9 @@ open System.Threading.Tasks
 /// so a session's conversations nest alongside its files, observability and feedback under
 /// one folder.
 module FileConversationStore =
+
+    [<Literal>]
+    let private CurrentSchemaVersion = 1
 
     let jsonOptions =
         let opts = JsonSerializerOptions(WriteIndented = false)
@@ -54,16 +58,59 @@ module FileConversationStore =
     let private metaFile baseDir (sessionId: string) (conversationName: string) =
         Path.Combine(conversationDir baseDir sessionId conversationName, "meta.json")
 
+    let private deserializeDocument<'value> kind path =
+        try
+            use document = JsonDocument.Parse(File.ReadAllText path)
+            let root = document.RootElement
+
+            if root.ValueKind <> JsonValueKind.Object then
+                raise (JsonException("The document must be a JSON object."))
+
+            let version = root.GetProperty("schemaVersion").GetInt32()
+
+            if version <> CurrentSchemaVersion then
+                raise (
+                    InvalidDataException(
+                        sprintf
+                            "%s at '%s' uses unsupported schema version %d; expected %d. Follow docs/migrations before writing."
+                            kind
+                            path
+                            version
+                            CurrentSchemaVersion
+                    )
+                )
+
+            root.GetProperty("value").Deserialize<'value>(jsonOptions)
+        with
+        | :? InvalidDataException -> reraise ()
+        | ex ->
+            raise (
+                InvalidDataException(
+                    sprintf
+                        "%s at '%s' is invalid. Restore or remove the session data by following docs/migrations before writing."
+                        kind
+                        path,
+                    ex
+                )
+            )
+
+    let private serializeDocument value =
+        use stream = new MemoryStream()
+
+        use writer = new Utf8JsonWriter(stream)
+        writer.WriteStartObject()
+        writer.WriteNumber("schemaVersion", CurrentSchemaVersion)
+        writer.WritePropertyName("value")
+        JsonSerializer.Serialize(writer, value, jsonOptions)
+        writer.WriteEndObject()
+        writer.Flush()
+        Encoding.UTF8.GetString(stream.ToArray())
+
     let private readMessages baseDir (sessionId: string) (conversationName: string) : PersistedMessage array =
         let path = messagesFile baseDir sessionId conversationName
 
         if File.Exists path then
-            try
-                match JsonSerializer.Deserialize<PersistedMessage array>(File.ReadAllText path, jsonOptions) with
-                | null -> [||]
-                | arr -> arr
-            with _ ->
-                [||]
+            deserializeDocument<PersistedMessage array> "Conversation messages" path
         else
             [||]
 
@@ -76,33 +123,40 @@ module FileConversationStore =
         Directory.CreateDirectory(conversationDir baseDir sessionId conversationName)
         |> ignore
 
-        File.WriteAllText(
-            messagesFile baseDir sessionId conversationName,
-            JsonSerializer.Serialize(messages, jsonOptions)
-        )
+        File.WriteAllText(messagesFile baseDir sessionId conversationName, serializeDocument messages)
 
     let readMeta (path: string) =
-        try
-            Some(JsonSerializer.Deserialize<ConversationMeta>(File.ReadAllText path, jsonOptions))
-        with _ ->
-            None
+        Some(deserializeDocument<ConversationMeta> "Conversation metadata" path)
+
+    let private readIndex baseDir sessionId =
+        let path = indexPath baseDir sessionId
+
+        if File.Exists path then
+            deserializeDocument<ConversationMeta array> "Conversation index" path
+        else
+            Array.empty
+
+    let private readMetas baseDir sessionId =
+        let dir = conversationsDir baseDir sessionId
+
+        if Directory.Exists dir then
+            Directory.GetDirectories(dir)
+            |> Array.choose (fun directory ->
+                let path = Path.Combine(directory, "meta.json")
+                if File.Exists path then readMeta path else None)
+        else
+            Array.empty
+
+    let private preflightSession baseDir sessionId =
+        readMetas baseDir sessionId |> ignore
+        readIndex baseDir sessionId |> ignore
 
     /// Rebuild the session-level conversations.json index from the per-conversation metas.
     let private rebuildIndex baseDir (sessionId: string) =
-        let dir = conversationsDir baseDir sessionId
-
-        let metas =
-            if Directory.Exists dir then
-                Directory.GetDirectories(dir)
-                |> Array.choose (fun d ->
-                    let m = Path.Combine(d, "meta.json")
-                    if File.Exists m then readMeta m else None)
-                |> Array.sortBy (fun m -> m.CreatedAt)
-            else
-                [||]
+        let metas = readMetas baseDir sessionId |> Array.sortBy (fun meta -> meta.CreatedAt)
 
         Directory.CreateDirectory(sessionDir baseDir sessionId) |> ignore
-        File.WriteAllText(indexPath baseDir sessionId, JsonSerializer.Serialize(metas, jsonOptions))
+        File.WriteAllText(indexPath baseDir sessionId, serializeDocument metas)
 
     /// Write a conversation's meta.json (preserving its original CreatedAt) and refresh the index.
     let private writeMeta baseDir (sessionId: string) (conversationName: string) (messageCount: int) =
@@ -127,7 +181,7 @@ module FileConversationStore =
         Directory.CreateDirectory(conversationDir baseDir sessionId conversationName)
         |> ignore
 
-        File.WriteAllText(metaPath, JsonSerializer.Serialize(meta, jsonOptions))
+        File.WriteAllText(metaPath, serializeDocument meta)
         rebuildIndex baseDir sessionId
 
     let create (baseDir: string) : ConversationStore =
@@ -140,6 +194,7 @@ module FileConversationStore =
                 else
                     lock gate (fun () ->
                         let merged = Array.append (readMessages baseDir sessionId conversationName) messages
+                        preflightSession baseDir sessionId
                         writeMessages baseDir sessionId conversationName merged
                         writeMeta baseDir sessionId conversationName merged.Length)
             }
@@ -148,6 +203,8 @@ module FileConversationStore =
         let saveAsync (sessionId: string) (conversationName: string) (messages: PersistedMessage array) =
             task {
                 lock gate (fun () ->
+                    readMessages baseDir sessionId conversationName |> ignore
+                    preflightSession baseDir sessionId
                     writeMessages baseDir sessionId conversationName messages
                     writeMeta baseDir sessionId conversationName messages.Length)
             }
@@ -161,15 +218,7 @@ module FileConversationStore =
                 let path = indexPath baseDir sessionId
 
                 if File.Exists path then
-                    return
-                        (try
-                            match
-                                JsonSerializer.Deserialize<ConversationMeta array>(File.ReadAllText path, jsonOptions)
-                            with
-                            | null -> [||]
-                            | arr -> arr
-                         with _ ->
-                             [||])
+                    return readIndex baseDir sessionId
                 else
                     return Array.empty
             }

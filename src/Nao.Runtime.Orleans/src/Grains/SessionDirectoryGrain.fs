@@ -32,6 +32,9 @@ type SessionDirectoryState() =
     [<Id(0u)>]
     member val Entries: ResizeArray<SessionDirectoryEntry> = ResizeArray() with get, set
 
+    [<Id(1u)>]
+    member val SchemaVersion: int = 0 with get, set
+
 /// Per-user session directory. Grain key = userId.
 /// Tracks which sessions exist so they can be enumerated after restart.
 type ISessionDirectoryGrain =
@@ -62,6 +65,15 @@ type ISessionDirectoryGrain =
 type SessionDirectoryGrain
     ([<PersistentState("sessionDirectory", "sessionStore")>] persistentState: IPersistentState<SessionDirectoryState>) =
     inherit Grain()
+
+    override this.OnActivateAsync(cancellationToken) =
+        GrainStateVersion.prepare
+            "Session directory state"
+            persistentState.RecordExists
+            persistentState.State.SchemaVersion
+            (fun version -> persistentState.State.SchemaVersion <- version)
+
+        base.OnActivateAsync(cancellationToken)
 
     interface ISessionDirectoryGrain with
         member _.RegisterAsync(entry: SessionDirectoryEntry) =

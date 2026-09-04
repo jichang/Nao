@@ -28,6 +28,7 @@ Nao connects models, agents, tools, memory, knowledge, distributed execution, go
 | [Memory and knowledge](docs/memory-knowledge.md) | Context, memory tiers, semantic/graph memory, planned knowledge ingestion, and RAG |
 | [Evaluation and observability](docs/evaluation-observability.md) | Evaluators, reproducibility, release gates, traces, metrics, telemetry, and drift |
 | [Providers and distributed runtime](docs/providers-runtime.md) | Provider semantics, routing direction, Orleans sessions, tenancy, workspaces, and operations |
+| [Durable formats](docs/durable-formats.md) | Durable schema inventory, decode policy, and migration rules |
 
 ### Roadmap workstreams
 

@@ -79,11 +79,12 @@ module AdoExecutionJournal =
     let create (factory: DbConnectionFactory) : ExecutionJournal =
         let ensureAsync () =
             task {
-                let! _ =
-                    Ado.executeNonQuery
+                do!
+                    AdoSchema.ensureVersionedTable
                         factory
+                        "execution-journal"
+                        "nao_execution_journal"
                         "CREATE TABLE IF NOT EXISTS nao_execution_journal (record_id TEXT NOT NULL PRIMARY KEY, owner TEXT NOT NULL, turn_id TEXT NOT NULL, tool_name TEXT NOT NULL, tool_input TEXT NOT NULL, tool_output TEXT NOT NULL, executed_at TEXT NOT NULL, reverted INTEGER NOT NULL, metadata TEXT NOT NULL)"
-                        []
 
                 let! _ =
                     Ado.executeNonQuery
@@ -96,20 +97,44 @@ module AdoExecutionJournal =
             :> Task
 
         let mapRecord (reader: DbDataReader) : ExecutionRecord =
-            { Id = Guid.Parse(Ado.getString reader "record_id")
-              Owner = Ado.getString reader "owner"
-              TurnId = Ado.getString reader "turn_id"
-              ToolName = Ado.getString reader "tool_name"
-              Input = Ado.getString reader "tool_input"
-              Output = Ado.getString reader "tool_output"
-              ExecutedAt = Time.fromIso (Ado.getString reader "executed_at")
-              Reverted = Ado.getBool reader "reverted"
-              Metadata = Json.mapFromJson (Ado.getString reader "metadata") }
+            let id = Ado.getString reader "record_id"
+
+            try
+                { Id = Guid.Parse id
+                  Owner = Ado.getString reader "owner"
+                  TurnId = Ado.getString reader "turn_id"
+                  ToolName = Ado.getString reader "tool_name"
+                  Input = Ado.getString reader "tool_input"
+                  Output = Ado.getString reader "tool_output"
+                  ExecutedAt = Time.fromIso (Ado.getString reader "executed_at")
+                  Reverted = Ado.getBool reader "reverted"
+                  Metadata = Json.mapFromJson (Ado.getString reader "metadata") }
+            with ex ->
+                raise (
+                    InvalidDataException(
+                        sprintf "Execution-journal row '%s' is invalid. Follow docs/migrations before writing." id,
+                        ex
+                    )
+                )
+
+        let validateAsync () =
+            task {
+                do! ensureAsync ()
+
+                let! _ =
+                    Ado.query
+                        factory
+                        "SELECT record_id, owner, turn_id, tool_name, tool_input, tool_output, executed_at, reverted, metadata FROM nao_execution_journal"
+                        []
+                        mapRecord
+
+                return ()
+            }
 
         let recordAsync (record: ExecutionRecord) =
             task {
                 JournalOperations.requireOwner record.Owner
-                do! ensureAsync ()
+                do! validateAsync ()
 
                 let! _ =
                     Ado.executeNonQuery
@@ -155,7 +180,7 @@ module AdoExecutionJournal =
 
         let markRevertedAsync recordId =
             task {
-                do! ensureAsync ()
+                do! validateAsync ()
 
                 let! _ =
                     Ado.executeNonQuery
@@ -170,7 +195,7 @@ module AdoExecutionJournal =
         let deleteOwnerAsync owner =
             JournalOperations.protect owner (fun () ->
                 task {
-                    do! ensureAsync ()
+                    do! validateAsync ()
 
                     return!
                         Ado.executeNonQuery
@@ -182,7 +207,7 @@ module AdoExecutionJournal =
         let deleteExpiredAsync owner before =
             JournalOperations.protect owner (fun () ->
                 task {
-                    do! ensureAsync ()
+                    do! validateAsync ()
 
                     return!
                         Ado.executeNonQuery
@@ -212,13 +237,21 @@ module FileExecutionJournal =
             if not (File.Exists file) then
                 []
             else
-                let document =
-                    FileJson.read<JournalDocument> file Unchecked.defaultof<JournalDocument>
+                try
+                    let document =
+                        FileJson.read<JournalDocument> file Unchecked.defaultof<JournalDocument>
 
-                if isNull (box document) || document.SchemaVersion <> 1 then
-                    raise (InvalidDataException "Unsupported execution journal schema.")
+                    if isNull (box document) || document.SchemaVersion <> 1 then
+                        raise (InvalidDataException "Expected execution journal schema version 1.")
 
-                document.Records
+                    document.Records
+                with ex ->
+                    raise (
+                        InvalidDataException(
+                            sprintf "Execution journal '%s' is invalid. Follow docs/migrations before writing." file,
+                            ex
+                        )
+                    )
 
         let save records =
             FileJson.write file { SchemaVersion = 1; Records = records }

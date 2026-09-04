@@ -2,6 +2,7 @@ namespace Nao.Runtime.Orleans.Tests
 
 open System
 open System.IO
+open System.Text.Json
 open System.Threading.Tasks
 open Microsoft.VisualStudio.TestTools.UnitTesting
 open Nao.Agents
@@ -93,6 +94,10 @@ type PublishingConversationStoreTests() =
             Assert.IsFalse(persistedJson.Contains('\n'), "Persisted conversation JSON must remain compact")
             Assert.IsFalse(persistedJson.Contains('\r'), "Persisted conversation JSON must remain compact")
 
+            use persisted = JsonDocument.Parse persistedJson
+            Assert.AreEqual(1, persisted.RootElement.GetProperty("schemaVersion").GetInt32())
+            Assert.AreEqual(1, persisted.RootElement.GetProperty("value").GetArrayLength())
+
             // ...and the write was teed to the bus.
             match recorder.Signals() with
             | [ MessagesAppended("default", msgs) ] ->
@@ -100,6 +105,92 @@ type PublishingConversationStoreTests() =
                 Assert.AreEqual("hi", msgs.[0].Content)
                 Assert.AreEqual("User", msgs.[0].Role)
             | other -> Assert.Fail(sprintf "expected one MessagesAppended, got %A" other)
+        finally
+            cleanup root
+
+    [<TestMethod>]
+    member _.Append_RejectsCorruptMessagesWithoutMutationOrPublication() =
+        let root = newRoot ()
+
+        try
+            let store, recorder = setup root
+
+            store.AppendAsync "dev/s1" "default" [| message "User" "original" "t1" |]
+            |> _.GetAwaiter().GetResult()
+
+            let messagesPath =
+                Directory.GetFiles(root, "messages.json", SearchOption.AllDirectories)
+                |> Array.exactlyOne
+
+            let metaPath =
+                Directory.GetFiles(root, "meta.json", SearchOption.AllDirectories)
+                |> Array.exactlyOne
+
+            let indexPath =
+                Directory.GetFiles(root, "conversations.json", SearchOption.AllDirectories)
+                |> Array.exactlyOne
+
+            File.WriteAllText(messagesPath, "{invalid")
+
+            let messagesBefore = File.ReadAllBytes messagesPath
+            let metaBefore = File.ReadAllBytes metaPath
+            let indexBefore = File.ReadAllBytes indexPath
+            let eventsBefore = recorder.Received.Count
+
+            let error =
+                Assert.ThrowsExactly<InvalidDataException>(fun () ->
+                    store.AppendAsync "dev/s1" "default" [| message "User" "new" "t2" |]
+                    |> _.GetAwaiter().GetResult())
+
+            StringAssert.Contains(error.Message, messagesPath)
+            StringAssert.Contains(error.Message, "Restore or remove")
+            CollectionAssert.AreEqual(messagesBefore, File.ReadAllBytes messagesPath)
+            CollectionAssert.AreEqual(metaBefore, File.ReadAllBytes metaPath)
+            CollectionAssert.AreEqual(indexBefore, File.ReadAllBytes indexPath)
+            Assert.AreEqual(eventsBefore, recorder.Received.Count)
+        finally
+            cleanup root
+
+    [<TestMethod>]
+    member _.Append_RejectsUnversionedMessagesWithoutMutationOrPublication() =
+        let root = newRoot ()
+
+        try
+            let store, recorder = setup root
+
+            store.AppendAsync "dev/s1" "default" [| message "User" "original" "t1" |]
+            |> _.GetAwaiter().GetResult()
+
+            let messagesPath =
+                Directory.GetFiles(root, "messages.json", SearchOption.AllDirectories)
+                |> Array.exactlyOne
+
+            let metaPath =
+                Directory.GetFiles(root, "meta.json", SearchOption.AllDirectories)
+                |> Array.exactlyOne
+
+            let indexPath =
+                Directory.GetFiles(root, "conversations.json", SearchOption.AllDirectories)
+                |> Array.exactlyOne
+
+            File.WriteAllText(messagesPath, "[]")
+
+            let messagesBefore = File.ReadAllBytes messagesPath
+            let metaBefore = File.ReadAllBytes metaPath
+            let indexBefore = File.ReadAllBytes indexPath
+            let eventsBefore = recorder.Received.Count
+
+            let error =
+                Assert.ThrowsExactly<InvalidDataException>(fun () ->
+                    store.AppendAsync "dev/s1" "default" [| message "User" "new" "t2" |]
+                    |> _.GetAwaiter().GetResult())
+
+            StringAssert.Contains(error.Message, messagesPath)
+            StringAssert.Contains(error.Message, "docs/migrations")
+            CollectionAssert.AreEqual(messagesBefore, File.ReadAllBytes messagesPath)
+            CollectionAssert.AreEqual(metaBefore, File.ReadAllBytes metaPath)
+            CollectionAssert.AreEqual(indexBefore, File.ReadAllBytes indexPath)
+            Assert.AreEqual(eventsBefore, recorder.Received.Count)
         finally
             cleanup root
 

@@ -2,6 +2,7 @@ namespace Nao.Persistence
 
 open System
 open System.Data.Common
+open System.IO
 open System.Threading.Tasks
 
 /// Provider-agnostic factory that creates ADO.NET connections.
@@ -127,3 +128,81 @@ module Ado =
 
     /// Encode a boolean as a portable integer parameter value.
     let boolValue (b: bool) : obj = box (if b then 1 else 0)
+
+/// Current-schema markers for provider-neutral ADO.NET tables.
+module AdoSchema =
+    [<Literal>]
+    let CurrentVersion = 1
+
+    [<Literal>]
+    let private MarkerTable = "nao_schema_versions"
+
+    let private tableExists (factory: DbConnectionFactory) tableName =
+        task {
+            try
+                let! _ = Ado.query factory (sprintf "SELECT * FROM %s WHERE 1 = 0" tableName) [] ignore
+                return true
+            with :? DbException ->
+                return false
+        }
+
+    let private invalid schemaKey message =
+        InvalidDataException(
+            sprintf
+                "ADO.NET component '%s' %s Follow docs/migrations before accessing or mutating this database."
+                schemaKey
+                message
+        )
+
+    let ensureVersionedTable factory schemaKey tableName createTableSql =
+        task {
+            let! markerExists = tableExists factory MarkerTable
+            let! dataTableExists = tableExists factory tableName
+
+            if not markerExists && dataTableExists then
+                raise (invalid schemaKey (sprintf "has an unversioned '%s' table." tableName))
+
+            if markerExists then
+                let! versions =
+                    try
+                        Ado.query
+                            factory
+                            (sprintf "SELECT schema_version FROM %s WHERE component = @component" MarkerTable)
+                            [ "@component", box schemaKey ]
+                            (fun reader -> Convert.ToInt32(reader.["schema_version"]))
+                    with ex ->
+                        raise (invalid schemaKey (sprintf "has an invalid schema marker: %s." ex.Message))
+
+                match versions with
+                | [ version ] when version = CurrentVersion && dataTableExists -> ()
+                | [ version ] when version <> CurrentVersion ->
+                    raise (
+                        invalid
+                            schemaKey
+                            (sprintf "uses unsupported schema version %d; expected %d." version CurrentVersion)
+                    )
+                | [ _ ] -> raise (invalid schemaKey (sprintf "is missing its '%s' table." tableName))
+                | [] when dataTableExists ->
+                    raise (invalid schemaKey (sprintf "has an unversioned '%s' table." tableName))
+                | [] ->
+                    do!
+                        Ado.executeTransaction
+                            factory
+                            [ sprintf
+                                  "INSERT INTO %s (component, schema_version) VALUES (@component, @version)"
+                                  MarkerTable,
+                              [ "@component", box schemaKey; "@version", box CurrentVersion ]
+                              createTableSql, [] ]
+                | _ -> raise (invalid schemaKey "has duplicate schema markers.")
+            else
+                do!
+                    Ado.executeTransaction
+                        factory
+                        [ sprintf
+                              "CREATE TABLE IF NOT EXISTS %s (component TEXT NOT NULL PRIMARY KEY, schema_version INTEGER NOT NULL)"
+                              MarkerTable,
+                          []
+                          sprintf "INSERT INTO %s (component, schema_version) VALUES (@component, @version)" MarkerTable,
+                          [ "@component", box schemaKey; "@version", box CurrentVersion ]
+                          createTableSql, [] ]
+        }

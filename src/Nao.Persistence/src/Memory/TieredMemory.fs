@@ -16,11 +16,21 @@ type TieredDocument = { Version: int; Event: TieredEvent }
 
 module PersistentTieredMemory =
     let create
+        context
         (store: EventStore)
         (config: TieredMemoryConfig)
         (embeddingProvider: EmbeddingProvider option)
         : TieredMemory =
         let inner = InMemoryTieredMemory.create config embeddingProvider
+
+        let loadEvents () =
+            EventStream.loadCurrent
+                context
+                1
+                FSharpJson.deserialize<TieredDocument>
+                (fun document -> document.Version)
+                (fun document -> document.Event)
+                store
 
         let replay event =
             match event with
@@ -34,34 +44,30 @@ module PersistentTieredMemory =
             | TieredEvent.DeleteExpired(owner, before) ->
                 inner.DeleteExpiredAsync owner before |> _.GetAwaiter().GetResult() |> ignore
 
-        do
-            store.LoadAll()
-            |> Seq.map FSharpJson.deserialize<TieredDocument>
-            |> Seq.iter (fun document ->
-                if document.Version <> 1 then
-                    invalidOp (sprintf "Unsupported tiered-memory document version: %d." document.Version)
-
-                replay document.Event)
+        do loadEvents () |> List.iter replay
 
         let append event =
             store.Append(FSharpJson.serialize { Version = 1; Event = event })
 
         let appendAfter operation event =
             task {
-                do! operation
+                loadEvents () |> ignore
+                do! operation ()
                 append event
             }
 
         let countAfter operation event =
             task {
-                let! count = operation
+                loadEvents () |> ignore
+                let! count = operation ()
                 append event
                 return count
             }
 
         let deleteAfter operation event =
             task {
-                let! result = operation
+                loadEvents () |> ignore
+                let! result = operation ()
 
                 match result with
                 | Ok _ -> append event
@@ -70,20 +76,36 @@ module PersistentTieredMemory =
                 return result
             }
 
-        { StoreAsync = fun entry -> appendAfter (inner.StoreAsync entry) (TieredEvent.Store entry)
+        let storeAsync entry =
+            appendAfter (fun () -> inner.StoreAsync entry) (TieredEvent.Store entry)
+
+        let recordAccessAsync owner keys asOf =
+            appendAfter
+                (fun () -> inner.RecordAccessAsync owner keys asOf)
+                (TieredEvent.RecordAccess(owner, keys, asOf))
+
+        let promoteAsync owner key targetTier =
+            appendAfter
+                (fun () -> inner.PromoteAsync owner key targetTier)
+                (TieredEvent.Promote(owner, key, targetTier))
+
+        let evictAsync owner asOf =
+            countAfter (fun () -> inner.EvictAsync owner asOf) (TieredEvent.Evict(owner, asOf))
+
+        let deleteOwnerAsync owner =
+            deleteAfter (fun () -> inner.DeleteOwnerAsync owner) (TieredEvent.DeleteOwner owner)
+
+        let deleteExpiredAsync owner before =
+            deleteAfter (fun () -> inner.DeleteExpiredAsync owner before) (TieredEvent.DeleteExpired(owner, before))
+
+        { StoreAsync = storeAsync
           RetrieveAsync = inner.RetrieveAsync
           RetrieveFromTierAsync = inner.RetrieveFromTierAsync
-          RecordAccessAsync =
-            fun owner keys asOf ->
-                appendAfter (inner.RecordAccessAsync owner keys asOf) (TieredEvent.RecordAccess(owner, keys, asOf))
-          PromoteAsync =
-            fun owner key targetTier ->
-                appendAfter (inner.PromoteAsync owner key targetTier) (TieredEvent.Promote(owner, key, targetTier))
-          EvictAsync = fun owner asOf -> countAfter (inner.EvictAsync owner asOf) (TieredEvent.Evict(owner, asOf))
-          DeleteOwnerAsync = fun owner -> deleteAfter (inner.DeleteOwnerAsync owner) (TieredEvent.DeleteOwner owner)
-          DeleteExpiredAsync =
-            fun owner before ->
-                deleteAfter (inner.DeleteExpiredAsync owner before) (TieredEvent.DeleteExpired(owner, before)) }
+          RecordAccessAsync = recordAccessAsync
+          PromoteAsync = promoteAsync
+          EvictAsync = evictAsync
+          DeleteOwnerAsync = deleteOwnerAsync
+          DeleteExpiredAsync = deleteExpiredAsync }
 
 module TieredMemories =
     let ado
@@ -91,14 +113,12 @@ module TieredMemories =
         (config: TieredMemoryConfig)
         (embeddingProvider: EmbeddingProvider option)
         : TieredMemory =
-        PersistentTieredMemory.create (EventStore.db factory "tiered") config embeddingProvider
+        PersistentTieredMemory.create "tiered" (EventStore.db factory "tiered") config embeddingProvider
 
     let file
         (baseDir: string)
         (config: TieredMemoryConfig)
         (embeddingProvider: EmbeddingProvider option)
         : TieredMemory =
-        PersistentTieredMemory.create
-            (EventStore.file (System.IO.Path.Combine(baseDir, "tiered.jsonl")))
-            config
-            embeddingProvider
+        let path = System.IO.Path.Combine(baseDir, "tiered.jsonl")
+        PersistentTieredMemory.create path (EventStore.file path) config embeddingProvider

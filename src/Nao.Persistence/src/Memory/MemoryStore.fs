@@ -102,17 +102,27 @@ module InMemoryStore =
 module AdoMemoryStore =
     let create (factory: DbConnectionFactory) : MemoryStore =
         let ensureAsync () =
-            Ado.executeNonQuery
+            AdoSchema.ensureVersionedTable
                 factory
+                "memory"
+                "nao_memory"
                 "CREATE TABLE IF NOT EXISTS nao_memory (agent TEXT NOT NULL, mem_key TEXT NOT NULL, mem_value TEXT NOT NULL, mem_ts TEXT NOT NULL, mem_tags TEXT NOT NULL, PRIMARY KEY (agent, mem_key))"
-                []
-            :> Task
 
         let mapEntry (r: DbDataReader) : MemoryEntry =
-            { Key = Ado.getString r "mem_key"
-              Value = Ado.getString r "mem_value"
-              Timestamp = Time.fromIso (Ado.getString r "mem_ts")
-              Tags = Json.tagsFromJson (Ado.getString r "mem_tags") }
+            let key = Ado.getString r "mem_key"
+
+            try
+                { Key = key
+                  Value = Ado.getString r "mem_value"
+                  Timestamp = Time.fromIso (Ado.getString r "mem_ts")
+                  Tags = Json.tagsFromJson (Ado.getString r "mem_tags") }
+            with ex ->
+                raise (
+                    InvalidDataException(
+                        sprintf "Memory row '%s' is invalid. Follow docs/migrations before writing." key,
+                        ex
+                    )
+                )
 
         let loadAll (agent: string) : Task<MemoryEntry list> =
             Ado.query
@@ -121,10 +131,32 @@ module AdoMemoryStore =
                 [ "@a", box agent ]
                 mapEntry
 
+        let validateAsync () =
+            task {
+                do! ensureAsync ()
+
+                let! _ = Ado.query factory "SELECT mem_key, mem_value, mem_ts, mem_tags FROM nao_memory" [] mapEntry
+
+                return ()
+            }
+
+        let forgetAsync agentId key =
+            task {
+                do! validateAsync ()
+
+                let! _ =
+                    Ado.executeNonQuery
+                        factory
+                        "DELETE FROM nao_memory WHERE agent = @a AND mem_key = @k"
+                        [ "@a", box agentId; "@k", box key ]
+
+                return ()
+            }
+
         { SaveAsync =
             fun (agentId: string) (entry: MemoryEntry) ->
                 task {
-                    do! ensureAsync ()
+                    do! validateAsync ()
 
                     do!
                         Ado.executeTransaction
@@ -154,24 +186,12 @@ module AdoMemoryStore =
                     do! ensureAsync ()
                     return! loadAll agentId
                 }
-          ForgetAsync =
-            fun agentId key ->
-                task {
-                    do! ensureAsync ()
-
-                    let! _ =
-                        Ado.executeNonQuery
-                            factory
-                            "DELETE FROM nao_memory WHERE agent = @a AND mem_key = @k"
-                            [ "@a", box agentId; "@k", box key ]
-
-                    return ()
-                }
+          ForgetAsync = forgetAsync
           DeleteOwnerAsync =
             fun owner ->
                 MemoryOperations.protect owner (fun () ->
                     task {
-                        do! ensureAsync ()
+                        do! validateAsync ()
 
                         return!
                             Ado.executeNonQuery factory "DELETE FROM nao_memory WHERE agent = @a" [ "@a", box owner ]
@@ -180,7 +200,7 @@ module AdoMemoryStore =
             fun owner before ->
                 MemoryOperations.protect owner (fun () ->
                     task {
-                        do! ensureAsync ()
+                        do! validateAsync ()
 
                         return!
                             Ado.executeNonQuery
@@ -191,6 +211,9 @@ module AdoMemoryStore =
 
 /// FileSystem-backed memory store. One JSON document per agent under {baseDir}.
 module FileMemoryStore =
+    [<Literal>]
+    let private CurrentSchemaVersion = 1
+
     let create (baseDir: string) : MemoryStore =
         let sync = obj ()
 
@@ -198,10 +221,14 @@ module FileMemoryStore =
             Path.Combine(baseDir, sprintf "%s.json" (Sanitize.id agentId))
 
         let load agentId : Dto.MemoryEntryDto list =
-            FileJson.read<Dto.MemoryEntryDto list> (agentFile agentId) []
+            VersionedFileJson.read<Dto.MemoryEntryDto list>
+                "Memory document"
+                CurrentSchemaVersion
+                (agentFile agentId)
+                []
 
         let save agentId entries =
-            FileJson.write (agentFile agentId) entries
+            VersionedFileJson.write CurrentSchemaVersion (agentFile agentId) entries
 
         { SaveAsync =
             fun (agentId: string) (entry: MemoryEntry) ->

@@ -136,23 +136,60 @@ module SimpleEmbeddingProvider =
 module AdoSemanticMemory =
     let create (embeddingProvider: EmbeddingProvider) (factory: DbConnectionFactory) : SemanticMemory =
         let ensureAsync () =
-            Ado.executeNonQuery
+            AdoSchema.ensureVersionedTable
                 factory
+                "semantic-memory"
+                "nao_semantic"
                 "CREATE TABLE IF NOT EXISTS nao_semantic (agent TEXT NOT NULL, sem_key TEXT NOT NULL, sem_content TEXT NOT NULL, sem_embedding TEXT NOT NULL, sem_ts TEXT NOT NULL, sem_tags TEXT NOT NULL, PRIMARY KEY (agent, sem_key))"
-                []
-            :> Task
 
         let mapEntry (reader: DbDataReader) : SemanticEntry =
-            { Key = Ado.getString reader "sem_key"
-              Content = Ado.getString reader "sem_content"
-              Embedding = Json.floatsFromJson (Ado.getString reader "sem_embedding")
-              Timestamp = Time.fromIso (Ado.getString reader "sem_ts")
-              Tags = Json.tagsFromJson (Ado.getString reader "sem_tags") }
+            let key = Ado.getString reader "sem_key"
+
+            try
+                { Key = key
+                  Content = Ado.getString reader "sem_content"
+                  Embedding = Json.floatsFromJson (Ado.getString reader "sem_embedding")
+                  Timestamp = Time.fromIso (Ado.getString reader "sem_ts")
+                  Tags = Json.tagsFromJson (Ado.getString reader "sem_tags") }
+            with ex ->
+                raise (
+                    InvalidDataException(
+                        sprintf "Semantic-memory row '%s' is invalid. Follow docs/migrations before writing." key,
+                        ex
+                    )
+                )
+
+        let validateAsync () =
+            task {
+                do! ensureAsync ()
+
+                let! _ =
+                    Ado.query
+                        factory
+                        "SELECT sem_key, sem_content, sem_embedding, sem_ts, sem_tags FROM nao_semantic"
+                        []
+                        mapEntry
+
+                return ()
+            }
+
+        let removeAsync agentId key =
+            task {
+                do! validateAsync ()
+
+                let! _ =
+                    Ado.executeNonQuery
+                        factory
+                        "DELETE FROM nao_semantic WHERE agent = @a AND sem_key = @k"
+                        [ "@a", box agentId; "@k", box key ]
+
+                return ()
+            }
 
         { StoreAsync =
             fun agentId key content ->
                 task {
-                    do! ensureAsync ()
+                    do! validateAsync ()
                     let! embedding = embeddingProvider.EmbedAsync content
 
                     do!
@@ -189,24 +226,12 @@ module AdoSemanticMemory =
                         |> List.truncate topK
                         |> List.map fst
                 }
-          RemoveAsync =
-            fun agentId key ->
-                task {
-                    do! ensureAsync ()
-
-                    let! _ =
-                        Ado.executeNonQuery
-                            factory
-                            "DELETE FROM nao_semantic WHERE agent = @a AND sem_key = @k"
-                            [ "@a", box agentId; "@k", box key ]
-
-                    return ()
-                }
+          RemoveAsync = removeAsync
           DeleteOwnerAsync =
             fun owner ->
                 SemanticOperations.protect owner (fun () ->
                     task {
-                        do! ensureAsync ()
+                        do! validateAsync ()
 
                         return!
                             Ado.executeNonQuery factory "DELETE FROM nao_semantic WHERE agent = @a" [ "@a", box owner ]
@@ -215,7 +240,7 @@ module AdoSemanticMemory =
             fun owner before ->
                 SemanticOperations.protect owner (fun () ->
                     task {
-                        do! ensureAsync ()
+                        do! validateAsync ()
 
                         return!
                             Ado.executeNonQuery
@@ -226,6 +251,9 @@ module AdoSemanticMemory =
 
 /// FileSystem-backed semantic memory. One JSON document per agent.
 module FileSemanticMemory =
+    [<Literal>]
+    let private CurrentSchemaVersion = 1
+
     let create (embeddingProvider: EmbeddingProvider) (baseDir: string) : SemanticMemory =
         let sync = obj ()
 
@@ -233,10 +261,14 @@ module FileSemanticMemory =
             Path.Combine(baseDir, sprintf "%s.json" (Sanitize.id agentId))
 
         let load agentId =
-            FileJson.read<Dto.SemanticEntryDto list> (agentFile agentId) []
+            VersionedFileJson.read<Dto.SemanticEntryDto list>
+                "Semantic memory document"
+                CurrentSchemaVersion
+                (agentFile agentId)
+                []
 
         let save agentId entries =
-            FileJson.write (agentFile agentId) entries
+            VersionedFileJson.write CurrentSchemaVersion (agentFile agentId) entries
 
         { StoreAsync =
             fun agentId key content ->

@@ -102,6 +102,29 @@ type EpisodicTests() =
             with error ->
                 Assert.Fail(sprintf "%s backend failed: %s" name error.Message)
 
+    [<TestMethod>]
+    member _.File_RejectsCorruptEpisodicEventsBeforeMutation() =
+        let dir = tempDir ()
+        let path = Path.Combine(dir, "episodic.jsonl")
+        let memory = EpisodicMemories.file dir None
+        let original = episode agent "original" DateTimeOffset.UtcNow 0.8
+        memory.RecordAsync original |> _.GetAwaiter().GetResult()
+        File.AppendAllText(path, "{invalid" + Environment.NewLine)
+        let before = File.ReadAllBytes path
+        let added = episode agent "added" DateTimeOffset.UtcNow 0.8
+
+        let error =
+            Assert.ThrowsExactly<InvalidDataException>(fun () -> memory.RecordAsync added |> _.GetAwaiter().GetResult())
+
+        StringAssert.Contains(error.Message, path)
+        StringAssert.Contains(error.Message, "event 2")
+        CollectionAssert.AreEqual(before, File.ReadAllBytes path)
+
+        let retained =
+            memory.QueryAsync agent (EpisodeQuery.Recent 10) |> _.GetAwaiter().GetResult()
+
+        Assert.IsFalse(retained |> List.exists (fun item -> item.Id = added.Id))
+
 // ---------------- Graph ----------------
 
 let private node owner id createdAt : GraphNode =
@@ -208,6 +231,30 @@ type GraphTests() =
                 exercise make |> _.GetAwaiter().GetResult()
             with error ->
                 Assert.Fail(sprintf "%s backend failed: %s" name error.Message)
+
+    [<TestMethod>]
+    member _.File_RejectsCorruptGraphEventsBeforeMutation() =
+        let dir = tempDir ()
+        let path = Path.Combine(dir, "graph.jsonl")
+        let graph = GraphMemories.file dir None
+
+        graph.UpsertNodeAsync(node agent "original" DateTimeOffset.UtcNow)
+        |> _.GetAwaiter().GetResult()
+
+        File.AppendAllText(path, "{invalid" + Environment.NewLine)
+        let before = File.ReadAllBytes path
+
+        let error =
+            Assert.ThrowsExactly<InvalidDataException>(fun () ->
+                graph.UpsertNodeAsync(node agent "added" DateTimeOffset.UtcNow)
+                |> _.GetAwaiter().GetResult())
+
+        StringAssert.Contains(error.Message, path)
+        StringAssert.Contains(error.Message, "event 2")
+        CollectionAssert.AreEqual(before, File.ReadAllBytes path)
+
+        let retained = graph.GetByTypeAsync agent "thing" |> _.GetAwaiter().GetResult()
+        Assert.IsFalse(retained |> List.exists (fun item -> item.Id = "added"))
 
 // ---------------- Tiered ----------------
 
@@ -340,6 +387,30 @@ type TieredTests() =
             with error ->
                 Assert.Fail(sprintf "%s backend failed: %s" name error.Message)
 
+    [<TestMethod>]
+    member _.File_RejectsCorruptTieredEventsBeforeMutation() =
+        let dir = tempDir ()
+        let path = Path.Combine(dir, "tiered.jsonl")
+        let memory = TieredMemories.file dir TieredMemoryConfig.Default None
+
+        memory.StoreAsync(tieredEntry agent "original" MemoryTier.LongTerm DateTimeOffset.UtcNow)
+        |> _.GetAwaiter().GetResult()
+
+        File.AppendAllText(path, "{invalid" + Environment.NewLine)
+        let before = File.ReadAllBytes path
+
+        let error =
+            Assert.ThrowsExactly<InvalidDataException>(fun () ->
+                memory.StoreAsync(tieredEntry agent "added" MemoryTier.LongTerm DateTimeOffset.UtcNow)
+                |> _.GetAwaiter().GetResult())
+
+        StringAssert.Contains(error.Message, path)
+        StringAssert.Contains(error.Message, "event 2")
+        CollectionAssert.AreEqual(before, File.ReadAllBytes path)
+
+        let retained = memory.RetrieveAsync agent "v" 10 |> _.GetAwaiter().GetResult()
+        Assert.IsFalse(retained |> List.exists (fun item -> item.Key = "added"))
+
 // ---------------- Working memory ----------------
 
 let private wmItem owner key addedAt expiresAt pinned : WorkingMemoryItem =
@@ -422,6 +493,25 @@ type WorkingMemoryTests() =
                 exercise make |> _.GetAwaiter().GetResult()
             with ex ->
                 Assert.Fail(sprintf "%s backend failed: %s" name ex.Message)
+
+    [<TestMethod>]
+    member _.File_RejectsCorruptWorkingEventsBeforeMutation() =
+        let dir = tempDir ()
+        let path = Path.Combine(dir, "working.jsonl")
+        let memory = WorkingMemories.file dir WorkingMemoryConfig.Default
+        let original = wmItem agent "original" DateTimeOffset.UtcNow None false
+        memory.SetAsync original |> _.GetAwaiter().GetResult()
+        File.AppendAllText(path, "{invalid" + Environment.NewLine)
+        let before = File.ReadAllBytes path
+        let added = wmItem agent "added" DateTimeOffset.UtcNow None false
+
+        let error =
+            Assert.ThrowsExactly<InvalidDataException>(fun () -> memory.SetAsync added |> _.GetAwaiter().GetResult())
+
+        StringAssert.Contains(error.Message, path)
+        StringAssert.Contains(error.Message, "event 2")
+        CollectionAssert.AreEqual(before, File.ReadAllBytes path)
+        Assert.IsTrue((memory.GetAsync agent "added" |> _.GetAwaiter().GetResult()).IsNone)
 
 // ---------------- Metrics ----------------
 
@@ -518,6 +608,26 @@ type MetricsTests() =
             with ex ->
                 Assert.Fail(sprintf "%s backend failed: %s" name ex.Message)
 
+    [<TestMethod>]
+    member _.File_RejectsCorruptEventsBeforeMutation() =
+        let dir = tempDir ()
+        let path = Path.Combine(dir, "metrics.jsonl")
+        let collector = MetricsCollectors.file dir
+        let original = MetricRecord.llmCall agent DateTimeOffset.UtcNow 10 5 20L
+        collector.Record original
+        File.AppendAllText(path, "{invalid" + Environment.NewLine)
+        let before = File.ReadAllBytes path
+
+        let error =
+            Assert.ThrowsExactly<InvalidDataException>(fun () ->
+                collector.Record(MetricRecord.llmCall agent DateTimeOffset.UtcNow 20 10 30L))
+
+        StringAssert.Contains(error.Message, path)
+        StringAssert.Contains(error.Message, "event 2")
+        StringAssert.Contains(error.Message, "docs/migrations")
+        CollectionAssert.AreEqual(before, File.ReadAllBytes path)
+        Assert.AreEqual(1, collector.GetMetrics(agent).TotalLlmCalls)
+
 // ---------------- Trace store ----------------
 
 let private executionTrace () =
@@ -604,9 +714,82 @@ type TraceStoreTests() =
         (exercise (fun () -> TraceStores.ado factory)).GetAwaiter().GetResult()
 
     [<TestMethod>]
+    member _.Ado_RejectsUnversionedEventTableBeforeMutation() =
+        let path =
+            Path.Combine(Path.GetTempPath(), sprintf "nao-rich-%s.db" (Guid.NewGuid().ToString("N")))
+
+        let factory =
+            DbConnectionFactory.ofFunc (fun () ->
+                new SqliteConnection(sprintf "Data Source=%s" path) :> Data.Common.DbConnection)
+
+        try
+            Ado.executeNonQuery
+                factory
+                "CREATE TABLE nao_events (stream TEXT NOT NULL, ord INTEGER NOT NULL, payload TEXT NOT NULL, PRIMARY KEY (stream, ord))"
+                []
+            |> _.Wait()
+
+            Ado.executeNonQuery
+                factory
+                "INSERT INTO nao_events (stream, ord, payload) VALUES ('trace-store', 0, '{}')"
+                []
+            |> _.Wait()
+
+            let error =
+                Assert.ThrowsExactly<InvalidDataException>(fun () -> TraceStores.ado factory |> ignore)
+
+            StringAssert.Contains(error.Message, "unversioned 'nao_events'")
+            StringAssert.Contains(error.Message, "docs/migrations")
+
+            let rows =
+                Ado.query factory "SELECT payload FROM nao_events" [] (fun reader -> Ado.getString reader "payload")
+                |> _.GetAwaiter().GetResult()
+
+            CollectionAssert.AreEqual([| "{}" |], rows |> List.toArray)
+
+            let markerTables =
+                Ado.query
+                    factory
+                    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'nao_schema_versions'"
+                    []
+                    (fun reader -> Ado.getString reader "name")
+                |> _.GetAwaiter().GetResult()
+
+            Assert.AreEqual(0, markerTables.Length)
+        finally
+            if File.Exists path then
+                File.Delete path
+
+    [<TestMethod>]
     member _.File_Persists() =
         let dir = tempDir ()
         (exercise (fun () -> TraceStores.file dir)).GetAwaiter().GetResult()
+
+    [<TestMethod>]
+    member _.File_RejectsUnversionedEventsBeforeMutation() =
+        let dir = tempDir ()
+        let path = Path.Combine(dir, "trace-store.jsonl")
+        let store = TraceStores.file dir
+        let original = executionTrace ()
+        store.SaveAsync original |> _.GetAwaiter().GetResult()
+
+        let persisted = File.ReadAllText path
+        StringAssert.Contains(persisted, "\"schemaVersion\":1")
+
+        File.WriteAllText(path, FSharpJson.serialize (TraceStoreEvent.Save original) + Environment.NewLine)
+        let before = File.ReadAllBytes path
+        let added = executionTrace ()
+
+        let error =
+            Assert.ThrowsExactly<InvalidDataException>(fun () -> store.SaveAsync added |> _.GetAwaiter().GetResult())
+
+        StringAssert.Contains(error.Message, path)
+        StringAssert.Contains(error.Message, "event 1")
+        StringAssert.Contains(error.Message, "docs/migrations")
+        CollectionAssert.AreEqual(before, File.ReadAllBytes path)
+
+        let traces = store.GetTracesAsync agent 10 |> _.GetAwaiter().GetResult()
+        Assert.IsFalse(traces |> List.exists (fun trace -> trace.Id = added.Id))
 
 // ---------------- Tracer ----------------
 
@@ -631,3 +814,23 @@ type TracerTests() =
     member _.File_Persists() =
         let dir = tempDir ()
         exercise (fun () -> Tracers.file dir)
+
+    [<TestMethod>]
+    member _.File_RejectsCorruptSpansBeforeMutation() =
+        let dir = tempDir ()
+        let path = Path.Combine(dir, "tracer.jsonl")
+        let tracer = Tracers.file dir
+        let root = tracer.StartTrace "root"
+
+        StringAssert.Contains(File.ReadAllText(path), "\"schemaVersion\":1")
+        File.AppendAllText(path, "{invalid" + Environment.NewLine)
+        let before = File.ReadAllBytes path
+
+        let error =
+            Assert.ThrowsExactly<InvalidDataException>(fun () -> tracer.StartSpan root "child" |> ignore)
+
+        StringAssert.Contains(error.Message, path)
+        StringAssert.Contains(error.Message, "span 2")
+        StringAssert.Contains(error.Message, "docs/migrations")
+        CollectionAssert.AreEqual(before, File.ReadAllBytes path)
+        Assert.AreEqual(1, tracer.GetTrace(root.TraceId).Length)

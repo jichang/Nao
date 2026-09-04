@@ -128,9 +128,145 @@ type MemoryStoreTests() =
         (runMemoryStoreRoundTrip (MemoryStores.ado factory)).GetAwaiter().GetResult()
 
     [<TestMethod>]
+    member _.AdoMemoryStore_RejectsUnversionedTableBeforeMutation() =
+        let factory, databasePath = sqliteFactory ()
+
+        try
+            Ado.executeNonQuery
+                factory
+                "CREATE TABLE nao_memory (agent TEXT NOT NULL, mem_key TEXT NOT NULL, mem_value TEXT NOT NULL, mem_ts TEXT NOT NULL, mem_tags TEXT NOT NULL, PRIMARY KEY (agent, mem_key))"
+                []
+            |> _.Wait()
+
+            Ado.executeNonQuery
+                factory
+                "INSERT INTO nao_memory (agent, mem_key, mem_value, mem_ts, mem_tags) VALUES ('existing', 'key', 'value', 'timestamp', '[]')"
+                []
+            |> _.Wait()
+
+            let store = MemoryStores.ado factory
+
+            let error =
+                Assert.ThrowsExactly<InvalidDataException>(fun () ->
+                    store.SaveAsync agent (memEntry "new" "value") |> _.GetAwaiter().GetResult())
+
+            StringAssert.Contains(error.Message, "unversioned 'nao_memory'")
+            StringAssert.Contains(error.Message, "docs/migrations")
+
+            let rows =
+                Ado.query factory "SELECT agent FROM nao_memory" [] (fun reader -> Ado.getString reader "agent")
+                |> _.GetAwaiter().GetResult()
+
+            CollectionAssert.AreEqual([| "existing" |], rows |> List.toArray)
+
+            let markerTables =
+                Ado.query
+                    factory
+                    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'nao_schema_versions'"
+                    []
+                    (fun reader -> Ado.getString reader "name")
+                |> _.GetAwaiter().GetResult()
+
+            Assert.AreEqual(0, markerTables.Length)
+        finally
+            if File.Exists databasePath then
+                File.Delete databasePath
+
+    [<TestMethod>]
+    member _.AdoMemoryStore_RejectsUnsupportedVersionBeforeMutation() =
+        let factory, databasePath = sqliteFactory ()
+
+        try
+            let store = MemoryStores.ado factory
+            store.RecallAllAsync agent |> _.Wait()
+
+            Ado.executeNonQuery
+                factory
+                "UPDATE nao_schema_versions SET schema_version = 2 WHERE component = 'memory'"
+                []
+            |> _.Wait()
+
+            let error =
+                Assert.ThrowsExactly<InvalidDataException>(fun () ->
+                    store.SaveAsync agent (memEntry "new" "value") |> _.GetAwaiter().GetResult())
+
+            StringAssert.Contains(error.Message, "version 2")
+            StringAssert.Contains(error.Message, "expected 1")
+
+            let rows =
+                Ado.query factory "SELECT agent FROM nao_memory" [] (fun reader -> Ado.getString reader "agent")
+                |> _.GetAwaiter().GetResult()
+
+            Assert.AreEqual(0, rows.Length)
+        finally
+            if File.Exists databasePath then
+                File.Delete databasePath
+
+    [<TestMethod>]
+    member _.AdoMemoryStore_RejectsCorruptRowBeforeMutation() =
+        let factory, databasePath = sqliteFactory ()
+
+        try
+            let store = MemoryStores.ado factory
+            store.RecallAllAsync agent |> _.Wait()
+
+            Ado.executeNonQuery
+                factory
+                "INSERT INTO nao_memory (agent, mem_key, mem_value, mem_ts, mem_tags) VALUES ('owner', 'corrupt-key', 'value', 'not-a-time', '[]')"
+                []
+            |> _.Wait()
+
+            let error =
+                Assert.ThrowsExactly<InvalidDataException>(fun () ->
+                    store.SaveAsync agent (memEntry "new" "value") |> _.GetAwaiter().GetResult())
+
+            StringAssert.Contains(error.Message, "corrupt-key")
+            StringAssert.Contains(error.Message, "docs/migrations")
+
+            let rows =
+                Ado.query factory "SELECT mem_key FROM nao_memory" [] (fun reader -> Ado.getString reader "mem_key")
+                |> _.GetAwaiter().GetResult()
+
+            CollectionAssert.AreEqual([| "corrupt-key" |], rows |> List.toArray)
+        finally
+            if File.Exists databasePath then
+                File.Delete databasePath
+
+    [<TestMethod>]
     member _.FileMemoryStore_RoundTrips() =
         let dir = tempDir ()
         (runMemoryStoreRoundTrip (MemoryStores.file dir)).GetAwaiter().GetResult()
+
+    [<TestMethod>]
+    member _.FileMemoryStore_RequiresVersionBeforeMutation() =
+        let dir = tempDir ()
+
+        try
+            let store = MemoryStores.file dir
+            let path = Path.Combine(dir, agent + ".json")
+            store.SaveAsync agent (memEntry "alpha" "v1") |> _.GetAwaiter().GetResult()
+
+            use document = JsonDocument.Parse(File.ReadAllText path)
+            Assert.AreEqual(1, document.RootElement.GetProperty("schemaVersion").GetInt32())
+
+            let currentDocument = File.ReadAllText path
+            let withUnknownField = "{\"futureField\":true," + currentDocument.Substring(1)
+
+            File.WriteAllText(path, withUnknownField)
+            Assert.AreEqual(1, store.RecallAllAsync agent |> _.GetAwaiter().GetResult() |> List.length)
+
+            File.WriteAllText(path, "[]")
+            let before = File.ReadAllBytes path
+
+            let error =
+                Assert.ThrowsExactly<InvalidDataException>(fun () ->
+                    store.SaveAsync agent (memEntry "beta" "v2") |> _.GetAwaiter().GetResult())
+
+            StringAssert.Contains(error.Message, path)
+            StringAssert.Contains(error.Message, "docs/migrations")
+            CollectionAssert.AreEqual(before, File.ReadAllBytes path)
+        finally
+            Directory.Delete(dir, true)
 
 [<TestClass>]
 type MemoryToolTests() =
@@ -372,6 +508,37 @@ type ExecutionJournalTests() =
         let dir = tempDir ()
         (runJournalRoundTrip (ExecutionJournals.file dir)).GetAwaiter().GetResult()
 
+    [<TestMethod>]
+    member _.FileExecutionJournal_RejectsCorruptDocumentBeforeMutation() =
+        let dir = tempDir ()
+
+        try
+            let path = Path.Combine(dir, "execution-journal.json")
+            File.WriteAllText(path, "{invalid")
+            let before = File.ReadAllBytes path
+            let journal = ExecutionJournals.file dir
+
+            let record =
+                { Id = Guid.NewGuid()
+                  Owner = agent
+                  TurnId = "turn"
+                  ToolName = "tool"
+                  Input = "input"
+                  Output = "output"
+                  ExecutedAt = DateTimeOffset.UtcNow
+                  Reverted = false
+                  Metadata = Map.empty }
+
+            let error =
+                Assert.ThrowsExactly<InvalidDataException>(fun () ->
+                    journal.RecordAsync record |> _.GetAwaiter().GetResult())
+
+            StringAssert.Contains(error.Message, path)
+            StringAssert.Contains(error.Message, "docs/migrations")
+            CollectionAssert.AreEqual(before, File.ReadAllBytes path)
+        finally
+            Directory.Delete(dir, true)
+
 // ---------------- SemanticMemory ----------------
 
 let private runSemanticRoundTrip (memory: SemanticMemory) =
@@ -457,6 +624,28 @@ type SemanticMemoryTests() =
         let dir = tempDir ()
         let provider = SimpleEmbeddingProvider.create ()
         (runSemanticRoundTrip (SemanticMemories.file provider dir)).GetAwaiter().GetResult()
+
+    [<TestMethod>]
+    member _.FileSemanticMemory_RejectsCorruptDocumentBeforeMutation() =
+        let dir = tempDir ()
+
+        try
+            let provider = SimpleEmbeddingProvider.create ()
+            let memory = SemanticMemories.file provider dir
+            let path = Path.Combine(dir, agent + ".json")
+            File.WriteAllText(path, "{invalid")
+            let before = File.ReadAllBytes path
+
+            let error =
+                Assert.ThrowsExactly<InvalidDataException>(fun () ->
+                    memory.StoreAsync agent "doc1" "the quick brown fox"
+                    |> _.GetAwaiter().GetResult())
+
+            StringAssert.Contains(error.Message, path)
+            StringAssert.Contains(error.Message, "docs/migrations")
+            CollectionAssert.AreEqual(before, File.ReadAllBytes path)
+        finally
+            Directory.Delete(dir, true)
 
 // ---------------- AuditLog ----------------
 
@@ -557,6 +746,64 @@ type AuditLogTests() =
         (runAuditRoundTrip (AuditLogs.ado factory)).GetAwaiter().GetResult()
 
     [<TestMethod>]
+    member _.AdoAuditLog_RejectsInvalidActionBeforeMutation() =
+        let factory, databasePath = sqliteFactory ()
+
+        try
+            let log = AuditLogs.ado factory
+            log.QueryAsync agent DateTimeOffset.MinValue |> _.Wait()
+            let corruptId = Guid.NewGuid().ToString("D")
+
+            Ado.executeNonQuery
+                factory
+                "INSERT INTO nao_audit (audit_id, audit_ts, agent_name, agent_desc, action_json, audit_input, audit_output, permitted, permission_level, violations, execution_id, metadata) VALUES (@id, @ts, @agent, '', '{\"Kind\":\"Unknown\",\"A\":null,\"B\":null}', NULL, NULL, 1, 'Allow', '[]', NULL, '{}')"
+                [ "@id", box corruptId
+                  "@ts", box (Time.toIso DateTimeOffset.UtcNow)
+                  "@agent", box agent ]
+            |> _.Wait()
+
+            let error =
+                Assert.ThrowsExactly<InvalidDataException>(fun () ->
+                    log.RecordAsync(auditEntry true None) |> _.GetAwaiter().GetResult())
+
+            StringAssert.Contains(error.Message, corruptId)
+            StringAssert.Contains(error.Message, "docs/migrations")
+
+            let rows =
+                Ado.query factory "SELECT audit_id FROM nao_audit" [] (fun reader -> Ado.getString reader "audit_id")
+                |> _.GetAwaiter().GetResult()
+
+            CollectionAssert.AreEqual([| corruptId |], rows |> List.toArray)
+        finally
+            if File.Exists databasePath then
+                File.Delete databasePath
+
+    [<TestMethod>]
     member _.FileAuditLog_RoundTrips() =
         let dir = tempDir ()
         (runAuditRoundTrip (AuditLogs.file dir)).GetAwaiter().GetResult()
+
+    [<TestMethod>]
+    member _.FileAuditLog_RequiresVersionBeforeMutation() =
+        let dir = tempDir ()
+
+        try
+            let log = AuditLogs.file dir
+            let path = Path.Combine(dir, "audit-log.json")
+            log.RecordAsync(auditEntry true None) |> _.GetAwaiter().GetResult()
+
+            use document = JsonDocument.Parse(File.ReadAllText path)
+            Assert.AreEqual(1, document.RootElement.GetProperty("schemaVersion").GetInt32())
+
+            File.WriteAllText(path, "[]")
+            let before = File.ReadAllBytes path
+
+            let error =
+                Assert.ThrowsExactly<InvalidDataException>(fun () ->
+                    log.RecordAsync(auditEntry false None) |> _.GetAwaiter().GetResult())
+
+            StringAssert.Contains(error.Message, path)
+            StringAssert.Contains(error.Message, "docs/migrations")
+            CollectionAssert.AreEqual(before, File.ReadAllBytes path)
+        finally
+            Directory.Delete(dir, true)

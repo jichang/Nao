@@ -13,6 +13,7 @@ The current implementation provides agent, ETCLOVG harness, persistence, provide
 | [Getting started](getting-started.html) | Restore, build, test, create an agent, run the harness, and register a workspace |
 | [AI platform roadmap](roadmap.html) | Release milestones, detailed checklists, dependencies, and definition of done |
 | [Development and contributing](development.html) | Coding, testing, compatibility, security, documentation, and roadmap workflow |
+| [Durable formats](durable-formats.html) | Current schema markers, decode policy, fail-fast gaps, and migration rules |
 
 ## Architecture and capabilities
 
