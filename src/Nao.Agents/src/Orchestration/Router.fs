@@ -11,12 +11,15 @@ type RoutingStrategy =
     | Custom of (string -> Agent list -> Task<Agent>)
 
 /// Functional router definition.
-type Router = { Agents: Agent list; Strategy: RoutingStrategy }
+type Router =
+    { Agents: Agent list
+      Strategy: RoutingStrategy }
 
 [<RequireQualifiedAccess>]
 module Router =
 
-    let create agents strategy = { Agents = agents; Strategy = strategy }
+    let create agents strategy =
+        { Agents = agents; Strategy = strategy }
 
     let findAgent name router =
         router.Agents |> List.tryFind (fun agent -> agent.Metadata.Name = name)

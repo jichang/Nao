@@ -5,14 +5,16 @@ open System.Threading.Tasks
 
 /// A governance policy that can be enforced at runtime
 type Policy =
-    { /// Policy identifier
-      Id: string
-      /// Human-readable description
-      Description: string
-      /// The enforcement action
-      Enforcement: PolicyEnforcement
-      /// The check function: returns None if policy passes, Some error message if violated
-      Evaluate: PolicyContext -> string option }
+    {
+        /// Policy identifier
+        Id: string
+        /// Human-readable description
+        Description: string
+        /// The enforcement action
+        Enforcement: PolicyEnforcement
+        /// The check function: returns None if policy passes, Some error message if violated
+        Evaluate: PolicyContext -> string option
+    }
 
 /// How a policy violation is handled
 and [<RequireQualifiedAccess>] PolicyEnforcement =
@@ -34,7 +36,12 @@ and PolicyContext =
       CurrentUsage: ResourceUsage option }
 
     /// Create a PolicyContext from an ExecutionContext (canonical factory)
-    static member FromExecutionContext (agentId: string) (action: string) (input: string option) (ctx: ExecutionContext) =
+    static member FromExecutionContext
+        (agentId: string)
+        (action: string)
+        (input: string option)
+        (ctx: ExecutionContext)
+        =
         { AgentId = agentId
           Action = action
           Input = input
@@ -43,14 +50,16 @@ and PolicyContext =
 
 /// Result of policy engine evaluation
 type PolicyResult =
-    { /// Whether execution should proceed
-      Proceed: bool
-      /// Policies that were violated
-      Violations: PolicyViolation list
-      /// Modified input (if any policy transforms applied)
-      ModifiedInput: string option
-      /// Warnings generated
-      Warnings: string list }
+    {
+        /// Whether execution should proceed
+        Proceed: bool
+        /// Policies that were violated
+        Violations: PolicyViolation list
+        /// Modified input (if any policy transforms applied)
+        ModifiedInput: string option
+        /// Warnings generated
+        Warnings: string list
+    }
 
 and PolicyViolation =
     { PolicyId: string
@@ -80,73 +89,84 @@ module PolicyEngine =
                 | PolicyEnforcement.Warn -> 1
                 | PolicyEnforcement.Modify _ -> 0)
 
-        { EvaluatePolicy = fun context ->
-            let violations = ResizeArray<PolicyViolation>()
-            let warnings = ResizeArray<string>()
-            let mutable blocked = false
-            let mutable modifiedInput = context.Input
+        { EvaluatePolicy =
+            fun context ->
+                let violations = ResizeArray<PolicyViolation>()
+                let warnings = ResizeArray<string>()
+                let mutable blocked = false
+                let mutable modifiedInput = context.Input
 
-            for policy in orderedPolicies do
-                match policy.Evaluate context with
-                | Some message ->
-                    violations.Add
-                        { PolicyId = policy.Id
-                          Description = policy.Description
-                          Enforcement = policy.Enforcement
-                          Message = message }
+                for policy in orderedPolicies do
+                    match policy.Evaluate context with
+                    | Some message ->
+                        violations.Add
+                            { PolicyId = policy.Id
+                              Description = policy.Description
+                              Enforcement = policy.Enforcement
+                              Message = message }
 
-                    match policy.Enforcement with
-                    | PolicyEnforcement.Block
-                    | PolicyEnforcement.Confirm -> blocked <- true
-                    | PolicyEnforcement.Warn ->
-                        warnings.Add(sprintf "[Policy %s]: %s" policy.Id message)
-                    | PolicyEnforcement.Modify transform ->
-                        modifiedInput <- modifiedInput |> Option.map transform
-                | None -> ()
+                        match policy.Enforcement with
+                        | PolicyEnforcement.Block
+                        | PolicyEnforcement.Confirm -> blocked <- true
+                        | PolicyEnforcement.Warn -> warnings.Add(sprintf "[Policy %s]: %s" policy.Id message)
+                        | PolicyEnforcement.Modify transform -> modifiedInput <- modifiedInput |> Option.map transform
+                    | None -> ()
 
-            { Proceed = not blocked
-              Violations = violations |> Seq.toList
-              ModifiedInput = modifiedInput
-              Warnings = warnings |> Seq.toList } }
+                { Proceed = not blocked
+                  Violations = violations |> Seq.toList
+                  ModifiedInput = modifiedInput
+                  Warnings = warnings |> Seq.toList } }
 
     /// Cost budget policy: blocks when estimated cost exceeds budget
     let costBudgetPolicy (maxUsd: decimal) : Policy =
         { Id = "cost-budget"
           Description = sprintf "Enforce maximum cost budget of $%.2f" maxUsd
           Enforcement = PolicyEnforcement.Block
-          Evaluate = fun ctx ->
-              match ctx.CurrentUsage with
-              | Some usage when usage.EstimatedCostUsd > maxUsd ->
-                  Some (sprintf "Cost budget exceeded: $%.4f > $%.2f" usage.EstimatedCostUsd maxUsd)
-              | _ -> None }
+          Evaluate =
+            fun ctx ->
+                match ctx.CurrentUsage with
+                | Some usage when usage.EstimatedCostUsd > maxUsd ->
+                    Some(sprintf "Cost budget exceeded: $%.4f > $%.2f" usage.EstimatedCostUsd maxUsd)
+                | _ -> None }
 
     /// Rate limit policy: blocks when too many actions in a time window
     let rateLimitPolicy (capability: string) (maxPerMinute: int) : Policy =
         let timestamps = System.Collections.Concurrent.ConcurrentQueue<DateTimeOffset>()
+
         { Id = sprintf "rate-limit-%s" capability
           Description = sprintf "Rate limit %s to %d per minute" capability maxPerMinute
           Enforcement = PolicyEnforcement.Block
-          Evaluate = fun ctx ->
-              if ctx.Action = capability then
-                  let now = DateTimeOffset.UtcNow
-                  let cutoff = now.AddMinutes(-1.0)
-                  let mutable item = DateTimeOffset.MinValue
-                  while timestamps.TryPeek(&item) && item < cutoff do
-                      timestamps.TryDequeue(&item) |> ignore
-                  if timestamps.Count >= maxPerMinute then
-                      Some (sprintf "Rate limit exceeded: %d/%d calls in last minute" timestamps.Count maxPerMinute)
-                  else
-                      timestamps.Enqueue(now)
-                      None
-              else None }
+          Evaluate =
+            fun ctx ->
+                if ctx.Action = capability then
+                    let now = DateTimeOffset.UtcNow
+                    let cutoff = now.AddMinutes(-1.0)
+                    let mutable item = DateTimeOffset.MinValue
+
+                    while timestamps.TryPeek(&item) && item < cutoff do
+                        timestamps.TryDequeue(&item) |> ignore
+
+                    if timestamps.Count >= maxPerMinute then
+                        Some(sprintf "Rate limit exceeded: %d/%d calls in last minute" timestamps.Count maxPerMinute)
+                    else
+                        timestamps.Enqueue(now)
+                        None
+                else
+                    None }
 
     /// Content length policy: blocks excessively long outputs
     let maxOutputLengthPolicy (maxChars: int) : Policy =
         { Id = "max-output-length"
           Description = sprintf "Limit output to %d characters" maxChars
-          Enforcement = PolicyEnforcement.Modify (fun s -> if s.Length > maxChars then s.Substring(0, maxChars) + "... [truncated]" else s)
-          Evaluate = fun ctx ->
-              match ctx.Input with
-              | Some input when input.Length > maxChars ->
-                  Some (sprintf "Output exceeds maximum length: %d > %d" input.Length maxChars)
-              | _ -> None }
+          Enforcement =
+            PolicyEnforcement.Modify(fun s ->
+                if s.Length > maxChars then
+                    s.Substring(0, maxChars) + "... [truncated]"
+                else
+                    s)
+          Evaluate =
+            fun ctx ->
+                match ctx.Input with
+                | Some input when input.Length > maxChars ->
+                    Some(sprintf "Output exceeds maximum length: %d > %d" input.Length maxChars)
+                | _ -> None }

@@ -14,15 +14,13 @@ type ToolSelectionConfig =
           RelevanceThreshold = 0.1 }
 
 /// Functional capability for selecting tools relevant to a task and context budget.
-type ToolSelection = {
-    Available: Tool list
-    Selected: Tool list
-}
+type ToolSelection =
+    { Available: Tool list
+      Selected: Tool list }
 
 /// Functional capability for discovering and selecting tools relevant to a task and context budget.
-type ToolSelector = {
-    SelectAsync: string -> int -> ToolProtocol -> Task<ToolSelection>
-}
+type ToolSelector =
+    { SelectAsync: string -> int -> ToolProtocol -> Task<ToolSelection> }
 
 [<RequireQualifiedAccess>]
 module ToolSelector =
@@ -42,10 +40,7 @@ module ToolSelector =
                 0.0
             else
                 let weightedCoverage weight text =
-                    Set.intersect queryTerms (terms text)
-                    |> Set.count
-                    |> float
-                    |> (*) weight
+                    Set.intersect queryTerms (terms text) |> Set.count |> float |> (*) weight
 
                 let weightedMatches =
                     weightedCoverage 1.0 tool.Name
@@ -63,6 +58,7 @@ module ToolSelector =
             task {
                 let! tools = protocol.ListTools()
                 let queryTerms = terms taskDescription
+
                 let ranked =
                     tools
                     |> List.map (fun tool -> tool, relevance queryTerms tool)
@@ -73,13 +69,17 @@ module ToolSelector =
                     |> List.filter (fun (_, score) -> score >= config.RelevanceThreshold && score > 0.0)
 
                 let candidates =
-                    if List.isEmpty relevant then ranked |> List.truncate 1
-                    else relevant
+                    if List.isEmpty relevant then
+                        ranked |> List.truncate 1
+                    else
+                        relevant
 
                 let mutable remainingTokens = max 0 availableTokenBudget
                 let selected = ResizeArray<Tool>()
+
                 for tool, _ in candidates do
                     let tokens = estimateTokens tool
+
                     if selected.Count < max 0 config.MaxTools && tokens <= remainingTokens then
                         selected.Add tool
                         remainingTokens <- remainingTokens - tokens

@@ -18,12 +18,12 @@ type DbConnectionFactory =
 module DbConnectionFactory =
 
     /// Build a factory from a plain function (e.g. fun () -> new SqliteConnection(cs)).
-    let ofFunc (create: unit -> DbConnection) : DbConnectionFactory =
-        { Create = create }
+    let ofFunc (create: unit -> DbConnection) : DbConnectionFactory = { Create = create }
 
     /// Build a factory from a DbProviderFactory + connection string.
     let ofProvider (provider: DbProviderFactory) (connectionString: string) : DbConnectionFactory =
-        { Create = fun () ->
+        { Create =
+            fun () ->
                 let conn = provider.CreateConnection()
                 conn.ConnectionString <- connectionString
                 conn }
@@ -48,49 +48,66 @@ module Ado =
             do! conn.OpenAsync()
             use cmd = conn.CreateCommand()
             cmd.CommandText <- sql
+
             for (n, v) in parameters do
                 addParam cmd n v
+
             return! cmd.ExecuteNonQueryAsync()
         }
 
     /// Execute several statements inside a single transaction.
-    let executeTransaction (factory: DbConnectionFactory) (statements: (string * (string * obj) list) list) : Task<unit> =
+    let executeTransaction
+        (factory: DbConnectionFactory)
+        (statements: (string * (string * obj) list) list)
+        : Task<unit> =
         task {
             use conn = factory.Create()
             do! conn.OpenAsync()
             use tx = conn.BeginTransaction()
+
             for (sql, parameters) in statements do
                 use cmd = conn.CreateCommand()
                 cmd.Transaction <- tx
                 cmd.CommandText <- sql
+
                 for (n, v) in parameters do
                     addParam cmd n v
+
                 let! _ = cmd.ExecuteNonQueryAsync()
                 ()
+
             do! tx.CommitAsync()
         }
 
     /// Run a query and project each row with the supplied mapper.
-    let query (factory: DbConnectionFactory) (sql: string) (parameters: (string * obj) list) (map: DbDataReader -> 'a) : Task<'a list> =
+    let query
+        (factory: DbConnectionFactory)
+        (sql: string)
+        (parameters: (string * obj) list)
+        (map: DbDataReader -> 'a)
+        : Task<'a list> =
         task {
             use conn = factory.Create()
             do! conn.OpenAsync()
             use cmd = conn.CreateCommand()
             cmd.CommandText <- sql
+
             for (n, v) in parameters do
                 addParam cmd n v
+
             use! reader = cmd.ExecuteReaderAsync()
             let results = ResizeArray<'a>()
             let mutable go = true
+
             while go do
                 let! has = reader.ReadAsync()
                 if has then results.Add(map reader) else go <- false
+
             return List.ofSeq results
         }
 
     /// Read a non-null string column by name.
-    let getString (r: DbDataReader) (col: string) : string =
-        r.GetString(r.GetOrdinal col)
+    let getString (r: DbDataReader) (col: string) : string = r.GetString(r.GetOrdinal col)
 
     /// Read a nullable string column by name.
     let getStringOpt (r: DbDataReader) (col: string) : string option =
@@ -100,7 +117,9 @@ module Ado =
     /// Read a boolean column (stored as integer 0/1 for portability).
     let getBool (r: DbDataReader) (col: string) : bool =
         let o = r.GetOrdinal col
-        if r.IsDBNull o then false
+
+        if r.IsDBNull o then
+            false
         else
             match r.GetValue o with
             | :? bool as b -> b

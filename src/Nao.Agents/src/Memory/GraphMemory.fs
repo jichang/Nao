@@ -5,7 +5,8 @@ open System.Threading.Tasks
 
 /// A relationship between two entities in the knowledge graph
 type GraphRelation =
-    { Subject: string
+    { Owner: string
+      Subject: string
       Predicate: string
       Object: string
       Confidence: float
@@ -15,7 +16,8 @@ type GraphRelation =
 
 /// A node in the knowledge graph with typed properties
 type GraphNode =
-    { Id: string
+    { Owner: string
+      Id: string
       EntityType: string
       Properties: Map<string, string>
       CreatedAt: DateTimeOffset
@@ -44,17 +46,12 @@ type GraphTraversalResult =
 
 /// Functional graph-based memory (knowledge graph) operations.
 type GraphMemory =
-    { /// Add or update a node
-      UpsertNodeAsync: GraphNode -> Task<unit>
-      /// Add a relation between entities
+    { UpsertNodeAsync: GraphNode -> Task<unit>
       AddRelationAsync: GraphRelation -> Task<unit>
-      /// Query the graph
-      QueryAsync: GraphQuery -> Task<GraphTraversalResult>
-      /// Remove a node and all its relations
-      RemoveNodeAsync: string -> Task<unit>
-      /// Remove a specific relation
-      RemoveRelationAsync: string -> string -> string -> Task<unit>
-      /// Get all nodes of a given type
-      GetByTypeAsync: string -> Task<GraphNode list>
-      /// Extract and store relations from text (via LLM or pattern matching)
-      ExtractRelationsAsync: string -> Task<GraphRelation list> }
+      QueryAsync: string -> GraphQuery -> Task<GraphTraversalResult>
+      RemoveNodeAsync: string -> string -> Task<unit>
+      RemoveRelationAsync: string -> string -> string -> string -> Task<unit>
+      GetByTypeAsync: string -> string -> Task<GraphNode list>
+      ExtractRelationsAsync: string -> string -> Task<GraphRelation list>
+      DeleteOwnerAsync: string -> Task<Result<int, PlatformFailure>>
+      DeleteExpiredAsync: string -> DateTimeOffset -> Task<Result<int, PlatformFailure>> }

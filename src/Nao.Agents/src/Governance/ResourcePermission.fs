@@ -17,14 +17,18 @@ module ResourcePermission =
         // Classic two-row dynamic-programming wildcard match.
         let dp = Array2D.create (pl + 1) (tl + 1) false
         dp.[0, 0] <- true
+
         for i in 1..pl do
-            if p.[i - 1] = '*' then dp.[i, 0] <- dp.[i - 1, 0]
+            if p.[i - 1] = '*' then
+                dp.[i, 0] <- dp.[i - 1, 0]
+
         for i in 1..pl do
             for j in 1..tl do
                 match p.[i - 1] with
                 | '*' -> dp.[i, j] <- dp.[i - 1, j] || dp.[i, j - 1]
                 | '?' -> dp.[i, j] <- dp.[i - 1, j - 1]
                 | c -> dp.[i, j] <- dp.[i - 1, j - 1] && (Char.ToLowerInvariant c = Char.ToLowerInvariant t.[j - 1])
+
         dp.[pl, tl]
 
     let private normHost (h: string) =
@@ -34,10 +38,12 @@ module ResourcePermission =
     /// URLs ("https://a.example.com/x") and bare host forms ("a.example.com/x").
     let hostOf (url: string) : string option =
         let raw = url.Trim()
+
         let tryParse (s: string) =
             match Uri.TryCreate(s, UriKind.Absolute) with
             | true, u when not (String.IsNullOrEmpty u.Host) -> Some(normHost u.Host)
             | _ -> None
+
         match tryParse raw with
         | Some h -> Some h
         | None -> tryParse ("http://" + raw)
@@ -47,13 +53,17 @@ module ResourcePermission =
     let hostMatches (pattern: string) (host: string) : bool =
         let p = normHost pattern
         let h = normHost host
-        if p = "*" || p = "" then true
-        else h = p || h.EndsWith("." + p, StringComparison.Ordinal) || glob p h
+
+        if p = "*" || p = "" then
+            true
+        else
+            h = p || h.EndsWith("." + p, StringComparison.Ordinal) || glob p h
 
     /// Does a path match a file pattern? "*" = any; otherwise the pattern matches the path
     /// itself, anything beneath it (prefix), or a glob.
     let pathMatches (pattern: string) (path: string) : bool =
-        if pattern = "*" then true
+        if pattern = "*" then
+            true
         else
             let norm (s: string) = s.Replace('\\', '/').TrimEnd('/')
             let p = norm pattern
@@ -86,8 +96,7 @@ module ResourcePermission =
             && (match hostOf url with
                 | Some h -> hostMatches pattern h
                 | None -> pattern = "*")
-        | PermissionTarget.Tool pattern, ResourceAccess.ToolCall name ->
-            pattern = "*" || glob pattern name
+        | PermissionTarget.Tool pattern, ResourceAccess.ToolCall name -> pattern = "*" || glob pattern name
         | _ -> false
 
     /// Keep only the rules that apply to the given session — every Global rule, plus the
@@ -109,6 +118,7 @@ module ResourcePermission =
         (access: ResourceAccess)
         : PermissionDecision =
         let matching = rules |> List.filter (ruleMatches access)
+
         if matching |> List.exists (fun r -> r.Decision = PermissionDecision.Deny) then
             PermissionDecision.Deny
         elif matching |> List.exists (fun r -> r.Decision = PermissionDecision.Allow) then

@@ -28,10 +28,12 @@ type ConsolidationResult =
 
 /// Functional memory-consolidation capability (background process).
 type MemoryConsolidation =
-        { /// Run a consolidation pass
-            ConsolidateAsync: ConsolidationStrategy -> Task<ConsolidationResult>
-            /// Get consolidation statistics
-            GetStatsAsync: unit -> Task<ConsolidationResult> }
+    {
+        /// Run a consolidation pass
+        ConsolidateAsync: ConsolidationStrategy -> Task<ConsolidationResult>
+        /// Get consolidation statistics
+        GetStatsAsync: unit -> Task<ConsolidationResult>
+    }
 
 /// Memory consolidation operating on `MemoryStore`.
 module MemoryConsolidation =
@@ -43,11 +45,7 @@ module MemoryConsolidation =
         let union = Set.union wordsA wordsB |> Set.count |> float
         if union = 0.0 then 0.0 else intersection / union
 
-    let mergeSimilarAsync
-        (store: MemoryStore)
-        (agentId: string)
-        (threshold: float)
-        : Task<int> =
+    let mergeSimilarAsync (store: MemoryStore) (agentId: string) (threshold: float) : Task<int> =
         task {
             let! entries = store.RecallAllAsync agentId
             let mutable merged = 0
@@ -57,9 +55,11 @@ module MemoryConsolidation =
                 if not (processed.Contains entries.[i].Key) then
                     let cluster = ResizeArray<MemoryEntry>()
                     cluster.Add(entries.[i])
+
                     for j in i + 1 .. entries.Length - 1 do
                         if not (processed.Contains entries.[j].Key) then
                             let sim = textSimilarity entries.[i].Value entries.[j].Value
+
                             if sim >= threshold then
                                 cluster.Add(entries.[j])
                                 processed.Add(entries.[j].Key) |> ignore
@@ -67,38 +67,42 @@ module MemoryConsolidation =
                     if cluster.Count > 1 then
                         // Merge: keep the most recent, combine values
                         let newest = cluster |> Seq.maxBy (fun e -> e.Timestamp)
+
                         let combinedValue =
-                            cluster
-                            |> Seq.map (fun e -> e.Value)
-                            |> Seq.distinct
-                            |> String.concat " | "
+                            cluster |> Seq.map (fun e -> e.Value) |> Seq.distinct |> String.concat " | "
+
                         let combinedTags =
                             cluster |> Seq.collect (fun e -> e.Tags) |> Seq.distinct |> Seq.toList
+
                         let mergedEntry =
-                            { newest with Value = combinedValue; Tags = combinedTags }
+                            { newest with
+                                Value = combinedValue
+                                Tags = combinedTags }
                         // Remove old entries and save merged
                         for e in cluster do
                             do! store.ForgetAsync agentId e.Key
+
                         do! store.SaveAsync agentId mergedEntry
                         merged <- merged + (cluster.Count - 1)
+
             return merged
         }
 
-    let deduplicateAsync
-        (store: MemoryStore)
-        (agentId: string)
-        : Task<int> =
+    let deduplicateAsync (store: MemoryStore) (agentId: string) : Task<int> =
         task {
             let! entries = store.RecallAllAsync agentId
             let seen = System.Collections.Generic.HashSet<string>()
             let mutable removed = 0
+
             for entry in entries do
                 let normalized = entry.Value.Trim().ToLowerInvariant()
+
                 if seen.Contains normalized then
                     do! store.ForgetAsync agentId entry.Key
                     removed <- removed + 1
                 else
                     seen.Add(normalized) |> ignore
+
             return removed
         }
 
@@ -112,8 +116,10 @@ module MemoryConsolidation =
             let! entries = store.RecallAllAsync agentId
             let now = DateTimeOffset.UtcNow
             let mutable decayed = 0
+
             for entry in entries do
                 let age = now - entry.Timestamp
+
                 if age > minAge then
                     // Add a decay marker tag
                     let decayCount =
@@ -121,7 +127,9 @@ module MemoryConsolidation =
                         |> List.tryFind (fun t -> t.StartsWith("decay:"))
                         |> Option.map (fun t -> t.Replace("decay:", "") |> float)
                         |> Option.defaultValue 1.0
+
                     let newDecay = decayCount * decayFactor
+
                     if newDecay < 0.1 then
                         do! store.ForgetAsync agentId entry.Key
                         decayed <- decayed + 1
@@ -130,9 +138,11 @@ module MemoryConsolidation =
                             entry.Tags
                             |> List.filter (fun t -> not (t.StartsWith("decay:")))
                             |> fun tags -> sprintf "decay:%.3f" newDecay :: tags
+
                         let updated = { entry with Tags = updatedTags }
                         do! store.ForgetAsync agentId entry.Key
                         do! store.SaveAsync agentId updated
+
             return decayed
         }
 
@@ -144,7 +154,9 @@ module MemoryConsolidation =
         : Task<int> =
         task {
             let! entries = store.RecallAllAsync agentId
-            if entries.Length < 10 then return 0
+
+            if entries.Length < 10 then
+                return 0
             else
                 // Group by tags
                 let groups =
@@ -156,26 +168,33 @@ module MemoryConsolidation =
                     |> List.filter (fun (_, group) -> group.Length >= 3)
 
                 let mutable summarized = 0
+
                 for (tag, group) in groups do
                     let content =
                         group
                         |> List.map (fun e -> sprintf "- %s: %s" e.Key e.Value)
                         |> String.concat "\n"
+
                     let prompt =
                         [ { Role = System
-                            Content = "Consolidate these memory entries into a single concise summary. Preserve all key facts." }
+                            Content =
+                              "Consolidate these memory entries into a single concise summary. Preserve all key facts." }
                           { Role = User; Content = content } ]
+
                     let! result = provider.CompleteAsync prompt options
                     // Replace cluster with summary
                     for e in group do
                         do! store.ForgetAsync agentId e.Key
+
                     let summaryEntry: MemoryEntry =
                         { Key = sprintf "consolidated:%s:%s" tag (Guid.NewGuid().ToString("N").[..7])
                           Value = result.Content
                           Timestamp = DateTimeOffset.UtcNow
                           Tags = [ tag; "consolidated" ] }
+
                     do! store.SaveAsync agentId summaryEntry
                     summarized <- summarized + group.Length
+
                 return summarized
         }
 
@@ -192,42 +211,64 @@ module MemoryConsolidation =
             | ConsolidationStrategy.MergeSimilar threshold ->
                 let! merged = mergeSimilarAsync store agentId threshold
                 let! afterEntries = store.RecallAllAsync agentId
+
                 return
-                    { Merged = merged; Removed = 0; Summarized = 0
-                      TotalBefore = totalBefore; TotalAfter = afterEntries.Length }
+                    { Merged = merged
+                      Removed = 0
+                      Summarized = 0
+                      TotalBefore = totalBefore
+                      TotalAfter = afterEntries.Length }
 
             | ConsolidationStrategy.Deduplicate ->
                 let! removed = deduplicateAsync store agentId
                 let! afterEntries = store.RecallAllAsync agentId
-                return
-                    { Merged = 0; Removed = removed; Summarized = 0
-                      TotalBefore = totalBefore; TotalAfter = afterEntries.Length }
 
-            | ConsolidationStrategy.ImportanceDecay (factor, minAge) ->
+                return
+                    { Merged = 0
+                      Removed = removed
+                      Summarized = 0
+                      TotalBefore = totalBefore
+                      TotalAfter = afterEntries.Length }
+
+            | ConsolidationStrategy.ImportanceDecay(factor, minAge) ->
                 let! removed = importanceDecayAsync store agentId factor minAge
                 let! afterEntries = store.RecallAllAsync agentId
-                return
-                    { Merged = 0; Removed = removed; Summarized = 0
-                      TotalBefore = totalBefore; TotalAfter = afterEntries.Length }
 
-            | ConsolidationStrategy.Summarize (provider, options) ->
+                return
+                    { Merged = 0
+                      Removed = removed
+                      Summarized = 0
+                      TotalBefore = totalBefore
+                      TotalAfter = afterEntries.Length }
+
+            | ConsolidationStrategy.Summarize(provider, options) ->
                 let! summarized = summarizeClusterAsync provider options store agentId
                 let! afterEntries = store.RecallAllAsync agentId
+
                 return
-                    { Merged = 0; Removed = 0; Summarized = summarized
-                      TotalBefore = totalBefore; TotalAfter = afterEntries.Length }
+                    { Merged = 0
+                      Removed = 0
+                      Summarized = summarized
+                      TotalBefore = totalBefore
+                      TotalAfter = afterEntries.Length }
 
             | ConsolidationStrategy.Composite strategies ->
                 let mutable totalMerged = 0
                 let mutable totalRemoved = 0
                 let mutable totalSummarized = 0
+
                 for strat in strategies do
                     let! result = consolidateAsync store agentId strat
                     totalMerged <- totalMerged + result.Merged
                     totalRemoved <- totalRemoved + result.Removed
                     totalSummarized <- totalSummarized + result.Summarized
+
                 let! afterEntries = store.RecallAllAsync agentId
+
                 return
-                    { Merged = totalMerged; Removed = totalRemoved; Summarized = totalSummarized
-                      TotalBefore = totalBefore; TotalAfter = afterEntries.Length }
+                    { Merged = totalMerged
+                      Removed = totalRemoved
+                      Summarized = totalSummarized
+                      TotalBefore = totalBefore
+                      TotalAfter = afterEntries.Length }
         }

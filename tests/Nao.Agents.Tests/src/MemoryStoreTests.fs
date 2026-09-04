@@ -30,8 +30,12 @@ type MemoryStoreTests() =
     member _.SaveMultiple_RecallsByPrefix() =
         let store = InMemoryStore.create ()
         store.SaveAsync agentId (makeEntry "user-name" "Alice") |> fun t -> t.Wait()
-        store.SaveAsync agentId (makeEntry "user-email" "alice@example.com") |> fun t -> t.Wait()
-        store.SaveAsync agentId (makeEntry "preference-theme" "dark") |> fun t -> t.Wait()
+
+        store.SaveAsync agentId (makeEntry "user-email" "alice@example.com")
+        |> fun t -> t.Wait()
+
+        store.SaveAsync agentId (makeEntry "preference-theme" "dark")
+        |> fun t -> t.Wait()
 
         let userResults = (store.RecallAsync agentId "user").Result
         Assert.AreEqual(2, userResults.Length)
@@ -59,11 +63,14 @@ type MemoryStoreTests() =
         Assert.AreEqual(0, results.Length)
 
     [<TestMethod>]
-    member _.Clear_RemovesAllEntries() =
+    member _.DeleteOwner_RemovesAllEntries() =
         let store = InMemoryStore.create ()
         store.SaveAsync agentId (makeEntry "a" "1") |> fun t -> t.Wait()
         store.SaveAsync agentId (makeEntry "b" "2") |> fun t -> t.Wait()
-        store.ClearAsync agentId |> fun t -> t.Wait()
+
+        match store.DeleteOwnerAsync agentId |> _.Result with
+        | Error failure -> Assert.Fail(failure.Message)
+        | Ok deleted -> Assert.AreEqual(2, deleted)
 
         let results = (store.RecallAllAsync agentId).Result
         Assert.AreEqual(0, results.Length)

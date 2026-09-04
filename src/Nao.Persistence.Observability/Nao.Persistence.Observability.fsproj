@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <OtherFlags>$(OtherFlags) --strict-indentation-</OtherFlags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\Nao.Persistence\src\Observability\FunctionalExecutionJournal.fs" Link="src\Observability\FunctionalExecutionJournal.fs" />
+    <Compile Include="..\Nao.Persistence\src\Observability\FunctionalAuditLog.fs" Link="src\Observability\FunctionalAuditLog.fs" />
+    <Compile Include="..\Nao.Persistence\src\Observability\FunctionalObservability.fs" Link="src\Observability\FunctionalObservability.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Nao.Agents\Nao.Agents.fsproj" />
+    <ProjectReference Include="..\Nao.Persistence.Infrastructure\Nao.Persistence.Infrastructure.fsproj" />
+  </ItemGroup>
+
+  <Import Project="..\..\.paket\Paket.Restore.targets" />
+
+</Project>

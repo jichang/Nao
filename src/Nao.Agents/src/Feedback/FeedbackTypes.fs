@@ -11,22 +11,24 @@ type FeedbackSentiment =
 
 /// User feedback attached to a turn. The signal that drives adjustments.
 type Feedback =
-    { /// Unique identifier for this feedback entry.
-      Id: Guid
-      /// Turn this feedback refers to.
-      TurnId: string
-      /// Session the turn belonged to.
-      SessionId: string
-      /// User who gave the feedback.
-      UserId: string
-      /// Positive / negative / neutral.
-      Sentiment: FeedbackSentiment
-      /// Optional free-text explanation from the user.
-      Comment: string option
-      /// When the feedback was given.
-      CreatedAt: DateTimeOffset
-      /// Arbitrary extra context.
-      Metadata: Map<string, string> }
+    {
+        /// Unique identifier for this feedback entry.
+        Id: Guid
+        /// Turn this feedback refers to.
+        TurnId: string
+        /// Session the turn belonged to.
+        SessionId: string
+        /// User who gave the feedback.
+        UserId: string
+        /// Positive / negative / neutral.
+        Sentiment: FeedbackSentiment
+        /// Optional free-text explanation from the user.
+        Comment: string option
+        /// When the feedback was given.
+        CreatedAt: DateTimeOffset
+        /// Arbitrary extra context.
+        Metadata: Map<string, string>
+    }
 
 /// Where a feedback signal originated. Explicit feedback is an intentional good/bad
 /// rating; conversation feedback is inferred heuristically from the chat history;
@@ -54,5 +56,4 @@ module FeedbackSource =
         | None -> Explicit
 
     /// Stamp a source marker into a metadata map.
-    let stamp (source: string) (metadata: Map<string, string>) : Map<string, string> =
-        metadata |> Map.add Key source
+    let stamp (source: string) (metadata: Map<string, string>) : Map<string, string> = metadata |> Map.add Key source

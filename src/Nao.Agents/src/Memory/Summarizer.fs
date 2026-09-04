@@ -4,12 +4,19 @@ open System.Threading.Tasks
 open Nao.Agents
 
 /// Configuration for conversation summarization
-type SummarizationConfig = { Threshold: int; KeepRecent: int; Provider: LlmProvider; Options: CompletionOptions } with
+type SummarizationConfig =
+    { Threshold: int
+      KeepRecent: int
+      Provider: LlmProvider
+      Options: CompletionOptions }
+
     static member Default provider =
         { Threshold = 20
           KeepRecent = 6
           Provider = provider
-          Options = { CompletionOptions.Default with MaxTokens = Some 300 } }
+          Options =
+            { CompletionOptions.Default with
+                MaxTokens = Some 300 } }
 
 module Summarizer =
 
@@ -27,17 +34,25 @@ module Summarizer =
             let formatted =
                 messages
                 |> List.map (fun m ->
-                    let role = match m.Role with System -> "System" | User -> "User" | Assistant -> "Assistant"
+                    let role =
+                        match m.Role with
+                        | System -> "System"
+                        | User -> "User"
+                        | Assistant -> "Assistant"
+
                     sprintf "%s: %s" role m.Content)
                 |> String.concat "\n"
 
-            let conversation = [
-                { Role = System; Content = summaryPrompt }
-                { Role = User; Content = formatted }
-            ]
+            let conversation =
+                [ { Role = System
+                    Content = summaryPrompt }
+                  { Role = User; Content = formatted } ]
 
             let! result = provider.CompleteAsync conversation options
-            return { Role = System; Content = sprintf "[Conversation Summary] %s" result.Content }
+
+            return
+                { Role = System
+                  Content = sprintf "[Conversation Summary] %s" result.Content }
         }
 
     /// Apply summarization to a conversation if it exceeds the threshold.

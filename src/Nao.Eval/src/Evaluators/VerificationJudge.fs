@@ -30,7 +30,8 @@ module VerificationJudge =
                     judgement.CriteriaScores
                     |> Map.fold (fun acc k v -> acc + sprintf "%s=%.2f " k v) ""
 
-                let reason = sprintf "%s [Criteria: %s]" judgement.Explanation (criteriaStr.TrimEnd())
+                let reason =
+                    sprintf "%s [Criteria: %s]" judgement.Explanation (criteriaStr.TrimEnd())
 
                 return (verdict, reason)
             })

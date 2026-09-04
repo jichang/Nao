@@ -29,6 +29,7 @@ module Composite =
                 match mode with
                 | CompositeMode.All ->
                     let allPass = results |> List.forall (fun (v, _) -> v.Passed)
+
                     if allPass then
                         return (EvalVerdict.Pass, "All evaluators passed")
                     else
@@ -37,13 +38,20 @@ module Composite =
                             |> List.filter (fun (v, _) -> not v.Passed)
                             |> List.map snd
                             |> String.concat "; "
+
                         let avgScore = results |> List.averageBy (fun (v, _) -> v.Score)
                         return (EvalVerdict.Partial avgScore, sprintf "Some evaluators failed: %s" failures)
 
                 | CompositeMode.Any ->
                     let anyPass = results |> List.exists (fun (v, _) -> v.Passed)
+
                     if anyPass then
-                        let passing = results |> List.filter (fun (v, _) -> v.Passed) |> List.map snd |> String.concat "; "
+                        let passing =
+                            results
+                            |> List.filter (fun (v, _) -> v.Passed)
+                            |> List.map snd
+                            |> String.concat "; "
+
                         return (EvalVerdict.Pass, sprintf "Passed: %s" passing)
                     else
                         let reasons = results |> List.map snd |> String.concat "; "
@@ -52,10 +60,12 @@ module Composite =
                 | CompositeMode.Average ->
                     let avgScore = results |> List.averageBy (fun (v, _) -> v.Score)
                     let reasons = results |> List.map snd |> String.concat "; "
+
                     let verdict =
                         if avgScore >= 0.8 then EvalVerdict.Pass
                         elif avgScore <= 0.2 then EvalVerdict.Fail
                         else EvalVerdict.Partial avgScore
+
                     return (verdict, sprintf "Average score: %.2f (%s)" avgScore reasons)
             })
 

@@ -20,7 +20,8 @@ type LoopOutcome<'State, 'Output> =
 /// A reusable, bounded state machine. Domain-specific code owns the state and transition;
 /// the engine owns iteration accounting and termination enforcement.
 type LoopDefinition<'State, 'Output> =
-    { MaxIterations: int; StepAsync: int -> 'State -> Task<LoopTransition<'State, 'Output>> }
+    { MaxIterations: int
+      StepAsync: int -> 'State -> Task<LoopTransition<'State, 'Output>> }
 
 [<RequireQualifiedAccess>]
 module Loop =

@@ -4,18 +4,20 @@ open System
 
 /// A single evaluation test case
 type EvalCase =
-    { /// Unique identifier for this case
-      Id: string
-      /// Human-readable description
-      Description: string
-      /// The input to send to the agent
-      Input: string
-      /// Expected output or reference answer (used by some evaluators)
-      Expected: string option
-      /// Tags for categorization and filtering
-      Tags: string list
-      /// Additional metadata for evaluators
-      Metadata: Map<string, string> }
+    {
+        /// Unique identifier for this case
+        Id: string
+        /// Human-readable description
+        Description: string
+        /// The input to send to the agent
+        Input: string
+        /// Expected output or reference answer (used by some evaluators)
+        Expected: string option
+        /// Tags for categorization and filtering
+        Tags: string list
+        /// Additional metadata for evaluators
+        Metadata: Map<string, string>
+    }
 
 module EvalCase =
 
@@ -48,9 +50,20 @@ module EvalCase =
 
 /// A dataset is a named collection of eval cases
 type EvalDataset =
-    { Name: string
+    { Id: Guid
+      Owner: string
+      CreatedAt: DateTimeOffset
+      Name: string
       Cases: EvalCase list }
 
 module EvalDataset =
 
-    let create name cases = { Name = name; Cases = cases }
+    let create owner name cases =
+        if String.IsNullOrWhiteSpace owner then
+            invalidArg (nameof owner) "Evaluation dataset owner cannot be blank."
+
+        { Id = Guid.NewGuid()
+          Owner = owner
+          CreatedAt = DateTimeOffset.UtcNow
+          Name = name
+          Cases = cases }

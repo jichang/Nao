@@ -78,8 +78,9 @@ type OpenAIChatResponseDto() =
     member val Usage: OpenAIUsageDto = null with get, set
 
 [<RequireQualifiedAccess>]
-module internal OpenAIChatDto =
-    let options = JsonSerializerOptions(DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)
+module OpenAIChatDto =
+    let options =
+        JsonSerializerOptions(DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)
 
     let serializeRequest model messages temperature streaming maxTokens stopSequences reasoningEffort =
         let messageDtos =
@@ -89,15 +90,18 @@ module internal OpenAIChatDto =
                 message.Role <- role
                 message.Content <- content
                 message)
+
         let request = OpenAIChatRequestDto()
         request.Model <- model
         request.Messages <- messageDtos
         request.Temperature <- temperature
         request.Stream <- streaming
+
         if streaming then
             let streamOptions = OpenAIStreamOptionsDto()
             streamOptions.IncludeUsage <- true
             request.StreamOptions <- streamOptions
+
         request.MaxTokens <- maxTokens |> Option.map Nullable |> Option.defaultValue (Nullable())
         request.Stop <- if Array.isEmpty stopSequences then null else stopSequences
         request.ReasoningEffort <- reasoningEffort

@@ -7,11 +7,15 @@ open Nao.Eval
 module Contains =
 
     let private comparison caseSensitive =
-        if caseSensitive then StringComparison.Ordinal else StringComparison.OrdinalIgnoreCase
+        if caseSensitive then
+            StringComparison.Ordinal
+        else
+            StringComparison.OrdinalIgnoreCase
 
     /// Create an expected-substring evaluator with configurable case sensitivity.
     let create caseSensitive =
         let comparison = comparison caseSensitive
+
         Evaluator.create "Contains" (fun (case: EvalCase) (actual: string) ->
             task {
                 match case.Expected with
@@ -20,18 +24,22 @@ module Contains =
                         return (EvalVerdict.Pass, sprintf "Output contains '%s'" expected)
                     else
                         return (EvalVerdict.Fail, sprintf "Output does not contain '%s'" expected)
-                | None ->
-                    return (EvalVerdict.Fail, "Contains evaluator requires an expected value")
+                | None -> return (EvalVerdict.Fail, "Contains evaluator requires an expected value")
             })
 
     /// Create an evaluator requiring all keywords, with configurable case sensitivity.
     let allWithCaseSensitivity caseSensitive (keywords: string list) =
         let comparison = comparison caseSensitive
+
         Evaluator.create "ContainsAll" (fun (_case: EvalCase) (actual: string) ->
             task {
                 let found = keywords |> List.filter (fun kw -> actual.Contains(kw, comparison))
-                let missing = keywords |> List.filter (fun kw -> not (actual.Contains(kw, comparison)))
+
+                let missing =
+                    keywords |> List.filter (fun kw -> not (actual.Contains(kw, comparison)))
+
                 let score = float found.Length / float keywords.Length
+
                 if missing.IsEmpty then
                     return (EvalVerdict.Pass, sprintf "Output contains all %d keywords" keywords.Length)
                 else
@@ -41,9 +49,11 @@ module Contains =
     /// Create an evaluator requiring any keyword, with configurable case sensitivity.
     let anyWithCaseSensitivity caseSensitive (keywords: string list) =
         let comparison = comparison caseSensitive
+
         Evaluator.create "ContainsAny" (fun (_case: EvalCase) (actual: string) ->
             task {
                 let found = keywords |> List.filter (fun kw -> actual.Contains(kw, comparison))
+
                 if found.Length > 0 then
                     return (EvalVerdict.Pass, sprintf "Output contains: %s" (String.concat ", " found))
                 else

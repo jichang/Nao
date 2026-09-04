@@ -14,8 +14,7 @@ type WindowStrategy =
 module ConversationWindow =
 
     /// Estimate token count for a message (approximation: ~4 chars per token)
-    let estimateTokens (msg: Message) =
-        (msg.Content.Length + 3) / 4
+    let estimateTokens (msg: Message) = (msg.Content.Length + 3) / 4
 
     /// Apply LastN strategy: keep the last N messages
     let applyLastN (n: int) (conversation: Conversation) : Conversation =
@@ -29,11 +28,14 @@ module ConversationWindow =
         let reversed = conversation |> List.rev
         let mutable budget = maxTokens
         let mutable result = []
+
         for msg in reversed do
             let tokens = estimateTokens msg
+
             if budget >= tokens then
                 budget <- budget - tokens
                 result <- msg :: result
+
         result
 
     /// Mark messages that should be summarized (those beyond the threshold)

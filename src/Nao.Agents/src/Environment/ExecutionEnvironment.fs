@@ -28,16 +28,24 @@ module ExecutionEnvironment =
                 } }
 
     /// Execute with timeout wrapping
-    let executeWithTimeout (env: ExecutionEnvironment) (ctx: ExecutionContext) (agentContext: AgentContext) (agent: Agent) (input: string) : Task<Result<string, LimitExceeded>> =
+    let executeWithTimeout
+        (env: ExecutionEnvironment)
+        (ctx: ExecutionContext)
+        (agentContext: AgentContext)
+        (agent: Agent)
+        (input: string)
+        : Task<Result<string, LimitExceeded>> =
         task {
             let timeout = ctx.Sandbox.Limits.MaxDuration
             use cts = new System.Threading.CancellationTokenSource(timeout)
-            let linkedCtx = { ctx with CancellationToken = cts.Token }
+
+            let linkedCtx =
+                { ctx with
+                    CancellationToken = cts.Token }
+
             try
                 return! env.ExecuteAsync linkedCtx agentContext agent input
             with
-            | :? TaskCanceledException ->
-                return Error LimitExceeded.Duration
-            | :? OperationCanceledException ->
-                return Error LimitExceeded.Duration
+            | :? TaskCanceledException -> return Error LimitExceeded.Duration
+            | :? OperationCanceledException -> return Error LimitExceeded.Duration
         }

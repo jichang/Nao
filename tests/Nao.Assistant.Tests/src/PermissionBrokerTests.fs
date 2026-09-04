@@ -16,7 +16,10 @@ type PermissionBrokerTests() =
     member _.NoClientConnectedDeniesByDefault() =
         // A session nobody is connected to cannot be asked → fail closed.
         let access = ResourceAccess.Web("GET", "https://nobody.example.com")
-        let outcome = (PermissionBroker.requestAsync (Guid.NewGuid().ToString("N")) access "test").Result
+
+        let outcome =
+            (PermissionBroker.requestAsync (Guid.NewGuid().ToString("N")) access "test").Result
+
         Assert.AreEqual(PermissionDecision.Deny, outcome.Decision)
 
     [<TestMethod>]
@@ -26,10 +29,17 @@ type PermissionBrokerTests() =
         // exactly what the WebSocket loop does when a real user clicks "Allow once".
         let sender (payload: string) : Task =
             let req = JsonSerializer.Deserialize<PermissionRequestDto>(payload, json)
-            let resp = { PermissionResponseDto.RequestId = req.RequestId; Decision = "allow"; Scope = "once" }
+
+            let resp =
+                { PermissionResponseDto.RequestId = req.RequestId
+                  Decision = "allow"
+                  Scope = "once" }
+
             PermissionBroker.resolve (JsonSerializer.Serialize(resp, json))
             Task.CompletedTask
+
         PermissionBroker.registerSession sessionKey sender
+
         try
             let access = ResourceAccess.Web("GET", "https://ok.example.com")
             let outcome = (PermissionBroker.requestAsync sessionKey access "test").Result
@@ -40,12 +50,20 @@ type PermissionBrokerTests() =
     [<TestMethod>]
     member _.DenyAnswerIsHonoured() =
         let sessionKey = Guid.NewGuid().ToString("N")
+
         let sender (payload: string) : Task =
             let req = JsonSerializer.Deserialize<PermissionRequestDto>(payload, json)
-            let resp = { PermissionResponseDto.RequestId = req.RequestId; Decision = "deny"; Scope = "" }
+
+            let resp =
+                { PermissionResponseDto.RequestId = req.RequestId
+                  Decision = "deny"
+                  Scope = "" }
+
             PermissionBroker.resolve (JsonSerializer.Serialize(resp, json))
             Task.CompletedTask
+
         PermissionBroker.registerSession sessionKey sender
+
         try
             let access = ResourceAccess.Web("GET", "https://blocked.example.com")
             let outcome = (PermissionBroker.requestAsync sessionKey access "test").Result
@@ -61,6 +79,7 @@ type PermissionBrokerTests() =
         PermissionBroker.registerSession sessionKey sender
         let saved = PermissionBroker.Timeout
         PermissionBroker.Timeout <- TimeSpan.FromMilliseconds 150.0
+
         try
             let access = ResourceAccess.Web("GET", "https://slow.example.com")
             let outcome = (PermissionBroker.requestAsync sessionKey access "test").Result

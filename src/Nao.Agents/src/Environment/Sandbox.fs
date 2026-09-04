@@ -12,20 +12,22 @@ type SandboxIsolation =
 
 /// Configuration for the execution sandbox
 type SandboxConfig =
-    { /// Resource budget for this execution
-      Limits: ResourceLimits
-      /// Isolation level
-      Isolation: SandboxIsolation
-      /// Working directory for file operations (if any)
-      WorkingDirectory: string option
-      /// Environment variables available to the agent
-      EnvironmentVariables: Map<string, string>
-      /// Whether the agent can access the network
-      AllowNetwork: bool
-      /// Whether the agent can access the filesystem
-      AllowFileSystem: bool
-      /// Allowed filesystem paths (only relevant if AllowFileSystem is true)
-      AllowedPaths: string list }
+    {
+        /// Resource budget for this execution
+        Limits: ResourceLimits
+        /// Isolation level
+        Isolation: SandboxIsolation
+        /// Working directory for file operations (if any)
+        WorkingDirectory: string option
+        /// Environment variables available to the agent
+        EnvironmentVariables: Map<string, string>
+        /// Whether the agent can access the network
+        AllowNetwork: bool
+        /// Whether the agent can access the filesystem
+        AllowFileSystem: bool
+        /// Allowed filesystem paths (only relevant if AllowFileSystem is true)
+        AllowedPaths: string list
+    }
 
     static member Default =
         { Limits = ResourceLimits.Unlimited

@@ -43,21 +43,24 @@ module JsonValueFormat =
             | true, true -> Some(sprintf "line %d, byte %d" ex.LineNumber.Value ex.BytePositionInLine.Value)
             | true, false -> Some(sprintf "line %d" ex.LineNumber.Value)
             | _ -> None
+
         { Summary = sprintf "JSON syntax error: %s" ex.Message
           Location = location
           Details =
-            if String.IsNullOrWhiteSpace ex.Path then Map.empty
-            else Map.ofList [ "path", ex.Path ] }
+            if String.IsNullOrWhiteSpace ex.Path then
+                Map.empty
+            else
+                Map.ofList [ "path", ex.Path ] }
 
     let private canonicalStrictJson (input: string) =
         try
             use document = JsonDocument.Parse(input)
             Ok(JsonSerializer.Serialize(document.RootElement))
-        with :? JsonException as ex -> Error(strictError ex)
+        with :? JsonException as ex ->
+            Error(strictError ex)
 
     /// Strict JSON input normalized to compact JSON.
-    let strict =
-        ValueFormat.create "strict-json" "application/json" canonicalStrictJson
+    let strict = ValueFormat.create "strict-json" "application/json" canonicalStrictJson
 
     /// Common JSON5 syntax emitted by LLMs, normalized immediately to strict compact JSON.
     /// Supports identifier keys, single-quoted strings, comments, and trailing commas through
@@ -69,15 +72,15 @@ module JsonValueFormat =
                 use jsonReader = new Newtonsoft.Json.JsonTextReader(textReader)
                 jsonReader.DateParseHandling <- Newtonsoft.Json.DateParseHandling.None
                 let value = Newtonsoft.Json.Linq.JToken.ReadFrom(jsonReader)
+
                 if jsonReader.Read() then
                     Error(ValueFormatError.create "Input must contain exactly one JSON5-compatible value.")
                 else
-                    value.ToString(Newtonsoft.Json.Formatting.None)
-                    |> canonicalStrictJson
-            with
-            | :? Newtonsoft.Json.JsonReaderException as ex ->
+                    value.ToString(Newtonsoft.Json.Formatting.None) |> canonicalStrictJson
+            with :? Newtonsoft.Json.JsonReaderException as ex ->
                 Error
                     { Summary = sprintf "JSON5-compatible syntax error: %s" ex.Message
                       Location = Some(sprintf "line %d, column %d" ex.LineNumber ex.LinePosition)
                       Details = Map.empty }
+
         ValueFormat.create "json5-compatible" "application/json" normalize

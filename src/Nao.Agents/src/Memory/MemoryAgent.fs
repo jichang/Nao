@@ -9,8 +9,10 @@ module MemoryAgent =
 
     let private prompt =
         { Prompt.Empty with
-            Role = "You are a memory specialist. You help another agent deliberately recall and maintain durable user and project knowledge."
-            Objective = "Interpret the caller's memory need, use the available memory tools, and return only the context or management outcome needed by the caller."
+            Role =
+                "You are a memory specialist. You help another agent deliberately recall and maintain durable user and project knowledge."
+            Objective =
+                "Interpret the caller's memory need, use the available memory tools, and return only the context or management outcome needed by the caller."
             Constraints =
                 [ "Use memory_search one or more times when recalling information. Refine the query when an initial search is insufficient."
                   "Distinguish durable preferences, facts, entities, and decisions from transient task details."
@@ -22,26 +24,25 @@ module MemoryAgent =
                   "Use the available tool descriptions and schemas as the source of truth."
                   "Finish with respond after the memory task is complete." ] }
 
-    let create
-        (factory: OrchestratorFactory)
-        (provider: LlmProvider)
-        (tools: Tool list)
-        : Agent =
+    let create (factory: OrchestratorFactory) (provider: LlmProvider) (tools: Tool list) : Agent =
         factory.Create
             { Id = id
               Name = name
               Description = "Recalls and maintains durable session knowledge using deliberate multi-step reasoning."
               Priority = 1000
               Responsibilities =
-                  [ "Recall prior preferences, facts, decisions, people, projects, and earlier work"
-                    "Create or update durable memories"
-                    "Resolve memory conflicts through explicit retrieval before writing" ]
+                [ "Recall prior preferences, facts, decisions, people, projects, and earlier work"
+                  "Create or update durable memories"
+                  "Resolve memory conflicts through explicit retrieval before writing" ]
               Contract = AgentContract.Text
               Provider = provider
               Tools = tools
               SubAgents = []
               Prompt = prompt
-              Options = { CompletionOptions.Default with Temperature = 0.0; MaxTokens = Some 800 }
+              Options =
+                { CompletionOptions.Default with
+                    Temperature = 0.0
+                    MaxTokens = Some 800 }
               MaxRounds = 5
               Bus = EventBus.none
               Scope = EventScope.Empty }

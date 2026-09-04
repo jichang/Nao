@@ -5,17 +5,29 @@ open System.Threading.Tasks
 open System.Collections.Concurrent
 open Nao.Agents
 
-/// In-memory tiered-memory factory with promotion, demotion, and eviction.
 module InMemoryTieredMemory =
     let create (config: TieredMemoryConfig) (embeddingProvider: EmbeddingProvider option) : TieredMemory =
-        let entries = ConcurrentDictionary<string, TieredMemoryEntry>()
+        if config.ShortTermCapacity < 0 then
+            invalidArg (nameof config) "Short-term capacity cannot be negative."
 
-        let tierOf (entry: TieredMemoryEntry) = entry.Tier
+        if config.MidTermCapacity < 0 then
+            invalidArg (nameof config) "Mid-term capacity cannot be negative."
 
-        let entriesInTier tier =
-            entries.Values
-            |> Seq.filter (fun e -> e.Tier = tier)
-            |> Seq.toList
+        if config.MidTermTtl |> Option.exists (fun ttl -> ttl < TimeSpan.Zero) then
+            invalidArg (nameof config) "Mid-term TTL cannot be negative."
+
+        let entries = ConcurrentDictionary<string * string, TieredMemoryEntry>()
+        let key owner entryKey = owner, entryKey
+
+        let requireOwner owner =
+            if String.IsNullOrWhiteSpace owner then
+                invalidArg (nameof owner) "Tiered-memory owner cannot be blank."
+
+        let owned owner =
+            entries.Values |> Seq.filter (fun entry -> entry.Owner = owner)
+
+        let inTier owner tier =
+            owned owner |> Seq.filter (fun entry -> entry.Tier = tier)
 
         let capacityFor tier =
             match tier with
@@ -23,12 +35,82 @@ module InMemoryTieredMemory =
             | MemoryTier.MidTerm -> config.MidTermCapacity
             | MemoryTier.LongTerm -> Int32.MaxValue
 
-        let shouldPromote (entry: TieredMemoryEntry) =
-            match config.PromotionPolicy with
-            | MemoryPromotionPolicy.AccessThreshold count -> entry.AccessCount >= count
-            | MemoryPromotionPolicy.RecencyBased maxAge ->
-                (DateTimeOffset.UtcNow - entry.Timestamp) <= maxAge
-            | MemoryPromotionPolicy.Manual -> false
+        let remove entry =
+            entries.TryRemove(key entry.Owner entry.Key) |> ignore
+
+        let evictOverflow owner tier =
+            let tierEntries = inTier owner tier |> Seq.toList
+            let excess = tierEntries.Length - capacityFor tier
+
+            if excess <= 0 then
+                0
+            else
+                let victims =
+                    tierEntries
+                    |> List.sortBy (fun entry -> entry.AccessCount, entry.Timestamp, entry.Key)
+                    |> List.take excess
+
+                victims |> List.iter remove
+                victims.Length
+
+        let storeAsync (entry: TieredMemoryEntry) =
+            requireOwner entry.Owner
+            entries.[key entry.Owner entry.Key] <- entry
+
+            if config.AutoEvict then
+                evictOverflow entry.Owner entry.Tier |> ignore
+
+            Task.FromResult()
+
+        let rankAsync owner query maxResults =
+            requireOwner owner
+
+            task {
+                let candidates = owned owner |> Seq.toList
+
+                match embeddingProvider with
+                | Some provider ->
+                    let! queryEmbedding = provider.EmbedAsync query
+
+                    let! ranked =
+                        candidates
+                        |> List.map (fun entry ->
+                            task {
+                                let! embedding = provider.EmbedAsync entry.Value
+                                return entry, SemanticSimilarity.cosineSimilarity queryEmbedding embedding
+                            })
+                        |> List.toArray
+                        |> Task.WhenAll
+
+                    return
+                        ranked
+                        |> Array.sortByDescending (fun (entry, score) ->
+                            score, entry.Relevance, entry.Timestamp, entry.Key)
+                        |> Array.truncate maxResults
+                        |> Array.map fst
+                        |> Array.toList
+                | None ->
+                    let queryWords = query.ToLowerInvariant().Split(' ') |> Set.ofArray
+
+                    return
+                        candidates
+                        |> List.map (fun entry ->
+                            let words = entry.Value.ToLowerInvariant().Split(' ') |> Set.ofArray
+                            entry, Set.intersect queryWords words |> Set.count)
+                        |> List.sortByDescending (fun (entry, score) ->
+                            score, entry.Relevance, entry.Timestamp, entry.Key)
+                        |> List.truncate maxResults
+                        |> List.map fst
+            }
+
+        let retrieveFromTierAsync owner tier maxResults =
+            requireOwner owner
+
+            inTier owner tier
+            |> Seq.sortByDescending (fun entry -> entry.Timestamp, entry.Key)
+            |> Seq.truncate maxResults
+            |> Seq.toList
+            |> Task.FromResult
 
         let nextTier tier =
             match tier with
@@ -36,104 +118,102 @@ module InMemoryTieredMemory =
             | MemoryTier.MidTerm -> Some MemoryTier.LongTerm
             | MemoryTier.LongTerm -> None
 
-        let isExpired (entry: TieredMemoryEntry) =
-            match entry.Tier, config.MidTermTtl with
-            | MemoryTier.MidTerm, Some ttl ->
-                (DateTimeOffset.UtcNow - entry.Timestamp) > ttl
-            | _ -> false
+        let shouldPromote asOf entry =
+            match config.PromotionPolicy with
+            | MemoryPromotionPolicy.AccessThreshold count -> entry.AccessCount >= count
+            | MemoryPromotionPolicy.RecencyBased maxAge -> asOf - entry.Timestamp <= maxAge
+            | MemoryPromotionPolicy.Manual -> false
 
-        let evictFromTier tier =
-            let inTier = entriesInTier tier
-            let capacity = capacityFor tier
-            if inTier.Length > capacity then
-                let toEvict =
-                    inTier
-                    |> List.sortBy (fun e -> e.AccessCount, e.Timestamp)
-                    |> List.take (inTier.Length - capacity)
-                for e in toEvict do
-                    entries.TryRemove(e.Key) |> ignore
-                toEvict.Length
-            else 0
+        let recordAccessAsync owner entryKeys asOf =
+            requireOwner owner
 
-        { StoreAsync = fun (entry: TieredMemoryEntry) ->
-            entries.AddOrUpdate(entry.Key, entry, fun _ _ -> entry) |> ignore
-            if config.AutoEvict then
-                evictFromTier entry.Tier |> ignore
-            task { return () }
+            for entryKey in entryKeys |> List.distinct do
+                match entries.TryGetValue(key owner entryKey) with
+                | true, entry ->
+                    let accessed =
+                        { entry with
+                            AccessCount = entry.AccessCount + 1 }
 
-          RetrieveAsync = fun (query: string) (maxResults: int) ->
+                    let updated =
+                        match shouldPromote asOf accessed, nextTier accessed.Tier with
+                        | true, Some target -> { accessed with Tier = target }
+                        | _ -> accessed
+
+                    entries.[key owner entryKey] <- updated
+
+                    if config.AutoEvict then
+                        evictOverflow owner updated.Tier |> ignore
+                | false, _ -> ()
+
+            Task.FromResult()
+
+        let promoteAsync owner entryKey targetTier =
+            requireOwner owner
+
+            match entries.TryGetValue(key owner entryKey) with
+            | true, entry ->
+                entries.[key owner entryKey] <- { entry with Tier = targetTier }
+
+                if config.AutoEvict then
+                    evictOverflow owner targetTier |> ignore
+            | false, _ -> ()
+
+            Task.FromResult()
+
+        let evictAsync owner asOf =
+            requireOwner owner
+
+            let expired =
+                match config.MidTermTtl with
+                | Some ttl ->
+                    inTier owner MemoryTier.MidTerm
+                    |> Seq.filter (fun entry -> entry.Timestamp + ttl < asOf)
+                    |> Seq.toArray
+                | None -> Array.empty
+
+            expired |> Array.iter remove
+
+            let overflow =
+                evictOverflow owner MemoryTier.ShortTerm
+                + evictOverflow owner MemoryTier.MidTerm
+
+            Task.FromResult(expired.Length + overflow)
+
+        let delete predicate =
+            let matches = entries.Values |> Seq.filter predicate |> Seq.toArray
+            matches |> Array.iter remove
+            Task.FromResult matches.Length
+
+        let protect owner operation =
             task {
-                let allEntries = entries.Values |> Seq.toList
-                let! ranked =
-                    task {
-                        match embeddingProvider with
-                        | Some provider ->
-                            let! queryEmbed = provider.EmbedAsync query
-                            let! results =
-                                allEntries
-                                |> List.map (fun e ->
-                                    task {
-                                        let! eEmbed = provider.EmbedAsync e.Value
-                                        let sim = SemanticSimilarity.cosineSimilarity queryEmbed eEmbed
-                                        return (e, sim)
-                                    })
-                                |> List.toArray
-                                |> Task.WhenAll
-                            return results |> Array.sortByDescending snd |> Array.map fst |> Array.toList
-                        | None ->
-                            // Fallback: keyword overlap scoring
-                            let queryWords =
-                                query.ToLowerInvariant().Split(' ')
-                                |> Set.ofArray
-                            return
-                                allEntries
-                                |> List.map (fun e ->
-                                    let entryWords = e.Value.ToLowerInvariant().Split(' ') |> Set.ofArray
-                                    let overlap = Set.intersect queryWords entryWords |> Set.count
-                                    (e, float overlap))
-                                |> List.sortByDescending snd
-                                |> List.map fst
-                    }
-
-                let results = ranked |> List.truncate maxResults
-                // Update access counts
-                for e in results do
-                    let updated = { e with AccessCount = e.AccessCount + 1; Timestamp = DateTimeOffset.UtcNow }
-                    entries.TryUpdate(e.Key, updated, e) |> ignore
-                    // Check promotion
-                    if shouldPromote updated then
-                        match nextTier updated.Tier with
-                        | Some target ->
-                            entries.TryUpdate(e.Key, { updated with Tier = target }, updated) |> ignore
-                        | None -> ()
-                return results
+                if String.IsNullOrWhiteSpace owner then
+                    return
+                        Error(
+                            PlatformFailure.create
+                                PlatformErrorCategory.InvalidInput
+                                "Tiered-memory owner cannot be blank."
+                                false
+                                None
+                        )
+                else
+                    try
+                        let! count = operation ()
+                        return Ok count
+                    with error ->
+                        return Error(PlatformFailure.fromException PlatformFailureBoundary.Storage None error)
             }
 
-          RetrieveFromTierAsync = fun (tier: MemoryTier) (maxResults: int) ->
-            entriesInTier tier
-            |> List.sortByDescending (fun e -> e.Timestamp)
-            |> List.truncate maxResults
-            |> Task.FromResult
+        let deleteOwnerAsync owner =
+            protect owner (fun () -> delete (fun entry -> entry.Owner = owner))
 
-          PromoteAsync = fun (key: string) (targetTier: MemoryTier) ->
-            match entries.TryGetValue(key) with
-            | true, entry ->
-                let promoted = { entry with Tier = targetTier; Timestamp = DateTimeOffset.UtcNow }
-                entries.TryUpdate(key, promoted, entry) |> ignore
-            | false, _ -> ()
-            task { return () }
+        let deleteExpiredAsync owner before =
+            protect owner (fun () -> delete (fun entry -> entry.Owner = owner && entry.Timestamp < before))
 
-          EvictAsync = fun () ->
-            let mutable totalEvicted = 0
-            // Evict expired mid-term entries
-            let expired =
-                entries.Values
-                |> Seq.filter isExpired
-                |> Seq.toList
-            for e in expired do
-                entries.TryRemove(e.Key) |> ignore
-                totalEvicted <- totalEvicted + 1
-            // Evict overflow from each tier
-            totalEvicted <- totalEvicted + evictFromTier MemoryTier.ShortTerm
-            totalEvicted <- totalEvicted + evictFromTier MemoryTier.MidTerm
-            task { return totalEvicted } }
+        { StoreAsync = storeAsync
+          RetrieveAsync = rankAsync
+          RetrieveFromTierAsync = retrieveFromTierAsync
+          RecordAccessAsync = recordAccessAsync
+          PromoteAsync = promoteAsync
+          EvictAsync = evictAsync
+          DeleteOwnerAsync = deleteOwnerAsync
+          DeleteExpiredAsync = deleteExpiredAsync }

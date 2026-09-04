@@ -4,10 +4,12 @@ open System.Threading.Tasks
 
 /// Functional evaluator for scoring agent outputs against expectations.
 type Evaluator =
-    { /// A name identifying this evaluator.
-      Name: string
-      /// Evaluate the agent's output for a given case.
-      EvaluateAsync: EvalCase -> string -> Task<EvalVerdict * string> }
+    {
+        /// A name identifying this evaluator.
+        Name: string
+        /// Evaluate the agent's output for a given case.
+        EvaluateAsync: EvalCase -> string -> Task<EvalVerdict * string>
+    }
 
 /// Functions for constructing and invoking evaluators.
 [<RequireQualifiedAccess>]

@@ -42,7 +42,10 @@ type ContextCompactionTests() =
     [<TestMethod>]
     member _.ApplyAsyncDropOldestStrategy() =
         let conv = [ for i in 1..20 -> makeMsg User (String.replicate 40 "a") ] // 10 tokens each = 200 total
-        let result = (ContextCompaction.applyAsync CompactionStrategy.DropOldest 50 conv).Result
+
+        let result =
+            (ContextCompaction.applyAsync CompactionStrategy.DropOldest 50 conv).Result
+
         Assert.IsTrue(result.Compacted.Length <= 5)
         Assert.IsTrue(result.MessagesRemoved > 0)
 
@@ -55,7 +58,7 @@ type ContextCompactionTests() =
               makeMsg User "y" ]
         // Keep only messages with content length > 5
         let scorer = fun (msg: Message) -> if msg.Content.Length > 5 then 1.0 else 0.0
-        let strategy = CompactionStrategy.RelevanceFilter (scorer, 0.5)
+        let strategy = CompactionStrategy.RelevanceFilter(scorer, 0.5)
         let result = (ContextCompaction.applyAsync strategy 10000 conv).Result
         Assert.AreEqual(2, result.Compacted.Length)
         Assert.AreEqual(2, result.MessagesRemoved)
@@ -65,11 +68,16 @@ type MemoryTierTests() =
 
     [<TestMethod>]
     member _.TieredMemoryEntryHasCorrectTier() =
-        let entry =
-            { Key = "fact"; Value = "Earth is round"
+        let entry: TieredMemoryEntry =
+            { Owner = "memory-tier-tests"
+              Key = "fact"
+              Value = "Earth is round"
               Tier = MemoryTier.LongTerm
               Timestamp = DateTimeOffset.UtcNow
-              AccessCount = 0; Relevance = 0.9; Tags = ["science"] }
+              AccessCount = 0
+              Relevance = 0.9
+              Tags = [ "science" ] }
+
         Assert.AreEqual(MemoryTier.LongTerm, entry.Tier)
         Assert.AreEqual("fact", entry.Key)
 

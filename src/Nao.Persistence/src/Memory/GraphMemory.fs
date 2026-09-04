@@ -1,76 +1,99 @@
 namespace Nao.Persistence
 
+open System
 open Nao.Agents
 
-/// Mutating events for knowledge-graph persistence.
 [<RequireQualifiedAccess>]
 type GraphEvent =
     | UpsertNode of GraphNode
     | AddRelation of GraphRelation
-    | RemoveNode of nodeId: string
+    | RemoveNode of owner: string * nodeId: string
+    | RemoveRelation of owner: string * subject: string * predicate: string * object': string
+    | DeleteOwner of owner: string
+    | DeleteExpired of owner: string * before: DateTimeOffset
 
-/// Event-sourced graph memory. Query/traversal logic is delegated to an in-memory
-/// instance rebuilt by replaying the event log. Relations produced by
-/// ExtractRelationsAsync are persisted as concrete AddRelation events so reloads
-/// never re-run a (possibly external) extractor.
+type GraphDocument = { Version: int; Event: GraphEvent }
+
 module PersistentGraphMemory =
     let create
-            (store: EventStore)
-            (relationExtractor: (string -> System.Threading.Tasks.Task<GraphRelation list>) option)
-            : GraphMemory =
+        (store: EventStore)
+        (relationExtractor: (string -> System.Threading.Tasks.Task<GraphRelation list>) option)
+        : GraphMemory =
         let inner = InMemoryGraphMemory.create relationExtractor
 
+        let replay event =
+            match event with
+            | GraphEvent.UpsertNode node -> inner.UpsertNodeAsync node |> _.GetAwaiter().GetResult()
+            | GraphEvent.AddRelation relation -> inner.AddRelationAsync relation |> _.GetAwaiter().GetResult()
+            | GraphEvent.RemoveNode(owner, nodeId) -> inner.RemoveNodeAsync owner nodeId |> _.GetAwaiter().GetResult()
+            | GraphEvent.RemoveRelation(owner, subject, predicate, object') ->
+                inner.RemoveRelationAsync owner subject predicate object'
+                |> _.GetAwaiter().GetResult()
+            | GraphEvent.DeleteOwner owner -> inner.DeleteOwnerAsync owner |> _.GetAwaiter().GetResult() |> ignore
+            | GraphEvent.DeleteExpired(owner, before) ->
+                inner.DeleteExpiredAsync owner before |> _.GetAwaiter().GetResult() |> ignore
+
         do
-            for line in store.LoadAll() do
-                match FSharpJson.deserialize<GraphEvent> line with
-                | GraphEvent.UpsertNode n -> inner.UpsertNodeAsync(n).GetAwaiter().GetResult()
-                | GraphEvent.AddRelation r -> inner.AddRelationAsync(r).GetAwaiter().GetResult()
-                | GraphEvent.RemoveNode id -> inner.RemoveNodeAsync(id).GetAwaiter().GetResult()
+            store.LoadAll()
+            |> Seq.map FSharpJson.deserialize<GraphDocument>
+            |> Seq.iter (fun document ->
+                if document.Version <> 1 then
+                    invalidOp (sprintf "Unsupported graph-memory document version: %d." document.Version)
 
-        { UpsertNodeAsync = fun (node: GraphNode) ->
+                replay document.Event)
+
+        let append event =
+            store.Append(FSharpJson.serialize { Version = 1; Event = event })
+
+        let appendAfter operation event =
             task {
-                do! inner.UpsertNodeAsync node
-                store.Append(FSharpJson.serialize (GraphEvent.UpsertNode node))
+                do! operation
+                append event
             }
 
-          AddRelationAsync = fun (relation: GraphRelation) ->
+        let deleteAfter operation event =
             task {
-                do! inner.AddRelationAsync relation
-                store.Append(FSharpJson.serialize (GraphEvent.AddRelation relation))
+                let! result = operation
+
+                match result with
+                | Ok _ -> append event
+                | Error _ -> ()
+
+                return result
             }
 
-          QueryAsync = fun (query: GraphQuery) -> inner.QueryAsync query
-
-          RemoveNodeAsync = fun (nodeId: string) ->
+        let extractRelationsAsync owner text =
             task {
-                do! inner.RemoveNodeAsync nodeId
-                store.Append(FSharpJson.serialize (GraphEvent.RemoveNode nodeId))
-            }
-
-          RemoveRelationAsync = fun (subject: string) (predicate: string) (object': string) ->
-            // Underlying in-memory store cannot remove individual relations; no state changes to persist.
-            inner.RemoveRelationAsync subject predicate object'
-
-          GetByTypeAsync = fun (entityType: string) -> inner.GetByTypeAsync entityType
-
-          ExtractRelationsAsync = fun (text: string) ->
-            task {
-                let! extracted = inner.ExtractRelationsAsync text
-                for rel in extracted do
-                    store.Append(FSharpJson.serialize (GraphEvent.AddRelation rel))
+                let! extracted = inner.ExtractRelationsAsync owner text
+                extracted |> List.iter (GraphEvent.AddRelation >> append)
                 return extracted
-            } }
+            }
 
-/// Factory helpers for graph memory persistence.
+        { UpsertNodeAsync = fun node -> appendAfter (inner.UpsertNodeAsync node) (GraphEvent.UpsertNode node)
+          AddRelationAsync =
+            fun relation -> appendAfter (inner.AddRelationAsync relation) (GraphEvent.AddRelation relation)
+          QueryAsync = inner.QueryAsync
+          RemoveNodeAsync =
+            fun owner nodeId -> appendAfter (inner.RemoveNodeAsync owner nodeId) (GraphEvent.RemoveNode(owner, nodeId))
+          RemoveRelationAsync =
+            fun owner subject predicate object' ->
+                appendAfter
+                    (inner.RemoveRelationAsync owner subject predicate object')
+                    (GraphEvent.RemoveRelation(owner, subject, predicate, object'))
+          GetByTypeAsync = inner.GetByTypeAsync
+          ExtractRelationsAsync = extractRelationsAsync
+          DeleteOwnerAsync = fun owner -> deleteAfter (inner.DeleteOwnerAsync owner) (GraphEvent.DeleteOwner owner)
+          DeleteExpiredAsync =
+            fun owner before ->
+                deleteAfter (inner.DeleteExpiredAsync owner before) (GraphEvent.DeleteExpired(owner, before)) }
+
 module GraphMemories =
-    /// ADO.NET-backed graph memory over any provider supplied via the connection factory.
     let ado
         (factory: DbConnectionFactory)
         (relationExtractor: (string -> System.Threading.Tasks.Task<GraphRelation list>) option)
         : GraphMemory =
         PersistentGraphMemory.create (EventStore.db factory "graph") relationExtractor
 
-    /// FileSystem-backed graph memory rooted at the given directory.
     let file
         (baseDir: string)
         (relationExtractor: (string -> System.Threading.Tasks.Task<GraphRelation list>) option)

@@ -7,8 +7,15 @@ This guide describes repository conventions for extending the current Nao implem
 ```bash
 dotnet tool restore
 dotnet paket install
+dotnet fantomas --check .
 dotnet build Nao.slnx
 dotnet test Nao.slnx
+```
+
+Format all F# source files before committing:
+
+```bash
+dotnet fantomas .
 ```
 
 Enable the pre-commit hook:
@@ -59,15 +66,47 @@ Optional vendor integrations should not add dependencies to core contract packag
 
 ## Project boundaries
 
-- `Nao.Agents` contains stable agent, tool, memory, harness, governance, and observability contracts.
-- `Nao.Protocols` contains response protocols.
-- `Nao.Persistence` contains storage implementations.
-- `Nao.Providers` contains model-provider implementations.
-- `Nao.Eval` contains evaluation infrastructure.
-- `Nao.Runtime.Orleans` contains the optional distributed runtime.
-- Vendor-specific knowledge, identity, telemetry, and reasoner integrations should be optional packages.
+Dependencies point inward from runtimes and adapters to core contracts:
 
-Do not create cyclic dependencies or make a vendor SDK a transitive requirement of the core.
+| Project | Role | Allowed project dependencies |
+|---|---|---|
+| `Nao.Protocols` | Core response contracts | None |
+| `Nao.Agents` | Core agent, tool, memory, governance, and observability contracts and execution | `Nao.Protocols` |
+| `Nao.Eval` | Evaluation implementation | `Nao.Agents` |
+| `Nao.Persistence.Infrastructure` | Provider-neutral ADO.NET, serialization, events, and backend selection contracts | `Nao.Agents` |
+| `Nao.Persistence.Memory` | Memory storage implementations | `Nao.Agents`, `Nao.Persistence.Infrastructure` |
+| `Nao.Persistence.Observability` | Trace, metric, audit, and journal implementations | `Nao.Agents`, `Nao.Persistence.Infrastructure` |
+| `Nao.Persistence.Feedback` | Feedback and turn storage implementations | `Nao.Agents`, `Nao.Persistence.Infrastructure` |
+| `Nao.Persistence` | Opt-in persistence composition | `Nao.Agents`, all persistence capability packages |
+| `Nao.Providers.OpenAICompatible` | OpenAI-compatible model adapters | `Nao.Agents` |
+| `Nao.Providers.Anthropic` | Anthropic Messages adapter | `Nao.Agents` |
+| `Nao.Providers.Ollama` | Ollama adapter | `Nao.Agents`, `Nao.Providers.OpenAICompatible` |
+| `Nao.Providers` | Opt-in provider selection and composition | `Nao.Agents`, all provider adapter packages |
+| `Nao.Runtime.Orleans` | Optional distributed runtime | `Nao.Agents` |
+| `Nao.Runtime.Orleans.Codegen` | Runtime build-time code generation | `Nao.Runtime.Orleans` |
+
+Core projects must not reference runtime, persistence, database, ontology, vector-store, or model-vendor packages. Adapter and implementation projects may depend on core projects but never the reverse. Runtime projects compose core and adapters; an adapter must not depend on a runtime. Project-reference cycles are forbidden.
+
+Create a separate package when a capability introduces a replaceable backend, optional third-party dependency, independent release or security cadence, or deployment-specific runtime. Extend the owning package when the change uses its existing dependencies, lifecycle, and release cadence and does not create a new replaceable boundary.
+
+Optional adapter packages use `Nao.<Domain>.<Adapter>` names. Reserved families are `Nao.Knowledge.<Adapter>`, `Nao.Telemetry.<Adapter>`, `Nao.Identity.<Adapter>`, `Nao.Vector.<Adapter>`, `Nao.Graph.<Adapter>`, and `Nao.Reasoning.<Adapter>`. Vendor-specific packages place the vendor or protocol in `<Adapter>` and remain outside core.
+
+Run the architecture policy and its rejection tests locally with:
+
+```bash
+python3 scripts/validate-project-dependencies.py
+python3 -m unittest scripts/test_validate_project_dependencies.py
+```
+
+Adding a production project or changing an allowed edge requires updating the validator and this table in the same change. CI rejects unregistered projects, forbidden edges, and known runtime, database, vector-store, or model-vendor packages in core.
+
+`Nao.Providers.Tests` owns conformance coverage for the provider composition and adapter packages. `Nao.Persistence.Tests` owns backend parity, lifecycle, and isolation coverage for the persistence composition and capability packages.
+
+## Runtime and API support
+
+Nao currently supports .NET 10 and the F# toolchain selected by that SDK. CI follows the latest .NET 10 feature band and centrally pins `FSharp.Core`; dependency lock updates are reviewed explicitly. The supported SDK and F# core are reviewed quarterly and before each minor release. Moving to a new .NET major or F# language generation requires a documented compatibility decision, a clean solution build, the full supported test surface, and migration notes.
+
+Public APIs are stable only when documented as supported. Experimental APIs use a `.Experimental` namespace or an `Experimental` module and may change or be removed in any minor release without a compatibility shim. Experimental durable formats still require an explicit schema version and fail-fast diagnostics; they must not be silently read as stable formats.
 
 ## Testing
 

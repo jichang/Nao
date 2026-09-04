@@ -17,10 +17,21 @@ type private StubHttpMessageHandler(send: HttpRequestMessage -> HttpResponseMess
 
 type private WaitingHttpMessageHandler() =
     inherit HttpMessageHandler()
+
     override _.SendAsync(_request, cancellationToken: CancellationToken) =
         task {
             do! Task.Delay(Timeout.Infinite, cancellationToken)
             return new HttpResponseMessage(HttpStatusCode.OK)
+        }
+
+module private ProviderFailure =
+    let capture (operation: unit -> Task<'value>) =
+        task {
+            let! error = Assert.ThrowsExactlyAsync<PlatformFailureException>(Func<Task>(fun () -> operation () :> Task))
+
+            match error :> exn with
+            | PlatformFailureException failure -> return failure
+            | _ -> return failwith "Expected a structured platform failure."
         }
 
 [<TestClass>]
@@ -39,75 +50,130 @@ type McpJsonTests() =
         Assert.AreEqual(2, root.GetProperty("params").GetProperty("arguments").GetProperty("count").GetInt32())
 
 [<TestClass>]
-type ProviderFactoryTests () =
+type ProviderFactoryTests() =
     [<TestMethod>]
-    member _.CreatesOpenAIProvider () =
+    member _.CreatesOpenAIProvider() =
         let provider = ProviderFactory.create (OpenAI OpenAIConfig.Default)
-        Assert.IsTrue((provider.Name ()).StartsWith "OpenAI")
+        Assert.IsTrue((provider.Name()).StartsWith "OpenAI")
 
     [<TestMethod>]
-    member _.CreatesDeepSeekProvider () =
+    member _.CreatesDeepSeekProvider() =
         let provider = ProviderFactory.create (DeepSeek DeepSeekConfig.Default)
-        Assert.AreEqual("DeepSeek(deepseek-chat)", provider.Name ())
+        Assert.AreEqual("DeepSeek(deepseek-chat)", provider.Name())
 
     [<TestMethod>]
-    member _.CreatesKimiProvider () =
+    member _.CreatesKimiProvider() =
         let provider = ProviderFactory.create (Kimi KimiConfig.Default)
-        Assert.AreEqual("Kimi(kimi-k2.5)", provider.Name ())
+        Assert.AreEqual("Kimi(kimi-k2.5)", provider.Name())
 
     [<TestMethod>]
-    member _.CreatesAnthropicProvider () =
+    member _.CreatesAnthropicProvider() =
         let provider = ProviderFactory.create (Anthropic AnthropicConfig.Default)
-        Assert.AreEqual("Anthropic(claude-sonnet-4-20250514)", provider.Name ())
+        Assert.AreEqual("Anthropic(claude-sonnet-4-20250514)", provider.Name())
 
     [<TestMethod>]
-    member _.CreatesVllmProvider () =
+    member _.CreatesVllmProvider() =
         let provider = ProviderFactory.create (Vllm VllmConfig.Default)
-        Assert.IsTrue((provider.Name ()).StartsWith "vLLM")
+        Assert.IsTrue((provider.Name()).StartsWith "vLLM")
 
     [<TestMethod>]
-    member _.CreatesLlamaCppProvider () =
+    member _.CreatesLlamaCppProvider() =
         let provider = ProviderFactory.create (LlamaCpp LlamaCppConfig.Default)
-        Assert.IsTrue((provider.Name ()).StartsWith "llama.cpp")
+        Assert.IsTrue((provider.Name()).StartsWith "llama.cpp")
 
     [<TestMethod>]
-    member _.OpenAIProviderReturnsResultOnUnreachableServer () =
-        let provider = ProviderFactory.create (OpenAI { OpenAIConfig.Default with BaseUrl = "http://localhost:1" })
-        let result = provider.CompleteAsync [ { Role = User; Content = "hi" } ] CompletionOptions.Default |> _.Result
-        Assert.AreEqual("error", result.FinishReason)
+    member _.OpenAIProviderRaisesTransientFailureOnUnreachableServer() : Task =
+        let provider =
+            ProviderFactory.create (
+                OpenAI
+                    { OpenAIConfig.Default with
+                        BaseUrl = "http://localhost:1" }
+            )
+
+        (task {
+            let! failure =
+                ProviderFailure.capture (fun () ->
+                    provider.CompleteAsync [ { Role = User; Content = "hi" } ] CompletionOptions.Default)
+
+            Assert.AreEqual(PlatformErrorCategory.TransientDependency, failure.Category)
+            Assert.IsTrue(failure.Retryable)
+        }
+        :> Task)
 
     [<TestMethod>]
-    member _.AnthropicProviderReturnsResultOnUnreachableServer () =
-        let provider = ProviderFactory.create (Anthropic { AnthropicConfig.Default with BaseUrl = "http://localhost:1" })
-        let result = provider.CompleteAsync [ { Role = User; Content = "hi" } ] CompletionOptions.Default |> _.Result
-        Assert.AreEqual("error", result.FinishReason)
+    member _.AnthropicProviderRaisesTransientFailureOnUnreachableServer() : Task =
+        let provider =
+            ProviderFactory.create (
+                Anthropic
+                    { AnthropicConfig.Default with
+                        BaseUrl = "http://localhost:1" }
+            )
+
+        (task {
+            let! failure =
+                ProviderFailure.capture (fun () ->
+                    provider.CompleteAsync [ { Role = User; Content = "hi" } ] CompletionOptions.Default)
+
+            Assert.AreEqual(PlatformErrorCategory.TransientDependency, failure.Category)
+            Assert.IsTrue(failure.Retryable)
+        }
+        :> Task)
 
 [<TestClass>]
-type OpenAIConfigTests () =
+type OpenAIConfigTests() =
     [<TestMethod>]
-    member _.DefaultHasExpectedValues () =
+    member _.DefaultHasExpectedValues() =
         let config = OpenAIConfig.Default
         Assert.AreEqual("gpt-4", config.Model)
         Assert.AreEqual("https://api.openai.com/v1/chat/completions", config.BaseUrl)
         Assert.AreEqual(None, config.TimeoutSeconds)
 
 [<TestClass>]
-type OpenAICompatibleProviderTests () =
+type OpenAICompatibleProviderTests() =
     [<TestMethod>]
-    member _.UsesConfiguredUrlWithoutModification () =
+    member _.UsesConfiguredUrlWithoutModification() =
         let mutable requestUrl = ""
         let mutable requestBody = ""
+
         let handler =
             StubHttpMessageHandler(fun request ->
-                requestUrl <- request.RequestUri |> Option.ofObj |> Option.map _.AbsoluteUri |> Option.defaultValue ""
-                requestBody <- request.Content |> Option.ofObj |> Option.map (fun content -> content.ReadAsStringAsync().Result) |> Option.defaultValue ""
+                requestUrl <-
+                    request.RequestUri
+                    |> Option.ofObj
+                    |> Option.map _.AbsoluteUri
+                    |> Option.defaultValue ""
+
+                requestBody <-
+                    request.Content
+                    |> Option.ofObj
+                    |> Option.map (fun content -> content.ReadAsStringAsync().Result)
+                    |> Option.defaultValue ""
+
                 let response = new HttpResponseMessage(HttpStatusCode.OK)
-                response.Content <- new StringContent("""{"choices":[{"message":{"content":"Hello"},"finish_reason":"stop"}],"usage":{"total_tokens":3}}""", Encoding.UTF8, "application/json")
+
+                response.Content <-
+                    new StringContent(
+                        """{"choices":[{"message":{"content":"Hello"},"finish_reason":"stop"}],"usage":{"total_tokens":3}}""",
+                        Encoding.UTF8,
+                        "application/json"
+                    )
+
                 response)
+
         let endpoint = "https://compatible.test/custom/chat?version=2"
-        let provider = OpenAICompatibleProvider.createWithHandler "Test" endpoint "model" None None (Some handler)
-        let options = { CompletionOptions.Default with MaxTokens = Some 42; StopSequences = [ "END" ] }
-        let result = provider.CompleteAsync [ { Role = User; Content = "Hello" } ] options |> _.Result
+
+        let provider =
+            OpenAICompatibleProvider.createWithHandler "Test" endpoint "model" None None (Some handler)
+
+        let options =
+            { CompletionOptions.Default with
+                MaxTokens = Some 42
+                StopSequences = [ "END" ] }
+
+        let result =
+            provider.CompleteAsync [ { Role = User; Content = "Hello" } ] options
+            |> _.Result
+
         Assert.AreEqual(endpoint, requestUrl)
         use body = JsonDocument.Parse(requestBody)
         Assert.AreEqual("model", body.RootElement.GetProperty("model").GetString())
@@ -122,85 +188,186 @@ type OpenAICompatibleProviderTests () =
     [<DataRow("")>]
     [<DataRow("localhost:8000/v1/chat/completions")>]
     [<DataRow("ftp://localhost/v1/chat/completions")>]
-    member _.RejectsInvalidUrl (url: string) =
-        Assert.ThrowsExactly<ArgumentException>(fun () -> OpenAICompatibleProvider.create "Test" url "model" None None |> ignore) |> ignore
+    member _.RejectsInvalidUrl(url: string) =
+        Assert.ThrowsExactly<ArgumentException>(fun () ->
+            OpenAICompatibleProvider.create "Test" url "model" None None |> ignore)
+        |> ignore
 
     [<TestMethod>]
-    member _.ReturnsErrorForMissingRequiredResponseFields () =
-        let handler =
-            StubHttpMessageHandler(fun _ ->
-                let response = new HttpResponseMessage(HttpStatusCode.OK)
-                response.Content <- new StringContent("{}", Encoding.UTF8, "application/json")
-                response)
-        let provider = OpenAICompatibleProvider.createWithHandler "Test" "https://compatible.test/chat" "model" None None (Some handler)
-        let result = provider.CompleteAsync [ { Role = User; Content = "Hello" } ] CompletionOptions.Default |> _.Result
-        Assert.AreEqual("error", result.FinishReason)
-        StringAssert.StartsWith(result.Content, "Parse error:")
+    member _.RejectsMissingRequiredResponseFields() : Task =
+        (task {
+            let handler =
+                StubHttpMessageHandler(fun _ ->
+                    let response = new HttpResponseMessage(HttpStatusCode.OK)
+                    response.Content <- new StringContent("{}", Encoding.UTF8, "application/json")
+                    response)
+
+            let provider =
+                OpenAICompatibleProvider.createWithHandler
+                    "Test"
+                    "https://compatible.test/chat"
+                    "model"
+                    None
+                    None
+                    (Some handler)
+
+            let! failure =
+                ProviderFailure.capture (fun () ->
+                    provider.CompleteAsync [ { Role = User; Content = "Hello" } ] CompletionOptions.Default)
+
+            Assert.AreEqual(PlatformErrorCategory.InvalidOutput, failure.Category)
+            Assert.IsFalse(failure.Retryable)
+        }
+        :> Task)
+
+    [<TestMethod>]
+    member _.MapsHttpFailuresToCanonicalCategories() : Task =
+        (task {
+            let cases =
+                [ 400, PlatformErrorCategory.InvalidInput, false
+                  401, PlatformErrorCategory.PermissionDenied, false
+                  403, PlatformErrorCategory.PermissionDenied, false
+                  404, PlatformErrorCategory.PermanentDependency, false
+                  408, PlatformErrorCategory.ResourceExhausted, true
+                  422, PlatformErrorCategory.InvalidInput, false
+                  429, PlatformErrorCategory.ResourceExhausted, true
+                  500, PlatformErrorCategory.TransientDependency, true
+                  503, PlatformErrorCategory.TransientDependency, true ]
+
+            for statusCode, expectedCategory, expectedRetryable in cases do
+                let handler =
+                    StubHttpMessageHandler(fun _ ->
+                        let response = new HttpResponseMessage(enum<HttpStatusCode> statusCode)
+                        response.Content <- new StringContent("provider failure")
+                        response)
+
+                let provider =
+                    OpenAICompatibleProvider.createWithHandler
+                        "Test"
+                        "https://compatible.test/chat"
+                        "model"
+                        None
+                        None
+                        (Some handler)
+
+                let! failure =
+                    ProviderFailure.capture (fun () ->
+                        provider.CompleteAsync [ { Role = User; Content = "Hello" } ] CompletionOptions.Default)
+
+                Assert.AreEqual(expectedCategory, failure.Category, $"HTTP {statusCode}")
+                Assert.AreEqual(expectedRetryable, failure.Retryable, $"HTTP {statusCode}")
+        }
+        :> Task)
 
 [<TestClass>]
-type DeepSeekConfigTests () =
+type DeepSeekConfigTests() =
     [<TestMethod>]
-    member _.DefaultUsesDeepSeekApi () =
+    member _.DefaultUsesDeepSeekApi() =
         let config = DeepSeekConfig.Default
         Assert.AreEqual("deepseek-chat", config.Model)
         Assert.AreEqual("https://api.deepseek.com/v1/chat/completions", config.BaseUrl)
         Assert.AreEqual(None, config.TimeoutSeconds)
 
 [<TestClass>]
-type KimiConfigTests () =
+type KimiConfigTests() =
     [<TestMethod>]
-    member _.DefaultUsesMoonshotApi () =
+    member _.DefaultUsesMoonshotApi() =
         let config = KimiConfig.Default
         Assert.AreEqual("kimi-k2.5", config.Model)
         Assert.AreEqual("https://api.moonshot.ai/v1/chat/completions", config.BaseUrl)
         Assert.AreEqual(None, config.TimeoutSeconds)
 
 [<TestClass>]
-type OllamaConfigTests () =
+type OllamaConfigTests() =
     [<TestMethod>]
-    member _.DefaultDisablesReasoningForToolProtocols () =
+    member _.DefaultDisablesReasoningForToolProtocols() =
         let config = OllamaConfig.Default
         Assert.AreEqual(Some "none", config.ReasoningEffort)
         Assert.AreEqual(None, config.TimeoutSeconds)
 
 [<TestClass>]
-type AnthropicConfigTests () =
+type AnthropicConfigTests() =
     [<TestMethod>]
-    member _.DefaultHasExpectedValues () =
+    member _.DefaultHasExpectedValues() =
         let config = AnthropicConfig.Default
         Assert.AreEqual("claude-sonnet-4-20250514", config.Model)
         Assert.AreEqual("https://api.anthropic.com", config.BaseUrl)
         Assert.AreEqual(None, config.TimeoutSeconds)
 
 [<TestClass>]
-type AnthropicProviderTests () =
+type AnthropicProviderTests() =
     [<TestMethod>]
-    member _.ConfiguredTimeoutCancelsRequest () =
-        let config = { AnthropicConfig.Default with BaseUrl = "https://anthropic.test"; TimeoutSeconds = Some 1 }
-        let provider = AnthropicProvider.createWithHandler config (Some(WaitingHttpMessageHandler()))
-        let result = provider.CompleteAsync [ { Role = User; Content = "Wait." } ] CompletionOptions.Default |> _.Result
-        Assert.AreEqual("error", result.FinishReason)
-        StringAssert.Contains(result.Content, "canceled")
+    member _.ConfiguredTimeoutCancelsRequest() : Task =
+        (task {
+            let config =
+                { AnthropicConfig.Default with
+                    BaseUrl = "https://anthropic.test"
+                    TimeoutSeconds = Some 1 }
+
+            let provider =
+                AnthropicProvider.createWithHandler config (Some(WaitingHttpMessageHandler()))
+
+            let! failure =
+                ProviderFailure.capture (fun () ->
+                    provider.CompleteAsync [ { Role = User; Content = "Wait." } ] CompletionOptions.Default)
+
+            Assert.AreEqual(PlatformErrorCategory.TransientDependency, failure.Category)
+            Assert.IsTrue(failure.Retryable)
+        }
+        :> Task)
 
     [<TestMethod>]
-    member _.SendsNativeMessagesRequestAndParsesResponse () =
+    member _.SendsNativeMessagesRequestAndParsesResponse() =
         let mutable requestUrl = ""
         let mutable apiKey = ""
         let mutable apiVersion = ""
         let mutable requestBody = ""
+
         let handler =
             StubHttpMessageHandler(fun request ->
-                requestUrl <- request.RequestUri |> Option.ofObj |> Option.map _.AbsoluteUri |> Option.defaultValue ""
+                requestUrl <-
+                    request.RequestUri
+                    |> Option.ofObj
+                    |> Option.map _.AbsoluteUri
+                    |> Option.defaultValue ""
+
                 apiKey <- request.Headers.GetValues("x-api-key") |> Seq.exactlyOne
                 apiVersion <- request.Headers.GetValues("anthropic-version") |> Seq.exactlyOne
-                requestBody <- request.Content |> Option.ofObj |> Option.map (fun content -> content.ReadAsStringAsync().Result) |> Option.defaultValue ""
+
+                requestBody <-
+                    request.Content
+                    |> Option.ofObj
+                    |> Option.map (fun content -> content.ReadAsStringAsync().Result)
+                    |> Option.defaultValue ""
+
                 let response = new HttpResponseMessage(HttpStatusCode.OK)
-                response.Content <- new StringContent("""{"content":[{"type":"text","text":"Hello"},{"type":"text","text":" world"}],"stop_reason":"max_tokens","usage":{"input_tokens":10,"output_tokens":5}}""", Encoding.UTF8, "application/json")
+
+                response.Content <-
+                    new StringContent(
+                        """{"content":[{"type":"text","text":"Hello"},{"type":"text","text":" world"}],"stop_reason":"max_tokens","usage":{"input_tokens":10,"output_tokens":5}}""",
+                        Encoding.UTF8,
+                        "application/json"
+                    )
+
                 response)
-        let config = { AnthropicConfig.Default with ApiKey = "test-key"; BaseUrl = "https://anthropic.test/" }
+
+        let config =
+            { AnthropicConfig.Default with
+                ApiKey = "test-key"
+                BaseUrl = "https://anthropic.test/" }
+
         let provider = AnthropicProvider.createWithHandler config (Some handler)
-        let conversation = [ { Role = System; Content = "Be concise." }; { Role = User; Content = "Say hello." } ]
-        let options = { CompletionOptions.Default with MaxTokens = Some 128; StopSequences = [ "END" ] }
+
+        let conversation =
+            [ { Role = System
+                Content = "Be concise." }
+              { Role = User; Content = "Say hello." } ]
+
+        let options =
+            { CompletionOptions.Default with
+                MaxTokens = Some 128
+                StopSequences = [ "END" ] }
+
         let result = provider.CompleteAsync conversation options |> _.Result
         Assert.AreEqual("https://anthropic.test/v1/messages", requestUrl)
         Assert.AreEqual("test-key", apiKey)
@@ -216,9 +383,10 @@ type AnthropicProviderTests () =
         Assert.AreEqual(Some 15, result.TokensUsed)
 
     [<TestMethod>]
-    member _.StreamsTextAndAggregatesUsage () =
+    member _.StreamsTextAndAggregatesUsage() =
         let stream =
-            String.concat "\n"
+            String.concat
+                "\n"
                 [ "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":5,\"output_tokens\":0}}}"
                   ""
                   "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"Hello\"}}"
@@ -228,14 +396,29 @@ type AnthropicProviderTests () =
                   "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":3}}"
                   ""
                   "data: {\"type\":\"message_stop\"}" ]
+
         let handler =
             StubHttpMessageHandler(fun _ ->
                 let response = new HttpResponseMessage(HttpStatusCode.OK)
                 response.Content <- new StringContent(stream, Encoding.UTF8, "text/event-stream")
                 response)
-        let provider = AnthropicProvider.createWithHandler { AnthropicConfig.Default with BaseUrl = "https://anthropic.test" } (Some handler)
+
+        let provider =
+            AnthropicProvider.createWithHandler
+                { AnthropicConfig.Default with
+                    BaseUrl = "https://anthropic.test" }
+                (Some handler)
+
         let chunks = ResizeArray<CompletionChunk>()
-        let result = LlmProvider.streamAsync provider [ { Role = User; Content = "Say hello." } ] CompletionOptions.Default chunks.Add |> _.Result
+
+        let result =
+            LlmProvider.streamAsync
+                provider
+                [ { Role = User; Content = "Say hello." } ]
+                CompletionOptions.Default
+                chunks.Add
+            |> _.Result
+
         Assert.AreEqual("Hello world", result.Content)
         Assert.AreEqual("stop", result.FinishReason)
         Assert.AreEqual(Some 8, result.TokensUsed)
@@ -244,18 +427,18 @@ type AnthropicProviderTests () =
         Assert.AreEqual(Some 8, chunks.[2].TokensUsed)
 
 [<TestClass>]
-type VllmConfigTests () =
+type VllmConfigTests() =
     [<TestMethod>]
-    member _.DefaultUsesLocalhost () =
+    member _.DefaultUsesLocalhost() =
         let config = VllmConfig.Default
         Assert.AreEqual("http://localhost:8000/v1/chat/completions", config.BaseUrl)
         Assert.AreEqual(None, config.ApiKey)
         Assert.AreEqual(None, config.TimeoutSeconds)
 
 [<TestClass>]
-type LlamaCppConfigTests () =
+type LlamaCppConfigTests() =
     [<TestMethod>]
-    member _.DefaultUsesLocalhost () =
+    member _.DefaultUsesLocalhost() =
         let config = LlamaCppConfig.Default
         Assert.AreEqual("http://localhost:8080/v1/chat/completions", config.BaseUrl)
         Assert.AreEqual(None, config.NPredict)

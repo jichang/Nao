@@ -9,11 +9,12 @@ module internal AgentHelpers =
     let tryParseToolCall (content: string) =
         // Simple pattern: {"tool":"name","args":"value"}
         let marker = "{" + "\"tool\"" + ":"
+
         if content.Contains(marker) then
             let parts = content.Split('"')
             let toolName = parts |> Array.tryItem 3 |> Option.defaultValue ""
             let args = parts |> Array.tryItem 7 |> Option.defaultValue ""
-            if toolName <> "" then Some (toolName, args) else None
+            if toolName <> "" then Some(toolName, args) else None
         else
             None
 
@@ -27,24 +28,36 @@ module DemoAgent =
     let create (provider: LlmProvider) (tools: Tool list) (prompt: Prompt) =
         let runCore (context: AgentContext) (input: string) : Task<string> =
             task {
-                let systemMsg = { Role = System; Content = Prompt.render prompt }
+                let systemMsg =
+                    { Role = System
+                      Content = Prompt.render prompt }
+
                 let userMsg = { Role = User; Content = input }
                 let conv1 = [ systemMsg; userMsg ]
 
                 let! result = provider.CompleteAsync conv1 CompletionOptions.Default
-                let assistantMsg = { Role = Assistant; Content = result.Content }
+
+                let assistantMsg =
+                    { Role = Assistant
+                      Content = result.Content }
+
                 let conv2 = conv1 @ [ assistantMsg ]
 
                 match AgentHelpers.tryParseToolCall result.Content with
-                | Some (toolName, args) ->
+                | Some(toolName, args) ->
                     match AgentHelpers.findTool tools toolName with
                     | Some tool ->
                         let! execution = tool.RunAsync context args
+
                         let toolResult =
                             match execution with
                             | Ok output -> output
                             | Error failure -> failure.Message
-                        let toolMsg = { Role = User; Content = "tool_result: " + toolResult }
+
+                        let toolMsg =
+                            { Role = User
+                              Content = "tool_result: " + toolResult }
+
                         let conv3 = conv2 @ [ toolMsg ]
                         let! finalResult = provider.CompleteAsync conv3 CompletionOptions.Default
                         return finalResult.Content
@@ -71,16 +84,19 @@ module DemoAgent =
 /// Test workspace definitions that provide DemoAgent via built agents/tools
 module DemoWorkspace =
     let private provider = LocalLlmProvider.create ()
-    let private tools = [ DemoTools.getWeather; DemoTools.calculator; DemoTools.greeter ]
+
+    let private tools =
+        [ DemoTools.getWeather; DemoTools.calculator; DemoTools.greeter ]
+
     let private prompt =
         { Prompt.Empty with
             Role = "You are a helpful assistant with access to tools."
             Objective = "Help the user by answering questions. Use tools when needed."
-            Constraints = ["Always use a tool when the user asks about weather or math."] }
+            Constraints = [ "Always use a tool when the user asks about weather or math." ] }
 
     let createAgent () = DemoAgent.create provider tools prompt
 
-    let definitions : Nao.Runtime.Orleans.WorkspaceDefinitions =
+    let definitions: Nao.Runtime.Orleans.WorkspaceDefinitions =
         { Agents = [ createAgent () ]
           Tools = tools
           Constitutions = [] }

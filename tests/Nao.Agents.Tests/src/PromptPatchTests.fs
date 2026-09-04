@@ -4,7 +4,7 @@ open Microsoft.VisualStudio.TestTools.UnitTesting
 open Nao.Agents
 
 [<TestClass>]
-type PromptPatchTests () =
+type PromptPatchTests() =
 
     let prompt =
         { Role = "base role"
@@ -12,9 +12,9 @@ type PromptPatchTests () =
           DomainKnowledge = [ "base domain" ]
           Constraints = [ "base constraint" ]
           Examples =
-              [ { Input = "base input"
-                  Output = "base output"
-                  Explanation = None } ]
+            [ { Input = "base input"
+                Output = "base output"
+                Explanation = None } ]
           OutputFormat = FreeText
           Context = [ "base context" ] }
 
@@ -52,11 +52,15 @@ type PromptPatchTests () =
     member _.UpdateOperationsReceiveTheExistingFieldValue() =
         let patch =
             { PromptPatch.Empty with
-                Role = Some(UpdateText (fun value -> value.ToUpperInvariant()))
+                Role = Some(UpdateText(fun value -> value.ToUpperInvariant()))
                 Examples =
-                    Some(UpdateList (fun examples ->
-                        examples
-                        |> List.map (fun example -> { example with Output = example.Output + " updated" }))) }
+                    Some(
+                        UpdateList(fun examples ->
+                            examples
+                            |> List.map (fun example ->
+                                { example with
+                                    Output = example.Output + " updated" }))
+                    ) }
 
         let result = Prompt.applyPatch patch prompt
 

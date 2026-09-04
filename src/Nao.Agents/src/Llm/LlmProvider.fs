@@ -19,7 +19,7 @@ module LlmProvider =
           Dispose = ignore }
 
     /// Return the provider's current human-readable name.
-    let name (provider: LlmProvider) = provider.Name ()
+    let name (provider: LlmProvider) = provider.Name()
 
     /// Request a buffered completion.
     let completeAsync conversation options (provider: LlmProvider) =
@@ -32,9 +32,13 @@ module LlmProvider =
         | None ->
             task {
                 let! result = provider.CompleteAsync conversation options
-                onChunk (CompletionChunk.create result.Content (Some result.FinishReason) result.TokensUsed result.Usage)
+
+                onChunk (
+                    CompletionChunk.create result.Content (Some result.FinishReason) result.TokensUsed result.Usage
+                )
+
                 return result
             }
 
     /// Release resources owned by the provider.
-    let dispose (provider: LlmProvider) = provider.Dispose ()
+    let dispose (provider: LlmProvider) = provider.Dispose()

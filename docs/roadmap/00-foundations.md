@@ -61,24 +61,28 @@ This workstream establishes an accurate baseline, stable platform vocabulary, pa
 **Acceptance criteria**
 
 - [x] Public APIs and documentation use the same terms consistently.
-- [ ] Each durable record has an owner, retention policy, and deletion path.
-- [ ] Error categories map consistently across agents, tools, providers, storage, and hosts.
+- [x] Each durable record has an owner, retention policy, and deletion path.
+- [x] Error categories map consistently across agents, tools, providers, storage, and hosts.
+
+Lifecycle coverage includes session turns, audit, key/value memory, semantic memory, execution-scoped working memory, owner-scoped episodic, graph, and tiered memory, traces, metrics, feedback, execution journals, and derived evaluation datasets/reports. Session destruction coordinates its conversation, turn, memory, metric, and journal owners before clearing runtime identity. Canonical exception and HTTP mappings preserve category and retryability across agent, tool, provider, storage, and host boundaries. FND-03 is complete.
 
 ## FND-04 — Package and dependency architecture
 
-- [ ] Define dependency-direction rules between core contracts, implementations, runtimes, and adapters.
-- [ ] Keep core contracts free from optional vendor SDKs.
-- [ ] Define criteria for creating a separate package versus extending an existing package.
-- [ ] Establish package naming for knowledge, telemetry, identity, vector, graph, and reasoning adapters.
-- [ ] Define supported .NET and F# versions and upgrade cadence.
-- [ ] Add architecture tests or build checks for forbidden dependencies.
-- [ ] Document experimental API namespaces and stability guarantees.
+- [x] Define dependency-direction rules between core contracts, implementations, runtimes, and adapters.
+- [x] Keep core contracts free from optional vendor SDKs.
+- [x] Define criteria for creating a separate package versus extending an existing package.
+- [x] Establish package naming for knowledge, telemetry, identity, vector, graph, and reasoning adapters.
+- [x] Define supported .NET and F# versions and upgrade cadence.
+- [x] Add architecture tests or build checks for forbidden dependencies.
+- [x] Document experimental API namespaces and stability guarantees.
 
 **Acceptance criteria**
 
-- [ ] Core packages can be consumed without Orleans, database, ontology, or vendor-specific dependencies.
-- [ ] Optional integrations can evolve without forcing unrelated dependency upgrades.
-- [ ] Forbidden dependency directions fail CI.
+- [x] Core packages can be consumed without Orleans, database, ontology, or vendor-specific dependencies.
+- [x] Optional integrations can evolve without forcing unrelated dependency upgrades.
+- [x] Forbidden dependency directions fail CI.
+
+The project graph is acyclic and enforced by `scripts/validate-project-dependencies.py`, including core-package checks for optional runtime, database, vector-store, and model-vendor dependencies. Provider adapters are independently consumable through `Nao.Providers.OpenAICompatible`, `Nao.Providers.Anthropic`, and `Nao.Providers.Ollama`; persistence capabilities are independently consumable through infrastructure, memory, observability, and feedback packages. The aggregate `Nao.Providers` and `Nao.Persistence` packages remain explicit opt-in composition conveniences. FND-04 is complete.
 
 ## FND-05 — Public contract compatibility
 

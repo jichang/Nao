@@ -15,13 +15,11 @@ module FeedbackJson =
         o.Converters.Add(JsonFSharpConverter(JsonUnionEncoding.InternalTag ||| JsonUnionEncoding.UnwrapFieldlessTags))
         o
 
-    let serialize (value: 'a) : string = JsonSerializer.Serialize(value, options)
-    let deserialize<'a> (s: string) : 'a = JsonSerializer.Deserialize<'a>(s, options)
+    let serialize (value: 'a) : string =
+        JsonSerializer.Serialize(value, options)
 
-    /// Compatibility aliases retained for callers that previously requested pretty output.
-    /// All framework JSON is compact so it can be embedded safely in LLM protocols.
-    let indentedOptions = options
-    let serializeIndented (value: 'a) : string = serialize value
+    let deserialize<'a> (s: string) : 'a =
+        JsonSerializer.Deserialize<'a>(s, options)
 
 // ─── Store capabilities ───
 
@@ -29,12 +27,15 @@ module FeedbackJson =
 type TurnStore =
     { SaveAsync: TurnRecord -> Task
       GetAsync: string -> Task<TurnRecord option>
-      GetForSessionAsync: string -> Task<TurnRecord list> }
+      GetForSessionAsync: string -> Task<TurnRecord list>
+      DeleteSessionAsync: string -> Task<Result<int, PlatformFailure>>
+      DeleteExpiredAsync: string -> DateTimeOffset -> Task<Result<int, PlatformFailure>> }
 
 /// Persists user feedback entries.
 type FeedbackStore =
     { SaveAsync: Feedback -> Task
       GetForTurnAsync: string -> Task<Feedback list>
       GetForSessionAsync: string -> Task<Feedback list>
-    /// Every feedback entry across all sessions — the input to cross-session aggregation.
-      GetAllAsync: unit -> Task<Feedback list> }
+      GetAllAsync: unit -> Task<Feedback list>
+      DeleteOwnerAsync: string -> Task<Result<int, PlatformFailure>>
+      DeleteExpiredAsync: string -> DateTimeOffset -> Task<Result<int, PlatformFailure>> }

@@ -24,6 +24,7 @@ module DemoTools =
                 | "10 / 2" -> "5"
                 | "100 - 37" -> "63"
                 | expression -> sprintf "Cannot evaluate: %s" expression
+
             Task.FromResult(Ok result))
 
     /// A greeting tool

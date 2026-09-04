@@ -125,6 +125,8 @@ Probabilistic judges should identify model, prompt, threshold, and evidence. The
 
 `AuditLog` records governance decisions. `ExecutionJournal` records tool executions and outcomes. Revertible operations can be compensated in reverse order:
 
+Journal records require stable record, session-workflow, and turn identity. Owner deletion and strict cutoff retention are available across in-memory, versioned-file, and indexed ADO.NET adapters, but hosts must not purge records while compensation remains possible.
+
 ```fsharp
 let journal = InMemoryExecutionJournal.create ()
 let! failures = ExecutionJournal.revertAllAsync journal tools

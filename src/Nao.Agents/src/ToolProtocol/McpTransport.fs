@@ -97,31 +97,36 @@ type McpConnectionState =
 
 /// Functions for an MCP client connection to a single server.
 type McpClient =
-    { /// Initialize the connection and perform capability negotiation.
-      ConnectAsync: unit -> Task<Result<McpServerInfo, string>>
-      /// List available tools from the server.
-      ListToolsAsync: unit -> Task<McpToolDef list>
-      /// List available resources.
-      ListResourcesAsync: unit -> Task<McpResource list>
-      /// Invoke a tool by name with JSON arguments.
-      InvokeToolAsync: string -> string -> Task<Result<string, string>>
-      /// Read a resource by URI.
-      ReadResourceAsync: string -> Task<Result<string, string>>
-      /// Get the current connection state.
-      State: unit -> McpConnectionState
-      /// Disconnect and cleanup.
-      DisconnectAsync: unit -> Task<unit> }
+    {
+        /// Initialize the connection and perform capability negotiation.
+        ConnectAsync: unit -> Task<Result<McpServerInfo, string>>
+        /// List available tools from the server.
+        ListToolsAsync: unit -> Task<McpToolDef list>
+        /// List available resources.
+        ListResourcesAsync: unit -> Task<McpResource list>
+        /// Invoke a tool by name with JSON arguments.
+        InvokeToolAsync: string -> string -> Task<Result<string, string>>
+        /// Read a resource by URI.
+        ReadResourceAsync: string -> Task<Result<string, string>>
+        /// Get the current connection state.
+        State: unit -> McpConnectionState
+        /// Disconnect and cleanup.
+        DisconnectAsync: unit -> Task<unit>
+    }
 
 /// Adapts remote MCP definitions to the canonical executable tool boundary.
 [<RequireQualifiedAccess>]
 module McpTool =
     let create exposedName (client: McpClient) (definition: McpToolDef) =
         let input = ToolCodec.create definition.InputSchema Ok Ok
+
         let operation =
-            ToolOperation.create (fun _ arguments -> task {
-                match! client.InvokeToolAsync definition.Name arguments with
-                | Ok output -> return Ok output
-                | Error message -> return Error(ToolExecError.Failed message) })
+            ToolOperation.create (fun _ arguments ->
+                task {
+                    match! client.InvokeToolAsync definition.Name arguments with
+                    | Ok output -> return Ok output
+                    | Error message -> return Error(ToolExecError.Failed message)
+                })
 
         Tool.create
             exposedName
@@ -134,16 +139,18 @@ module McpTool =
 
 /// Functions for a registry of multiple MCP server connections.
 type McpRegistry =
-    { /// Register a new MCP server.
-      RegisterAsync: string -> McpTransport -> Task<Result<McpServerInfo, string>>
-      /// Unregister and disconnect a server.
-      UnregisterAsync: string -> Task<unit>
-      /// Get all registered servers.
-      GetServers: unit -> (string * McpConnectionState) list
-      /// Get a specific client by server name.
-      GetClient: string -> McpClient option
-      /// Discover tools from all connected servers.
-      DiscoverToolsAsync: unit -> Task<McpToolDef list> }
+    {
+        /// Register a new MCP server.
+        RegisterAsync: string -> McpTransport -> Task<Result<McpServerInfo, string>>
+        /// Unregister and disconnect a server.
+        UnregisterAsync: string -> Task<unit>
+        /// Get all registered servers.
+        GetServers: unit -> (string * McpConnectionState) list
+        /// Get a specific client by server name.
+        GetClient: string -> McpClient option
+        /// Discover tools from all connected servers.
+        DiscoverToolsAsync: unit -> Task<McpToolDef list>
+    }
 
 /// Stdio-based MCP client construction.
 [<RequireQualifiedAccess>]
@@ -156,8 +163,10 @@ module StdioMcpClient =
 
         let startProcess () =
             let psi = System.Diagnostics.ProcessStartInfo(command)
+
             for arg in args do
                 psi.ArgumentList.Add(arg)
+
             psi.UseShellExecute <- false
             psi.RedirectStandardInput <- true
             psi.RedirectStandardOutput <- true
@@ -181,135 +190,152 @@ module StdioMcpClient =
                 return if isNull line then "" else line
             }
 
-        { ConnectAsync = fun () ->
-            task {
-                try
-                    state <- McpConnectionState.Connecting
-                    let p = startProcess ()
-                    let! _response = sendJsonRpc p "initialize" (McpJson.InitializeParamsDto())
-                    let info =
-                        { Name = command
-                          Version = "1.0"
-                          Capabilities = McpCapability.Tools
-                          ProtocolVersion = "2025-03-26" }
-                    serverInfo <- Some info
-                    state <- McpConnectionState.Connected info
-                    return Ok info
-                with ex ->
-                    state <- McpConnectionState.Error ex.Message
-                    return Error ex.Message
-            }
+        { ConnectAsync =
+            fun () ->
+                task {
+                    try
+                        state <- McpConnectionState.Connecting
+                        let p = startProcess ()
+                        let! _response = sendJsonRpc p "initialize" (McpJson.InitializeParamsDto())
 
-          ListToolsAsync = fun () ->
-            task {
-                match proc with
-                | Some p when not p.HasExited ->
-                    let! _response = sendJsonRpc p "tools/list" (McpJson.EmptyParamsDto())
-                    // In production, parse JSON response into McpToolDef list
-                    return tools |> Seq.toList
-                | _ -> return []
-            }
+                        let info =
+                            { Name = command
+                              Version = "1.0"
+                              Capabilities = McpCapability.Tools
+                              ProtocolVersion = "2025-03-26" }
+
+                        serverInfo <- Some info
+                        state <- McpConnectionState.Connected info
+                        return Ok info
+                    with ex ->
+                        state <- McpConnectionState.Error ex.Message
+                        return Error ex.Message
+                }
+
+          ListToolsAsync =
+            fun () ->
+                task {
+                    match proc with
+                    | Some p when not p.HasExited ->
+                        let! _response = sendJsonRpc p "tools/list" (McpJson.EmptyParamsDto())
+                        // In production, parse JSON response into McpToolDef list
+                        return tools |> Seq.toList
+                    | _ -> return []
+                }
 
           ListResourcesAsync = fun () -> Task.FromResult([])
 
-          InvokeToolAsync = fun (name: string) (arguments: string) ->
-            task {
-                match proc with
-                | Some p when not p.HasExited ->
-                    try
-                        use document = JsonDocument.Parse(arguments)
-                        let parameters = McpJson.ToolCallParamsDto()
-                        parameters.Name <- name
-                        parameters.Arguments <- document.RootElement.Clone()
-                        let! response = sendJsonRpc p "tools/call" parameters
-                        if String.IsNullOrEmpty response then
-                            return Error "No response from tool server"
-                        else
-                            return Ok response
-                    with :? JsonException as ex ->
-                        return Error(sprintf "Invalid MCP tool arguments: %s" ex.Message)
-                | _ -> return Error "MCP server not connected"
-            }
+          InvokeToolAsync =
+            fun (name: string) (arguments: string) ->
+                task {
+                    match proc with
+                    | Some p when not p.HasExited ->
+                        try
+                            use document = JsonDocument.Parse(arguments)
+                            let parameters = McpJson.ToolCallParamsDto()
+                            parameters.Name <- name
+                            parameters.Arguments <- document.RootElement.Clone()
+                            let! response = sendJsonRpc p "tools/call" parameters
 
-          ReadResourceAsync = fun _uri ->
-            Task.FromResult(Error "Resources not supported in stdio transport")
+                            if String.IsNullOrEmpty response then
+                                return Error "No response from tool server"
+                            else
+                                return Ok response
+                        with :? JsonException as ex ->
+                            return Error(sprintf "Invalid MCP tool arguments: %s" ex.Message)
+                    | _ -> return Error "MCP server not connected"
+                }
+
+          ReadResourceAsync = fun _uri -> Task.FromResult(Error "Resources not supported in stdio transport")
 
           State = fun () -> state
 
-          DisconnectAsync = fun () ->
-            task {
-                match proc with
-                | Some p ->
-                    if not p.HasExited then
-                        let! _ = sendJsonRpc p "shutdown" (McpJson.EmptyParamsDto())
-                        p.Kill()
-                    p.Dispose()
-                    proc <- None
-                | None -> ()
-                state <- McpConnectionState.Disconnected
-            } }
+          DisconnectAsync =
+            fun () ->
+                task {
+                    match proc with
+                    | Some p ->
+                        if not p.HasExited then
+                            let! _ = sendJsonRpc p "shutdown" (McpJson.EmptyParamsDto())
+                            p.Kill()
+
+                        p.Dispose()
+                        proc <- None
+                    | None -> ()
+
+                    state <- McpConnectionState.Disconnected
+                } }
 
 /// Registry managing multiple MCP connections.
 [<RequireQualifiedAccess>]
 module McpRegistry =
     let create () : McpRegistry =
-        let clients = System.Collections.Concurrent.ConcurrentDictionary<string, McpClient>()
+        let clients =
+            System.Collections.Concurrent.ConcurrentDictionary<string, McpClient>()
 
-        { RegisterAsync = fun (name: string) (transport: McpTransport) ->
-            task {
-                let client =
-                    match transport with
-                    | McpTransport.Stdio (cmd, args) -> StdioMcpClient.create cmd args
-                    | McpTransport.Sse _url ->
-                        // SSE client would be implemented here
-                        StdioMcpClient.create "echo" ["not-implemented"]
-                    | McpTransport.StreamableHttp (_url, _headers) ->
-                        StdioMcpClient.create "echo" ["not-implemented"]
-                let! result = client.ConnectAsync()
-                match result with
-                | Ok info ->
-                    clients.TryAdd(name, client) |> ignore
-                    return Ok info
-                | Error msg -> return Error msg
-            }
+        { RegisterAsync =
+            fun (name: string) (transport: McpTransport) ->
+                task {
+                    let client =
+                        match transport with
+                        | McpTransport.Stdio(cmd, args) -> StdioMcpClient.create cmd args
+                        | McpTransport.Sse _url ->
+                            // SSE client would be implemented here
+                            StdioMcpClient.create "echo" [ "not-implemented" ]
+                        | McpTransport.StreamableHttp(_url, _headers) ->
+                            StdioMcpClient.create "echo" [ "not-implemented" ]
 
-          UnregisterAsync = fun name ->
-            task {
-                match clients.TryRemove(name) with
-                | true, client -> do! client.DisconnectAsync()
-                | _ -> ()
-            }
+                    let! result = client.ConnectAsync()
 
-          GetServers = fun () ->
-            clients
-            |> Seq.map (fun kvp -> (kvp.Key, kvp.Value.State()))
-            |> Seq.toList
+                    match result with
+                    | Ok info ->
+                        clients.TryAdd(name, client) |> ignore
+                        return Ok info
+                    | Error msg -> return Error msg
+                }
 
-          GetClient = fun name ->
-            match clients.TryGetValue(name) with
-            | true, client -> Some client
-            | _ -> None
+          UnregisterAsync =
+            fun name ->
+                task {
+                    match clients.TryRemove(name) with
+                    | true, client -> do! client.DisconnectAsync()
+                    | _ -> ()
+                }
 
-          DiscoverToolsAsync = fun () ->
-            task {
-                let results = ResizeArray<McpToolDef>()
-                for kvp in clients do
-                    let! tools = kvp.Value.ListToolsAsync()
-                    results.AddRange(tools)
-                return results |> Seq.toList
-            } }
+          GetServers = fun () -> clients |> Seq.map (fun kvp -> (kvp.Key, kvp.Value.State())) |> Seq.toList
+
+          GetClient =
+            fun name ->
+                match clients.TryGetValue(name) with
+                | true, client -> Some client
+                | _ -> None
+
+          DiscoverToolsAsync =
+            fun () ->
+                task {
+                    let results = ResizeArray<McpToolDef>()
+
+                    for kvp in clients do
+                        let! tools = kvp.Value.ListToolsAsync()
+                        results.AddRange(tools)
+
+                    return results |> Seq.toList
+                } }
 
     /// Discover connected MCP tools as qualified executable tools (`server.tool`).
     let discoverExecutableToolsAsync (registry: McpRegistry) =
         task {
             let tools = ResizeArray<Tool>()
+
             for serverName, state in registry.GetServers() do
                 match state, registry.GetClient serverName with
                 | McpConnectionState.Connected _, Some client ->
                     let! definitions = client.ListToolsAsync()
+
                     for definition in definitions do
                         tools.Add(McpTool.create (sprintf "%s.%s" serverName definition.Name) client definition)
                 | _ -> ()
+
             return tools |> Seq.toList
         }
 

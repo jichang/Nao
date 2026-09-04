@@ -14,7 +14,8 @@ type ProtocolTests() =
           Metadata = Map.ofList [ "compact", "true" ] }
 
     let parse response =
-        if response = "action sample" then Ok [ "sample" ]
+        if response = "action sample" then
+            Ok [ "sample" ]
         else
             Error
                 { Summary = "Unknown action syntax."
@@ -37,6 +38,7 @@ type ProtocolTests() =
     [<TestMethod>]
     member _.``protocol returns values or structured repair diagnostics``() =
         Assert.AreEqual(Ok [ "sample" ], protocol.Parse "action sample")
+
         match protocol.Parse "invalid" with
         | Error error ->
             Assert.AreEqual(Some "line 1", error.Location)
@@ -47,6 +49,7 @@ type ProtocolTests() =
     [<TestMethod>]
     member _.``JSON5-compatible values normalize to strict compact JSON``() =
         let input = "{source:'sample}.md',targets:['sample.html',],}"
+
         match JsonValueFormat.json5Compatible.Normalize input with
         | Ok canonical -> Assert.AreEqual("{\"source\":\"sample}.md\",\"targets\":[\"sample.html\"]}", canonical)
         | Error error -> Assert.Fail(ValueFormatError.format error)
@@ -61,4 +64,8 @@ type ProtocolTests() =
         let doubled = "{{source:'sample}}.md',model:{{body:{{value:'{{literal}}'}}}}}}"
         let expected = "{source:'sample}}.md',model:{body:{value:'{{literal}}'}}}"
         Assert.AreEqual(expected, JsonText.normalizeRedundantObjectDelimiters doubled)
-        Assert.AreEqual("{{source:'sample.md'} trailing}", JsonText.normalizeRedundantObjectDelimiters "{{source:'sample.md'} trailing}")
+
+        Assert.AreEqual(
+            "{{source:'sample.md'} trailing}",
+            JsonText.normalizeRedundantObjectDelimiters "{{source:'sample.md'} trailing}"
+        )

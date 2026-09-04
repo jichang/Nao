@@ -24,17 +24,23 @@ type ToolSelectionTests() =
 
     [<TestMethod>]
     member _.``selection discovers once and matches schema terms``() =
-        let generic = tool "lookup" 0 "Looks up information" "string" "string" 
-        let invoice = tool "fetch" 0 "Fetches a record" "object: invoiceNumber" "object: invoiceStatus"
+        let generic = tool "lookup" 0 "Looks up information" "string" "string"
+
+        let invoice =
+            tool "fetch" 0 "Fetches a record" "object: invoiceNumber" "object: invoiceStatus"
+
         let baseProtocol = ToolProtocol.fromTools [ generic; invoice ]
         let mutable discoveries = 0
+
         let protocol =
             { baseProtocol with
-                ListTools = fun () ->
-                    discoveries <- discoveries + 1
-                    baseProtocol.ListTools() }
+                ListTools =
+                    fun () ->
+                        discoveries <- discoveries + 1
+                        baseProtocol.ListTools() }
 
-        let result = (selector 5 0.1).SelectAsync "check invoice status" 1000 protocol |> _.Result
+        let result =
+            (selector 5 0.1).SelectAsync "check invoice status" 1000 protocol |> _.Result
 
         Assert.AreEqual(1, discoveries)
         Assert.AreEqual([ "fetch" ], result.Selected |> List.map _.Name)
@@ -44,8 +50,10 @@ type ToolSelectionTests() =
     member _.``selection is deterministic for equal scores``() =
         let alpha = tool "alpha" 0 "Handles reports" "string" "string"
         let beta = tool "beta" 0 "Handles reports" "string" "string"
+
         let select tools =
             let protocol = ToolProtocol.fromTools tools
+
             (selector 2 0.1).SelectAsync "reports" 1000 protocol
             |> fun task -> task.Result.Selected |> List.map _.Name
 

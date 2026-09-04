@@ -20,6 +20,7 @@ type LifecycleTests() =
     member _.InitializeTransitionsToReady() =
         let lc = AgentLifecycle.create ()
         let result = (AgentLifecycle.initializeAsync agentId lc).Result
+
         match result with
         | Ok initialized ->
             Assert.AreEqual(LifecycleState.Ready, initialized.State)
@@ -29,7 +30,11 @@ type LifecycleTests() =
     [<TestMethod>]
     member _.StartTransitionsToRunning() =
         let lc = AgentLifecycle.create ()
-        let initialized = (AgentLifecycle.initializeAsync agentId lc).Result |> Result.defaultWith (fun _ -> failwith "init failed")
+
+        let initialized =
+            (AgentLifecycle.initializeAsync agentId lc).Result
+            |> Result.defaultWith (fun _ -> failwith "init failed")
+
         let started = (AgentLifecycle.startAsync agentId "test input" initialized).Result
         Assert.AreEqual(LifecycleState.Running, started.State)
         Assert.AreEqual(2, started.Events.Length)
@@ -37,7 +42,11 @@ type LifecycleTests() =
     [<TestMethod>]
     member _.SuspendTransitionsToSuspended() =
         let lc = AgentLifecycle.create ()
-        let initialized = (AgentLifecycle.initializeAsync agentId lc).Result |> Result.defaultWith (fun _ -> failwith "init failed")
+
+        let initialized =
+            (AgentLifecycle.initializeAsync agentId lc).Result
+            |> Result.defaultWith (fun _ -> failwith "init failed")
+
         let started = (AgentLifecycle.startAsync agentId "input" initialized).Result
         let suspended = AgentLifecycle.suspend agentId "pausing" started
         Assert.AreEqual(LifecycleState.Suspended, suspended.State)
@@ -45,7 +54,11 @@ type LifecycleTests() =
     [<TestMethod>]
     member _.ResumeTransitionsToRunning() =
         let lc = AgentLifecycle.create ()
-        let initialized = (AgentLifecycle.initializeAsync agentId lc).Result |> Result.defaultWith (fun _ -> failwith "init failed")
+
+        let initialized =
+            (AgentLifecycle.initializeAsync agentId lc).Result
+            |> Result.defaultWith (fun _ -> failwith "init failed")
+
         let started = (AgentLifecycle.startAsync agentId "input" initialized).Result
         let suspended = AgentLifecycle.suspend agentId "pause" started
         let resumed = AgentLifecycle.resume agentId suspended
@@ -54,7 +67,11 @@ type LifecycleTests() =
     [<TestMethod>]
     member _.CompleteTransitionsToCompleted() =
         let lc = AgentLifecycle.create ()
-        let initialized = (AgentLifecycle.initializeAsync agentId lc).Result |> Result.defaultWith (fun _ -> failwith "init failed")
+
+        let initialized =
+            (AgentLifecycle.initializeAsync agentId lc).Result
+            |> Result.defaultWith (fun _ -> failwith "init failed")
+
         let started = (AgentLifecycle.startAsync agentId "input" initialized).Result
         let completed = (AgentLifecycle.completeAsync agentId "done" started).Result
         Assert.AreEqual(LifecycleState.Completed, completed.State)
@@ -62,9 +79,14 @@ type LifecycleTests() =
     [<TestMethod>]
     member _.FailTransitionsToFailed() =
         let lc = AgentLifecycle.create ()
-        let initialized = (AgentLifecycle.initializeAsync agentId lc).Result |> Result.defaultWith (fun _ -> failwith "init failed")
+
+        let initialized =
+            (AgentLifecycle.initializeAsync agentId lc).Result
+            |> Result.defaultWith (fun _ -> failwith "init failed")
+
         let started = (AgentLifecycle.startAsync agentId "input" initialized).Result
         let failed = (AgentLifecycle.failAsync agentId (exn "boom") started).Result
+
         match failed.State with
         | LifecycleState.Failed msg -> Assert.AreEqual("boom", msg)
         | _ -> Assert.Fail("Expected Failed state")
@@ -80,16 +102,22 @@ type LifecycleTests() =
         let blockHook =
             { LifecycleHook.passthrough with
                 OnBeforeInit = fun _ -> Task.FromResult(Error "blocked by policy") }
+
         let lc = AgentLifecycle.create () |> AgentLifecycle.withHooks [ blockHook ]
         let result = (AgentLifecycle.initializeAsync agentId lc).Result
+
         match result with
         | Error msg -> Assert.AreEqual("blocked by policy", msg)
         | Ok _ -> Assert.Fail("Expected Error")
 
     [<TestMethod>]
     member _.PassthroughLifecycleHookAllowsAll() =
-        let lc = AgentLifecycle.create () |> AgentLifecycle.withHooks [ LifecycleHook.passthrough ]
+        let lc =
+            AgentLifecycle.create ()
+            |> AgentLifecycle.withHooks [ LifecycleHook.passthrough ]
+
         let result = (AgentLifecycle.initializeAsync agentId lc).Result
+
         match result with
         | Ok initialized -> Assert.AreEqual(LifecycleState.Ready, initialized.State)
         | Error msg -> Assert.Fail(msg)

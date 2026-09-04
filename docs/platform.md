@@ -70,8 +70,8 @@ The current repository primarily implements the lower four layers. Knowledge, re
 |---|---|
 | `Nao.Agents` | Core agent/tool contracts and ETCLOVG harness implementation |
 | `Nao.Protocols` | Typed model-response protocols, parsing, diagnostics, and repair |
-| `Nao.Persistence` | ADO.NET and filesystem persistence and memory implementations |
-| `Nao.Providers` | Hosted and local model-provider adapters |
+| `Nao.Persistence.*` | Independently consumable infrastructure, memory, observability, and feedback implementations plus opt-in composition |
+| `Nao.Providers.*` | Independently consumable hosted and local model-provider adapters plus opt-in composition |
 | `Nao.Eval` | Evaluation cases, datasets, evaluators, runners, and reports |
 | `Nao.Runtime.Orleans` | Distributed sessions, session discovery, and workspace runtime |
 | `Nao.Runtime.Orleans.Codegen` | Orleans serialization source-generation support |

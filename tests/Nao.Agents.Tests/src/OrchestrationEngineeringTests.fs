@@ -7,14 +7,7 @@ open Nao.Agents
 
 module private TestAgent =
     let transform (id: string) (transform: string -> string) : Agent =
-        Agent.createContextual
-            id
-            id
-            id
-            0
-            []
-            AgentContract.Text
-            (fun _ input -> Task.FromResult(transform input))
+        Agent.createContextual id id id 0 [] AgentContract.Text (fun _ input -> Task.FromResult(transform input))
 
 [<TestClass>]
 type LoopEngineeringTests() =
@@ -26,8 +19,11 @@ type LoopEngineeringTests() =
               StepAsync =
                 fun _ state ->
                     Task.FromResult(
-                        if state = 2 then Complete(string state)
-                        else Continue(state + 1)) }
+                        if state = 2 then
+                            Complete(string state)
+                        else
+                            Continue(state + 1)
+                    ) }
 
         match (Loop.runAsync definition 0).Result with
         | Completed(output, iterations) ->
@@ -54,8 +50,10 @@ type LoopEngineeringTests() =
               Initialize = fun _ input -> input, 0
               StepAsync =
                 fun _ _ (input, attempts) ->
-                    if attempts = 1 then Task.FromResult(Complete(input.ToUpperInvariant()))
-                    else Task.FromResult(Continue(input, attempts + 1))
+                    if attempts = 1 then
+                        Task.FromResult(Complete(input.ToUpperInvariant()))
+                    else
+                        Task.FromResult(Continue(input, attempts + 1))
               OnLimitReached = fun (input, _) -> input }
 
         let agent =
@@ -74,7 +72,8 @@ type LoopEngineeringTests() =
 type GraphEngineeringTests() =
 
     let node (id: string) (transform: string -> string) : AgentGraphNode =
-        { Id = GraphNodeId.create id; Agent = TestAgent.transform id transform }
+        { Id = GraphNodeId.create id
+          Agent = TestAgent.transform id transform }
 
     [<TestMethod>]
     member _.GraphSelectsTheFirstMatchingBranch() =
@@ -93,14 +92,25 @@ type GraphEngineeringTests() =
                   ExecutionGraph.edge classify.Id negative.Id ]
               MaxSteps = 2 }
 
-        let accepted = ExecutionGraph.runAsync AgentContext.allowAll "yes please" graph |> fun task -> task.Result
-        let rejected = ExecutionGraph.runAsync AgentContext.allowAll "no thanks" graph |> fun task -> task.Result
+        let accepted =
+            ExecutionGraph.runAsync AgentContext.allowAll "yes please" graph
+            |> fun task -> task.Result
+
+        let rejected =
+            ExecutionGraph.runAsync AgentContext.allowAll "no thanks" graph
+            |> fun task -> task.Result
 
         match accepted, rejected with
         | Ok acceptedResult, Ok rejectedResult ->
             Assert.AreEqual("accepted:yes please", acceptedResult.Output)
             Assert.AreEqual("rejected:no thanks", rejectedResult.Output)
-            CollectionAssert.AreEqual([| "classify"; "positive" |], acceptedResult.Steps |> List.map (fun step -> GraphNodeId.value step.NodeId) |> List.toArray)
+
+            CollectionAssert.AreEqual(
+                [| "classify"; "positive" |],
+                acceptedResult.Steps
+                |> List.map (fun step -> GraphNodeId.value step.NodeId)
+                |> List.toArray
+            )
         | _ -> Assert.Fail("Expected both graph branches to complete.")
 
     [<TestMethod>]
@@ -124,8 +134,12 @@ type GraphEngineeringTests() =
 
     [<TestMethod>]
     member _.LinearGraphPreservesPipelineBehavior() =
-        let stages = [ TestAgent.transform "trim" (fun value -> value.Trim()); TestAgent.transform "decorate" (fun value -> "[" + value + "]") ]
+        let stages =
+            [ TestAgent.transform "trim" (fun value -> value.Trim())
+              TestAgent.transform "decorate" (fun value -> "[" + value + "]") ]
+
         let graph = ExecutionGraph.linear stages |> Option.get
+
         let output =
             match (ExecutionGraph.runAsync AgentContext.allowAll " value " graph).Result with
             | Ok result -> result.Output

@@ -43,8 +43,8 @@ The current implementation provides agent, ETCLOVG harness, persistence, provide
 |---|---|
 | `Nao.Agents` | [Agent, tool, memory, governance, observability, and harness APIs](reference/nao-agents.html) |
 | `Nao.Protocols` | [Response protocol APIs](reference/nao-protocols.html) |
-| `Nao.Persistence` | [Persistence and memory implementation APIs](reference/nao-persistence.html) |
-| `Nao.Providers` | [Model provider APIs](reference/nao-providers.html) |
+| `Nao.Persistence.*` | Persistence infrastructure, memory, observability, feedback, and [composition APIs](reference/nao-persistence.html) |
+| `Nao.Providers.*` | Independent model adapters and [composition APIs](reference/nao-providers.html) |
 | `Nao.Eval` | [Evaluation APIs](reference/nao-eval.html) |
 | `Nao.Runtime.Orleans` | [Distributed runtime APIs](reference/nao-runtime-orleans.html) |
 

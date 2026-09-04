@@ -3,8 +3,15 @@
     <Project Path="src/Nao.Agents/Nao.Agents.fsproj" />
     <Project Path="src/Nao.Eval/Nao.Eval.fsproj" />
     <Project Path="src/Nao.Persistence/Nao.Persistence.fsproj" />
+    <Project Path="src/Nao.Persistence.Feedback/Nao.Persistence.Feedback.fsproj" />
+    <Project Path="src/Nao.Persistence.Infrastructure/Nao.Persistence.Infrastructure.fsproj" />
+    <Project Path="src/Nao.Persistence.Memory/Nao.Persistence.Memory.fsproj" />
+    <Project Path="src/Nao.Persistence.Observability/Nao.Persistence.Observability.fsproj" />
     <Project Path="src/Nao.Protocols/Nao.Protocols.fsproj" />
     <Project Path="src/Nao.Providers/Nao.Providers.fsproj" />
+    <Project Path="src/Nao.Providers.Anthropic/Nao.Providers.Anthropic.fsproj" />
+    <Project Path="src/Nao.Providers.Ollama/Nao.Providers.Ollama.fsproj" />
+    <Project Path="src/Nao.Providers.OpenAICompatible/Nao.Providers.OpenAICompatible.fsproj" />
     <Project Path="src/Nao.Runtime.Orleans/Nao.Runtime.Orleans.fsproj" />
     <Project Path="src/Nao.Runtime.Orleans.Codegen/Nao.Runtime.Orleans.Codegen.csproj" />
   </Folder>

@@ -8,17 +8,29 @@ open Orleans.Runtime
 /// A lightweight entry tracking a session in the directory
 [<GenerateSerializer>]
 type SessionDirectoryEntry() =
-    [<Id(0u)>] member val SessionId: string = "" with get, set
-    [<Id(1u)>] member val AgentName: string = "" with get, set
-    [<Id(2u)>] member val Title: string = "" with get, set
-    [<Id(3u)>] member val CreatedAt: DateTimeOffset = DateTimeOffset.MinValue with get, set
-    [<Id(4u)>] member val LastActiveAt: DateTimeOffset = DateTimeOffset.MinValue with get, set
-    [<Id(5u)>] member val IsActive: bool = true with get, set
+    [<Id(0u)>]
+    member val SessionId: string = "" with get, set
+
+    [<Id(1u)>]
+    member val AgentName: string = "" with get, set
+
+    [<Id(2u)>]
+    member val Title: string = "" with get, set
+
+    [<Id(3u)>]
+    member val CreatedAt: DateTimeOffset = DateTimeOffset.MinValue with get, set
+
+    [<Id(4u)>]
+    member val LastActiveAt: DateTimeOffset = DateTimeOffset.MinValue with get, set
+
+    [<Id(5u)>]
+    member val IsActive: bool = true with get, set
 
 /// Persistent state for the session directory grain
 [<GenerateSerializer>]
 type SessionDirectoryState() =
-    [<Id(0u)>] member val Entries: ResizeArray<SessionDirectoryEntry> = ResizeArray() with get, set
+    [<Id(0u)>]
+    member val Entries: ResizeArray<SessionDirectoryEntry> = ResizeArray() with get, set
 
 /// Per-user session directory. Grain key = userId.
 /// Tracks which sessions exist so they can be enumerated after restart.
@@ -48,9 +60,7 @@ type ISessionDirectoryGrain =
 
 /// Per-user session directory grain implementation
 type SessionDirectoryGrain
-    (
-        [<PersistentState("sessionDirectory", "sessionStore")>] persistentState: IPersistentState<SessionDirectoryState>
-    ) =
+    ([<PersistentState("sessionDirectory", "sessionStore")>] persistentState: IPersistentState<SessionDirectoryState>) =
     inherit Grain()
 
     interface ISessionDirectoryGrain with
@@ -60,6 +70,7 @@ type SessionDirectoryGrain
                 let exists =
                     persistentState.State.Entries
                     |> Seq.exists (fun e -> e.SessionId = entry.SessionId)
+
                 if not exists then
                     persistentState.State.Entries.Add(entry)
                     do! persistentState.WriteStateAsync()
@@ -68,13 +79,15 @@ type SessionDirectoryGrain
         member _.TouchAsync (sessionId: string) (title: string) =
             task {
                 let entry =
-                    persistentState.State.Entries
-                    |> Seq.tryFind (fun e -> e.SessionId = sessionId)
+                    persistentState.State.Entries |> Seq.tryFind (fun e -> e.SessionId = sessionId)
+
                 match entry with
                 | Some e ->
                     e.LastActiveAt <- DateTimeOffset.UtcNow
+
                     if not (System.String.IsNullOrEmpty title) then
                         e.Title <- title
+
                     do! persistentState.WriteStateAsync()
                 | None -> ()
             }
@@ -82,8 +95,8 @@ type SessionDirectoryGrain
         member _.MarkInactiveAsync(sessionId: string) =
             task {
                 let entry =
-                    persistentState.State.Entries
-                    |> Seq.tryFind (fun e -> e.SessionId = sessionId)
+                    persistentState.State.Entries |> Seq.tryFind (fun e -> e.SessionId = sessionId)
+
                 match entry with
                 | Some e ->
                     e.IsActive <- false
@@ -94,8 +107,8 @@ type SessionDirectoryGrain
         member _.MarkActiveAsync(sessionId: string) =
             task {
                 let entry =
-                    persistentState.State.Entries
-                    |> Seq.tryFind (fun e -> e.SessionId = sessionId)
+                    persistentState.State.Entries |> Seq.tryFind (fun e -> e.SessionId = sessionId)
+
                 match entry with
                 | Some e ->
                     e.IsActive <- true
@@ -109,6 +122,7 @@ type SessionDirectoryGrain
                 let idx =
                     persistentState.State.Entries
                     |> Seq.tryFindIndex (fun e -> e.SessionId = sessionId)
+
                 match idx with
                 | Some i ->
                     persistentState.State.Entries.RemoveAt(i)

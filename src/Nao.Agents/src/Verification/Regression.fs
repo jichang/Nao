@@ -5,25 +5,29 @@ open System.Threading.Tasks
 
 /// Regression detection: compare current trace against baseline
 type RegressionResult =
-    { /// Whether regression was detected
-      IsRegression: bool
-      /// Specific regressions found
-      Regressions: RegressionItem list
-      /// Baseline trace used for comparison
-      BaselineTraceId: Guid option }
+    {
+        /// Whether regression was detected
+        IsRegression: bool
+        /// Specific regressions found
+        Regressions: RegressionItem list
+        /// Baseline trace used for comparison
+        BaselineTraceId: Guid option
+    }
 
 /// A single regression item
 and RegressionItem =
-    { /// What regressed
-      Description: string
-      /// Category of regression
-      Category: RegressionCategory
-      /// Severity (0.0 to 1.0)
-      Severity: float
-      /// Baseline value
-      BaselineValue: string
-      /// Current value
-      CurrentValue: string }
+    {
+        /// What regressed
+        Description: string
+        /// Category of regression
+        Category: RegressionCategory
+        /// Severity (0.0 to 1.0)
+        Severity: float
+        /// Baseline value
+        BaselineValue: string
+        /// Current value
+        CurrentValue: string
+    }
 
 /// Categories of regression
 and [<RequireQualifiedAccess>] RegressionCategory =
@@ -35,12 +39,18 @@ and [<RequireQualifiedAccess>] RegressionCategory =
 
 /// Functional execution-trace persistence operations for regression comparison.
 type TraceStore =
-        { /// Save an execution trace
-            SaveAsync: ExecutionTrace -> Task<unit>
-            /// Get the most recent successful trace for an agent + task pattern
-            GetBaselineAsync: string -> string -> Task<ExecutionTrace option>
-            /// Get all traces for an agent
-            GetTracesAsync: string -> int -> Task<ExecutionTrace list> }
+    {
+        /// Save an execution trace
+        SaveAsync: ExecutionTrace -> Task<unit>
+        /// Get the most recent successful trace for an agent + task pattern
+        GetBaselineAsync: string -> string -> Task<ExecutionTrace option>
+        /// Get all traces for an agent
+        GetTracesAsync: string -> int -> Task<ExecutionTrace list>
+        /// Delete every trace owned by an agent
+        DeleteOwnerAsync: string -> Task<Result<int, PlatformFailure>>
+        /// Delete traces owned by an agent that precede a retention cutoff
+        DeleteExpiredAsync: string -> DateTimeOffset -> Task<Result<int, PlatformFailure>>
+    }
 
 module Regression =
 
@@ -51,6 +61,7 @@ module Regression =
         // Check step count regression (significantly more steps = potential regression)
         let baselineSteps = baseline.Steps.Length
         let currentSteps = current.Steps.Length
+
         if currentSteps > baselineSteps * 2 then
             regressions.Add
                 { Description = "Step count significantly increased"
@@ -64,10 +75,12 @@ module Regression =
             match baseline.CompletedAt with
             | Some c -> (c - baseline.StartedAt).TotalMilliseconds
             | None -> 0.0
+
         let currentDuration =
             match current.CompletedAt with
             | Some c -> (c - current.StartedAt).TotalMilliseconds
             | None -> 0.0
+
         if currentDuration > baselineDuration * 2.0 && baselineDuration > 0.0 then
             regressions.Add
                 { Description = "Execution duration significantly increased"

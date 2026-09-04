@@ -15,13 +15,21 @@ module PermissionDenied =
     let format access hint =
         let kind, resource = kindAndResource access
         let message = sprintf "Permission denied: access to %s was not granted." resource
+
         match hint with
         | Some value ->
             JsonSerializer.Serialize
-                {| error = "permission_denied"; kind = kind; resource = resource; message = message; hint = value |}
+                {| error = "permission_denied"
+                   kind = kind
+                   resource = resource
+                   message = message
+                   hint = value |}
         | None ->
             JsonSerializer.Serialize
-                {| error = "permission_denied"; kind = kind; resource = resource; message = message |}
+                {| error = "permission_denied"
+                   kind = kind
+                   resource = resource
+                   message = message |}
 
 /// Executable, discoverable tool value.
 type Tool =
@@ -50,31 +58,66 @@ module Tool =
                 try
                     match input.Decode rawInput with
                     | Error reason ->
-                        return Error { Kind = ToolFailureKind.InputContract; Message = reason; Retryable = true }
+                        return
+                            Error
+                                { Kind = ToolFailureKind.InputContract
+                                  Message = reason
+                                  Retryable = true }
                     | Ok decodedInput ->
                         let mutable denied = None
+
                         for access in permissions do
                             if denied.IsNone then
-                                let! allowed = context.RequestPermission access (sprintf "Tool '%s' requires this access." name) false
-                                if not allowed then denied <- Some access
+                                let! allowed =
+                                    context.RequestPermission
+                                        access
+                                        (sprintf "Tool '%s' requires this access." name)
+                                        false
+
+                                if not allowed then
+                                    denied <- Some access
+
                         match denied with
                         | Some access ->
-                            return Error { Kind = ToolFailureKind.PermissionDenied; Message = PermissionDenied.format access None; Retryable = false }
+                            return
+                                Error
+                                    { Kind = ToolFailureKind.PermissionDenied
+                                      Message = PermissionDenied.format access None
+                                      Retryable = false }
                         | None ->
                             match! operation.ExecuteAsync context decodedInput with
-                            | Error (ToolExecError.InvalidInput reason) ->
-                                return Error { Kind = ToolFailureKind.InputContract; Message = reason; Retryable = true }
-                            | Error (ToolExecError.PermissionDenied reason) ->
-                                return Error { Kind = ToolFailureKind.PermissionDenied; Message = reason; Retryable = false }
-                            | Error (ToolExecError.Failed reason) ->
-                                return Error { Kind = ToolFailureKind.Execution; Message = reason; Retryable = false }
+                            | Error(ToolExecError.InvalidInput reason) ->
+                                return
+                                    Error
+                                        { Kind = ToolFailureKind.InputContract
+                                          Message = reason
+                                          Retryable = true }
+                            | Error(ToolExecError.PermissionDenied reason) ->
+                                return
+                                    Error
+                                        { Kind = ToolFailureKind.PermissionDenied
+                                          Message = reason
+                                          Retryable = false }
+                            | Error(ToolExecError.Failed reason) ->
+                                return
+                                    Error
+                                        { Kind = ToolFailureKind.Execution
+                                          Message = reason
+                                          Retryable = false }
                             | Ok result ->
                                 match output.Encode result with
                                 | Ok encoded -> return Ok encoded
                                 | Error reason ->
-                                    return Error { Kind = ToolFailureKind.OutputContract; Message = reason; Retryable = false }
+                                    return
+                                        Error
+                                            { Kind = ToolFailureKind.OutputContract
+                                              Message = reason
+                                              Retryable = false }
                 with ex ->
-                    return Error { Kind = ToolFailureKind.Execution; Message = ex.Message; Retryable = false }
+                    return
+                        PlatformFailure.fromException PlatformFailureBoundary.Tool None ex
+                        |> ToolFailure.ofPlatformFailure
+                        |> Error
             }
 
         { Name = name
@@ -101,7 +144,8 @@ module Tool =
 
     /// Renders a tool's metadata and explicit transport schemas for a model prompt.
     let render tool =
-        sprintf "  %s (priority %d): %s\n  Input: %s\n  Output: %s"
+        sprintf
+            "  %s (priority %d): %s\n  Input: %s\n  Output: %s"
             tool.Name
             tool.Priority
             tool.Description

@@ -5,24 +5,16 @@ open System.Threading.Tasks
 
 /// An episode represents a discrete event in the agent's experience
 type Episode =
-    { Id: string
-      /// What happened
+    { Owner: string
+      Id: string
       Action: string
-      /// The outcome/observation
       Observation: string
-      /// Context at the time (e.g., what task was being performed)
       Context: string
-      /// Whether the outcome was successful
       Success: bool
-      /// Relevance/importance score
       Importance: float
-      /// When the episode occurred
       Timestamp: DateTimeOffset
-      /// Tags for categorization
       Tags: string list
-      /// Emotional valence: positive=reward, negative=punishment
       Valence: float
-      /// Linked episode IDs (causal chain)
       LinkedEpisodes: string list }
 
 /// Query for retrieving episodes
@@ -43,15 +35,11 @@ type EpisodeQuery =
 
 /// Functional episodic memory — stores sequences of experiences.
 type EpisodicMemory =
-        { /// Record a new episode
-            RecordAsync: Episode -> Task<unit>
-            /// Query episodes
-            QueryAsync: EpisodeQuery -> Task<Episode list>
-            /// Link two episodes (causal or temporal relationship)
-            LinkAsync: string -> string -> Task<unit>
-            /// Get the full episode chain starting from a given episode
-            GetChainAsync: string -> Task<Episode list>
-            /// Compute lessons learned from similar episodes (pattern recognition)
-            SynthesizeAsync: string -> Task<string list>
-            /// Forget episodes below importance threshold
-            ForgetBelowAsync: float -> Task<int> }
+    { RecordAsync: Episode -> Task<unit>
+      QueryAsync: string -> EpisodeQuery -> Task<Episode list>
+      LinkAsync: string -> string -> string -> Task<unit>
+      GetChainAsync: string -> string -> Task<Episode list>
+      SynthesizeAsync: string -> string -> Task<string list>
+      ForgetBelowAsync: string -> float -> Task<int>
+      DeleteOwnerAsync: string -> Task<Result<int, PlatformFailure>>
+      DeleteExpiredAsync: string -> DateTimeOffset -> Task<Result<int, PlatformFailure>> }

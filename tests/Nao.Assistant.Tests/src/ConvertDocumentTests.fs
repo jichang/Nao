@@ -24,7 +24,9 @@ type ConvertDocumentTests() =
     /// before the module is ever touched.
     [<AssemblyInitialize>]
     static member Init(_ctx: TestContext) =
-        let dataDir = Path.Combine(Path.GetTempPath(), "nao-convert-tests", Guid.NewGuid().ToString("N"))
+        let dataDir =
+            Path.Combine(Path.GetTempPath(), "nao-convert-tests", Guid.NewGuid().ToString("N"))
+
         Environment.SetEnvironmentVariable("NAO_DATA_DIR", dataDir)
         workspace <- Path.Combine(dataDir, "workspace")
         Directory.CreateDirectory workspace |> ignore
@@ -33,15 +35,20 @@ type ConvertDocumentTests() =
         File.WriteAllText(Path.Combine(workspace, name), content)
 
     member private _.RunTool (tool: Tool) (input: string) =
-        match tool.RunAsync AgentContext.allowAll input |> fun task -> task.GetAwaiter().GetResult() with
+        match
+            tool.RunAsync AgentContext.allowAll input
+            |> fun task -> task.GetAwaiter().GetResult()
+        with
         | Ok output -> output
-        | Error failure -> Assert.Fail(failure.Message); ""
+        | Error failure ->
+            Assert.Fail(failure.Message)
+            ""
 
-    member private this.Convert (input: string) =
+    member private this.Convert(input: string) =
         let json = this.RunTool AssistantTools.convertDocument input
         JsonDocument.Parse(json).RootElement
 
-    member private this.WriteDocument (input: string) =
+    member private this.WriteDocument(input: string) =
         let json = this.RunTool AssistantTools.writeDocument input
         JsonDocument.Parse(json).RootElement
 
@@ -97,7 +104,9 @@ type ConvertDocumentTests() =
 
     [<TestMethod>]
     member this.WriteDocument_CreatesDesignedNaoDocAndConvertsToHtml() =
-        let request = """{"target":"designed","document":{"Schema":"nao-doc/1","Metadata":{"Title":"Designed Document","Authors":[],"Language":null,"Created":null,"Modified":null,"Properties":{}},"Resources":[],"Body":{"Case":"Fluid","Fields":[[{"Case":"Heading","Fields":[1,[{"Case":"Run","Fields":["Designed Document",{"FontFamily":"Aptos Display","FontSize":{"Value":24,"Unit":{"Case":"Pt"}},"Weight":{"Case":"Bold"},"Style":null,"Decorations":[],"Color":null,"Background":null,"Features":{}}]}]]},{"Case":"Heading","Fields":[2,[{"Case":"Run","Fields":["First Section",{"FontFamily":null,"FontSize":{"Value":16,"Unit":{"Case":"Pt"}},"Weight":null,"Style":null,"Decorations":[],"Color":null,"Background":null,"Features":{}}]}]]},{"Case":"Paragraph","Fields":[[{"Case":"Run","Fields":["This section was generated from requirements.",{"FontFamily":null,"FontSize":null,"Weight":null,"Style":null,"Decorations":[],"Color":null,"Background":null,"Features":{}}]}],null]}]]},"DefaultPage":null}}"""
+        let request =
+            """{"target":"designed","document":{"Schema":"nao-doc/1","Metadata":{"Title":"Designed Document","Authors":[],"Language":null,"Created":null,"Modified":null,"Properties":{}},"Resources":[],"Body":{"Case":"Fluid","Fields":[[{"Case":"Heading","Fields":[1,[{"Case":"Run","Fields":["Designed Document",{"FontFamily":"Aptos Display","FontSize":{"Value":24,"Unit":{"Case":"Pt"}},"Weight":{"Case":"Bold"},"Style":null,"Decorations":[],"Color":null,"Background":null,"Features":{}}]}]]},{"Case":"Heading","Fields":[2,[{"Case":"Run","Fields":["First Section",{"FontFamily":null,"FontSize":{"Value":16,"Unit":{"Case":"Pt"}},"Weight":null,"Style":null,"Decorations":[],"Color":null,"Background":null,"Features":{}}]}]]},{"Case":"Paragraph","Fields":[[{"Case":"Run","Fields":["This section was generated from requirements.",{"FontFamily":null,"FontSize":null,"Weight":null,"Style":null,"Decorations":[],"Color":null,"Background":null,"Features":{}}]}],null]}]]},"DefaultPage":null}}"""
+
         let result = this.WriteDocument request
         let modelPath = Path.Combine(workspace, "designed.naodoc")
         Assert.AreEqual(SignedByte.Documents.SignedByteDoc.MediaType, result.GetProperty("mediaType").GetString())
@@ -114,7 +123,10 @@ type ConvertDocumentTests() =
 
     [<TestMethod>]
     member this.RichTextSource_CanConvertToPdf() =
-        this.WriteSource "rich-notes.rtf" @"{\rtf1\ansi\deff0{\fonttbl{\f0 Calibri;}}\fs24 Rich Notes\par A paragraph with \b bold text\b0.\par}"
+        this.WriteSource
+            "rich-notes.rtf"
+            @"{\rtf1\ansi\deff0{\fonttbl{\f0 Calibri;}}\fs24 Rich Notes\par A paragraph with \b bold text\b0.\par}"
+
         let result = this.Convert """{"source":"rich-notes.rtf","target":"pdf"}"""
         let converted = result.GetProperty("converted").GetString()
         Assert.AreEqual(SignedByte.Documents.Rtf.MediaType, result.GetProperty("from").GetString())
@@ -127,6 +139,4 @@ type ConvertDocumentTests() =
         this.WriteSource "doc.md" "# Doc\n"
         let result = this.Convert """{"source":"doc.md","target":"nonsense"}"""
         // An unknown target must surface an error rather than silently degrading.
-        Assert.IsTrue(
-            result.TryGetProperty("error") |> fst,
-            "Expected an error for an unsupported target format")
+        Assert.IsTrue(result.TryGetProperty("error") |> fst, "Expected an error for an unsupported target format")

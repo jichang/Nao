@@ -19,7 +19,12 @@ type LocalizationTests() =
     [<TestMethod>]
     member _.Every_language_has_a_distinct_display_name() =
         let names = Localization.all |> List.map Localization.displayName
-        Assert.IsTrue(names |> List.forall (fun n -> not (System.String.IsNullOrWhiteSpace n)), "display names must be non-empty")
+
+        Assert.IsTrue(
+            names |> List.forall (fun n -> not (System.String.IsNullOrWhiteSpace n)),
+            "display names must be non-empty"
+        )
+
         Assert.AreEqual(names.Length, (names |> List.distinct |> List.length), "display names must be unique")
 
     [<TestMethod>]
@@ -27,14 +32,15 @@ type LocalizationTests() =
         // Reflect over the Strings record so the test fails automatically if a new field is
         // added without translations in every language.
         let fields = FSharpType.GetRecordFields(typeof<Localization.Strings>)
+
         for lang in Localization.all do
             Localization.apply lang
             let strings = box (Localization.current ())
+
             for f in fields do
                 let value = f.GetValue(strings) :?> string
-                Assert.IsFalse(
-                    System.String.IsNullOrWhiteSpace value,
-                    sprintf "%A.%s is empty" lang f.Name)
+                Assert.IsFalse(System.String.IsNullOrWhiteSpace value, sprintf "%A.%s is empty" lang f.Name)
+
         Localization.apply Localization.English
 
     [<TestMethod>]

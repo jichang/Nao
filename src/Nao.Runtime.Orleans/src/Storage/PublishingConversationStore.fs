@@ -18,16 +18,31 @@ module PublishingConversationStore =
         let steps =
             m.Steps
             |> Array.map (fun s ->
-                ({ Kind = s.Kind; Title = s.Title; Input = s.Input; Output = s.Output } : ConversationStep))
+                ({ Kind = s.Kind
+                   Title = s.Title
+                   Input = s.Input
+                   Output = s.Output }
+                : ConversationStep))
             |> Array.toList
+
         let data =
-            if isNull (box m.Data) then []
+            if isNull (box m.Data) then
+                []
             else
                 m.Data
                 |> Array.map (fun value ->
-                    { AgentContextData.Kind = value.Kind; ContentType = value.ContentType; Payload = value.Payload })
+                    { AgentContextData.Kind = value.Kind
+                      ContentType = value.ContentType
+                      Payload = value.Payload })
                 |> Array.toList
-        { Role = m.Role; Content = m.Content; Timestamp = m.Timestamp; TurnId = m.TurnId; Steps = steps; Attachments = m.Attachments |> Array.toList; Data = data }
+
+        { Role = m.Role
+          Content = m.Content
+          Timestamp = m.Timestamp
+          TurnId = m.TurnId
+          Steps = steps
+          Attachments = m.Attachments |> Array.toList
+          Data = data }
 
     /// Build the event scope for a conversation write. The action id is the turn id carried
     /// by the messages (empty when none) so each write is attributed to the turn that
@@ -35,56 +50,86 @@ module PublishingConversationStore =
     let buildScope (sessionId: string) (conversationName: string) (messages: PersistedMessage array) : EventScope =
         let turnId =
             messages
-            |> Array.tryPick (fun m -> if String.IsNullOrEmpty m.TurnId then None else Some m.TurnId)
+            |> Array.tryPick (fun m ->
+                if String.IsNullOrEmpty m.TurnId then
+                    None
+                else
+                    Some m.TurnId)
             |> Option.defaultValue ""
+
         let userId, sid =
             match sessionId.IndexOf('/') with
             | i when i >= 0 -> sessionId.Substring(0, i), sessionId.Substring(i + 1)
             | _ -> sessionId, sessionId
+
         EventScope.Create(userId, sid, conversationName, "", turnId, sessionId)
 
     let create (bus: EventBus) (inner: ConversationStore) : ConversationStore =
         let appendAsync (sessionId: string) (conversationName: string) (messages: PersistedMessage array) =
             task {
                 do! inner.AppendAsync sessionId conversationName messages
+
                 if messages.Length > 0 then
-                    let signal = MessagesAppended(conversationName, messages |> Array.map toMessage |> Array.toList)
-                    do! EventBus.publishAsync (ConversationCaptured(buildScope sessionId conversationName messages, signal)) bus
+                    let signal =
+                        MessagesAppended(conversationName, messages |> Array.map toMessage |> Array.toList)
+
+                    do!
+                        EventBus.publishAsync
+                            (ConversationCaptured(buildScope sessionId conversationName messages, signal))
+                            bus
             }
             :> Task
 
         let saveAsync (sessionId: string) (conversationName: string) (messages: PersistedMessage array) =
             task {
                 do! inner.SaveAsync sessionId conversationName messages
-                let signal = ConversationSaved(conversationName, messages |> Array.map toMessage |> Array.toList)
-                do! EventBus.publishAsync (ConversationCaptured(buildScope sessionId conversationName messages, signal)) bus
+
+                let signal =
+                    ConversationSaved(conversationName, messages |> Array.map toMessage |> Array.toList)
+
+                do!
+                    EventBus.publishAsync
+                        (ConversationCaptured(buildScope sessionId conversationName messages, signal))
+                        bus
             }
             :> Task
 
         let loadAsync (sessionId: string) (conversationName: string) =
             inner.LoadAsync sessionId conversationName
 
-        let listConversationsAsync (sessionId: string) =
-            inner.ListConversationsAsync sessionId
+        let listConversationsAsync (sessionId: string) = inner.ListConversationsAsync sessionId
 
         let listSessionsAsync () = inner.ListSessionsAsync()
 
         let deleteConversationAsync (sessionId: string) (conversationName: string) =
             task {
                 do! inner.DeleteConversationAsync sessionId conversationName
-                do! (EventBus.publishAsync
+
+                do!
+                    (EventBus.publishAsync
                         (ConversationCaptured(
                             buildScope sessionId conversationName [||],
-                            ConversationDeleted conversationName)) bus)
+                            ConversationDeleted conversationName
+                        ))
+                        bus)
             }
             :> Task
 
         let deleteSessionAsync (sessionId: string) =
             task {
                 do! inner.DeleteSessionAsync sessionId
-                do! (EventBus.publishAsync
-                    (ConversationCaptured(buildScope sessionId "" [||], SessionConversationsDeleted)) bus)
+
+                do!
+                    (EventBus.publishAsync
+                        (ConversationCaptured(buildScope sessionId "" [||], SessionConversationsDeleted))
+                        bus)
             }
             :> Task
 
-        { AppendAsync = appendAsync; SaveAsync = saveAsync; LoadAsync = loadAsync; ListConversationsAsync = listConversationsAsync; ListSessionsAsync = listSessionsAsync; DeleteConversationAsync = deleteConversationAsync; DeleteSessionAsync = deleteSessionAsync }
+        { AppendAsync = appendAsync
+          SaveAsync = saveAsync
+          LoadAsync = loadAsync
+          ListConversationsAsync = listConversationsAsync
+          ListSessionsAsync = listSessionsAsync
+          DeleteConversationAsync = deleteConversationAsync
+          DeleteSessionAsync = deleteSessionAsync }

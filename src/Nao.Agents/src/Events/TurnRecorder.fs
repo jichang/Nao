@@ -11,12 +11,18 @@ open System.Threading.Tasks
 /// The orchestrator publishes `ToolInvoked`/`ToolCompleted` (and
 /// `SubAgentInvoked`/`SubAgentCompleted`) pairs sequentially, so we match each result
 /// to the earliest still-unmatched invocation of the same name (FIFO).
-type TurnRecorder = { TurnId: string; Consumer: EventConsumer; Steps: unit -> TurnStep list; Data: unit -> AgentContextData list; Snapshot: unit -> TurnRecord }
+type TurnRecorder =
+    { TurnId: string
+      Consumer: EventConsumer
+      Steps: unit -> TurnStep list
+      Data: unit -> AgentContextData list
+      Snapshot: unit -> TurnRecord }
 
 module TurnRecorder =
 
-    let create (turnId: string, sessionId: string, userId: string,
-                workspaceKey: string, agentName: string, input: string) =
+    let create
+        (turnId: string, sessionId: string, userId: string, workspaceKey: string, agentName: string, input: string)
+        =
 
         let sync = obj ()
         let toolCalls = ResizeArray<ToolCallRecord>()
@@ -37,18 +43,16 @@ module TurnRecorder =
 
         let dequeue (table: Dictionary<string, Queue<string>>) (key: string) : string option =
             match table.TryGetValue key with
-            | true, q when q.Count > 0 -> Some (q.Dequeue())
+            | true, q when q.Count > 0 -> Some(q.Dequeue())
             | _ -> None
 
         let getSteps () : TurnStep list =
             lock sync (fun () ->
                 steps
-                |> Seq.filter (fun s ->
-                    not (s.Kind = "reasoning" && s.Output.Trim() = output.Trim()))
+                |> Seq.filter (fun s -> not (s.Kind = "reasoning" && s.Output.Trim() = output.Trim()))
                 |> List.ofSeq)
 
-        let getData () : AgentContextData list =
-            lock sync (fun () -> List.ofSeq data)
+        let getData () : AgentContextData list = lock sync (fun () -> List.ofSeq data)
 
         let snapshot () : TurnRecord =
             lock sync (fun () ->
@@ -67,25 +71,48 @@ module TurnRecorder =
         let consumer =
             EventConsumer.create (fun (evt: NaoEvent) ->
                 match evt with
-                | NaoEvent.TurnProgress (scope, signal) when scope.ActionId = turnId ->
+                | NaoEvent.TurnProgress(scope, signal) when scope.ActionId = turnId ->
                     lock sync (fun () ->
                         match signal with
                         | ReasoningAdded content when not (String.IsNullOrWhiteSpace content) ->
                             // Each round's assistant output: the orchestrator's reasoning / decision.
-                            steps.Add { Kind = "reasoning"; Title = "Reasoning"; Input = ""; Output = content }
+                            steps.Add
+                                { Kind = "reasoning"
+                                  Title = "Reasoning"
+                                  Input = ""
+                                  Output = content }
                         | ReasoningAdded _ -> ()
-                        | ToolInvoked (name, input) -> enqueue pendingTools name input
-                        | ToolCompleted (name, result) ->
+                        | ToolInvoked(name, input) -> enqueue pendingTools name input
+                        | ToolCompleted(name, result) ->
                             let toolInput = dequeue pendingTools name |> Option.defaultValue ""
-                            toolCalls.Add { Name = name; Input = toolInput; Output = result }
-                            steps.Add { Kind = "tool"; Title = name; Input = toolInput; Output = result }
-                        | SubAgentInvoked (name, input) -> enqueue pendingAgents name input
-                        | SubAgentCompleted (name, result) ->
+
+                            toolCalls.Add
+                                { Name = name
+                                  Input = toolInput
+                                  Output = result }
+
+                            steps.Add
+                                { Kind = "tool"
+                                  Title = name
+                                  Input = toolInput
+                                  Output = result }
+                        | SubAgentInvoked(name, input) -> enqueue pendingAgents name input
+                        | SubAgentCompleted(name, result) ->
                             let agentInput = dequeue pendingAgents name |> Option.defaultValue ""
-                            subAgentCalls.Add { Name = name; Input = agentInput; Output = result }
-                            steps.Add { Kind = "agent"; Title = name; Input = agentInput; Output = result }
+
+                            subAgentCalls.Add
+                                { Name = name
+                                  Input = agentInput
+                                  Output = result }
+
+                            steps.Add
+                                { Kind = "agent"
+                                  Title = name
+                                  Input = agentInput
+                                  Output = result }
                         | ToolDataPublished value -> data.Add value
                         | AnswerProduced answer -> output <- answer)
+
                     Task.CompletedTask
                 | _ -> Task.CompletedTask)
 
@@ -95,6 +122,6 @@ module TurnRecorder =
           Data = getData
           Snapshot = snapshot }
 
-    let steps recorder = recorder.Steps ()
-    let data recorder = recorder.Data ()
-    let snapshot recorder = recorder.Snapshot ()
+    let steps recorder = recorder.Steps()
+    let data recorder = recorder.Data()
+    let snapshot recorder = recorder.Snapshot()

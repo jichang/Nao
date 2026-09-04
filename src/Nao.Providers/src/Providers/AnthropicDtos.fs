@@ -94,7 +94,8 @@ type AnthropicStreamEventDto() =
 
 [<RequireQualifiedAccess>]
 module internal AnthropicDto =
-    let options = JsonSerializerOptions(DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)
+    let options =
+        JsonSerializerOptions(DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)
 
     let serializeRequest model maxTokens temperature streaming systemPrompt messages stopSequences =
         let messageDtos =
@@ -104,6 +105,7 @@ module internal AnthropicDto =
                 message.Role <- role
                 message.Content <- content
                 message)
+
         let request = AnthropicRequestDto()
         request.Model <- model
         request.MaxTokens <- maxTokens

@@ -16,12 +16,16 @@ module InMemoryEventBus =
 
         let unsubscribe consumer =
             lock gate (fun () ->
-                let index = consumers.FindIndex(fun candidate -> EventConsumer.sameIdentity candidate consumer)
-                if index >= 0 then consumers.RemoveAt index)
+                let index =
+                    consumers.FindIndex(fun candidate -> EventConsumer.sameIdentity candidate consumer)
+
+                if index >= 0 then
+                    consumers.RemoveAt index)
 
         let publishAsync (evt: NaoEvent) : Task =
             task {
                 let snapshot = lock gate (fun () -> consumers.ToArray())
+
                 for c in snapshot do
                     try
                         do! EventConsumer.handleAsync evt c
@@ -29,6 +33,7 @@ module InMemoryEventBus =
                         // Isolate consumers: a storage strategy failing must not abort the
                         // producer's turn. (No logger in this layer; swallow by design.)
                         ()
-            } :> Task
+            }
+            :> Task
 
         EventBus.create publishAsync subscribe unsubscribe

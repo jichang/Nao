@@ -38,14 +38,23 @@ type ResourceLimitsTests() =
     [<TestMethod>]
     member _.CheckReturnsSpecificLimitExceeded() =
         let limits = ResourceLimits.Constrained 60 10 100
-        let usage = { ResourceUsage.Zero with TotalTokens = 101 }
+
+        let usage =
+            { ResourceUsage.Zero with
+                TotalTokens = 101 }
+
         let result = ResourceUsage.check limits usage
         Assert.AreEqual(Some LimitExceeded.TotalTokens, result)
 
     [<TestMethod>]
     member _.CheckReturnsNoneWhenWithinLimits() =
         let limits = ResourceLimits.Constrained 60 10 5000
-        let usage = { ResourceUsage.Zero with LlmCalls = 5; TotalTokens = 2000 }
+
+        let usage =
+            { ResourceUsage.Zero with
+                LlmCalls = 5
+                TotalTokens = 2000 }
+
         let result = ResourceUsage.check limits usage
         Assert.AreEqual(None, result)
 
@@ -92,7 +101,11 @@ type SandboxTests() =
     [<TestMethod>]
     member _.CheckLimitsDetectsExceeded() =
         let limits = ResourceLimits.Constrained 60 1 5000
-        let config = { SandboxConfig.Default with Limits = limits }
+
+        let config =
+            { SandboxConfig.Default with
+                Limits = limits }
+
         let ctx = ExecutionContext.Create config
         ctx.RecordLlmCall(100, 0.01m)
         ctx.RecordLlmCall(100, 0.01m) // second call exceeds limit of 1
@@ -119,6 +132,7 @@ type ExecutionEnvironmentTests() =
         let ctx = ExecutionContext.Create SandboxConfig.Default
         let env = ExecutionEnvironment.local ()
         let result = (env.ExecuteAsync ctx AgentContext.allowAll agent "input").Result
+
         match result with
         | Ok response -> Assert.AreEqual("hello", response)
         | Error _ -> Assert.Fail("Expected Ok")
@@ -126,10 +140,19 @@ type ExecutionEnvironmentTests() =
     [<TestMethod>]
     member _.ExecuteWithTimeoutReturnsOnTime() =
         let agent = makeAgent "fast"
-        let config = { SandboxConfig.Default with Limits = { ResourceLimits.Unlimited with MaxDuration = TimeSpan.FromSeconds 5.0 } }
+
+        let config =
+            { SandboxConfig.Default with
+                Limits =
+                    { ResourceLimits.Unlimited with
+                        MaxDuration = TimeSpan.FromSeconds 5.0 } }
+
         let ctx = ExecutionContext.Create config
         let env = ExecutionEnvironment.local ()
-        let result = (ExecutionEnvironment.executeWithTimeout env ctx AgentContext.allowAll agent "go").Result
+
+        let result =
+            (ExecutionEnvironment.executeWithTimeout env ctx AgentContext.allowAll agent "go").Result
+
         match result with
         | Ok r -> Assert.AreEqual("fast", r)
         | Error _ -> Assert.Fail("Expected Ok")

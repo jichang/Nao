@@ -13,34 +13,119 @@ module InMemoryTurnStore =
     let create () : TurnStore =
         let items = Dictionary<string, TurnRecord>()
         let sync = obj ()
-        { SaveAsync = fun turn ->
+
+        let saveAsync (turn: TurnRecord) =
             lock sync (fun () -> items.[turn.TurnId] <- turn)
             Task.CompletedTask
-          GetAsync = fun turnId ->
+
+        let getAsync turnId =
             lock sync (fun () ->
                 match items.TryGetValue turnId with
-                | true, v -> Some v
+                | true, value -> Some value
                 | _ -> None)
             |> Task.FromResult
-          GetForSessionAsync = fun sessionId ->
+
+        let getForSessionAsync sessionId =
             lock sync (fun () ->
-                items.Values |> Seq.filter (fun t -> t.SessionId = sessionId) |> List.ofSeq)
-            |> Task.FromResult }
+                items.Values
+                |> Seq.filter (fun turn -> turn.SessionId = sessionId)
+                |> List.ofSeq)
+            |> Task.FromResult
+
+        let delete (predicate: TurnRecord -> bool) =
+            lock sync (fun () ->
+                let keys =
+                    items.Values
+                    |> Seq.filter predicate
+                    |> Seq.map (fun turn -> turn.TurnId)
+                    |> Seq.toArray in
+
+                keys |> Array.iter (items.Remove >> ignore)
+                keys.Length)
+            |> Task.FromResult
+
+        let protect (sessionId: string) operation =
+            if String.IsNullOrWhiteSpace sessionId then
+                Error(
+                    PlatformFailure.create PlatformErrorCategory.InvalidInput "Turn session cannot be blank." false None
+                )
+                |> Task.FromResult
+            else
+                task {
+                    let! count = operation ()
+                    return Ok count
+                }
+
+        let deleteSessionAsync sessionId =
+            protect sessionId (fun () -> delete (fun turn -> turn.SessionId = sessionId))
+
+        let deleteExpiredAsync sessionId before =
+            protect sessionId (fun () -> delete (fun turn -> turn.SessionId = sessionId && turn.CreatedAt < before))
+
+        { SaveAsync = saveAsync
+          GetAsync = getAsync
+          GetForSessionAsync = getForSessionAsync
+          DeleteSessionAsync = deleteSessionAsync
+          DeleteExpiredAsync = deleteExpiredAsync }
 
 module InMemoryFeedbackStore =
     let create () : FeedbackStore =
         let items = ResizeArray<Feedback>()
         let sync = obj ()
-        { SaveAsync = fun feedback ->
-            lock sync (fun () -> items.Add feedback)
+
+        let saveAsync (feedback: Feedback) =
+            lock sync (fun () ->
+                items.RemoveAll(fun item -> item.Id = feedback.Id) |> ignore
+                items.Add feedback)
+
             Task.CompletedTask
-          GetForTurnAsync = fun turnId ->
-            lock sync (fun () -> items |> Seq.filter (fun f -> f.TurnId = turnId) |> List.ofSeq)
+
+        let getForTurnAsync (turnId: string) =
+            lock sync (fun () -> items |> Seq.filter (fun feedback -> feedback.TurnId = turnId) |> List.ofSeq)
             |> Task.FromResult
-          GetForSessionAsync = fun sessionId ->
-            lock sync (fun () -> items |> Seq.filter (fun f -> f.SessionId = sessionId) |> List.ofSeq)
+
+        let getForSessionAsync (sessionId: string) =
+            lock sync (fun () ->
+                items
+                |> Seq.filter (fun feedback -> feedback.SessionId = sessionId)
+                |> List.ofSeq)
             |> Task.FromResult
-          GetAllAsync = fun () -> lock sync (fun () -> List.ofSeq items) |> Task.FromResult }
+
+        let getAllAsync () =
+            lock sync (fun () -> List.ofSeq items) |> Task.FromResult
+
+        let delete (predicate: Feedback -> bool) =
+            lock sync (fun () -> items.RemoveAll(fun feedback -> predicate feedback))
+            |> Task.FromResult
+
+        let protect (owner: string) operation =
+            if String.IsNullOrWhiteSpace owner then
+                Error(
+                    PlatformFailure.create
+                        PlatformErrorCategory.InvalidInput
+                        "Feedback owner cannot be blank."
+                        false
+                        None
+                )
+                |> Task.FromResult
+            else
+                task {
+                    let! count = operation ()
+                    return Ok count
+                }
+
+        let deleteOwnerAsync (owner: string) =
+            protect owner (fun () -> delete (fun feedback -> feedback.UserId = owner))
+
+        let deleteExpiredAsync (owner: string) before =
+            protect owner (fun () -> delete (fun feedback -> feedback.UserId = owner && feedback.CreatedAt < before))
+
+        { SaveAsync = saveAsync
+          GetForTurnAsync = getForTurnAsync
+          GetForSessionAsync = getForSessionAsync
+          GetAllAsync = getAllAsync
+          DeleteOwnerAsync = deleteOwnerAsync
+          DeleteExpiredAsync = deleteExpiredAsync }
 
 [<AutoOpen>]
 module InMemoryFeedbackFactory =

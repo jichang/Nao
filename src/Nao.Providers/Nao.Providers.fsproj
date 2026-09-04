@@ -6,24 +6,17 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Include="src/Configs/OpenAIConfig.fs" />
-    <Compile Include="src/Configs/DeepSeekConfig.fs" />
-    <Compile Include="src/Configs/KimiConfig.fs" />
-    <Compile Include="src/Configs/AnthropicConfig.fs" />
-    <Compile Include="src/Configs/OllamaConfig.fs" />
-    <Compile Include="src/Configs/VllmConfig.fs" />
-    <Compile Include="src/Configs/LlamaCppConfig.fs" />
-    <Compile Include="src/Providers/OpenAIChatDtos.fs" />
-    <Compile Include="src/Providers/AnthropicDtos.fs" />
-    <Compile Include="src/Providers/AnthropicProvider.fs" />
-    <Compile Include="src/Providers/OllamaProvider.fs" />
-    <Compile Include="src/Providers/OpenAICompatibleProvider.fs" />
     <Compile Include="src/Factory/ProviderType.fs" />
     <Compile Include="src/Factory/ProviderFactory.fs" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Nao.Agents\Nao.Agents.fsproj" />
+    <ProjectReference Include="..\Nao.Providers.Anthropic\Nao.Providers.Anthropic.fsproj" />
+    <ProjectReference Include="..\Nao.Providers.Ollama\Nao.Providers.Ollama.fsproj" />
+    <ProjectReference Include="..\Nao.Providers.OpenAICompatible\Nao.Providers.OpenAICompatible.fsproj" />
   </ItemGroup>
+
+  <Import Project="..\..\.paket\Paket.Restore.targets" />
 
 </Project>

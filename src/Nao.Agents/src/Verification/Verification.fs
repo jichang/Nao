@@ -12,23 +12,27 @@ type ReadinessResult =
 
 /// Task grounding: validates that the agent understands what it needs to do
 type TaskGrounding =
-    { /// The original user input/task
-      Task: string
-      /// Reformulated task understanding (agent's interpretation)
-      Understanding: string option
-      /// Key success criteria extracted from the task
-      SuccessCriteria: string list
-      /// Required capabilities to complete the task
-      RequiredCapabilities: string list
-      /// Estimated complexity (1-10)
-      EstimatedComplexity: int option }
+    {
+        /// The original user input/task
+        Task: string
+        /// Reformulated task understanding (agent's interpretation)
+        Understanding: string option
+        /// Key success criteria extracted from the task
+        SuccessCriteria: string list
+        /// Required capabilities to complete the task
+        RequiredCapabilities: string list
+        /// Estimated complexity (1-10)
+        EstimatedComplexity: int option
+    }
 
 /// Functional pre-flight readiness check before agent execution.
 type ReadinessCheck =
-    { /// Check name.
-      Name: string
-      /// Perform the check.
-      CheckAsync: string -> string -> Task<ReadinessResult> }
+    {
+        /// Check name.
+        Name: string
+        /// Perform the check.
+        CheckAsync: string -> string -> Task<ReadinessResult>
+    }
 
 /// Functions for constructing and invoking readiness checks.
 [<RequireQualifiedAccess>]
@@ -39,26 +43,36 @@ module ReadinessCheck =
         { Name = name; CheckAsync = checkAsync }
 
     /// Perform a readiness check.
-    let checkAsync agentId input (check: ReadinessCheck) =
-        check.CheckAsync agentId input
+    let checkAsync agentId input (check: ReadinessCheck) = check.CheckAsync agentId input
 
 /// Captures a complete execution trace for offline analysis
-type ExecutionTrace = { Id: Guid; AgentId: string; Input: string; Output: string option; Steps: TraceStep list; StartedAt: DateTimeOffset; CompletedAt: DateTimeOffset option; Success: bool; Metadata: Map<string, string> }
+type ExecutionTrace =
+    { Id: Guid
+      AgentId: string
+      Input: string
+      Output: string option
+      Steps: TraceStep list
+      StartedAt: DateTimeOffset
+      CompletedAt: DateTimeOffset option
+      Success: bool
+      Metadata: Map<string, string> }
 
 /// A single step in an execution trace
 and TraceStep =
-    { /// Step number (1-based)
-      StepNumber: int
-      /// What action was taken
-      Action: TraceAction
-      /// Input to this step
-      Input: string
-      /// Output from this step
-      Output: string
-      /// Duration in milliseconds
-      DurationMs: int64
-      /// Timestamp
-      Timestamp: DateTimeOffset }
+    {
+        /// Step number (1-based)
+        StepNumber: int
+        /// What action was taken
+        Action: TraceAction
+        /// Input to this step
+        Input: string
+        /// Output from this step
+        Output: string
+        /// Duration in milliseconds
+        DurationMs: int64
+        /// Timestamp
+        Timestamp: DateTimeOffset
+    }
 
 /// Actions that can appear in a trace
 and [<RequireQualifiedAccess>] TraceAction =
@@ -79,23 +93,27 @@ type JudgementVerdict =
 
 /// Result of automated judgement on an execution
 type JudgementResult =
-    { /// The verdict
-      Verdict: JudgementVerdict
-      /// Explanation for the verdict
-      Explanation: string
-      /// Scores on individual criteria
-      CriteriaScores: Map<string, float>
-      /// Suggestions for improvement
-      Suggestions: string list
-      /// The judge that produced this result
-      JudgeName: string }
+    {
+        /// The verdict
+        Verdict: JudgementVerdict
+        /// Explanation for the verdict
+        Explanation: string
+        /// Scores on individual criteria
+        CriteriaScores: Map<string, float>
+        /// Suggestions for improvement
+        Suggestions: string list
+        /// The judge that produced this result
+        JudgeName: string
+    }
 
 /// Functional capability for automated quality judgement.
 type Judge =
-    { /// Judge name.
-      Name: string
-      /// Evaluate an execution trace and produce a judgement.
-      JudgeAsync: ExecutionTrace -> Task<JudgementResult> }
+    {
+        /// Judge name.
+        Name: string
+        /// Evaluate an execution trace and produce a judgement.
+        JudgeAsync: ExecutionTrace -> Task<JudgementResult>
+    }
 
 /// Functions for constructing and invoking judges.
 [<RequireQualifiedAccess>]
@@ -106,8 +124,7 @@ module Judge =
         { Name = name; JudgeAsync = judgeAsync }
 
     /// Evaluate an execution trace.
-    let judgeAsync trace (judge: Judge) =
-        judge.JudgeAsync trace
+    let judgeAsync trace (judge: Judge) = judge.JudgeAsync trace
 
 /// Captures and manages execution traces for verification
 module Verification =
@@ -125,7 +142,13 @@ module Verification =
           Metadata = Map.empty }
 
     /// Add a step to the trace
-    let addStep (action: TraceAction) (input: string) (output: string) (durationMs: int64) (trace: ExecutionTrace) : ExecutionTrace =
+    let addStep
+        (action: TraceAction)
+        (input: string)
+        (output: string)
+        (durationMs: int64)
+        (trace: ExecutionTrace)
+        : ExecutionTrace =
         let step =
             { StepNumber = trace.Steps.Length + 1
               Action = action
@@ -133,7 +156,9 @@ module Verification =
               Output = output
               DurationMs = durationMs
               Timestamp = DateTimeOffset.UtcNow }
-        { trace with Steps = trace.Steps @ [ step ] }
+
+        { trace with
+            Steps = trace.Steps @ [ step ] }
 
     /// Complete the trace with success
     let complete (output: string) (trace: ExecutionTrace) : ExecutionTrace =
@@ -152,10 +177,7 @@ module Verification =
     /// Run all readiness checks
     let checkReadiness (checks: ReadinessCheck list) (agentId: string) (input: string) : Task<ReadinessResult> =
         task {
-            let! results =
-                checks
-                |> List.map (ReadinessCheck.checkAsync agentId input)
-                |> Task.WhenAll
+            let! results = checks |> List.map (ReadinessCheck.checkAsync agentId input) |> Task.WhenAll
 
             let allReasons =
                 results
@@ -164,23 +186,31 @@ module Verification =
                     | ReadinessResult.Ready -> []
                     | ReadinessResult.NotReady reasons -> reasons)
 
-            if allReasons.IsEmpty then return ReadinessResult.Ready
-            else return ReadinessResult.NotReady allReasons
+            if allReasons.IsEmpty then
+                return ReadinessResult.Ready
+            else
+                return ReadinessResult.NotReady allReasons
         }
 
     /// Ground a task by having the agent reformulate its understanding
-    let groundTaskAsync (provider: LlmProvider) (options: CompletionOptions) (taskDescription: string) : Task<TaskGrounding> =
+    let groundTaskAsync
+        (provider: LlmProvider)
+        (options: CompletionOptions)
+        (taskDescription: string)
+        : Task<TaskGrounding> =
         task {
             let system =
                 Prompt.render
                     { Prompt.Empty with
                         Objective = "Analyze the following task and reformulate your understanding of it."
                         OutputFormat =
-                            OutputFormat.Schema "1. Your understanding of what needs to be done\n2. Key success criteria (one per line, prefixed with '- ')\n3. Required capabilities\n4. Estimated complexity (1-10)" }
+                            OutputFormat.Schema
+                                "1. Your understanding of what needs to be done\n2. Key success criteria (one per line, prefixed with '- ')\n3. Required capabilities\n4. Estimated complexity (1-10)" }
 
             let prompt =
                 [ { Role = System; Content = system }
-                  { Role = User; Content = taskDescription } ]
+                  { Role = User
+                    Content = taskDescription } ]
 
             let! result = provider.CompleteAsync prompt options
             // Parse the LLM response into structured grounding
@@ -203,8 +233,13 @@ module LlmJudge =
                 let traceDescription =
                     trace.Steps
                     |> List.map (fun s ->
-                        sprintf "Step %d [%A]: Input=%s, Output=%s (%dms)"
-                            s.StepNumber s.Action s.Input (s.Output.Substring(0, min 200 s.Output.Length)) s.DurationMs)
+                        sprintf
+                            "Step %d [%A]: Input=%s, Output=%s (%dms)"
+                            s.StepNumber
+                            s.Action
+                            s.Input
+                            (s.Output.Substring(0, min 200 s.Output.Length))
+                            s.DurationMs)
                     |> String.concat "\n"
 
                 let criteriaStr = criteria |> List.map (sprintf "- %s") |> String.concat "\n"
@@ -213,19 +248,31 @@ module LlmJudge =
                     Prompt.render
                         { Prompt.Empty with
                             Role = "You are a quality judge."
-                            Objective = "Evaluate the following agent execution trace against these criteria:\n" + criteriaStr
-                            OutputFormat = OutputFormat.Schema "PASS, FAIL, or PARTIAL(score), followed by an explanation." }
+                            Objective =
+                                "Evaluate the following agent execution trace against these criteria:\n"
+                                + criteriaStr
+                            OutputFormat =
+                                OutputFormat.Schema "PASS, FAIL, or PARTIAL(score), followed by an explanation." }
 
                 let prompt =
                     [ { Role = System; Content = system }
-                      { Role = User; Content = sprintf "Task: %s\nOutput: %s\nSteps:\n%s" trace.Input (trace.Output |> Option.defaultValue "N/A") traceDescription } ]
+                      { Role = User
+                        Content =
+                          sprintf
+                              "Task: %s\nOutput: %s\nSteps:\n%s"
+                              trace.Input
+                              (trace.Output |> Option.defaultValue "N/A")
+                              traceDescription } ]
 
                 let! result = provider.CompleteAsync prompt options
 
                 let verdict =
-                    if result.Content.StartsWith("PASS") then JudgementVerdict.Pass
-                    elif result.Content.StartsWith("FAIL") then JudgementVerdict.Fail
-                    else JudgementVerdict.Inconclusive result.Content
+                    if result.Content.StartsWith("PASS") then
+                        JudgementVerdict.Pass
+                    elif result.Content.StartsWith("FAIL") then
+                        JudgementVerdict.Fail
+                    else
+                        JudgementVerdict.Inconclusive result.Content
 
                 return
                     { Verdict = verdict

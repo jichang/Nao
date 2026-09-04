@@ -4,31 +4,35 @@ open System
 
 /// Describes an LLM response protocol for prompt construction and discovery.
 type ResponseProtocolDescriptor =
-    { /// Stable protocol name, such as "compact tool lines".
-      Name: string
-      /// Short explanation of when and why the protocol is used.
-      Description: string
-      /// Exact rules to include in the model's system prompt.
-      Instructions: string list
-      /// Complete valid responses suitable for few-shot prompting.
-      Examples: string list
-      /// Media type of the response representation when one applies.
-      MediaType: string option
-      /// Extensible protocol metadata for hosts and tooling.
-      Metadata: Map<string, string> }
+    {
+        /// Stable protocol name, such as "compact tool lines".
+        Name: string
+        /// Short explanation of when and why the protocol is used.
+        Description: string
+        /// Exact rules to include in the model's system prompt.
+        Instructions: string list
+        /// Complete valid responses suitable for few-shot prompting.
+        Examples: string list
+        /// Media type of the response representation when one applies.
+        MediaType: string option
+        /// Extensible protocol metadata for hosts and tooling.
+        Metadata: Map<string, string>
+    }
 
 /// Structured parse failure used to produce targeted LLM repair instructions.
 type ResponseParseError =
-    { /// Concise statement of what failed.
-      Summary: string
-      /// Location of the failure, for example "line 3, column 8".
-      Location: string option
-      /// Expected syntax or semantic shape at the failure point.
-      Expected: string option
-      /// Concrete correction the model should make.
-      SuggestedFix: string option
-      /// Machine-readable context for logging and custom repair strategies.
-      Details: Map<string, string> }
+    {
+        /// Concise statement of what failed.
+        Summary: string
+        /// Location of the failure, for example "line 3, column 8".
+        Location: string option
+        /// Expected syntax or semantic shape at the failure point.
+        Expected: string option
+        /// Concrete correction the model should make.
+        SuggestedFix: string option
+        /// Machine-readable context for logging and custom repair strategies.
+        Details: Map<string, string>
+    }
 
 [<RequireQualifiedAccess>]
 module ResponseParseError =
@@ -70,6 +74,7 @@ module ResponseProtocol =
     /// Render the protocol contract for inclusion in a system prompt.
     let promptInstructions (protocol: ResponseProtocol<'Action>) =
         let descriptor = protocol.Descriptor
+
         [ yield sprintf "# Response Protocol: %s" descriptor.Name
           yield descriptor.Description
           yield! descriptor.Instructions

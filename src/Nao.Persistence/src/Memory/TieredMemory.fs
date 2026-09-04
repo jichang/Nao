@@ -1,58 +1,91 @@
 namespace Nao.Persistence
 
+open System
 open Nao.Agents
 
-/// Mutating events for tiered memory persistence.
 [<RequireQualifiedAccess>]
 type TieredEvent =
     | Store of TieredMemoryEntry
-    | Promote of key: string * targetTier: MemoryTier
-    | Evict
+    | RecordAccess of owner: string * keys: string list * asOf: DateTimeOffset
+    | Promote of owner: string * key: string * targetTier: MemoryTier
+    | Evict of owner: string * asOf: DateTimeOffset
+    | DeleteOwner of owner: string
+    | DeleteExpired of owner: string * before: DateTimeOffset
 
-/// Event-sourced tiered memory. Note: time-relative eviction is re-evaluated at
-/// load time when an Evict event replays, which is the desired durability behaviour.
+type TieredDocument = { Version: int; Event: TieredEvent }
+
 module PersistentTieredMemory =
     let create
-            (store: EventStore)
-            (config: TieredMemoryConfig)
-            (embeddingProvider: EmbeddingProvider option)
-            : TieredMemory =
+        (store: EventStore)
+        (config: TieredMemoryConfig)
+        (embeddingProvider: EmbeddingProvider option)
+        : TieredMemory =
         let inner = InMemoryTieredMemory.create config embeddingProvider
 
+        let replay event =
+            match event with
+            | TieredEvent.Store entry -> inner.StoreAsync entry |> _.GetAwaiter().GetResult()
+            | TieredEvent.RecordAccess(owner, keys, asOf) ->
+                inner.RecordAccessAsync owner keys asOf |> _.GetAwaiter().GetResult()
+            | TieredEvent.Promote(owner, key, targetTier) ->
+                inner.PromoteAsync owner key targetTier |> _.GetAwaiter().GetResult()
+            | TieredEvent.Evict(owner, asOf) -> inner.EvictAsync owner asOf |> _.GetAwaiter().GetResult() |> ignore
+            | TieredEvent.DeleteOwner owner -> inner.DeleteOwnerAsync owner |> _.GetAwaiter().GetResult() |> ignore
+            | TieredEvent.DeleteExpired(owner, before) ->
+                inner.DeleteExpiredAsync owner before |> _.GetAwaiter().GetResult() |> ignore
+
         do
-            for line in store.LoadAll() do
-                match FSharpJson.deserialize<TieredEvent> line with
-                | TieredEvent.Store e -> inner.StoreAsync(e).GetAwaiter().GetResult()
-                | TieredEvent.Promote(k, t) -> (inner.PromoteAsync k t).GetAwaiter().GetResult()
-                | TieredEvent.Evict -> inner.EvictAsync().GetAwaiter().GetResult() |> ignore
+            store.LoadAll()
+            |> Seq.map FSharpJson.deserialize<TieredDocument>
+            |> Seq.iter (fun document ->
+                if document.Version <> 1 then
+                    invalidOp (sprintf "Unsupported tiered-memory document version: %d." document.Version)
 
-        { StoreAsync = fun (entry: TieredMemoryEntry) ->
+                replay document.Event)
+
+        let append event =
+            store.Append(FSharpJson.serialize { Version = 1; Event = event })
+
+        let appendAfter operation event =
             task {
-                do! inner.StoreAsync entry
-                store.Append(FSharpJson.serialize (TieredEvent.Store entry))
+                do! operation
+                append event
             }
 
-          RetrieveAsync = fun (query: string) (maxResults: int) -> inner.RetrieveAsync query maxResults
-
-          RetrieveFromTierAsync = fun (tier: MemoryTier) (maxResults: int) ->
-            inner.RetrieveFromTierAsync tier maxResults
-
-          PromoteAsync = fun (key: string) (targetTier: MemoryTier) ->
+        let countAfter operation event =
             task {
-                do! inner.PromoteAsync key targetTier
-                store.Append(FSharpJson.serialize (TieredEvent.Promote(key, targetTier)))
+                let! count = operation
+                append event
+                return count
             }
 
-          EvictAsync = fun () ->
+        let deleteAfter operation event =
             task {
-                let! removed = inner.EvictAsync()
-                store.Append(FSharpJson.serialize TieredEvent.Evict)
-                return removed
-            } }
+                let! result = operation
 
-/// Factory helpers for tiered memory persistence.
+                match result with
+                | Ok _ -> append event
+                | Error _ -> ()
+
+                return result
+            }
+
+        { StoreAsync = fun entry -> appendAfter (inner.StoreAsync entry) (TieredEvent.Store entry)
+          RetrieveAsync = inner.RetrieveAsync
+          RetrieveFromTierAsync = inner.RetrieveFromTierAsync
+          RecordAccessAsync =
+            fun owner keys asOf ->
+                appendAfter (inner.RecordAccessAsync owner keys asOf) (TieredEvent.RecordAccess(owner, keys, asOf))
+          PromoteAsync =
+            fun owner key targetTier ->
+                appendAfter (inner.PromoteAsync owner key targetTier) (TieredEvent.Promote(owner, key, targetTier))
+          EvictAsync = fun owner asOf -> countAfter (inner.EvictAsync owner asOf) (TieredEvent.Evict(owner, asOf))
+          DeleteOwnerAsync = fun owner -> deleteAfter (inner.DeleteOwnerAsync owner) (TieredEvent.DeleteOwner owner)
+          DeleteExpiredAsync =
+            fun owner before ->
+                deleteAfter (inner.DeleteExpiredAsync owner before) (TieredEvent.DeleteExpired(owner, before)) }
+
 module TieredMemories =
-    /// ADO.NET-backed tiered memory over any provider supplied via the connection factory.
     let ado
         (factory: DbConnectionFactory)
         (config: TieredMemoryConfig)
@@ -60,7 +93,6 @@ module TieredMemories =
         : TieredMemory =
         PersistentTieredMemory.create (EventStore.db factory "tiered") config embeddingProvider
 
-    /// FileSystem-backed tiered memory rooted at the given directory.
     let file
         (baseDir: string)
         (config: TieredMemoryConfig)

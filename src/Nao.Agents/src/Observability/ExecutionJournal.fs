@@ -6,29 +6,24 @@ open System.Threading.Tasks
 
 /// A record of a single tool execution (immutable, for journaling)
 type ExecutionRecord =
-    { /// Which tool was executed
+    { Id: Guid
+      Owner: string
+      TurnId: string
       ToolName: string
-      /// The input provided
       Input: string
-      /// The output produced
       Output: string
-      /// When it was executed
       ExecutedAt: DateTimeOffset
-      /// Whether the execution has been reverted
       Reverted: bool
-      /// Additional metadata
       Metadata: Map<string, string> }
 
 /// Functional journal operations for tool execution revert/audit support.
 type ExecutionJournal =
-        { /// Record a tool execution
-            RecordAsync: ExecutionRecord -> Task
-            /// Get all recorded executions (most recent first)
-            GetHistoryAsync: unit -> Task<ExecutionRecord list>
-            /// Get executions that can be reverted (not yet reverted, tool supports revert)
-            GetRevertibleAsync: unit -> Task<ExecutionRecord list>
-            /// Mark an execution as reverted
-            MarkRevertedAsync: ExecutionRecord -> Task }
+    { RecordAsync: ExecutionRecord -> Task
+      GetHistoryAsync: unit -> Task<ExecutionRecord list>
+      GetRevertibleAsync: unit -> Task<ExecutionRecord list>
+      MarkRevertedAsync: Guid -> Task
+      DeleteOwnerAsync: string -> Task<Result<int, PlatformFailure>>
+      DeleteExpiredAsync: string -> DateTimeOffset -> Task<Result<int, PlatformFailure>> }
 
 module internal RuntimeExecutionJournal =
     let private current = AsyncLocal<ExecutionJournal option>()
@@ -48,6 +43,7 @@ module ExecutionJournal =
 
             for record in revertible do
                 let tool = tools |> List.tryFind (fun t -> t.Name = record.ToolName)
+
                 match tool with
                 | Some tool when Tool.canRevert tool ->
                     let context: RevertContext =
@@ -55,13 +51,15 @@ module ExecutionJournal =
                           Output = record.Output
                           ExecutedAt = record.ExecutedAt
                           Metadata = record.Metadata }
+
                     let! result = Tool.revertAsync context tool
+
                     match result with
-                    | Ok () -> do! journal.MarkRevertedAsync record
+                    | Ok() -> do! journal.MarkRevertedAsync record.Id
                     | _ -> ()
+
                     results.Add(record.ToolName, result)
-                | _ ->
-                    results.Add(record.ToolName, Error "Tool not found or does not support revert")
+                | _ -> results.Add(record.ToolName, Error "Tool not found or does not support revert")
 
             return results |> Seq.toList
         }
@@ -70,10 +68,12 @@ module ExecutionJournal =
     let revertLastAsync (journal: ExecutionJournal) (tools: Tool list) : Task<Result<unit, string>> =
         task {
             let! revertible = journal.GetRevertibleAsync()
+
             match revertible with
             | [] -> return Error "No revertible executions"
             | record :: _ ->
                 let tool = tools |> List.tryFind (fun candidate -> candidate.Name = record.ToolName)
+
                 match tool with
                 | Some tool when Tool.canRevert tool ->
                     let context: RevertContext =
@@ -81,11 +81,13 @@ module ExecutionJournal =
                           Output = record.Output
                           ExecutedAt = record.ExecutedAt
                           Metadata = record.Metadata }
+
                     let! result = Tool.revertAsync context tool
+
                     match result with
-                    | Ok () -> do! journal.MarkRevertedAsync record
+                    | Ok() -> do! journal.MarkRevertedAsync record.Id
                     | _ -> ()
+
                     return result
-                | _ ->
-                    return Error(sprintf "Tool '%s' does not support revert" record.ToolName)
+                | _ -> return Error(sprintf "Tool '%s' does not support revert" record.ToolName)
         }

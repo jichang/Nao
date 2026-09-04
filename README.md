@@ -60,8 +60,8 @@ See [Getting started](docs/getting-started.md) for the first typed agent and har
 |---|---|
 | `Nao.Agents` | Core agent/tool contracts and ETCLOVG harness |
 | `Nao.Protocols` | Typed response protocols and repair |
-| `Nao.Persistence` | Persistence and memory implementations |
-| `Nao.Providers` | Hosted and local model-provider adapters |
+| `Nao.Persistence.*` | Persistence capability packages and opt-in composition |
+| `Nao.Providers.*` | Hosted and local model-provider adapter packages and opt-in composition |
 | `Nao.Eval` | Evaluation cases, runners, evaluators, and reports |
 | `Nao.Runtime.Orleans` | Distributed sessions and workspace runtime |
 | `Nao.Runtime.Orleans.Codegen` | Orleans serialization source-generation support |

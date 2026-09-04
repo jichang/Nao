@@ -22,14 +22,16 @@ module TestHost =
 
     /// A sample tool definition used as the
     /// target of seeded feedback and improvement suggestions.
-    let echoToolJson = """{
+    let echoToolJson =
+        """{
   "name": "echo",
   "description": "Echo back the input text.",
   "execution": { "type": "process", "command": "echo", "args": ["{{input}}"] },
     "signature": { "output": "text" }
 }"""
 
-    let agentJson = """{
+    let agentJson =
+        """{
   "name": "nao-assistant",
   "description": "Test assistant agent.",
   "prompt": {
@@ -58,7 +60,9 @@ module TestHost =
     /// connected `NaoClient`. A direct `FeedbackService` over the same feedback dir lets
     /// tests seed turns/feedback the way the Orleans-hosted grain would in production.
     type Fixture() =
-        let root = Path.Combine(Path.GetTempPath(), "nao-assistant-tests", Guid.NewGuid().ToString("N"))
+        let root =
+            Path.Combine(Path.GetTempPath(), "nao-assistant-tests", Guid.NewGuid().ToString("N"))
+
         let workspaceRoot = Path.Combine(root, "workspace")
         let feedbackDir = Path.Combine(root, "feedback")
         let echoToolPath = Path.Combine(workspaceRoot, ".nao", "tools", "echo.json")
@@ -97,7 +101,9 @@ module TestHost =
                             [ { Name = "echo"
                                 Input = "please"
                                 Output = "please" } ] }
+
                 do! feedback.RecordTurnAsync turn
+
                 let fb =
                     { Id = Guid.NewGuid()
                       TurnId = turnId
@@ -107,6 +113,7 @@ module TestHost =
                       Comment = Some "the echo output was confusing"
                       CreatedAt = DateTimeOffset.UtcNow
                       Metadata = Map.empty }
+
                 do! feedback.SubmitFeedbackAsync fb
                 return ()
             }
@@ -114,8 +121,13 @@ module TestHost =
         interface IDisposable with
             member _.Dispose() =
                 (client :> IDisposable).Dispose()
-                try (host :> IAsyncDisposable).DisposeAsync().AsTask().GetAwaiter().GetResult()
-                with _ -> ()
-                try Directory.Delete(root, true) with _ -> ()
 
+                try
+                    (host :> IAsyncDisposable).DisposeAsync().AsTask().GetAwaiter().GetResult()
+                with _ ->
+                    ()
 
+                try
+                    Directory.Delete(root, true)
+                with _ ->
+                    ()

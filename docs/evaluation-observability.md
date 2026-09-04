@@ -8,8 +8,10 @@ Quality, safety, latency, reliability, and cost are runtime properties. Nao's ev
 
 ```fsharp
 let dataset =
-    { Name = "math"
-    Cases = [ EvalCase.create "1" "2+2" "4" ] }
+  EvalDataset.create
+    "team/evaluation"
+    "math"
+    [ EvalCase.create "1" "2+2" "4" ]
 
 let evaluator = ExactMatch.evaluator
 
@@ -80,11 +82,17 @@ Production traces and feedback
   → permanent regression coverage
 ```
 
-Production-derived data requires consent, tenant isolation, redaction, retention, and review before becoming a dataset.
+Production-derived data requires consent, tenant isolation, redaction, retention, and review before becoming a dataset. `TurnStore` supports session-owned deletion and strict retention cutoff for its execution evidence. `FeedbackStore` independently supports user-owned deletion across sessions and cutoff retention, but neither operation erases already-derived datasets governed by their own policy.
+
+`EvalDataset`, `EvalRun`, `EvalResult`, and `EvalReport` carry stable identity and explicit ownership. `EvalArchives.inMemory` and `EvalArchives.file` persist datasets and reports behind owner-scoped lookup plus counted owner and strict timestamp-cutoff deletion. The versioned JSONL archive records deletion tombstones, so deleted derived data remains absent after replay and later writes remain valid. ADO.NET evaluation persistence remains planned and should use a dedicated evaluation persistence package rather than expand the core evaluation dependency surface.
 
 ## Current observability model
 
 Nao provides parent/child traces, metrics, token usage, execution journals, and resilience primitives.
+
+`TraceStore` supports counted deletion for one `AgentId` and strict retention purge by `StartedAt`. In-memory traces are removed directly; file and ADO.NET stores persist tombstones so deleted traces remain absent after replay. These tombstones are logical deletion, not physical erasure of the underlying append-only payloads.
+
+`ExecutionJournal` requires stable record, session-workflow, and turn identity and supports counted owner/cutoff deletion. Retention must preserve records while compensation is still possible; coordinated session destruction deletes the session journal before clearing runtime identity.
 
 ```fsharp
 let tracer = Tracer.inMemory ()

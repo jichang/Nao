@@ -5,178 +5,232 @@ open System.Threading.Tasks
 open System.Collections.Concurrent
 open Nao.Agents
 
-/// In-memory episodic-memory factory.
 module InMemoryEpisodicMemory =
     let create (embeddingProvider: EmbeddingProvider option) : EpisodicMemory =
-        let episodes = ConcurrentDictionary<string, Episode>()
-        let embeddings = ConcurrentDictionary<string, float array>()
+        let episodes = ConcurrentDictionary<string * string, Episode>()
+        let embeddings = ConcurrentDictionary<string * string, float array>()
+        let key owner episodeId = owner, episodeId
+
+        let requireOwner owner =
+            if String.IsNullOrWhiteSpace owner then
+                invalidArg (nameof owner) "Episodic-memory owner cannot be blank."
+
+        let owned owner =
+            episodes.Values |> Seq.filter (fun episode -> episode.Owner = owner)
 
         let computeEmbedding (text: string) =
             task {
                 match embeddingProvider with
-                | Some provider ->
-                    return! provider.EmbedAsync text
+                | Some provider -> return! provider.EmbedAsync text
                 | None ->
-                    // Simple hash-based pseudo-embedding for testing
-                    let words = text.ToLowerInvariant().Split(' ') |> Array.distinct
-                    let vec = Array.zeroCreate 64
-                    for word in words do
-                        let hash = abs (word.GetHashCode())
-                        let idx = hash % 64
-                        vec.[idx] <- vec.[idx] + 1.0
-                    return vec
+                    let vector = Array.zeroCreate 64
+
+                    for word in text.ToLowerInvariant().Split(' ') |> Array.distinct do
+                        let index = abs (word.GetHashCode()) % 64
+                        vector.[index] <- vector.[index] + 1.0
+
+                    return vector
             }
 
-        { RecordAsync = fun (episode: Episode) ->
+        let recordAsync (episode: Episode) =
             task {
-                episodes.TryAdd(episode.Id, episode) |> ignore
-                let! emb = computeEmbedding (sprintf "%s %s %s" episode.Action episode.Observation episode.Context)
-                embeddings.TryAdd(episode.Id, emb) |> ignore
+                requireOwner episode.Owner
+                episodes.[key episode.Owner episode.Id] <- episode
+
+                let! embedding =
+                    computeEmbedding (sprintf "%s %s %s" episode.Action episode.Observation episode.Context)
+
+                embeddings.[key episode.Owner episode.Id] <- embedding
             }
 
-          QueryAsync = fun (query: EpisodeQuery) ->
-            let collectRelated episodeId maxHops =
-                let rec collect (ids: Set<string>) (visited: Set<string>) (depth: int) =
-                    if depth >= maxHops then visited
-                    else
-                        let neighbors =
-                            ids
-                            |> Set.toList
-                            |> List.collect (fun id ->
-                                match episodes.TryGetValue(id) with
-                                | true, ep -> ep.LinkedEpisodes
-                                | _ -> [])
-                            |> List.filter (fun id -> not (visited.Contains id))
-                            |> Set.ofList
-                        collect neighbors (Set.union visited neighbors) (depth + 1)
-                collect (Set.singleton episodeId) (Set.singleton episodeId) 0
+        let collectRelated owner episodeId maxHops =
+            let rec collect (ids: Set<string>) (visited: Set<string>) depth =
+                if depth >= maxHops then
+                    visited
+                else
+                    let neighbors =
+                        ids
+                        |> Set.toList
+                        |> List.collect (fun id ->
+                            match episodes.TryGetValue(key owner id) with
+                            | true, episode -> episode.LinkedEpisodes
+                            | _ -> [])
+                        |> List.filter (fun id -> not (visited.Contains id))
+                        |> Set.ofList
+
+                    collect neighbors (Set.union visited neighbors) (depth + 1)
+
+            collect (Set.singleton episodeId) (Set.singleton episodeId) 0
+
+        let queryAsync owner (query: EpisodeQuery) =
+            requireOwner owner
 
             task {
                 match query with
-                | EpisodeQuery.BySimilarity (description, topK) ->
-                    let! queryEmb = computeEmbedding description
+                | EpisodeQuery.BySimilarity(description, topK) ->
+                    let! queryEmbedding = computeEmbedding description
+
                     return
-                        episodes.Values
-                        |> Seq.map (fun ep ->
-                            let emb =
-                                match embeddings.TryGetValue(ep.Id) with
-                                | true, e -> e
+                        owned owner
+                        |> Seq.map (fun episode ->
+                            let embedding =
+                                match embeddings.TryGetValue(key owner episode.Id) with
+                                | true, value -> value
                                 | _ -> Array.empty
-                            (ep, SemanticSimilarity.cosineSimilarity queryEmb emb))
+
+                            episode, SemanticSimilarity.cosineSimilarity queryEmbedding embedding)
                         |> Seq.sortByDescending snd
                         |> Seq.truncate topK
                         |> Seq.map fst
                         |> Seq.toList
-
-                | EpisodeQuery.ByTimeRange (from', to') ->
+                | EpisodeQuery.ByTimeRange(from', to') ->
                     return
-                        episodes.Values
-                        |> Seq.filter (fun ep -> ep.Timestamp >= from' && ep.Timestamp <= to')
-                        |> Seq.sortByDescending (fun ep -> ep.Timestamp)
+                        owned owner
+                        |> Seq.filter (fun episode -> episode.Timestamp >= from' && episode.Timestamp <= to')
+                        |> Seq.sortByDescending (fun episode -> episode.Timestamp)
                         |> Seq.toList
-
                 | EpisodeQuery.ByTags tags ->
                     let tagSet = Set.ofList tags
-                    return
-                        episodes.Values
-                        |> Seq.filter (fun ep ->
-                            ep.Tags |> List.exists (fun t -> tagSet.Contains t))
-                        |> Seq.sortByDescending (fun ep -> ep.Importance)
-                        |> Seq.toList
 
+                    return
+                        owned owner
+                        |> Seq.filter (fun episode -> episode.Tags |> List.exists tagSet.Contains)
+                        |> Seq.sortByDescending (fun episode -> episode.Importance)
+                        |> Seq.toList
                 | EpisodeQuery.Recent count ->
                     return
-                        episodes.Values
-                        |> Seq.sortByDescending (fun ep -> ep.Timestamp)
+                        owned owner
+                        |> Seq.sortByDescending (fun episode -> episode.Timestamp)
                         |> Seq.truncate count
                         |> Seq.toList
-
-                | EpisodeQuery.Related (episodeId, maxHops) ->
-                    let related = collectRelated episodeId maxHops
+                | EpisodeQuery.Related(episodeId, maxHops) ->
                     return
-                        related
+                        collectRelated owner episodeId maxHops
                         |> Set.toList
                         |> List.choose (fun id ->
-                            match episodes.TryGetValue(id) with
-                            | true, ep -> Some ep
+                            match episodes.TryGetValue(key owner id) with
+                            | true, episode -> Some episode
                             | _ -> None)
-
-                | EpisodeQuery.ByOutcome (success, topK) ->
+                | EpisodeQuery.ByOutcome(success, topK) ->
                     return
-                        episodes.Values
-                        |> Seq.filter (fun ep -> ep.Success = success)
-                        |> Seq.sortByDescending (fun ep -> ep.Importance)
+                        owned owner
+                        |> Seq.filter (fun episode -> episode.Success = success)
+                        |> Seq.sortByDescending (fun episode -> episode.Importance)
                         |> Seq.truncate topK
                         |> Seq.toList
             }
 
-          LinkAsync = fun (fromId: string) (toId: string) ->
-            match episodes.TryGetValue(fromId) with
-            | true, ep ->
-                if not (ep.LinkedEpisodes |> List.contains toId) then
-                    let updated = { ep with LinkedEpisodes = toId :: ep.LinkedEpisodes }
-                    episodes.TryUpdate(fromId, updated, ep) |> ignore
+        let linkAsync owner fromId toId =
+            requireOwner owner
+
+            match episodes.TryGetValue(key owner fromId) with
+            | true, episode when
+                episodes.ContainsKey(key owner toId)
+                && not (episode.LinkedEpisodes |> List.contains toId)
+                ->
+                episodes.[key owner fromId] <-
+                    { episode with
+                        LinkedEpisodes = toId :: episode.LinkedEpisodes }
             | _ -> ()
-            task { return () }
 
-          GetChainAsync = fun (episodeId: string) ->
-            let rec walk (id: string) (visited: Set<string>) (acc: Episode list) =
-                if visited.Contains id then acc
+            Task.FromResult()
+
+        let getChainAsync owner episodeId =
+            requireOwner owner
+
+            let rec walk id visited collected =
+                if visited |> Set.contains id then
+                    collected
                 else
-                    match episodes.TryGetValue(id) with
-                    | true, ep ->
-                        let newVisited = visited.Add id
-                        let mutable result = ep :: acc
-                        for linkedId in ep.LinkedEpisodes do
-                            result <- walk linkedId newVisited result
-                        result
-                    | _ -> acc
+                    match episodes.TryGetValue(key owner id) with
+                    | true, episode ->
+                        episode.LinkedEpisodes
+                        |> List.fold
+                            (fun result linkedId -> walk linkedId (visited.Add id) result)
+                            (episode :: collected)
+                    | _ -> collected
+
+            walk episodeId Set.empty []
+            |> List.sortBy (fun episode -> episode.Timestamp)
+            |> Task.FromResult
+
+        let synthesizeAsync owner context =
+            requireOwner owner
 
             task {
-                return walk episodeId Set.empty [] |> List.sortBy (fun ep -> ep.Timestamp)
-            }
+                let! queryEmbedding = computeEmbedding context
 
-          SynthesizeAsync = fun (context: string) ->
-            task {
-                let! queryEmb = computeEmbedding context
                 let similar =
-                    episodes.Values
-                    |> Seq.map (fun ep ->
-                        let emb =
-                            match embeddings.TryGetValue(ep.Id) with
-                            | true, e -> e
+                    owned owner
+                    |> Seq.map (fun episode ->
+                        let embedding =
+                            match embeddings.TryGetValue(key owner episode.Id) with
+                            | true, value -> value
                             | _ -> Array.empty
-                        (ep, SemanticSimilarity.cosineSimilarity queryEmb emb))
-                    |> Seq.filter (fun (_, sim) -> sim > 0.3)
+
+                        episode, SemanticSimilarity.cosineSimilarity queryEmbedding embedding)
+                    |> Seq.filter (fun (_, similarity) -> similarity > 0.3)
                     |> Seq.sortByDescending snd
                     |> Seq.truncate 10
                     |> Seq.map fst
                     |> Seq.toList
 
-                // Synthesize lessons from patterns
-                let successfulPatterns =
+                let successes =
                     similar
-                    |> List.filter (fun ep -> ep.Success)
-                    |> List.map (fun ep -> sprintf "When %s -> %s (success)" ep.Action ep.Observation)
+                    |> List.filter (fun episode -> episode.Success)
+                    |> List.map (fun episode -> sprintf "When %s -> %s (success)" episode.Action episode.Observation)
 
-                let failurePatterns =
+                let failures =
                     similar
-                    |> List.filter (fun ep -> not ep.Success)
-                    |> List.map (fun ep -> sprintf "Avoid: %s -> %s (failed)" ep.Action ep.Observation)
+                    |> List.filter (fun episode -> not episode.Success)
+                    |> List.map (fun episode -> sprintf "Avoid: %s -> %s (failed)" episode.Action episode.Observation)
 
-                return successfulPatterns @ failurePatterns
+                return successes @ failures
             }
 
-          ForgetBelowAsync = fun (importanceThreshold: float) ->
+        let delete predicate =
+            let matches = episodes.Values |> Seq.filter predicate |> Seq.toArray
+
+            for episode in matches do
+                episodes.TryRemove(key episode.Owner episode.Id) |> ignore
+                embeddings.TryRemove(key episode.Owner episode.Id) |> ignore
+
+            Task.FromResult matches.Length
+
+        let forgetBelowAsync owner threshold =
+            requireOwner owner
+            delete (fun episode -> episode.Owner = owner && episode.Importance < threshold)
+
+        let protect owner operation =
             task {
-                let toForget =
-                    episodes.Values
-                    |> Seq.filter (fun ep -> ep.Importance < importanceThreshold)
-                    |> Seq.toList
-                let mutable count = 0
-                for ep in toForget do
-                    if episodes.TryRemove(ep.Id) |> fst then
-                        embeddings.TryRemove(ep.Id) |> ignore
-                        count <- count + 1
-                return count
-            } }
+                if String.IsNullOrWhiteSpace owner then
+                    return
+                        Error(
+                            PlatformFailure.create
+                                PlatformErrorCategory.InvalidInput
+                                "Episodic-memory owner cannot be blank."
+                                false
+                                None
+                        )
+                else
+                    try
+                        let! count = operation ()
+                        return Ok count
+                    with error ->
+                        return Error(PlatformFailure.fromException PlatformFailureBoundary.Storage None error)
+            }
+
+        let deleteOwnerAsync owner =
+            protect owner (fun () -> delete (fun episode -> episode.Owner = owner))
+
+        let deleteExpiredAsync owner before =
+            protect owner (fun () -> delete (fun episode -> episode.Owner = owner && episode.Timestamp < before))
+
+        { RecordAsync = recordAsync
+          QueryAsync = queryAsync
+          LinkAsync = linkAsync
+          GetChainAsync = getChainAsync
+          SynthesizeAsync = synthesizeAsync
+          ForgetBelowAsync = forgetBelowAsync
+          DeleteOwnerAsync = deleteOwnerAsync
+          DeleteExpiredAsync = deleteExpiredAsync }

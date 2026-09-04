@@ -15,12 +15,14 @@ type ToolProtocolTests() =
             []
             ToolCodec.text
             ToolCodec.text
-            (ToolOperation.create (fun _ input -> task {
-                let! output = execute input
-                return Ok output }))
+            (ToolOperation.create (fun _ input ->
+                task {
+                    let! output = execute input
+                    return Ok output
+                }))
 
     let tools =
-        [ textTool "add" "Add numbers" (fun input -> Task.FromResult (sprintf "result:%s" input))
+        [ textTool "add" "Add numbers" (fun input -> Task.FromResult(sprintf "result:%s" input))
           textTool "sub" "Subtract numbers" (fun _ -> Task.FromResult "subtracted") ]
 
     [<TestMethod>]
@@ -28,12 +30,20 @@ type ToolProtocolTests() =
         let cases =
             [ ToolFailureKind.InputContract, true, PlatformErrorCategory.InvalidInput
               ToolFailureKind.PermissionDenied, false, PlatformErrorCategory.PermissionDenied
+              ToolFailureKind.NotReady, false, PlatformErrorCategory.NotReady
+              ToolFailureKind.ResourceExhausted, true, PlatformErrorCategory.ResourceExhausted
               ToolFailureKind.OutputContract, false, PlatformErrorCategory.InvalidOutput
+              ToolFailureKind.InternalFailure, false, PlatformErrorCategory.InternalFailure
+              ToolFailureKind.Cancelled, false, PlatformErrorCategory.Cancelled
               ToolFailureKind.Execution, true, PlatformErrorCategory.TransientDependency
               ToolFailureKind.Execution, false, PlatformErrorCategory.PermanentDependency ]
 
         for kind, retryable, expectedCategory in cases do
-            let failure = { Kind = kind; Message = "failed"; Retryable = retryable }
+            let failure =
+                { Kind = kind
+                  Message = "failed"
+                  Retryable = retryable }
+
             Assert.AreEqual(expectedCategory, failure.Category)
 
             let platformFailure = failure.ToPlatformFailure(Some "tool-call-1")
@@ -77,6 +87,7 @@ type ToolProtocolTests() =
         Assert.IsFalse(result.Success)
         Assert.IsTrue(result.Error.IsSome)
         Assert.IsTrue(result.Error.Value.Contains("not found"))
+        Assert.AreEqual(Some PlatformErrorCategory.InvalidInput, result.Failure |> Option.map _.Category)
 
     [<TestMethod>]
     member _.InvokeAsyncHandlesException() =
@@ -85,6 +96,7 @@ type ToolProtocolTests() =
         let result = (protocol.InvokeAsync AgentContext.allowAll "fail" "x").Result
         Assert.IsFalse(result.Success)
         Assert.IsTrue(result.Error.Value.Contains("boom"))
+        Assert.AreEqual(Some PlatformErrorCategory.InternalFailure, result.Failure |> Option.map _.Category)
 
     [<TestMethod>]
     member _.IsAvailableReturnsTrueForExisting() =
@@ -95,9 +107,19 @@ type ToolProtocolTests() =
     [<TestMethod>]
     member _.WithMiddlewareBlocksOnBeforeError() =
         let blockMiddleware =
-            { BeforeExecute = fun _name _input -> Task.FromResult(Error "blocked")
+            { BeforeExecute =
+                fun _name _input ->
+                    Task.FromResult(
+                        Error
+                            { Kind = ToolFailureKind.PermissionDenied
+                              Message = "blocked"
+                              Retryable = false }
+                    )
               AfterExecute = fun _name result -> Task.FromResult result }
-        let protocol = ToolProtocol.fromTools tools |> ToolProtocol.withMiddleware blockMiddleware
+
+        let protocol =
+            ToolProtocol.fromTools tools |> ToolProtocol.withMiddleware blockMiddleware
+
         let result = (protocol.InvokeAsync AgentContext.allowAll "add" "5").Result
         Assert.IsFalse(result.Success)
         Assert.AreEqual(Some "blocked", result.Error)
@@ -106,14 +128,26 @@ type ToolProtocolTests() =
     member _.RateLimitMiddlewareAllowsWithinLimit() =
         let middleware = ToolProtocol.rateLimitMiddleware 100
         let result = (middleware.BeforeExecute "test" "input").Result
+
         match result with
         | Ok v -> Assert.AreEqual("input", v)
         | Error _ -> Assert.Fail("Should be allowed")
 
     [<TestMethod>]
+    member _.RateLimitMiddlewareReturnsResourceExhausted() =
+        let middleware = ToolProtocol.rateLimitMiddleware 0
+
+        match (middleware.BeforeExecute "test" "input").Result with
+        | Ok _ -> Assert.Fail("The zero-call limit must reject the invocation.")
+        | Error failure ->
+            Assert.AreEqual(PlatformErrorCategory.ResourceExhausted, failure.Category)
+            Assert.IsTrue(failure.Retryable)
+
+    [<TestMethod>]
     member _.InvokeAsyncUsesProvidedPermissionContext() =
         let ran = ref false
         let permission = ResourceAccess.File("write", "/tmp/protocol.txt")
+
         let permissionedTool =
             Tool.create
                 "writer"
@@ -122,15 +156,21 @@ type ToolProtocolTests() =
                 [ permission ]
                 ToolCodec.text
                 ToolCodec.text
-                (ToolOperation.create (fun _ input -> task {
-                    ran.Value <- true
-                    return Ok input }))
+                (ToolOperation.create (fun _ input ->
+                    task {
+                        ran.Value <- true
+                        return Ok input
+                    }))
+
         let asked = ResizeArray<ResourceAccess>()
+
         let context =
             { AgentContext.allowAll with
-                RequestPermission = fun access _ _ ->
-                    asked.Add access
-                    Task.FromResult false }
+                RequestPermission =
+                    fun access _ _ ->
+                        asked.Add access
+                        Task.FromResult false }
+
         let protocol = ToolProtocol.fromTools [ permissionedTool ]
 
         let result = (protocol.InvokeAsync context "writer" "content").Result
@@ -143,8 +183,7 @@ type ToolProtocolTests() =
     [<TestMethod>]
     member _.CompositionPassesContextAndChainsOutputs() =
         let protocol = ToolProtocol.fromTools tools
-        let composition =
-            ToolComposition.Chain [ ToolStep.Of "add"; ToolStep.Of "sub" ]
+        let composition = ToolComposition.Chain [ ToolStep.Of "add"; ToolStep.Of "sub" ]
 
         let result =
             ToolComposer.executeAsync AgentContext.allowAll protocol composition "5"
@@ -156,27 +195,32 @@ type ToolProtocolTests() =
     [<TestMethod>]
     member _.McpToolUsesQualifiedNameAndRemoteDefinition() =
         let mutable invoked = None
+
         let client =
             { ConnectAsync = fun () -> Task.FromResult(Error "unused")
               ListToolsAsync = fun () -> Task.FromResult([])
               ListResourcesAsync = fun () -> Task.FromResult([])
-              InvokeToolAsync = fun name arguments ->
-                  invoked <- Some(name, arguments)
-                  Task.FromResult(Ok "remote-result")
+              InvokeToolAsync =
+                fun name arguments ->
+                    invoked <- Some(name, arguments)
+                    Task.FromResult(Ok "remote-result")
               ReadResourceAsync = fun _ -> Task.FromResult(Error "unused")
               State = fun () -> McpConnectionState.Disconnected
               DisconnectAsync = fun () -> Task.FromResult(()) }
+
         let definition =
             { Name = "search"
               Description = Some "Search remotely"
               InputSchema = "{\"type\":\"object\"}"
               Annotations = Map.empty }
+
         let tool = McpTool.create "docs.search" client definition
 
-        let result = tool.RunAsync AgentContext.allowAll "{\"query\":\"Nao\"}" |> fun task -> task.Result
+        let result =
+            tool.RunAsync AgentContext.allowAll "{\"query\":\"Nao\"}"
+            |> fun task -> task.Result
 
         Assert.AreEqual("docs.search", tool.Name)
         Assert.AreEqual(definition.InputSchema, tool.Schema.Input)
         Assert.AreEqual(Some("search", "{\"query\":\"Nao\"}"), invoked)
         Assert.AreEqual(Ok "remote-result", result)
-

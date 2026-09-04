@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\Nao.Providers\src\Configs\AnthropicConfig.fs" Link="src\Configs\AnthropicConfig.fs" />
+    <Compile Include="..\Nao.Providers\src\Providers\AnthropicDtos.fs" Link="src\Providers\AnthropicDtos.fs" />
+    <Compile Include="..\Nao.Providers\src\Providers\AnthropicProvider.fs" Link="src\Providers\AnthropicProvider.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Nao.Agents\Nao.Agents.fsproj" />
+  </ItemGroup>
+
+  <Import Project="..\..\.paket\Paket.Restore.targets" />
+
+</Project>

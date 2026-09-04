@@ -12,11 +12,15 @@ module private EventBusTestHelpers =
     /// Test consumer that records the events it receives (and can optionally throw).
     let recordingConsumer shouldFail =
         let received = ResizeArray<NaoEvent>()
+
         let consumer =
             EventConsumer.create (fun evt ->
-                if shouldFail then failwith "boom"
+                if shouldFail then
+                    failwith "boom"
+
                 received.Add evt
                 Task.CompletedTask)
+
         consumer, received
 
 open EventBusTestHelpers
@@ -31,7 +35,8 @@ type EventBusTests() =
             conversationId = "c1",
             workspaceKey = "ws",
             actionId = "turn-1",
-            sessionKey = "dev/s1")
+            sessionKey = "dev/s1"
+        )
 
     let sampleTurn () =
         { TurnRecord.Empty with
@@ -43,7 +48,9 @@ type EventBusTests() =
             CreatedAt = DateTimeOffset.UtcNow }
 
     let tempDir () =
-        let dir = Path.Combine(Path.GetTempPath(), "nao-events-" + Guid.NewGuid().ToString("N"))
+        let dir =
+            Path.Combine(Path.GetTempPath(), "nao-events-" + Guid.NewGuid().ToString("N"))
+
         Directory.CreateDirectory dir |> ignore
         dir
 
@@ -90,7 +97,11 @@ type EventBusTests() =
     member _.UnsubscribeUsesConsumerIdentity() =
         let bus = InMemoryEventBus.create ()
         let received = ResizeArray<NaoEvent>()
-        let handle evt = received.Add evt; Task.CompletedTask
+
+        let handle evt =
+            received.Add evt
+            Task.CompletedTask
+
         let first = EventConsumer.create handle
         let second = EventConsumer.create handle
         EventBus.subscribe first bus
@@ -105,10 +116,12 @@ type EventBusTests() =
     member _.PublishUsesSubscriptionSnapshot() =
         let bus = InMemoryEventBus.create ()
         let late, received = recordingConsumer false
+
         let subscribing =
             EventConsumer.create (fun _ ->
                 EventBus.subscribe late bus
                 Task.CompletedTask)
+
         EventBus.subscribe subscribing bus
 
         EventBus.publishAsync (TurnCompleted(scope (), sampleTurn ())) bus |> _.Wait()
@@ -120,18 +133,24 @@ type EventBusTests() =
     member _.PublishAwaitsConsumersSequentially() =
         let bus = InMemoryEventBus.create ()
         let order = ResizeArray<string>()
-        let release = TaskCompletionSource<unit>(TaskCreationOptions.RunContinuationsAsynchronously)
+
+        let release =
+            TaskCompletionSource<unit>(TaskCreationOptions.RunContinuationsAsynchronously)
+
         let first =
             EventConsumer.create (fun _ ->
                 task {
                     order.Add "first-start"
                     do! release.Task
                     order.Add "first-end"
-                } :> Task)
+                }
+                :> Task)
+
         let second =
             EventConsumer.create (fun _ ->
                 order.Add "second"
                 Task.CompletedTask)
+
         EventBus.subscribe first bus
         EventBus.subscribe second bus
 
@@ -146,7 +165,10 @@ type EventBusTests() =
     [<TestMethod>]
     member _.RoutesTurnToPerSessionFolder() =
         let root = tempDir ()
-        let consumer = FeedbackEventConsumer.create (fun key -> Path.Combine(root, key.Replace("/", "_"), "feedback"))
+
+        let consumer =
+            FeedbackEventConsumer.create (fun key -> Path.Combine(root, key.Replace("/", "_"), "feedback"))
+
         let evt = TurnCompleted(scope (), sampleTurn ())
 
         EventConsumer.handleAsync evt consumer.Consumer |> _.Wait()
@@ -157,14 +179,18 @@ type EventBusTests() =
     [<TestMethod>]
     member _.SeparatesDistinctSessions() =
         let root = tempDir ()
-        let consumer = FeedbackEventConsumer.create (fun key -> Path.Combine(root, key.Replace("/", "_"), "feedback"))
-        let scopeA =
-            EventScope.Create("dev", "s1", "c1", "ws", "turn-a", "dev/s1")
-        let scopeB =
-            EventScope.Create("dev", "s2", "c1", "ws", "turn-b", "dev/s2")
 
-        EventConsumer.handleAsync (TurnCompleted(scopeA, sampleTurn ())) consumer.Consumer |> _.Wait()
-        EventConsumer.handleAsync (TurnCompleted(scopeB, sampleTurn ())) consumer.Consumer |> _.Wait()
+        let consumer =
+            FeedbackEventConsumer.create (fun key -> Path.Combine(root, key.Replace("/", "_"), "feedback"))
+
+        let scopeA = EventScope.Create("dev", "s1", "c1", "ws", "turn-a", "dev/s1")
+        let scopeB = EventScope.Create("dev", "s2", "c1", "ws", "turn-b", "dev/s2")
+
+        EventConsumer.handleAsync (TurnCompleted(scopeA, sampleTurn ())) consumer.Consumer
+        |> _.Wait()
+
+        EventConsumer.handleAsync (TurnCompleted(scopeB, sampleTurn ())) consumer.Consumer
+        |> _.Wait()
 
         Assert.IsTrue(File.Exists(Path.Combine(root, "dev_s1", "feedback", "turns.jsonl")))
         Assert.IsTrue(File.Exists(Path.Combine(root, "dev_s2", "feedback", "turns.jsonl")))
@@ -172,7 +198,9 @@ type EventBusTests() =
     [<TestMethod>]
     member _.FeedbackFor_ReturnsServiceForReads() =
         let root = tempDir ()
-        let consumer = FeedbackEventConsumer.create (fun key -> Path.Combine(root, key.Replace("/", "_"), "feedback"))
+
+        let consumer =
+            FeedbackEventConsumer.create (fun key -> Path.Combine(root, key.Replace("/", "_"), "feedback"))
 
         let svc = FeedbackEventConsumer.feedbackFor "dev/s1" consumer
 

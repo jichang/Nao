@@ -14,6 +14,7 @@
     <Compile Include="src/MSTestSettings.fs" />
     <Compile Include="src/EvaluatorTests.fs" />
     <Compile Include="src/EvalRunnerTests.fs" />
+    <Compile Include="src/EvalArchiveTests.fs" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\Nao.Eval\Nao.Eval.fsproj" />

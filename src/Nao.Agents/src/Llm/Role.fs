@@ -5,4 +5,3 @@ type Role =
     | System
     | User
     | Assistant
-

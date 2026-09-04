@@ -25,6 +25,7 @@ type ConversationContextRenderTests() =
         let history =
             [ msg "User" "Convert this markdown file to pdf" [ "report.md" ]
               msg "Assistant" "Conversion started." [] ]
+
         let result = ConversationContextRender.withHistory 8 history "convert it to html"
         // The earlier turn and the new request must both be present so "it" can be resolved.
         StringAssert.Contains(result, "Convert this markdown file to pdf")
@@ -40,8 +41,7 @@ type ConversationContextRenderTests() =
 
     [<TestMethod>]
     member _.RecentTranscript_KeepsOnlyTheLastNMessages() =
-        let history =
-            [ for i in 1..10 -> msg "User" (sprintf "message %d" i) [] ]
+        let history = [ for i in 1..10 -> msg "User" (sprintf "message %d" i) [] ]
         let result = ConversationContextRender.recentTranscript 3 history
         StringAssert.Contains(result, "message 8")
         StringAssert.Contains(result, "message 9")

@@ -19,15 +19,20 @@ type AgentGroup =
 module AgentGroup =
 
     let create agents termination =
-        { Agents = agents; Moderator = None; Termination = termination }
+        { Agents = agents
+          Moderator = None
+          Termination = termination }
 
     let createModerated agents moderator termination =
-        { Agents = agents; Moderator = Some moderator; Termination = termination }
+        { Agents = agents
+          Moderator = Some moderator
+          Termination = termination }
 
     let shouldTerminate (history: AgentMessage list) (group: AgentGroup) =
         match group.Termination with
         | MaxRounds maxRounds ->
-            group.Agents.IsEmpty || history.Length >= 1 + max 0 maxRounds * group.Agents.Length
+            group.Agents.IsEmpty
+            || history.Length >= 1 + max 0 maxRounds * group.Agents.Length
         | ContentContains keyword -> history |> List.exists (fun message -> message.Content.Contains(keyword))
         | Custom predicate -> predicate history
 
@@ -52,7 +57,8 @@ module AgentGroup =
                             finished <- shouldTerminate (history |> Seq.toList) group
                         | None -> ()
 
-                if not progressed then finished <- true
+                if not progressed then
+                    finished <- true
 
             return history |> Seq.toList
         }

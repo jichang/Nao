@@ -1,60 +1,87 @@
 namespace Nao.Persistence
 
+open System
 open Nao.Agents
 
-/// Mutating events for episodic memory persistence.
 [<RequireQualifiedAccess>]
 type EpisodicEvent =
     | Record of Episode
-    | Link of fromId: string * toId: string
-    | Forget of importanceThreshold: float
+    | Link of owner: string * fromId: string * toId: string
+    | ForgetBelow of owner: string * importanceThreshold: float
+    | DeleteOwner of owner: string
+    | DeleteExpired of owner: string * before: DateTimeOffset
 
-/// Event-sourced episodic memory. Delegates all query logic to an in-memory
-/// instance rebuilt by replaying the event log, so similarity/graph behaviour is
-/// identical to `InMemoryEpisodicMemory`.
+type EpisodicDocument = { Version: int; Event: EpisodicEvent }
+
 module PersistentEpisodicMemory =
     let create (store: EventStore) (embeddingProvider: EmbeddingProvider option) : EpisodicMemory =
         let inner = InMemoryEpisodicMemory.create embeddingProvider
 
+        let replay event =
+            match event with
+            | EpisodicEvent.Record episode -> inner.RecordAsync episode |> _.GetAwaiter().GetResult()
+            | EpisodicEvent.Link(owner, fromId, toId) -> inner.LinkAsync owner fromId toId |> _.GetAwaiter().GetResult()
+            | EpisodicEvent.ForgetBelow(owner, threshold) ->
+                inner.ForgetBelowAsync owner threshold |> _.GetAwaiter().GetResult() |> ignore
+            | EpisodicEvent.DeleteOwner owner -> inner.DeleteOwnerAsync owner |> _.GetAwaiter().GetResult() |> ignore
+            | EpisodicEvent.DeleteExpired(owner, before) ->
+                inner.DeleteExpiredAsync owner before |> _.GetAwaiter().GetResult() |> ignore
+
         do
-            for line in store.LoadAll() do
-                match FSharpJson.deserialize<EpisodicEvent> line with
-                | EpisodicEvent.Record ep -> inner.RecordAsync(ep).GetAwaiter().GetResult()
-                | EpisodicEvent.Link(f, t) -> (inner.LinkAsync f t).GetAwaiter().GetResult()
-                | EpisodicEvent.Forget th -> (inner.ForgetBelowAsync th).GetAwaiter().GetResult() |> ignore
+            store.LoadAll()
+            |> Seq.map FSharpJson.deserialize<EpisodicDocument>
+            |> Seq.iter (fun document ->
+                if document.Version <> 1 then
+                    invalidOp (sprintf "Unsupported episodic-memory document version: %d." document.Version)
 
-        { RecordAsync = fun (episode: Episode) ->
+                replay document.Event)
+
+        let append event =
+            store.Append(FSharpJson.serialize { Version = 1; Event = event })
+
+        let appendAfter operation event =
             task {
-                do! inner.RecordAsync episode
-                store.Append(FSharpJson.serialize (EpisodicEvent.Record episode))
+                do! operation
+                append event
             }
 
-          QueryAsync = fun (query: EpisodeQuery) -> inner.QueryAsync query
-
-          LinkAsync = fun (fromId: string) (toId: string) ->
+        let countAfter operation event =
             task {
-                do! inner.LinkAsync fromId toId
-                store.Append(FSharpJson.serialize (EpisodicEvent.Link(fromId, toId)))
+                let! count = operation
+                append event
+                return count
             }
 
-          GetChainAsync = fun (episodeId: string) -> inner.GetChainAsync episodeId
-
-          SynthesizeAsync = fun (context: string) -> inner.SynthesizeAsync context
-
-          ForgetBelowAsync = fun (importanceThreshold: float) ->
+        let deleteAfter operation event =
             task {
-                let! removed = inner.ForgetBelowAsync importanceThreshold
-                store.Append(FSharpJson.serialize (EpisodicEvent.Forget importanceThreshold))
-                return removed
-            } }
+                let! result = operation
 
-/// Factory helpers for episodic memory persistence.
+                match result with
+                | Ok _ -> append event
+                | Error _ -> ()
+
+                return result
+            }
+
+        { RecordAsync = fun episode -> appendAfter (inner.RecordAsync episode) (EpisodicEvent.Record episode)
+          QueryAsync = inner.QueryAsync
+          LinkAsync =
+            fun owner fromId toId ->
+                appendAfter (inner.LinkAsync owner fromId toId) (EpisodicEvent.Link(owner, fromId, toId))
+          GetChainAsync = inner.GetChainAsync
+          SynthesizeAsync = inner.SynthesizeAsync
+          ForgetBelowAsync =
+            fun owner threshold ->
+                countAfter (inner.ForgetBelowAsync owner threshold) (EpisodicEvent.ForgetBelow(owner, threshold))
+          DeleteOwnerAsync = fun owner -> deleteAfter (inner.DeleteOwnerAsync owner) (EpisodicEvent.DeleteOwner owner)
+          DeleteExpiredAsync =
+            fun owner before ->
+                deleteAfter (inner.DeleteExpiredAsync owner before) (EpisodicEvent.DeleteExpired(owner, before)) }
+
 module EpisodicMemories =
-    /// ADO.NET-backed episodic memory over any provider supplied via the connection factory.
     let ado (factory: DbConnectionFactory) (embeddingProvider: EmbeddingProvider option) : EpisodicMemory =
         PersistentEpisodicMemory.create (EventStore.db factory "episodic") embeddingProvider
 
-    /// FileSystem-backed episodic memory rooted at the given directory.
     let file (baseDir: string) (embeddingProvider: EmbeddingProvider option) : EpisodicMemory =
         PersistentEpisodicMemory.create
             (EventStore.file (System.IO.Path.Combine(baseDir, "episodic.jsonl")))

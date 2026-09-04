@@ -34,12 +34,28 @@ Identity scopes are ordered from broad to narrow: tenant, organizational group, 
 | Turn | Session runtime | Immutable attribution for the session retention lifetime; corrections append new facts rather than changing identity |
 | Execution | Harness/runtime | One bounded attempt; completion, failure, or cancellation closes it, after which operational records follow telemetry/audit policy |
 
-`SessionDeletion` coordinates the implemented session destruction path. It deletes the session conversation directory, clears the `session:<grain-key>` memory owner, removes the per-user directory entry, and clears Orleans session state. The runtime performs these idempotent effects before deactivation, and isolation tests verify that another session is preserved.
+`SessionDeletion` coordinates the implemented session destruction path. It deletes the conversation directory, session turn records, the `session:<grain-key>` memory owner, session-owned metrics, and the execution journal before removing the per-user directory entry and clearing Orleans state. Owner deletion stops on the first structured failure, preserving directory and runtime identity for retry. Isolation tests verify that another session is preserved.
+
+`AuditLog` includes deletion of all records for one `AgentId` owner and retention purge before a caller-supplied cutoff. In-memory, file, and ADO.NET implementations enforce the same owner isolation and reject blank owners with `PlatformErrorCategory.InvalidInput`. The governance owner chooses the cutoff according to its retention and legal-hold policy; Nao does not impose a universal audit retention period.
+
+`SemanticMemory` likewise owns deletion of all entries for one agent and retention purge before a caller-supplied cutoff. Its in-memory, file, and ADO.NET implementations use the same strict cutoff and blank-owner validation. These operations delete the embeddings stored by the current adapters; future external vector indexes must participate in the same deletion path.
+
+`MemoryStore` exposes counted owner deletion and retention purge before a caller-supplied cutoff. All three adapters retain entries exactly at the cutoff, reject blank owners, and isolate deletion to the requested owner.
+
+`TraceStore` exposes the same owner and cutoff operations using `ExecutionTrace.AgentId` and `StartedAt`. The in-memory adapter physically removes matching traces; file and ADO.NET adapters append deletion tombstones that are enforced during replay. Tombstones remove records from the authoritative reconstructed view but do not physically erase historical payloads from the append-only event stream, so privacy-driven erasure still requires future compaction or stream replacement.
+
+`TurnStore` treats `SessionId` as owner, `CreatedAt` as the retention timestamp, and `TurnId` as the identity of one authoritative logical record. ADO.NET deletion removes rows physically; JSONL deletion appends ordered typed tombstones. `FeedbackService.DeleteSessionAsync` exposes this owner operation to coordinated session destruction.
+
+`FeedbackStore` treats `UserId` as owner because feedback is a user-provided signal that may span sessions; `SessionId` and `TurnId` remain correlation. It supports counted owner deletion and strict cutoff purge by `CreatedAt`, with physical ADO.NET deletion and ordered typed JSONL tombstones. Hosts authorize deletion and apply legal holds; deleting source feedback does not erase already-derived evaluation datasets governed by separate retention policy.
+
+`EvalArchive` owns derived evaluation datasets and reports. Datasets, runs, results, and reports carry stable identity and explicit owner correlation; reports validate that every child result matches their owner, dataset, and run. In-memory and versioned JSONL archives provide owner-scoped retrieval, counted owner deletion, and strict cutoff retention using dataset creation and report run timestamps. File deletion is tombstone-based and survives replay.
+
+`ExecutionJournal` treats the session workflow key as owner because compensation belongs to the workflow that caused the side effect, not to an agent definition. Every `ExecutionRecord` requires a stable ID, owner, and turn ID; orchestration rejects journal writes without that identity. In-memory, versioned-file, and indexed ADO.NET adapters physically delete matching records before a strict `ExecutedAt` cutoff. Coordinated session destruction deletes that journal before removing runtime identity; hosts must preserve compensation history while a workflow can still be reverted.
 
 | Data | Durable authority | Projection or derived view | Trust | Retention and deletion owner |
 |---|---|---|---|---|
 | Conversation context | Committed session turns | Model window, compacted history, summary | Untrusted input plus model output | Session runtime applies host retention; session destruction removes the conversation records it owns |
-| Working memory | Current execution/session state | Prompt context | Runtime-derived, not independently authoritative | Execution or session owner; discard at boundary unless explicitly promoted |
+| Working memory | Current execution state | Prompt context | Runtime-derived, not independently authoritative | Execution owner; discard at the execution boundary unless explicitly promoted |
 | Episodic memory | Persisted event or memory entry with owner and provenance | Recall results | Historical evidence | Host policy for the owning tenant/user/agent scope |
 | Semantic memory | Persisted text, embedding metadata, owner, and provenance | Similarity results | Derived and potentially uncertain | Host policy and storage adapter; deletion must include derived indexes |
 | Knowledge | Versioned external source record with provenance | Chunks, embeddings, indexes, retrieval results | Source-backed but retrieved content remains untrusted instructions | Source owner and ingestion policy; deletion cascades through derivatives |
@@ -49,9 +65,9 @@ Identity scopes are ordered from broad to narrow: tenant, organizational group, 
 
 Persisted append-only events record accepted facts and are the reconstruction authority. Mutable stores, indexes, summaries, registries, and dashboards are projections or configuration views and must be rebuildable or explicitly versioned. `NaoEvent` is an in-process notification contract, not automatically a persisted event. `ConversationStore.SaveAsync` is a mutable projection boundary, while `EventStore` is append-only.
 
-Deletion means deleting or tombstoning the authoritative record according to policy and then removing or rebuilding all derived views. Current adapters do not yet implement this lifecycle consistently; callers must not infer complete erasure from one store operation.
+Deletion means deleting or tombstoning the authoritative record according to policy and then removing or rebuilding all derived views. Current adapters do not yet implement this lifecycle consistently; callers must not infer complete erasure from one store operation. Working-, episodic-, graph-, and tiered-memory plus metrics file and ADO.NET streams use versioned owner-scoped events and durable lifecycle tombstones; their replay projections and aggregates are not independent authorities.
 
-The session lifecycle does not yet cover globally rooted or database-backed feedback, turns, audit records, execution journals, traces, metrics, episodic memory, graph memory, working memory, tiered memory, or append-only event streams. Those stores require owner fields, retention contracts, and deletion or tombstone operations before Nao can claim complete durable-record lifecycle coverage.
+The session lifecycle does not automatically purge audit records, user-owned feedback, or separately owned evaluation archives because their governance retention may outlive a session. Hosts invoke those deletion operations only when policy permits. Metrics accept stable, timestamped `MetricRecord` values, aggregate within their owner, and participate in coordinated session destruction.
 
 ## Trust levels
 
@@ -73,13 +89,13 @@ Trust and authorization are independent. Verified or source-backed content canno
 | Permission denied | Authenticated context lacks authority or policy denies access | Do not retry unchanged; require a new grant or policy/context change | `ToolFailureKind.PermissionDenied`, `HarnessError.PermissionDenied`, `HarnessError.PolicyBlocked` |
 | Not ready | A dependency or lifecycle prerequisite is unavailable | Retry only when the failed prerequisite can change | `HarnessError.NotReady`, `HarnessError.InitializationFailed` |
 | Resource exhausted | A configured time, token, call, cost, or tool limit was reached | Do not retry with the same limits; resume or retry only under explicit budget policy | `HarnessError.ResourceLimitExceeded` |
-| Transient dependency | A provider, transport, database, or runtime dependency failed temporarily | Retry when the operation is idempotent and bounded retry policy permits | Tool execution failures marked `Retryable = true`; provider/runtime mappings remain incomplete |
-| Permanent dependency | A dependency rejected a supported request or cannot satisfy it | Do not retry unchanged | Tool execution failures marked `Retryable = false`; provider/runtime mappings remain incomplete |
+| Transient dependency | A provider, transport, database, or runtime dependency failed temporarily | Retry when the operation is idempotent and bounded retry policy permits | Provider transport and 5xx failures; storage I/O failures; retryable tool execution failures |
+| Permanent dependency | A dependency rejected a supported request or cannot satisfy it | Do not retry unchanged | Provider 404 and other non-transient HTTP failures; non-retryable tool dependency failures |
 | Invalid output | Agent, provider, or tool output violates its declared contract or constitution | Repair or retry only under a bounded policy | `ToolFailureKind.OutputContract`, `HarnessError.ConstitutionViolation` |
 | Internal failure | Unexpected implementation defect or invariant violation | Do not automatically retry unless classified by the owning boundary | `HarnessError.ExecutionFailed`; unclassified exceptions |
-| Cancelled | Caller cancellation or execution shutdown | Do not retry automatically; the caller decides whether to start a new execution | Cancellation tokens/exceptions; structured mappings remain incomplete |
+| Cancelled | Caller cancellation or execution shutdown | Do not retry automatically; the caller decides whether to start a new execution | Canonically classified cancellation exceptions |
 
-Expected failures should cross public boundaries as structured values with category, diagnostic, retryability, and correlation. Tool and harness failures expose the shared `PlatformErrorCategory` and retryability contract. Provider, persistence, and Orleans mappings are not yet unified and remain FND-03 implementation work.
+Expected failures cross public boundaries as structured values with category, diagnostic, retryability, and correlation. Agents, tools, providers, storage, and Orleans hosts use `PlatformErrorCategory`; task APIs without an error result transport the same `PlatformFailure` through `PlatformFailureException`.
 
 ## Execution flow
 

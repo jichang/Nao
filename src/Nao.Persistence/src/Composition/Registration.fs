@@ -2,16 +2,6 @@ namespace Nao.Persistence
 
 open Nao.Agents
 
-/// Selects which durable backend the persistence factories should produce. The host
-/// turns this single knob to choose between the two storage categories: file system
-/// or database.
-[<RequireQualifiedAccess>]
-type PersistenceMode =
-    /// FileSystem-backed implementations rooted at the given directory.
-    | File of baseDir: string
-    /// Provider-agnostic ADO.NET implementations using the supplied connection factory.
-    | Database of factory: DbConnectionFactory
-
 /// Builds concrete persistence components for a chosen `PersistenceMode`. The rest of
 /// the system depends only on functional capability records; this module is the one place that maps a
 /// mode to an implementation, so swapping file for database is a single edit.

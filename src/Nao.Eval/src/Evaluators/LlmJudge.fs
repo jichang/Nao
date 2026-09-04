@@ -27,10 +27,17 @@ module internal LlmJudgeResponse =
         JsonSerializer.Deserialize<LlmJudgeResponseDto>(json.Trim())
 
 /// Configuration for the LLM-as-judge evaluator
-type LlmJudgeConfig = { Provider: LlmProvider; Options: CompletionOptions; Criteria: string; ScaleDescription: string } with
+type LlmJudgeConfig =
+    { Provider: LlmProvider
+      Options: CompletionOptions
+      Criteria: string
+      ScaleDescription: string }
+
     static member Default provider =
         { Provider = provider
-          Options = { CompletionOptions.Default with Temperature = 0.0 }
+          Options =
+            { CompletionOptions.Default with
+                Temperature = 0.0 }
           Criteria = "correctness, completeness, and relevance"
           ScaleDescription = "1-5 where 1=completely wrong, 3=partially correct, 5=perfect" }
 
@@ -43,7 +50,8 @@ module LlmJudge =
             | Some exp -> sprintf "\n\nReference Answer:\n%s" exp
             | None -> ""
 
-        sprintf """You are an evaluation judge. Grade the following agent output based on: %s
+        sprintf
+            """You are an evaluation judge. Grade the following agent output based on: %s
 
 Scale: %s
 
@@ -67,8 +75,10 @@ Where score is a number on the scale described above."""
     let private parseScore (response: string) =
         try
             let parsed = LlmJudgeResponse.deserialize response
+
             if isNull parsed || not parsed.Score.HasValue then
                 raise (JsonException("score is required and must be a number."))
+
             if String.IsNullOrWhiteSpace parsed.Reason then
                 raise (JsonException("reason is required and must be a non-empty string."))
 
@@ -83,15 +93,16 @@ Where score is a number on the scale described above."""
         Evaluator.create "LlmJudge" (fun (case: EvalCase) (actual: string) ->
             task {
                 let prompt = buildPrompt config case actual
+
                 let system =
                     Prompt.render
                         { Prompt.Empty with
                             Role = "You are a precise evaluation judge."
                             OutputFormat = OutputFormat.Schema "JSON" }
-                let conversation = [
-                    { Role = System; Content = system }
-                    { Role = User; Content = prompt }
-                ]
+
+                let conversation =
+                    [ { Role = System; Content = system }; { Role = User; Content = prompt } ]
+
                 let! result = config.Provider.CompleteAsync conversation config.Options
                 let (score, reason) = parseScore result.Content
 
@@ -103,7 +114,10 @@ Where score is a number on the scale described above."""
                 return (verdict, reason)
             })
 
-    let create provider = LlmJudgeConfig.Default provider |> withConfig
+    let create provider =
+        LlmJudgeConfig.Default provider |> withConfig
 
     let withCriteria criteria provider =
-        { LlmJudgeConfig.Default provider with Criteria = criteria } |> withConfig
+        { LlmJudgeConfig.Default provider with
+            Criteria = criteria }
+        |> withConfig

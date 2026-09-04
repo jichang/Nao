@@ -23,7 +23,11 @@ type VerificationTests() =
     [<TestMethod>]
     member _.AddStepAppendsToTrace() =
         let trace = Verification.startTrace agentId "input"
-        let updated = trace |> Verification.addStep (TraceAction.LlmCall "gpt-4") "input" "output" 100L
+
+        let updated =
+            trace
+            |> Verification.addStep (TraceAction.LlmCall "gpt-4") "input" "output" 100L
+
         Assert.AreEqual(1, updated.Steps.Length)
         Assert.AreEqual(1, updated.Steps.[0].StepNumber)
         Assert.AreEqual("input", updated.Steps.[0].Input)
@@ -50,8 +54,10 @@ type VerificationTests() =
     member _.CheckReadinessAllPass() =
         let check1 =
             ReadinessCheck.create "check1" (fun _ _ -> Task.FromResult ReadinessResult.Ready)
+
         let check2 =
             ReadinessCheck.create "check2" (fun _ _ -> Task.FromResult ReadinessResult.Ready)
+
         let result = (Verification.checkReadiness [ check1; check2 ] agentId "input").Result
         Assert.AreEqual(ReadinessResult.Ready, result)
 
@@ -59,9 +65,13 @@ type VerificationTests() =
     member _.CheckReadinessCollectsFailures() =
         let passCheck =
             ReadinessCheck.create "pass" (fun _ _ -> Task.FromResult ReadinessResult.Ready)
+
         let failCheck =
-            ReadinessCheck.create "fail" (fun _ _ -> Task.FromResult(ReadinessResult.NotReady ["missing tool"]))
-        let result = (Verification.checkReadiness [ passCheck; failCheck ] agentId "input").Result
+            ReadinessCheck.create "fail" (fun _ _ -> Task.FromResult(ReadinessResult.NotReady [ "missing tool" ]))
+
+        let result =
+            (Verification.checkReadiness [ passCheck; failCheck ] agentId "input").Result
+
         match result with
         | ReadinessResult.NotReady reasons ->
             Assert.AreEqual(1, reasons.Length)
@@ -70,9 +80,14 @@ type VerificationTests() =
 
     [<TestMethod>]
     member _.CheckReadinessRunsInParallelAndPreservesReasonOrder() =
-        let firstStarted = TaskCompletionSource<unit>(TaskCreationOptions.RunContinuationsAsynchronously)
-        let secondStarted = TaskCompletionSource<unit>(TaskCreationOptions.RunContinuationsAsynchronously)
-        let release = TaskCompletionSource<unit>(TaskCreationOptions.RunContinuationsAsynchronously)
+        let firstStarted =
+            TaskCompletionSource<unit>(TaskCreationOptions.RunContinuationsAsynchronously)
+
+        let secondStarted =
+            TaskCompletionSource<unit>(TaskCreationOptions.RunContinuationsAsynchronously)
+
+        let release =
+            TaskCompletionSource<unit>(TaskCreationOptions.RunContinuationsAsynchronously)
 
         let check name (started: TaskCompletionSource<unit>) reason =
             ReadinessCheck.create name (fun _ _ ->
@@ -93,17 +108,15 @@ type VerificationTests() =
         Assert.IsTrue(secondStarted.Task.Wait(TimeSpan.FromSeconds 1.0))
         release.SetResult()
 
-        Assert.AreEqual(
-            ReadinessResult.NotReady [ "first reason"; "second reason" ],
-            pending.Result)
+        Assert.AreEqual(ReadinessResult.NotReady [ "first reason"; "second reason" ], pending.Result)
 
     [<TestMethod>]
     member _.CheckReadinessPropagatesCheckErrors() : Task =
         task {
             let expected = InvalidOperationException("readiness failed")
+
             let check =
-                ReadinessCheck.create "throws" (fun _ _ ->
-                    Task.FromException<ReadinessResult>(expected))
+                ReadinessCheck.create "throws" (fun _ _ -> Task.FromException<ReadinessResult>(expected))
 
             try
                 let! _ = Verification.checkReadiness [ check ] agentId "input"
@@ -119,12 +132,20 @@ type RegressionTests() =
     let agentId = "test"
 
     let makeTrace success steps duration =
-        let startedAt = DateTimeOffset.UtcNow.AddMilliseconds(- duration)
+        let startedAt = DateTimeOffset.UtcNow.AddMilliseconds(-duration)
+
         { Id = Guid.NewGuid()
           AgentId = agentId
           Input = "test"
           Output = Some "result"
-          Steps = [ for i in 1..steps -> { StepNumber = i; Action = TraceAction.LlmCall "test"; Input = ""; Output = ""; DurationMs = 10L; Timestamp = DateTimeOffset.UtcNow } ]
+          Steps =
+            [ for i in 1..steps ->
+                  { StepNumber = i
+                    Action = TraceAction.LlmCall "test"
+                    Input = ""
+                    Output = ""
+                    DurationMs = 10L
+                    Timestamp = DateTimeOffset.UtcNow } ]
           StartedAt = startedAt
           CompletedAt = Some DateTimeOffset.UtcNow
           Success = success
@@ -144,7 +165,11 @@ type RegressionTests() =
         let current = makeTrace true 10 1000.0 // 10 > 2*2
         let result = Regression.detect baseline current
         Assert.IsTrue(result.IsRegression)
-        Assert.IsTrue(result.Regressions |> List.exists (fun r -> r.Category = RegressionCategory.Latency))
+
+        Assert.IsTrue(
+            result.Regressions
+            |> List.exists (fun r -> r.Category = RegressionCategory.Latency)
+        )
 
     [<TestMethod>]
     member _.DetectsSuccessRegression() =
@@ -152,8 +177,18 @@ type RegressionTests() =
         let current = makeTrace false 3 1000.0
         let result = Regression.detect baseline current
         Assert.IsTrue(result.IsRegression)
-        Assert.IsTrue(result.Regressions |> List.exists (fun r -> r.Category = RegressionCategory.SuccessRate))
-        Assert.AreEqual(1.0, (result.Regressions |> List.find (fun r -> r.Category = RegressionCategory.SuccessRate)).Severity)
+
+        Assert.IsTrue(
+            result.Regressions
+            |> List.exists (fun r -> r.Category = RegressionCategory.SuccessRate)
+        )
+
+        Assert.AreEqual(
+            1.0,
+            (result.Regressions
+             |> List.find (fun r -> r.Category = RegressionCategory.SuccessRate))
+                .Severity
+        )
 
     [<TestMethod>]
     member _.InMemoryTraceStoreSavesAndRetrieves() =
@@ -167,9 +202,19 @@ type RegressionTests() =
     [<TestMethod>]
     member _.GetBaselineReturnsLatestSuccessful() =
         let store = InMemoryTraceStore.create ()
-        let old = { makeTrace true 2 2000.0 with StartedAt = DateTimeOffset.UtcNow.AddHours(-2.0) }
-        let recent = { makeTrace true 3 1000.0 with StartedAt = DateTimeOffset.UtcNow.AddMinutes(-5.0) }
-        let failed = { makeTrace false 1 500.0 with StartedAt = DateTimeOffset.UtcNow }
+
+        let old =
+            { makeTrace true 2 2000.0 with
+                StartedAt = DateTimeOffset.UtcNow.AddHours(-2.0) }
+
+        let recent =
+            { makeTrace true 3 1000.0 with
+                StartedAt = DateTimeOffset.UtcNow.AddMinutes(-5.0) }
+
+        let failed =
+            { makeTrace false 1 500.0 with
+                StartedAt = DateTimeOffset.UtcNow }
+
         store.SaveAsync(old).Wait()
         store.SaveAsync(recent).Wait()
         store.SaveAsync(failed).Wait()

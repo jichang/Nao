@@ -9,24 +9,32 @@ open Nao.Agents
 /// where the data lands — routing/persistence is entirely the consumer's choice, so a new
 /// storage strategy (per session, per category, per workspace, ...) needs no producer change.
 type EventScope =
-    { /// Owning user (grain key prefix).
-      UserId: string
-    /// Session id (grain key suffix).
-      SessionId: string
-      /// Active conversation within the session.
-      ConversationId: string
-      /// Workspace the turn ran against.
-      WorkspaceKey: string
-      /// The action that produced the event — the turn id.
-      ActionId: string
-            /// Storage routing key — the full grain key ("userId/sessionId").
-      SessionKey: string
-      /// When the event occurred.
-      Timestamp: DateTimeOffset }
+    {
+        /// Owning user (grain key prefix).
+        UserId: string
+        /// Session id (grain key suffix).
+        SessionId: string
+        /// Active conversation within the session.
+        ConversationId: string
+        /// Workspace the turn ran against.
+        WorkspaceKey: string
+        /// The action that produced the event — the turn id.
+        ActionId: string
+        /// Storage routing key — the full grain key ("userId/sessionId").
+        SessionKey: string
+        /// When the event occurred.
+        Timestamp: DateTimeOffset
+    }
 
     static member Create
-        (userId: string, sessionId: string, conversationId: string, workspaceKey: string,
-         actionId: string, sessionKey: string) : EventScope =
+        (
+            userId: string,
+            sessionId: string,
+            conversationId: string,
+            workspaceKey: string,
+            actionId: string,
+            sessionKey: string
+        ) : EventScope =
         { UserId = userId
           SessionId = sessionId
           ConversationId = conversationId
@@ -36,8 +44,7 @@ type EventScope =
           Timestamp = DateTimeOffset.UtcNow }
 
     /// An empty scope, used for library/test contexts that run an agent outside a session.
-    static member Empty : EventScope =
-        EventScope.Create("", "", "", "", "", "")
+    static member Empty: EventScope = EventScope.Create("", "", "", "", "", "")
 
 /// One process step (a tool call or sub-agent delegation) of an assistant turn, in a
 /// transport-neutral shape so the conversation event stream carries no storage-layer types.
@@ -50,20 +57,27 @@ type ConversationStep =
 /// A single persisted conversation message in a transport-neutral shape (decoupled from the
 /// runtime's storage record so this layer stays dependency-light).
 type ConversationMessage =
-    { Role: string
-      Content: string
-      Timestamp: DateTimeOffset
-    /// Turn this message belongs to.
-      TurnId: string
-    /// Process steps for an assistant turn (empty for user messages).
-      Steps: ConversationStep list
-      /// Names of files attached to a user message (empty otherwise).
-      Attachments: string list
-      /// Structured data published by tools during this turn.
-      Data: AgentContextData list }
+    {
+        Role: string
+        Content: string
+        Timestamp: DateTimeOffset
+        /// Turn this message belongs to.
+        TurnId: string
+        /// Process steps for an assistant turn (empty for user messages).
+        Steps: ConversationStep list
+        /// Names of files attached to a user message (empty otherwise).
+        Attachments: string list
+        /// Structured data published by tools during this turn.
+        Data: AgentContextData list
+    }
 
 /// The exact messages sent to an LLM and the raw response it returned.
-type LlmExchange = { Round: int; Attempt: int; IsRepair: bool; Messages: (string * string) list; Response: string }
+type LlmExchange =
+    { Round: int
+      Attempt: int
+      IsRepair: bool
+      Messages: (string * string) list
+      Response: string }
 
 /// Domain events the system dispatches. Each carries an EventScope plus its payload.
 /// Consumers subscribe to the bus and decide how/where to persist, so adding a storage
@@ -100,16 +114,12 @@ and ObservabilitySignal =
     | SpanEventAdded of Span * name: string * attributes: Map<string, string>
     /// Attributes were set on a span.
     | SpanAttributesSet of Span * attributes: Map<string, string>
-    /// An LLM call's token counts and latency were recorded.
-    | LlmCallRecorded of inputTokens: int * outputTokens: int * latencyMs: int64
-    /// A tool invocation's duration and outcome were recorded.
-    | ToolCallRecorded of toolName: string * durationMs: int64 * success: bool
-    /// A custom metric point was recorded.
-    | MetricRecorded of MetricPoint
+    /// A complete metric observation was recorded.
+    | MetricRecorded of MetricRecord
     /// A tool execution was recorded in the journal.
     | ExecutionRecorded of ExecutionRecord
     /// A journalled execution was marked reverted.
-    | ExecutionReverted of ExecutionRecord
+    | ExecutionReverted of Guid
     /// An execution trace was saved to the regression trace store.
     | TraceSaved of ExecutionTrace
     /// A governance audit entry was recorded.
@@ -153,38 +163,35 @@ type EventConsumer =
 
 module EventConsumer =
 
-  let create handle =
-    { Identity = obj ()
-      Handle = handle }
+    let create handle = { Identity = obj (); Handle = handle }
 
-  let handleAsync event consumer = consumer.Handle event
+    let handleAsync event consumer = consumer.Handle event
 
-  let sameIdentity left right =
-    obj.ReferenceEquals(left.Identity, right.Identity)
+    let sameIdentity left right =
+        obj.ReferenceEquals(left.Identity, right.Identity)
 
 /// The single dispatch service producers publish to. Fans each event out to all
 /// subscribed consumers; producers hold only this — never a concrete storage type.
 type EventBus =
-  private
-    { Publish: NaoEvent -> Task
-      Add: EventConsumer -> unit
-      Remove: EventConsumer -> unit }
+    private
+        { Publish: NaoEvent -> Task
+          Add: EventConsumer -> unit
+          Remove: EventConsumer -> unit }
 
 /// Composable event bus helpers.
 module EventBus =
 
-  let create publishAsync subscribe unsubscribe =
-    { Publish = publishAsync
-      Add = subscribe
-      Remove = unsubscribe }
+    let create publishAsync subscribe unsubscribe =
+        { Publish = publishAsync
+          Add = subscribe
+          Remove = unsubscribe }
 
-  let publishAsync event bus = bus.Publish event
+    let publishAsync event bus = bus.Publish event
 
-  let subscribe consumer bus = bus.Add consumer
+    let subscribe consumer bus = bus.Add consumer
 
-  /// Detach the first subscription with the consumer's identity.
-  let unsubscribe consumer bus = bus.Remove consumer
+    /// Detach the first subscription with the consumer's identity.
+    let unsubscribe consumer bus = bus.Remove consumer
 
     /// A bus that drops every event and has no subscribers (library/test default).
-  let none : EventBus =
-    create (fun _ -> Task.CompletedTask) ignore ignore
+    let none: EventBus = create (fun _ -> Task.CompletedTask) ignore ignore

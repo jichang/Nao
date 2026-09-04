@@ -9,9 +9,7 @@ open Nao.Agents
 module LocalLlmProvider =
 
     let create () =
-        LlmProvider.create
-            (fun () -> "LocalTest")
-            (fun (conversation: Conversation) (_options: CompletionOptions) ->
+        LlmProvider.create (fun () -> "LocalTest") (fun (conversation: Conversation) (_options: CompletionOptions) ->
             let lastMessage =
                 conversation
                 |> List.tryFindBack (fun m -> m.Role = User)
@@ -21,7 +19,7 @@ module LocalLlmProvider =
             let response =
                 if lastMessage.Contains("tool_result:") then
                     // After receiving a tool result, produce a final answer
-                    let result = lastMessage.Split("tool_result:") |> Array.last |> fun s -> s.Trim()
+                    let result = lastMessage.Split("tool_result:") |> Array.last |> (fun s -> s.Trim())
                     sprintf "Based on the tool result, the answer is: %s" result
                 elif lastMessage.Contains("weather") then
                     """{"tool":"get_weather","args":"London"}"""

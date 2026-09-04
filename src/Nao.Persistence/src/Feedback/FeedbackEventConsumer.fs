@@ -10,12 +10,15 @@ open Nao.Agents
 /// FeedbackService for a session (the query side). The folder is derived from the event's
 /// session key by `rootFor`; the backing FeedbackService is the store-level swap point (File
 /// today, Database later), so changing where data lands needs no producer change.
-type FeedbackEventConsumer = { Consumer: EventConsumer; FeedbackFor: string -> FeedbackService }
+type FeedbackEventConsumer =
+    { Consumer: EventConsumer
+      FeedbackFor: string -> FeedbackService }
 
 module FeedbackEventConsumer =
 
     let create (rootFor: string -> string) =
         let services = ConcurrentDictionary<string, FeedbackService>()
+
         let serviceFor (sessionKey: string) =
             services.GetOrAdd(rootFor sessionKey, fun dir -> FeedbackDb.file dir)
 

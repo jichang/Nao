@@ -27,8 +27,7 @@ type GraphStep =
       Step: int }
 
 /// An executable graph node backed by an agent.
-type AgentGraphNode =
-    { Id: GraphNodeId; Agent: Agent }
+type AgentGraphNode = { Id: GraphNodeId; Agent: Agent }
 
 /// A conditional transition between graph nodes. Outgoing edges are evaluated in declaration
 /// order; the first matching edge is selected. No matching edge means successful completion.
@@ -40,7 +39,10 @@ type GraphEdge =
 
 /// A bounded directed execution graph. Cycles are supported but remain bounded by `MaxSteps`.
 type ExecutionGraph =
-    { Entry: GraphNodeId; Nodes: AgentGraphNode list; Edges: GraphEdge list; MaxSteps: int }
+    { Entry: GraphNodeId
+      Nodes: AgentGraphNode list
+      Edges: GraphEdge list
+      MaxSteps: int }
 
 /// Successful graph output and the ordered execution path that produced it.
 type GraphExecutionResult =
@@ -77,8 +79,10 @@ module ExecutionGraph =
                     None)
 
         let entryProblems =
-            if Set.contains graph.Entry known then []
-            else [ sprintf "Entry node '%s' does not exist." (GraphNodeId.value graph.Entry) ]
+            if Set.contains graph.Entry known then
+                []
+            else
+                [ sprintf "Entry node '%s' does not exist." (GraphNodeId.value graph.Entry) ]
 
         let edgeProblems =
             graph.Edges
@@ -89,7 +93,10 @@ module ExecutionGraph =
                       sprintf "Edge target '%s' does not exist." (GraphNodeId.value edge.Target) ])
 
         let budgetProblems =
-            if graph.MaxSteps < 1 then [ "MaxSteps must be at least one." ] else []
+            if graph.MaxSteps < 1 then
+                [ "MaxSteps must be at least one." ]
+            else
+                []
 
         match duplicates @ entryProblems @ edgeProblems @ budgetProblems with
         | [] -> Ok graph
@@ -127,15 +134,13 @@ module ExecutionGraph =
                                     |> List.tryFind (fun edge -> edge.From = nodeId && edge.Condition step)
 
                                 match nextEdge with
-                                | Some edge ->
-                                    return Continue(edge.Target, edge.Transform step, step :: completedSteps)
+                                | Some edge -> return Continue(edge.Target, edge.Transform step, step :: completedSteps)
                                 | None ->
                                     return
                                         Complete
                                             { Output = output
                                               Steps = List.rev (step :: completedSteps) }
-                            }
-                      }
+                            } }
 
                 let! outcome = Loop.runAsync definition (validGraph.Entry, input, [])
 
@@ -186,10 +191,13 @@ module ExecutionGraph =
                 return
                     match result with
                     | Ok execution -> execution.Output
-                    | Error(InvalidGraph problems) ->
-                        raise (InvalidOperationException(String.concat " " problems))
+                    | Error(InvalidGraph problems) -> raise (InvalidOperationException(String.concat " " problems))
                     | Error(StepLimitReached(maxSteps, _)) ->
-                        raise (InvalidOperationException(sprintf "Execution graph exceeded its limit of %d steps." maxSteps))
+                        raise (
+                            InvalidOperationException(
+                                sprintf "Execution graph exceeded its limit of %d steps." maxSteps
+                            )
+                        )
             }
 
         Agent.createContextual id name description priority responsibilities contract execute

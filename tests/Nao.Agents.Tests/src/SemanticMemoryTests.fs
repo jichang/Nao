@@ -84,7 +84,7 @@ type CosineSimilarityTests() =
     member _.IdenticalVectors_ReturnOne() =
         let v = [| 1.0; 2.0; 3.0 |]
         let result = SemanticSimilarity.cosineSimilarity v v
-        Assert.IsTrue(abs(result - 1.0) < 0.001)
+        Assert.IsTrue(abs (result - 1.0) < 0.001)
 
     [<TestMethod>]
     member _.OrthogonalVectors_ReturnZero() =

@@ -12,9 +12,15 @@ open System.Threading.Tasks
 /// Construct it with whichever stores you like (file-backed for the running app, database
 /// for a shared deployment). The default factories wire sensible implementations.
 type FeedbackService =
-                { RecordTurnAsync: TurnRecord -> Task; SaveFeedbackAsync: Feedback -> Task; SubmitFeedbackAsync: Feedback -> Task }
+    { RecordTurnAsync: TurnRecord -> Task
+      SaveFeedbackAsync: Feedback -> Task
+      SubmitFeedbackAsync: Feedback -> Task
+      DeleteSessionAsync: string -> Task<Result<int, PlatformFailure>> }
 
 module FeedbackService =
 
-                let create (turnStore: TurnStore) (feedbackStore: FeedbackStore) : FeedbackService =
-                                { RecordTurnAsync = turnStore.SaveAsync; SaveFeedbackAsync = feedbackStore.SaveAsync; SubmitFeedbackAsync = feedbackStore.SaveAsync }
+    let create (turnStore: TurnStore) (feedbackStore: FeedbackStore) : FeedbackService =
+        { RecordTurnAsync = turnStore.SaveAsync
+          SaveFeedbackAsync = feedbackStore.SaveAsync
+          SubmitFeedbackAsync = feedbackStore.SaveAsync
+          DeleteSessionAsync = turnStore.DeleteSessionAsync }

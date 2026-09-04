@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <OtherFlags>$(OtherFlags) --strict-indentation-</OtherFlags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\Nao.Persistence\src\Memory\MemoryStore.fs" Link="src\Memory\MemoryStore.fs" />
+    <Compile Include="..\Nao.Persistence\src\Memory\SemanticMemoryFunctional.fs" Link="src\Memory\SemanticMemoryFunctional.fs" />
+    <Compile Include="..\Nao.Persistence\src\Memory\EpisodicMemoryImpl.fs" Link="src\Memory\EpisodicMemoryImpl.fs" />
+    <Compile Include="..\Nao.Persistence\src\Memory\GraphMemoryImpl.fs" Link="src\Memory\GraphMemoryImpl.fs" />
+    <Compile Include="..\Nao.Persistence\src\Memory\TieredMemoryImpl.fs" Link="src\Memory\TieredMemoryImpl.fs" />
+    <Compile Include="..\Nao.Persistence\src\Memory\WorkingMemoryImpl.fs" Link="src\Memory\WorkingMemoryImpl.fs" />
+    <Compile Include="..\Nao.Persistence\src\Memory\EpisodicMemory.fs" Link="src\Memory\EpisodicMemory.fs" />
+    <Compile Include="..\Nao.Persistence\src\Memory\GraphMemory.fs" Link="src\Memory\GraphMemory.fs" />
+    <Compile Include="..\Nao.Persistence\src\Memory\TieredMemory.fs" Link="src\Memory\TieredMemory.fs" />
+    <Compile Include="..\Nao.Persistence\src\Memory\WorkingMemory.fs" Link="src\Memory\WorkingMemory.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Nao.Agents\Nao.Agents.fsproj" />
+    <ProjectReference Include="..\Nao.Persistence.Infrastructure\Nao.Persistence.Infrastructure.fsproj" />
+  </ItemGroup>
+
+  <Import Project="..\..\.paket\Paket.Restore.targets" />
+
+</Project>

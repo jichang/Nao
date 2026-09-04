@@ -8,6 +8,8 @@ Obj
 debug
 Debug
 .fake
+__pycache__/
+*.py[cod]
 
 TestResults
 

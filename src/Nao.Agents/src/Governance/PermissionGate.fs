@@ -11,4 +11,5 @@ type PermissionOutcome =
 [<RequireQualifiedAccess>]
 module PermissionGate =
     /// Optional host callback for resolving permission requests interactively.
-    let mutable Prompt: (string -> ResourceAccess -> string -> bool -> Task<PermissionOutcome>) option = None
+    let mutable Prompt: (string -> ResourceAccess -> string -> bool -> Task<PermissionOutcome>) option =
+        None

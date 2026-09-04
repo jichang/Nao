@@ -18,24 +18,26 @@ type SpanStatus =
 
 /// A single span in a distributed trace
 type Span =
-    { /// Unique span identifier
-      Id: SpanId
-      /// Parent trace
-      TraceId: TraceId
-      /// Parent span (None for root spans)
-      ParentSpanId: SpanId option
-      /// Operation name
-      OperationName: string
-      /// When the span started
-      StartTime: DateTimeOffset
-      /// When the span ended (None if still running)
-      EndTime: DateTimeOffset option
-      /// Status of the span
-      Status: SpanStatus
-      /// Key-value attributes
-      Attributes: Map<string, string>
-      /// Events that occurred during this span
-      Events: SpanEvent list }
+    {
+        /// Unique span identifier
+        Id: SpanId
+        /// Parent trace
+        TraceId: TraceId
+        /// Parent span (None for root spans)
+        ParentSpanId: SpanId option
+        /// Operation name
+        OperationName: string
+        /// When the span started
+        StartTime: DateTimeOffset
+        /// When the span ended (None if still running)
+        EndTime: DateTimeOffset option
+        /// Status of the span
+        Status: SpanStatus
+        /// Key-value attributes
+        Attributes: Map<string, string>
+        /// Events that occurred during this span
+        Events: SpanEvent list
+    }
 
     member this.Duration =
         match this.EndTime with
@@ -50,15 +52,17 @@ and SpanEvent =
 
 /// Functional trace collection operations.
 type Tracer =
-    { /// Start a new root trace
-      StartTrace: string -> Span
-      /// Start a child span under an existing span
-      StartSpan: Span -> string -> Span
-      /// End a span
-      EndSpan: Span -> SpanStatus -> unit
-      /// Add an event to the current span
-      AddEvent: Span -> string -> Map<string, string> -> unit
-      /// Set attributes on a span
-      SetAttributes: Span -> Map<string, string> -> unit
-      /// Get all completed spans for a trace
-      GetTrace: TraceId -> Span list }
+    {
+        /// Start a new root trace
+        StartTrace: string -> Span
+        /// Start a child span under an existing span
+        StartSpan: Span -> string -> Span
+        /// End a span
+        EndSpan: Span -> SpanStatus -> unit
+        /// Add an event to the current span
+        AddEvent: Span -> string -> Map<string, string> -> unit
+        /// Set attributes on a span
+        SetAttributes: Span -> Map<string, string> -> unit
+        /// Get all completed spans for a trace
+        GetTrace: TraceId -> Span list
+    }

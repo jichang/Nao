@@ -28,6 +28,14 @@ jobs:
       - name: Validate solution and test surface
         run: python3 scripts/validate-test-surface.py
 
+      - name: Validate dependency architecture
+        run: |
+          python3 scripts/validate-project-dependencies.py
+          python3 -m unittest scripts/test_validate_project_dependencies.py
+
+      - name: Check F# formatting
+        run: dotnet fantomas --check .
+
       - name: Build
         run: dotnet build Nao.slnx -c Release
 

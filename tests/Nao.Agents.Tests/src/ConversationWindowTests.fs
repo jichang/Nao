@@ -56,7 +56,9 @@ type ConversationWindowTests() =
 
     [<TestMethod>]
     member _.PartitionForSummary_SplitsCorrectly() =
-        let (toSummarize, recent) = ConversationWindow.partitionForSummary 3 sampleConversation
+        let (toSummarize, recent) =
+            ConversationWindow.partitionForSummary 3 sampleConversation
+
         Assert.AreEqual(4, toSummarize.Length)
         Assert.AreEqual(3, recent.Length)
         // Recent keeps last 3: "4", "Thanks", "You're welcome!"
@@ -64,7 +66,9 @@ type ConversationWindowTests() =
 
     [<TestMethod>]
     member _.PartitionForSummary_NoSplitWhenBelowThreshold() =
-        let (toSummarize, recent) = ConversationWindow.partitionForSummary 100 sampleConversation
+        let (toSummarize, recent) =
+            ConversationWindow.partitionForSummary 100 sampleConversation
+
         Assert.AreEqual(0, toSummarize.Length)
         Assert.AreEqual(7, recent.Length)
 

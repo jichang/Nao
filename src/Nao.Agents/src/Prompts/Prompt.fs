@@ -38,26 +38,28 @@ type PromptPatch =
 
 /// A structured prompt definition following prompt engineering best practices
 type Prompt =
-    { /// The agent's role and identity (e.g. "You are a financial analyst...")
-      Role: string
+    {
+        /// The agent's role and identity (e.g. "You are a financial analyst...")
+        Role: string
 
-      /// The specific task or objective the agent should accomplish
-      Objective: string
+        /// The specific task or objective the agent should accomplish
+        Objective: string
 
-      /// Domain-specific knowledge and context the agent needs
-      DomainKnowledge: string list
+        /// Domain-specific knowledge and context the agent needs
+        DomainKnowledge: string list
 
-      /// Constraints and rules the agent must follow
-      Constraints: string list
+        /// Constraints and rules the agent must follow
+        Constraints: string list
 
-      /// Few-shot examples demonstrating expected behavior
-      Examples: PromptExample list
+        /// Few-shot examples demonstrating expected behavior
+        Examples: PromptExample list
 
-      /// Desired output format
-      OutputFormat: OutputFormat
+        /// Desired output format
+        OutputFormat: OutputFormat
 
-      /// Additional context injected at runtime (e.g. retrieved documents)
-      Context: string list }
+        /// Additional context injected at runtime (e.g. retrieved documents)
+        Context: string list
+    }
 
     static member Empty =
         { Role = ""
@@ -91,13 +93,34 @@ module Prompt =
     /// Apply explicit field-level operations to a prompt.
     let applyPatch (patch: PromptPatch) (prompt: Prompt) =
         { prompt with
-            Role = patch.Role |> Option.map (fun operation -> applyText operation prompt.Role) |> Option.defaultValue prompt.Role
-            Objective = patch.Objective |> Option.map (fun operation -> applyText operation prompt.Objective) |> Option.defaultValue prompt.Objective
-            DomainKnowledge = patch.DomainKnowledge |> Option.map (fun operation -> applyList operation prompt.DomainKnowledge) |> Option.defaultValue prompt.DomainKnowledge
-            Constraints = patch.Constraints |> Option.map (fun operation -> applyList operation prompt.Constraints) |> Option.defaultValue prompt.Constraints
-            Examples = patch.Examples |> Option.map (fun operation -> applyList operation prompt.Examples) |> Option.defaultValue prompt.Examples
-            OutputFormat = patch.OutputFormat |> Option.map (fun operation -> applyValue operation prompt.OutputFormat) |> Option.defaultValue prompt.OutputFormat
-            Context = patch.Context |> Option.map (fun operation -> applyList operation prompt.Context) |> Option.defaultValue prompt.Context }
+            Role =
+                patch.Role
+                |> Option.map (fun operation -> applyText operation prompt.Role)
+                |> Option.defaultValue prompt.Role
+            Objective =
+                patch.Objective
+                |> Option.map (fun operation -> applyText operation prompt.Objective)
+                |> Option.defaultValue prompt.Objective
+            DomainKnowledge =
+                patch.DomainKnowledge
+                |> Option.map (fun operation -> applyList operation prompt.DomainKnowledge)
+                |> Option.defaultValue prompt.DomainKnowledge
+            Constraints =
+                patch.Constraints
+                |> Option.map (fun operation -> applyList operation prompt.Constraints)
+                |> Option.defaultValue prompt.Constraints
+            Examples =
+                patch.Examples
+                |> Option.map (fun operation -> applyList operation prompt.Examples)
+                |> Option.defaultValue prompt.Examples
+            OutputFormat =
+                patch.OutputFormat
+                |> Option.map (fun operation -> applyValue operation prompt.OutputFormat)
+                |> Option.defaultValue prompt.OutputFormat
+            Context =
+                patch.Context
+                |> Option.map (fun operation -> applyList operation prompt.Context)
+                |> Option.defaultValue prompt.Context }
 
     /// Render a structured prompt into a single system message string.
     /// Combines role, objective, domain knowledge, constraints, examples,
@@ -112,7 +135,9 @@ module Prompt =
             sections.Add(sprintf "# Objective\n%s" prompt.Objective)
 
         if prompt.DomainKnowledge <> [] then
-            let items = prompt.DomainKnowledge |> List.map (sprintf "- %s") |> String.concat "\n"
+            let items =
+                prompt.DomainKnowledge |> List.map (sprintf "- %s") |> String.concat "\n"
+
             sections.Add(sprintf "# Domain Knowledge\n%s" items)
 
         if prompt.Constraints <> [] then
@@ -127,8 +152,10 @@ module Prompt =
                         match ex.Explanation with
                         | Some e -> sprintf "\nExplanation: %s" e
                         | None -> ""
+
                     sprintf "## Example %d\nInput: %s\nOutput: %s%s" (i + 1) ex.Input ex.Output explanation)
                 |> String.concat "\n\n"
+
             sections.Add(sprintf "# Examples\n%s" examples)
 
         if prompt.Context <> [] then
@@ -137,7 +164,6 @@ module Prompt =
 
         match prompt.OutputFormat with
         | FreeText -> ()
-        | Schema description ->
-            sections.Add(sprintf "# Output Format\nFollow this schema:\n%s" description)
+        | Schema description -> sections.Add(sprintf "# Output Format\nFollow this schema:\n%s" description)
 
         sections |> Seq.toList |> String.concat "\n\n"

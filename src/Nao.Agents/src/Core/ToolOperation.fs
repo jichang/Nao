@@ -18,24 +18,53 @@ type ToolExecError =
 type ToolFailureKind =
     | InputContract
     | PermissionDenied
+    | NotReady
+    | ResourceExhausted
     | Execution
     | OutputContract
+    | InternalFailure
+    | Cancelled
 
 /// Runtime failure containing its pipeline stage, caller-facing diagnostic, and whether changing
 /// the invocation input may allow a retry to succeed.
 type ToolFailure =
-    { Kind: ToolFailureKind; Message: string; Retryable: bool }
+    { Kind: ToolFailureKind
+      Message: string
+      Retryable: bool }
 
     member this.Category =
         match this.Kind with
         | ToolFailureKind.InputContract -> PlatformErrorCategory.InvalidInput
         | ToolFailureKind.PermissionDenied -> PlatformErrorCategory.PermissionDenied
+        | ToolFailureKind.NotReady -> PlatformErrorCategory.NotReady
+        | ToolFailureKind.ResourceExhausted -> PlatformErrorCategory.ResourceExhausted
         | ToolFailureKind.OutputContract -> PlatformErrorCategory.InvalidOutput
+        | ToolFailureKind.InternalFailure -> PlatformErrorCategory.InternalFailure
+        | ToolFailureKind.Cancelled -> PlatformErrorCategory.Cancelled
         | ToolFailureKind.Execution when this.Retryable -> PlatformErrorCategory.TransientDependency
         | ToolFailureKind.Execution -> PlatformErrorCategory.PermanentDependency
 
     member this.ToPlatformFailure(correlationId) =
         PlatformFailure.create this.Category this.Message this.Retryable correlationId
+
+[<RequireQualifiedAccess>]
+module ToolFailure =
+    let ofPlatformFailure (failure: PlatformFailure) =
+        let kind =
+            match failure.Category with
+            | PlatformErrorCategory.InvalidInput -> ToolFailureKind.InputContract
+            | PlatformErrorCategory.PermissionDenied -> ToolFailureKind.PermissionDenied
+            | PlatformErrorCategory.NotReady -> ToolFailureKind.NotReady
+            | PlatformErrorCategory.ResourceExhausted -> ToolFailureKind.ResourceExhausted
+            | PlatformErrorCategory.InvalidOutput -> ToolFailureKind.OutputContract
+            | PlatformErrorCategory.InternalFailure -> ToolFailureKind.InternalFailure
+            | PlatformErrorCategory.Cancelled -> ToolFailureKind.Cancelled
+            | PlatformErrorCategory.TransientDependency
+            | PlatformErrorCategory.PermanentDependency -> ToolFailureKind.Execution
+
+        { Kind = kind
+          Message = failure.Message
+          Retryable = failure.Retryable }
 
 /// Encoded result returned through the executable tool boundary.
 type ToolRunResult = Result<string, ToolFailure>
@@ -61,4 +90,5 @@ module ToolOperation =
 
     /// Adds revert support to an operation.
     let withRevert revertAsync operation =
-        { operation with RevertAsync = Some revertAsync }
+        { operation with
+            RevertAsync = Some revertAsync }

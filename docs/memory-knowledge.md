@@ -2,14 +2,14 @@
 
 Nao distinguishes conversation context, agent memory, source-backed knowledge, and produced artifacts. Treating all four as “memory” creates incorrect trust, retention, and deletion behavior.
 
-The memory layer exposes eight functional capability records rather than interfaces: `MemoryStore`, `EmbeddingProvider`, `SemanticMemory`, `EpisodicMemory`, `GraphMemory`, `TieredMemory`, `WorkingMemory`, and `MemoryConsolidation`. Concrete in-memory, file-system, and ADO.NET behavior lives in `Nao.Persistence` where applicable.
+The memory layer exposes eight functional capability records rather than interfaces: `MemoryStore`, `EmbeddingProvider`, `SemanticMemory`, `EpisodicMemory`, `GraphMemory`, `TieredMemory`, `WorkingMemory`, and `MemoryConsolidation`. Concrete in-memory, file-system, and ADO.NET behavior lives in `Nao.Persistence.Memory` where applicable. Applications can use that package directly or opt into the aggregate `Nao.Persistence` composition package.
 
 ## Data categories
 
 | Category | Purpose | Typical lifetime | Authority |
 |---|---|---|---|
 | Conversation context | Material selected for the current model call | One turn or bounded conversation | Untrusted interaction history |
-| Working memory | Temporary task state | One execution or session | Agent/runtime-derived |
+| Working memory | Temporary task state | One execution | Agent/runtime-derived |
 | Episodic memory | Prior events and experiences | Cross-turn or cross-session by policy | Historical evidence |
 | Semantic memory | Searchable learned facts or text | Policy-controlled | Derived and potentially uncertain |
 | Knowledge | Versioned content from external sources | Source lifecycle | Source-backed |
@@ -31,6 +31,14 @@ Summaries are derived content. They should retain the source-message range and m
 ## Key-value and working memory
 
 `MemoryStore` is a functional capability record for structured entries scoped to an owner. Hosts provide the owner scope; agents and tools should not be able to select arbitrary users or tenants.
+
+The capability directly owns counted deletion for one owner and strict retention purge before a caller-supplied cutoff. In-memory, file, and ADO.NET adapters preserve entries exactly at the cutoff and reject blank owners; hosts remain responsible for choosing and authorizing the owner and retention policy.
+
+`WorkingMemory` is separately scoped by execution ID and keys items by `(ExecutionId, Key)`. Capacity, reads, attention changes, decay, rendering, and deletion are isolated per execution. Default expiry is normalized from `AddedAt` before persistence; decay and unpin operations accept an explicit effective time so replay cannot extend an item's lifetime. Owner deletion includes pinned items, while strict expiry deletion removes only unpinned items before the supplied cutoff.
+
+`EpisodicMemory` requires an owner on every episode and keys records by `(Owner, Id)`. Queries, causal links, chains, synthesis, and importance-based forgetting remain within that owner. The capability also owns counted owner deletion and strict retention purge by `Timestamp`; versioned file and ADO.NET event streams persist lifecycle tombstones so deleted episodes do not return after replay.
+
+`TieredMemory` keys entries by `(Owner, Key)` and applies short- and mid-term capacity independently per owner. Retrieval is a pure ranking operation; callers explicitly record access at an effective time to update counts and apply promotion policy. Eviction also receives an effective time, uses stable ordering, and preserves entries exactly at the TTL boundary. Owner and strict creation-time cutoff deletion are counted and persist as versioned tombstones.
 
 ```fsharp
 let store = InMemoryStore.create ()
@@ -72,7 +80,9 @@ Current implementations are useful foundations but do not constitute a productio
 
 `GraphMemory` represents functional operations over nodes, relations, and basic entity, predicate, neighborhood, property, and path queries. It is a property-graph-style memory abstraction; it is not an RDF/OWL ontology model and does not imply description-logic reasoning.
 
-Graph records require stronger production semantics around identity, relation removal, cascading deletion, provenance, confidence, authorization, indexing, and durable rebuilds. These tasks are tracked in the [ontology and reasoning roadmap](roadmap/05-ontology-logic.md).
+Nodes and relations require an owner and are keyed within that graph namespace. Queries, traversal, extraction, and removal cannot cross owners. Removing or expiring a node cascades its incident relations; owner deletion and strict cutoff purge count all removed nodes and relations. Versioned file and ADO.NET events preserve relation, node, owner, and cutoff tombstones across replay.
+
+Parallel assertions for the same subject/predicate/object tuple, richer provenance and confidence policy, authorization, indexing, and production durable rebuilds remain future graph work. These tasks are tracked in the [ontology and reasoning roadmap](roadmap/05-ontology-logic.md).
 
 ## Knowledge architecture
 
