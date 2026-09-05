@@ -18,12 +18,12 @@ This workstream makes the ETCLOVG harness the single reliable execution path and
 ## HAR-01 — One execution contract
 
 - [x] Define one immutable execution request containing identity, input, budgets, policy versions, dependency versions, and correlation data.
-- [ ] Define an execution result containing outputs, artifacts, usage, evidence, policy decisions, and terminal status.
+- [x] Define an execution result containing outputs, artifacts, usage, evidence, policy decisions, and terminal status.
 - [ ] Route direct agent, tool, delegated-agent, memory-tool, evaluation, and replay execution through the harness.
 - [ ] Eliminate authorization bypasses created by permissive default contexts in production paths.
 - [ ] Define nested budget inheritance for delegated agents and tools.
 - [ ] Make cancellation and deadlines flow through every call boundary.
-- [ ] Define terminal states for success, failure, cancellation, timeout, denial, limit exceeded, and indeterminate outcomes.
+- [x] Define terminal states for success, failure, cancellation, timeout, denial, limit exceeded, and indeterminate outcomes.
 
 **Acceptance criteria**
 

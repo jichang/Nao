@@ -26,9 +26,9 @@ type TurnStepRecord() =
     [<Id(3u)>]
     member val Output: string = "" with get, set
 
-/// Structured data published by a tool during a turn.
+/// Artifact published by an agent or tool during a turn.
 [<GenerateSerializer>]
-type AgentContextDataRecord() =
+type ArtifactRecord() =
     [<Id(0u)>]
     member val Kind: string = "" with get, set
 
@@ -37,6 +37,9 @@ type AgentContextDataRecord() =
 
     [<Id(2u)>]
     member val Payload: string = "" with get, set
+
+    [<Id(3u)>]
+    member val Id: string = "" with get, set
 
 /// A single persisted message in a conversation
 type PersistedMessage =
@@ -52,8 +55,8 @@ type PersistedMessage =
         Steps: TurnStepRecord[]
         /// Names of files attached to a user message (empty for assistant messages).
         Attachments: string[]
-        /// Structured data published by tools during the turn (empty for user messages).
-        Data: AgentContextDataRecord[]
+        /// Artifacts published by agents or tools during the turn (empty for user messages).
+        Artifacts: ArtifactRecord[]
     }
 
 /// Metadata about a persisted conversation

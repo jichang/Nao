@@ -133,7 +133,7 @@ type OrchestratorObservabilityTests() =
 
         let history = journal.GetHistoryAsync() |> _.Result
 
-        Assert.IsTrue(result.Success)
+        Assert.AreEqual(ExecutionTerminalStatus.Succeeded, result.Status)
         let aggregate = metrics.GetMetrics context.SessionKey
         Assert.AreEqual(1, aggregate.TotalToolCalls)
         let executionMetrics = metrics.GetByExecution context.Correlation.ExecutionId
@@ -197,8 +197,8 @@ type OrchestratorObservabilityTests() =
             EtclovgHarness.runAsync EtclovgConfig.Default context agent (request context agent "start")
             |> _.Result
 
-        Assert.IsTrue(result.Success)
-        Assert.AreEqual(Some "done", result.Response)
+        Assert.AreEqual(ExecutionTerminalStatus.Succeeded, result.Status)
+        Assert.AreEqual(Some "done", result.Outputs.Response)
         Assert.AreEqual(1, beforeCalls)
 
     [<TestMethod>]
@@ -240,7 +240,7 @@ type OrchestratorObservabilityTests() =
             EtclovgHarness.runAsync harnessConfig context parent (request context parent "start")
             |> _.Result
 
-        Assert.IsTrue(result.Success)
+        Assert.AreEqual(ExecutionTerminalStatus.Succeeded, result.Status)
 
         Assert.IsTrue(
             events

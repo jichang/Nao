@@ -59,7 +59,7 @@ type PublishingConversationStoreTests() =
           TurnId = turnId
           Steps = [||]
           Attachments = [||]
-          Data = [||] }
+          Artifacts = [||] }
 
     let message role content turnId =
         messageWith (CorrelationContext.root ()) role content turnId
@@ -82,15 +82,35 @@ type PublishingConversationStoreTests() =
         try
             let store, recorder = setup root
             let correlation = CorrelationContext.root ()
+            let artifactCount = Random.Shared.Next(1, 5)
 
-            store.AppendAsync "dev/s1" "default" [| messageWith correlation "User" "hi" "t1" |]
-            |> fun t -> t.Wait()
+            let artifacts =
+                [| for index in 1..artifactCount ->
+                       let artifact = ArtifactRecord()
+                       artifact.Id <- ArtifactId.generate () |> ArtifactId.serialize
+                       artifact.Kind <- sprintf "artifact-%d" index
+                       artifact.ContentType <- "application/json"
+                       artifact.Payload <- sprintf "{\"index\":%d}" index
+                       artifact |]
+
+            let input =
+                { messageWith correlation "User" "hi" "t1" with
+                    Artifacts = artifacts }
+
+            store.AppendAsync "dev/s1" "default" [| input |] |> fun t -> t.Wait()
 
             // Backing still persisted (reads stay correct).
             let loaded = (store.LoadAsync "dev/s1" "default").Result
             Assert.AreEqual(1, loaded.Length)
             Assert.AreEqual("hi", loaded.[0].Content)
             Assert.AreEqual(correlation, loaded.[0].Correlation)
+            Assert.AreEqual(artifacts.Length, loaded.[0].Artifacts.Length)
+
+            for expected, actual in Array.zip artifacts loaded.[0].Artifacts do
+                Assert.AreEqual(expected.Id, actual.Id)
+                Assert.AreEqual(expected.Kind, actual.Kind)
+                Assert.AreEqual(expected.ContentType, actual.ContentType)
+                Assert.AreEqual(expected.Payload, actual.Payload)
 
             let executionMessages =
                 store.LoadByExecutionAsync correlation.ExecutionId |> _.Result
@@ -110,6 +130,11 @@ type PublishingConversationStoreTests() =
             Assert.AreEqual(1, persisted.RootElement.GetProperty("schemaVersion").GetInt32())
             Assert.AreEqual(1, persisted.RootElement.GetProperty("value").GetArrayLength())
 
+            Assert.AreEqual(
+                artifacts.Length,
+                persisted.RootElement.GetProperty("value").[0].GetProperty("Artifacts").GetArrayLength()
+            )
+
             // ...and the write was teed to the bus.
             match recorder.Signals() with
             | [ MessagesAppended("default", msgs) ] ->
@@ -117,6 +142,13 @@ type PublishingConversationStoreTests() =
                 Assert.AreEqual("hi", msgs.[0].Content)
                 Assert.AreEqual("User", msgs.[0].Role)
                 Assert.AreEqual(correlation, msgs.[0].Correlation)
+                Assert.AreEqual(artifacts.Length, msgs.[0].Artifacts.Length)
+
+                for expected, actual in List.zip (List.ofArray artifacts) msgs.[0].Artifacts do
+                    Assert.AreEqual(expected.Id, ArtifactId.serialize actual.Id)
+                    Assert.AreEqual(expected.Kind, actual.Kind)
+                    Assert.AreEqual(expected.ContentType, actual.ContentType)
+                    Assert.AreEqual(expected.Payload, actual.Payload)
             | other -> Assert.Fail(sprintf "expected one MessagesAppended, got %A" other)
         finally
             cleanup root

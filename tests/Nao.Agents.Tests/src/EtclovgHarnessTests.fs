@@ -61,6 +61,32 @@ type EtclovgHarnessTests() =
             Assert.AreEqual(Some "execution-1", failure.CorrelationId)
 
     [<TestMethod>]
+    member _.TerminalStatusesExposePlatformFailure() =
+        let cases =
+            [ (ExecutionTerminalStatus.Failed(HarnessError.ExecutionFailed "failed"),
+               PlatformErrorCategory.InternalFailure,
+               false)
+              (ExecutionTerminalStatus.Denied HarnessError.PermissionDenied,
+               PlatformErrorCategory.PermissionDenied,
+               false)
+              (ExecutionTerminalStatus.LimitExceeded LimitExceeded.Duration,
+               PlatformErrorCategory.ResourceExhausted,
+               false)
+              (ExecutionTerminalStatus.Cancelled, PlatformErrorCategory.Cancelled, false)
+              (ExecutionTerminalStatus.TimedOut, PlatformErrorCategory.TransientDependency, true)
+              (ExecutionTerminalStatus.Indeterminate "unknown", PlatformErrorCategory.InternalFailure, false) ]
+
+        for status, expectedCategory, expectedRetryable in cases do
+            let failure = status.ToPlatformFailure(Some "execution-1")
+            Assert.AreEqual(expectedCategory, failure.Category)
+            Assert.AreEqual(expectedRetryable, failure.Retryable)
+            Assert.AreEqual(Some "execution-1", failure.CorrelationId)
+
+        Assert.ThrowsExactly<InvalidOperationException>(fun () ->
+            ExecutionTerminalStatus.Succeeded.ToPlatformFailure None |> ignore)
+        |> ignore
+
+    [<TestMethod>]
     member _.SuccessfulExecutionReturnsResponse() =
         let agent = makeAgent "hello world"
         let config = EtclovgConfig.Default
@@ -70,10 +96,39 @@ type EtclovgHarnessTests() =
         let result =
             (EtclovgHarness.runAsync config context agent (request context agent "test")).Result
 
-        Assert.IsTrue(result.Success)
-        Assert.AreEqual(Some "hello world", result.Response)
-        Assert.IsTrue(result.HarnessError.IsNone)
-        Assert.IsTrue(result.Trace.IsSome)
+        Assert.AreEqual(ExecutionTerminalStatus.Succeeded, result.Status)
+        Assert.AreEqual(Some "hello world", result.Outputs.Response)
+        Assert.IsTrue(result.Evidence.Trace.IsSome)
+
+    [<TestMethod>]
+    member _.PublishedArtifactRetainsIdentityInExecutionOutput() =
+        let mutable produced: Artifact option = None
+        let mutable published: Artifact option = None
+
+        let agent =
+            Agent.createContextual "artifact-agent" "artifact-agent" "test" 0 [] AgentContract.Text (fun context _ ->
+                task {
+                    let artifact = Artifact.create "report" "application/json" "{\"value\":42}"
+                    produced <- Some artifact
+                    do! context.PublishArtifact artifact
+
+                    return "done"
+                })
+
+        let context =
+            { (AgentContext.allowAll ()) with
+                PublishArtifact =
+                    fun artifact ->
+                        published <- Some artifact
+                        Task.CompletedTask }
+
+        let result =
+            (EtclovgHarness.runAsync EtclovgConfig.Default context agent (request context agent "test")).Result
+
+        Assert.AreEqual(ExecutionTerminalStatus.Succeeded, result.Status)
+        Assert.AreEqual(1, result.Outputs.Artifacts.Length)
+        Assert.AreEqual(produced, published)
+        Assert.AreEqual(produced, Some result.Outputs.Artifacts.Head)
 
     [<TestMethod>]
     member _.PolicyViolationBlocksExecution() =
@@ -108,9 +163,12 @@ type EtclovgHarnessTests() =
         let result =
             (EtclovgHarness.runAsync blockConfig context agent (request context agent "test")).Result
 
-        Assert.IsFalse(result.Success)
-        Assert.IsTrue(result.HarnessError.Value.Message.Contains("Blocked by policy"))
-        Assert.AreEqual(1, result.PolicyViolations.Length)
+        Assert.AreEqual(
+            ExecutionTerminalStatus.Denied(HarnessError.PolicyBlocked [ "no execution allowed" ]),
+            result.Status
+        )
+
+        Assert.AreEqual(1, result.PolicyDecisions.PolicyViolations.Length)
 
     [<TestMethod>]
     member _.ReadinessCheckFailureBlocksExecution() =
@@ -129,8 +187,7 @@ type EtclovgHarnessTests() =
         let result =
             (EtclovgHarness.runAsync config context agent (request context agent "test")).Result
 
-        Assert.IsFalse(result.Success)
-        Assert.IsTrue(result.HarnessError.Value.Message.Contains("Not ready"))
+        Assert.AreEqual(ExecutionTerminalStatus.Failed(HarnessError.NotReady [ "missing dependency" ]), result.Status)
 
     [<TestMethod>]
     member _.LifecycleHookCanBlockInit() =
@@ -149,8 +206,7 @@ type EtclovgHarnessTests() =
         let result =
             (EtclovgHarness.runAsync config context agent (request context agent "test")).Result
 
-        Assert.IsFalse(result.Success)
-        Assert.AreEqual(Some(HarnessError.InitializationFailed "init blocked"), result.HarnessError)
+        Assert.AreEqual(ExecutionTerminalStatus.Failed(HarnessError.InitializationFailed "init blocked"), result.Status)
 
     [<TestMethod>]
     member _.ConstitutionViolationBlocksOutput() =
@@ -169,9 +225,11 @@ type EtclovgHarnessTests() =
         let result =
             (EtclovgHarness.runAsync config context agent (request context agent "test")).Result
 
-        Assert.IsFalse(result.Success)
-        Assert.IsTrue(result.HarnessError.Value.Message.Contains("Output violates constitution"))
-        Assert.IsTrue(result.ConstitutionViolations.Length > 0)
+        match result.Status with
+        | ExecutionTerminalStatus.Denied(HarnessError.ConstitutionViolation _) -> ()
+        | status -> Assert.Fail(sprintf "Expected constitution denial, got %A" status)
+
+        Assert.IsTrue(result.PolicyDecisions.ConstitutionViolations.Length > 0)
 
     [<TestMethod>]
     member _.DeterministicAgentDoesNotRecordLlmCall() =
@@ -189,9 +247,9 @@ type EtclovgHarnessTests() =
         let result =
             (EtclovgHarness.runAsync config context agent (request context agent "test")).Result
 
-        Assert.IsTrue(result.Success)
-        Assert.IsTrue(result.Metrics.IsSome)
-        Assert.AreEqual(0, result.Metrics.Value.TotalLlmCalls)
+        Assert.AreEqual(ExecutionTerminalStatus.Succeeded, result.Status)
+        Assert.IsTrue(result.Evidence.Metrics.IsSome)
+        Assert.AreEqual(0, result.Evidence.Metrics.Value.TotalLlmCalls)
 
     [<TestMethod>]
     member _.TraceStoredAfterExecution() =
@@ -207,7 +265,7 @@ type EtclovgHarnessTests() =
         let result =
             (EtclovgHarness.runAsync config context agent (request context agent "question")).Result
 
-        Assert.IsTrue(result.Success)
+        Assert.AreEqual(ExecutionTerminalStatus.Succeeded, result.Status)
         let agentId = "test-agent"
         let traces = (store.GetTracesAsync agentId 10).Result
         Assert.AreEqual(1, traces.Length)
@@ -227,8 +285,8 @@ type EtclovgHarnessTests() =
         let result =
             (EtclovgHarness.runAsync config context agent (request context agent "test")).Result
 
-        Assert.IsTrue(result.Success)
-        Assert.AreEqual(1, result.AuditEntries)
+        Assert.AreEqual(ExecutionTerminalStatus.Succeeded, result.Status)
+        Assert.AreEqual(1, result.Evidence.AuditEntries)
         let agentId = "test-agent"
 
         let entries =
@@ -267,11 +325,11 @@ type EtclovgHarnessTests() =
         let result =
             (EtclovgHarness.runAsync config context agent (request context agent "hello")).Result
 
-        Assert.IsTrue(result.Success)
-        Assert.AreEqual(Some "safe response", result.Response)
-        Assert.IsTrue(result.Metrics.IsSome)
-        Assert.IsTrue(result.Trace.IsSome)
-        Assert.AreEqual(1, result.AuditEntries)
+        Assert.AreEqual(ExecutionTerminalStatus.Succeeded, result.Status)
+        Assert.AreEqual(Some "safe response", result.Outputs.Response)
+        Assert.IsTrue(result.Evidence.Metrics.IsSome)
+        Assert.IsTrue(result.Evidence.Trace.IsSome)
+        Assert.AreEqual(1, result.Evidence.AuditEntries)
 
     [<TestMethod>]
     member _.AgentIdentityMismatchFailsBeforeExecution() =
@@ -291,6 +349,5 @@ type EtclovgHarnessTests() =
         let result =
             (EtclovgHarness.runAsync EtclovgConfig.Default context agent mismatched).Result
 
-        Assert.IsFalse(result.Success)
-        Assert.AreEqual(Some HarnessError.PermissionDenied, result.HarnessError)
+        Assert.AreEqual(ExecutionTerminalStatus.Denied HarnessError.PermissionDenied, result.Status)
         Assert.IsFalse(executed)

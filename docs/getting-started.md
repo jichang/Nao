@@ -96,11 +96,17 @@ let request =
 
 let! result =
     EtclovgHarness.runAsync config agentContext eligibilityAgent request
+
+match result.Status, result.Outputs.Response with
+| ExecutionTerminalStatus.Succeeded, Some response -> printfn "%s" response
+| status, _ -> printfn "Execution ended with %A" status
 ```
 
 The request is the authoritative execution envelope. Its authorization scope, identity,
 budgets, pinned policy and dependency versions, and correlation data are immutable for the
 run. The harness rejects a request whose agent identity differs from the executable agent.
+The result groups response and published artifacts under `Outputs`, trace and metrics under
+`Evidence`, governance outcomes under `PolicyDecisions`, and exposes one terminal `Status`.
 
 `ReadinessCheck` and `Judge` are immutable capability records. Their modules provide
 `create` and invocation functions, so harness extensions require no interface implementation,

@@ -24,12 +24,10 @@ module PublishingConversationStore =
                 : ConversationStep))
             |> Array.toList
 
-        let data =
-            m.Data
+        let artifacts =
+            m.Artifacts
             |> Array.map (fun value ->
-                { AgentContextData.Kind = value.Kind
-                  ContentType = value.ContentType
-                  Payload = value.Payload })
+                Artifact.restore (ArtifactId.parse value.Id) value.Kind value.ContentType value.Payload)
             |> Array.toList
 
         { Role = m.Role
@@ -39,7 +37,7 @@ module PublishingConversationStore =
           TurnId = m.TurnId
           Steps = steps
           Attachments = m.Attachments |> Array.toList
-          Data = data }
+          Artifacts = artifacts }
 
     /// Build the event scope for a conversation write. The action id is the turn id carried
     /// by the messages (empty when none) so each write is attributed to the turn that

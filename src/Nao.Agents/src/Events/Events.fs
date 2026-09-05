@@ -74,8 +74,8 @@ type ConversationMessage =
         Steps: ConversationStep list
         /// Names of files attached to a user message (empty otherwise).
         Attachments: string list
-        /// Structured data published by tools during this turn.
-        Data: AgentContextData list
+        /// Artifacts published by agents or tools during this turn.
+        Artifacts: Artifact list
     }
 
 /// The exact messages sent to an LLM and the raw response it returned.
@@ -145,8 +145,8 @@ and ProgressSignal =
     | SubAgentInvoked of name: string * input: string
     /// A sub-agent returned a result.
     | SubAgentCompleted of name: string * result: string
-    /// A tool published structured data for persistence and frontend rendering.
-    | ToolDataPublished of data: AgentContextData
+    /// An agent or tool published an artifact for persistence and frontend rendering.
+    | ArtifactPublished of artifact: Artifact
     /// The turn produced its final answer.
     | AnswerProduced of answer: string
 

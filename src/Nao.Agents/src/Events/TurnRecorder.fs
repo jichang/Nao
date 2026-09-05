@@ -15,7 +15,7 @@ type TurnRecorder =
     { TurnId: string
       Consumer: EventConsumer
       Steps: unit -> TurnStep list
-      Data: unit -> AgentContextData list
+      Artifacts: unit -> Artifact list
       Snapshot: unit -> TurnRecord }
 
 module TurnRecorder =
@@ -34,7 +34,7 @@ module TurnRecorder =
         let sync = obj ()
         let toolCalls = ResizeArray<ToolCallRecord>()
         let subAgentCalls = ResizeArray<SubAgentCallRecord>()
-        let data = ResizeArray<AgentContextData>()
+        let artifacts = ResizeArray<Artifact>()
         let steps = ResizeArray<TurnStep>()
         let pendingTools = Dictionary<string, Queue<string>>()
         let pendingAgents = Dictionary<string, Queue<string>>()
@@ -59,7 +59,8 @@ module TurnRecorder =
                 |> Seq.filter (fun s -> not (s.Kind = "reasoning" && s.Output.Trim() = output.Trim()))
                 |> List.ofSeq)
 
-        let getData () : AgentContextData list = lock sync (fun () -> List.ofSeq data)
+        let getArtifacts () : Artifact list =
+            lock sync (fun () -> List.ofSeq artifacts)
 
         let snapshot () : TurnRecord =
             lock sync (fun () ->
@@ -73,7 +74,7 @@ module TurnRecorder =
                   Output = output
                   ToolCalls = List.ofSeq toolCalls
                   SubAgentCalls = List.ofSeq subAgentCalls
-                  Data = List.ofSeq data
+                  Artifacts = List.ofSeq artifacts
                   CreatedAt = DateTimeOffset.UtcNow })
 
         let consumer =
@@ -118,7 +119,7 @@ module TurnRecorder =
                                   Title = name
                                   Input = agentInput
                                   Output = result }
-                        | ToolDataPublished value -> data.Add value
+                        | ArtifactPublished artifact -> artifacts.Add artifact
                         | AnswerProduced answer -> output <- answer)
 
                     Task.CompletedTask
@@ -127,9 +128,9 @@ module TurnRecorder =
         { TurnId = turnId
           Consumer = consumer
           Steps = getSteps
-          Data = getData
+          Artifacts = getArtifacts
           Snapshot = snapshot }
 
     let steps recorder = recorder.Steps()
-    let data recorder = recorder.Data()
+    let artifacts recorder = recorder.Artifacts()
     let snapshot recorder = recorder.Snapshot()

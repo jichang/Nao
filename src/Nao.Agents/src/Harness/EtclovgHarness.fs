@@ -84,35 +84,16 @@ type EtclovgConfig =
             TraceStore = services.TraceStore |> Option.orElse this.TraceStore
             AuditLog = services.AuditLog |> Option.orElse this.AuditLog }
 
-/// Result of an ETCLOVG harness execution
-type EtclovgResult =
-    {
-        /// The agent's final response (if successful)
-        Response: string option
-        /// Whether execution succeeded
-        Success: bool
-        /// Structured execution error
-        HarnessError: HarnessError option
-        /// Resource usage
-        Usage: ResourceUsage
-        /// Execution trace
-        Trace: ExecutionTrace option
-        /// Metrics collected during execution
-        Metrics: ExecutionMetrics option
-        /// Judgement result (if judge configured)
-        Judgement: JudgementResult option
-        /// Regression result (if baseline available)
-        Regression: RegressionResult option
-        /// Audit entries generated
-        AuditEntries: int
-        /// Policy violations
-        PolicyViolations: PolicyViolation list
-        /// Constitution violations
-        ConstitutionViolations: ConstitutionViolation list
-    }
-
 /// The ETCLOVG Harness — integrates all seven layers into a unified execution pipeline
 module EtclovgHarness =
+
+    let private terminalStatus =
+        function
+        | HarnessError.PermissionDenied -> ExecutionTerminalStatus.Denied HarnessError.PermissionDenied
+        | HarnessError.PolicyBlocked _ as error -> ExecutionTerminalStatus.Denied error
+        | HarnessError.ConstitutionViolation _ as error -> ExecutionTerminalStatus.Denied error
+        | HarnessError.ResourceLimitExceeded limit -> ExecutionTerminalStatus.LimitExceeded limit
+        | error -> ExecutionTerminalStatus.Failed error
 
     let private eventScope (request: ExecutionRequest) =
         let userId = request.Authorization |> AuthorizationScope.userId |> UserId.value
@@ -141,6 +122,8 @@ module EtclovgHarness =
 
     let private failResult
         (harnessError: HarnessError)
+        (correlation: CorrelationContext)
+        (artifacts: Artifact list)
         (usage: ResourceUsage)
         (trace: ExecutionTrace)
         (policyViolations: PolicyViolation list)
@@ -148,18 +131,47 @@ module EtclovgHarness =
         (metricsOwner: string)
         (metrics: MetricsCollector option)
         (auditEntries: int)
-        : EtclovgResult =
-        { Response = None
-          Success = false
-          HarnessError = Some harnessError
+        : ExecutionResult =
+        let outputs: ExecutionOutputs =
+            { Response = None
+              Artifacts = artifacts }
+
+        let evidence: ExecutionEvidence =
+            { Trace = Some trace
+              Metrics = metrics |> Option.map (fun value -> value.GetMetrics metricsOwner)
+              Judgement = None
+              Regression = None
+              AuditEntries = auditEntries }
+
+        let decisions: ExecutionPolicyDecisions =
+            { PolicyViolations = policyViolations
+              ConstitutionViolations = constitutionViolations }
+
+        { Correlation = correlation
+          Status = terminalStatus harnessError
+          Outputs = outputs
           Usage = usage
-          Trace = Some trace
-          Metrics = metrics |> Option.map (fun m -> m.GetMetrics metricsOwner)
-          Judgement = None
-          Regression = None
-          AuditEntries = auditEntries
-          PolicyViolations = policyViolations
-          ConstitutionViolations = constitutionViolations }
+          Evidence = evidence
+          PolicyDecisions = decisions }
+
+    let private successResult correlation response artifacts usage trace metrics judgement regression decisions =
+        let outputs: ExecutionOutputs =
+            { Response = Some response
+              Artifacts = artifacts }
+
+        let evidence: ExecutionEvidence =
+            { Trace = Some trace
+              Metrics = metrics
+              Judgement = judgement
+              Regression = regression
+              AuditEntries = 1 }
+
+        { Correlation = correlation
+          Status = ExecutionTerminalStatus.Succeeded
+          Outputs = outputs
+          Usage = usage
+          Evidence = evidence
+          PolicyDecisions = decisions }
 
     /// Run an agent through the full ETCLOVG harness
     let runAsync
@@ -167,19 +179,28 @@ module EtclovgHarness =
         (agentContext: AgentContext)
         (agent: Agent)
         (request: ExecutionRequest)
-        : Task<EtclovgResult> =
+        : Task<ExecutionResult> =
         task {
             let input = request.Input
             let scope = eventScope request
+            let artifacts = ResizeArray<Artifact>()
 
             let execCtx =
                 ExecutionContext.CreateWithCorrelation request.Sandbox request.Correlation
+
+            let publishArtifact = agentContext.PublishArtifact
 
             let agentContext =
                 { agentContext with
                     Correlation = request.Correlation
                     SessionKey = scope.SessionKey
-                    TurnId = request.TurnId |> TurnId.value }
+                    TurnId = request.TurnId |> TurnId.value
+                    PublishArtifact =
+                        fun artifact ->
+                            task {
+                                do! publishArtifact artifact
+                                artifacts.Add artifact
+                            } }
 
             let mutable trace =
                 Verification.startTrace execCtx.Correlation agent.Metadata.Id input
@@ -211,7 +232,18 @@ module EtclovgHarness =
 
             match preflightError with
             | Some error ->
-                return failResult error execCtx.Usage trace policyViolations [] agentContext.SessionKey None 0
+                return
+                    failResult
+                        error
+                        request.Correlation
+                        (List.ofSeq artifacts)
+                        execCtx.Usage
+                        trace
+                        policyViolations
+                        []
+                        agentContext.SessionKey
+                        None
+                        0
             | None ->
 
                 // === V: Verification — Readiness checks ===
@@ -226,6 +258,8 @@ module EtclovgHarness =
                     return
                         failResult
                             (HarnessError.NotReady reasons)
+                            request.Correlation
+                            (List.ofSeq artifacts)
                             execCtx.Usage
                             trace
                             policyViolations
@@ -246,6 +280,8 @@ module EtclovgHarness =
                         return
                             failResult
                                 (HarnessError.InitializationFailed msg)
+                                request.Correlation
+                                (List.ofSeq artifacts)
                                 execCtx.Usage
                                 trace
                                 policyViolations
@@ -347,6 +383,8 @@ module EtclovgHarness =
                             return
                                 failResult
                                     (HarnessError.ResourceLimitExceeded limitExceeded)
+                                    request.Correlation
+                                    (List.ofSeq artifacts)
                                     execCtx.Usage
                                     trace
                                     policyViolations
@@ -390,20 +428,17 @@ module EtclovgHarness =
                                 let violationIds = constitutionViolations |> List.map (fun v -> v.RuleId)
 
                                 return
-                                    ({ Response = None
-                                       Success = false
-                                       HarnessError = Some(HarnessError.ConstitutionViolation violationIds)
-                                       Usage = execCtx.Usage
-                                       Trace = Some trace
-                                       Metrics =
-                                         config.Metrics
-                                         |> Option.map (fun metrics -> metrics.GetMetrics agentContext.SessionKey)
-                                       Judgement = None
-                                       Regression = None
-                                       AuditEntries = 1
-                                       PolicyViolations = policyViolations
-                                       ConstitutionViolations = constitutionViolations }
-                                    : EtclovgResult)
+                                    failResult
+                                        (HarnessError.ConstitutionViolation violationIds)
+                                        request.Correlation
+                                        (List.ofSeq artifacts)
+                                        execCtx.Usage
+                                        trace
+                                        policyViolations
+                                        constitutionViolations
+                                        agentContext.SessionKey
+                                        config.Metrics
+                                        1
                             else
 
                                 // === L: Lifecycle — Complete ===
@@ -473,17 +508,23 @@ module EtclovgHarness =
                                     config.Bus
                                 |> ignore
 
-                                return
-                                    { Response = Some response
-                                      Success = true
-                                      HarnessError = None
-                                      Usage = execCtx.Usage
-                                      Trace = Some trace
-                                      Metrics =
-                                        config.Metrics |> Option.map (fun m -> m.GetMetrics agentContext.SessionKey)
-                                      Judgement = judgement
-                                      Regression = regression
-                                      AuditEntries = 1
-                                      PolicyViolations = policyViolations
+                                let metrics =
+                                    config.Metrics
+                                    |> Option.map (fun value -> value.GetMetrics agentContext.SessionKey)
+
+                                let decisions: ExecutionPolicyDecisions =
+                                    { PolicyViolations = policyViolations
                                       ConstitutionViolations = constitutionViolations }
+
+                                return
+                                    successResult
+                                        request.Correlation
+                                        response
+                                        (List.ofSeq artifacts)
+                                        execCtx.Usage
+                                        trace
+                                        metrics
+                                        judgement
+                                        regression
+                                        decisions
         }

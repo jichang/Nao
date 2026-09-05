@@ -369,7 +369,7 @@ type SessionGrain
         record.Correlation <- pm.Correlation
         record.Steps <- ResizeArray(pm.Steps)
         record.Attachments <- ResizeArray(pm.Attachments)
-        record.Data <- ResizeArray(pm.Data)
+        record.Artifacts <- ResizeArray(pm.Artifacts)
         record
 
     let restoreActiveConversationAsync () =
@@ -401,7 +401,7 @@ type SessionGrain
         content
         messageSteps
         attachments
-        messageData
+        messageArtifacts
         : PersistedMessage =
         { Role = role
           Content = content
@@ -410,7 +410,7 @@ type SessionGrain
           TurnId = turnId
           Steps = messageSteps
           Attachments = attachments
-          Data = messageData }
+          Artifacts = messageArtifacts }
 
     /// Append a completed turn — the user prompt plus a single assistant message that
     /// carries the whole process (ordered tool/sub-agent steps) and the final answer —
@@ -426,16 +426,21 @@ type SessionGrain
         (turnId: string)
         (correlation: CorrelationContext)
         (steps: TurnStep list)
-        (data: AgentContextData list)
+        (artifacts: Artifact list)
         : Task =
         task {
             let ctx = activeConversation ()
             let stepRecords = steps |> List.map toStepRecord
 
-            let dataRecords =
-                data
+            let artifactRecords =
+                artifacts
                 |> List.map (fun value ->
-                    AgentContextDataRecord(Kind = value.Kind, ContentType = value.ContentType, Payload = value.Payload))
+                    ArtifactRecord(
+                        Id = ArtifactId.serialize value.Id,
+                        Kind = value.Kind,
+                        ContentType = value.ContentType,
+                        Payload = value.Payload
+                    ))
 
             let userRecord =
                 MessageRecord(
@@ -453,7 +458,7 @@ type SessionGrain
                     TurnId = turnId,
                     Correlation = correlation,
                     Steps = ResizeArray(stepRecords),
-                    Data = ResizeArray(dataRecords)
+                    Artifacts = ResizeArray(artifactRecords)
                 )
 
             ctx.Messages.Add userRecord
@@ -477,7 +482,7 @@ type SessionGrain
                            response
                            (stepRecords |> List.toArray)
                            [||]
-                           (dataRecords |> List.toArray) |]
+                           (artifactRecords |> List.toArray) |]
 
                 do! conversationStore.AppendAsync grainKey convName persisted
 
@@ -666,7 +671,7 @@ type SessionGrain
                                     return outcome.Decision = PermissionDecision.Allow
                         }
 
-                    let contextData = ResizeArray<AgentContextData>()
+                    let artifacts = ResizeArray<Artifact>()
                     let grantedResources = ResizeArray<ResourceAccess>()
                     let permissionLock = new SemaphoreSlim(1, 1)
 
@@ -693,10 +698,10 @@ type SessionGrain
                                 permissionLock.Release() |> ignore
                         }
 
-                    let publishData data : Task =
+                    let publishArtifact artifact : Task =
                         (task {
-                            lock contextData (fun () -> contextData.Add data)
-                            do! EventBus.publishAsync (TurnProgress(turnScope, ToolDataPublished data)) eventBus
+                            lock artifacts (fun () -> artifacts.Add artifact)
+                            do! EventBus.publishAsync (TurnProgress(turnScope, ArtifactPublished artifact)) eventBus
                         }
                         :> Task)
 
@@ -704,11 +709,11 @@ type SessionGrain
                         { Correlation = correlation
                           SessionKey = sessionKey
                           TurnId = turnId
-                          GetData = (fun () -> lock contextData (fun () -> List.ofSeq contextData))
+                          GetArtifacts = (fun () -> lock artifacts (fun () -> List.ofSeq artifacts))
                           GetGrantedResources =
                             (fun () -> lock grantedResources (fun () -> List.ofSeq grantedResources))
                           RequestPermission = requestPermission
-                          PublishData = publishData }
+                          PublishArtifact = publishArtifact }
 
                     try
                         // Subscribe the recorder for this turn's progress signals; detached in finally.
@@ -741,8 +746,8 @@ type SessionGrain
 
                             let! result = EtclovgHarness.runAsync harnessConfig agentContext agent request
 
-                            match result.Success, result.Response with
-                            | true, Some response ->
+                            match result.Status, result.Outputs.Response with
+                            | ExecutionTerminalStatus.Succeeded, Some response ->
                                 // Emit the completed turn; a subscribed storage strategy persists it
                                 // so feedback can later be analysed against it.
                                 let turnRecord =
@@ -764,7 +769,7 @@ type SessionGrain
                                         turnId
                                         correlation
                                         (TurnRecorder.steps recorder)
-                                        (TurnRecorder.data recorder)
+                                        (TurnRecorder.artifacts recorder)
 
                                 info.LastTurnId <- turnId
 
@@ -773,10 +778,7 @@ type SessionGrain
                                 return response
 
                             | _ ->
-                                let failure =
-                                    result.HarnessError
-                                    |> Option.defaultValue (HarnessError.ExecutionFailed "Unknown harness failure")
-                                    |> fun error -> error.ToPlatformFailure(Some turnId)
+                                let failure = result.Status.ToPlatformFailure(Some turnId)
 
                                 return PlatformFailure.raiseException failure
                     finally

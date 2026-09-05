@@ -63,8 +63,8 @@ type TurnRecord =
         ToolCalls: ToolCallRecord list
         /// Sub-agents delegated to during the turn, in order.
         SubAgentCalls: SubAgentCallRecord list
-        /// Structured data published by tools during the turn.
-        Data: AgentContextData list
+        /// Artifacts published by agents or tools during the turn.
+        Artifacts: Artifact list
         /// When the turn completed.
         CreatedAt: DateTimeOffset
     }
@@ -81,5 +81,5 @@ module TurnRecord =
           Output = ""
           ToolCalls = []
           SubAgentCalls = []
-          Data = []
+          Artifacts = []
           CreatedAt = DateTimeOffset.MinValue }

@@ -51,3 +51,53 @@ type HarnessError =
 
     member this.ToPlatformFailure(correlationId) =
         PlatformFailure.create this.Category this.Message this.Retryable correlationId
+
+/// Final state of a harness execution.
+[<RequireQualifiedAccess>]
+type ExecutionTerminalStatus =
+    | Succeeded
+    | Failed of error: HarnessError
+    | Cancelled
+    | TimedOut
+    | Denied of error: HarnessError
+    | LimitExceeded of limit: LimitExceeded
+    | Indeterminate of message: string
+
+    member this.ToPlatformFailure(correlationId) =
+        match this with
+        | Succeeded -> invalidOp "A successful execution has no platform failure."
+        | Failed error
+        | Denied error -> error.ToPlatformFailure correlationId
+        | LimitExceeded limit -> (HarnessError.ResourceLimitExceeded limit).ToPlatformFailure correlationId
+        | Cancelled -> PlatformFailure.create PlatformErrorCategory.Cancelled "Execution cancelled" false correlationId
+        | TimedOut ->
+            PlatformFailure.create PlatformErrorCategory.TransientDependency "Execution timed out" true correlationId
+        | Indeterminate message ->
+            PlatformFailure.create PlatformErrorCategory.InternalFailure message false correlationId
+
+/// User-visible values produced by an execution.
+type ExecutionOutputs =
+    { Response: string option
+      Artifacts: Artifact list }
+
+/// Verifiable records collected while an execution runs.
+type ExecutionEvidence =
+    { Trace: ExecutionTrace option
+      Metrics: ExecutionMetrics option
+      Judgement: JudgementResult option
+      Regression: RegressionResult option
+      AuditEntries: int }
+
+/// Governance outcomes applied to an execution.
+type ExecutionPolicyDecisions =
+    { PolicyViolations: PolicyViolation list
+      ConstitutionViolations: ConstitutionViolation list }
+
+/// Immutable outcome of one governed harness execution.
+type ExecutionResult =
+    { Correlation: CorrelationContext
+      Status: ExecutionTerminalStatus
+      Outputs: ExecutionOutputs
+      Usage: ResourceUsage
+      Evidence: ExecutionEvidence
+      PolicyDecisions: ExecutionPolicyDecisions }

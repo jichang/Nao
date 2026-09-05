@@ -49,9 +49,9 @@ type MessageRecord() =
     [<Id(4u)>]
     member val Attachments: ResizeArray<string> = ResizeArray() with get, set
 
-    /// Structured data published by tools during this turn.
+    /// Artifacts published by agents or tools during this turn.
     [<Id(5u)>]
-    member val Data: ResizeArray<AgentContextDataRecord> = ResizeArray() with get, set
+    member val Artifacts: ResizeArray<ArtifactRecord> = ResizeArray() with get, set
 
     /// Execution identity, correlation, causation, and attempt for this message.
     [<Id(6u)>]

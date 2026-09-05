@@ -907,24 +907,25 @@ type EtclovgFullIntegrationTests() =
                 .Result
 
         // Verify success
-        Assert.IsTrue(result.Success, sprintf "Expected success but got error: %A" result.HarnessError)
-        Assert.AreEqual(Some "The current AAPL price is $189.45 based on latest market data.", result.Response)
+        Assert.AreEqual(ExecutionTerminalStatus.Succeeded, result.Status)
+
+        Assert.AreEqual(Some "The current AAPL price is $189.45 based on latest market data.", result.Outputs.Response)
 
         // E: Resource usage tracked
         Assert.IsTrue(result.Usage.ElapsedTime > TimeSpan.Zero)
 
         // O: Metrics collected
-        Assert.IsTrue(result.Metrics.IsSome)
-        Assert.AreEqual(0, result.Metrics.Value.TotalLlmCalls)
+        Assert.IsTrue(result.Evidence.Metrics.IsSome)
+        Assert.AreEqual(0, result.Evidence.Metrics.Value.TotalLlmCalls)
 
         // V: Trace stored
-        Assert.IsTrue(result.Trace.IsSome)
-        Assert.IsTrue(result.Trace.Value.Success)
+        Assert.IsTrue(result.Evidence.Trace.IsSome)
+        Assert.IsTrue(result.Evidence.Trace.Value.Success)
         let storedTraces = (traceStore.GetTracesAsync agentId 10).Result
         Assert.AreEqual(1, storedTraces.Length)
 
         // G: Audit recorded
-        Assert.IsTrue(result.AuditEntries > 0)
+        Assert.IsTrue(result.Evidence.AuditEntries > 0)
 
         let auditEntries =
             (audit.QueryAsync agentId (DateTimeOffset.UtcNow.AddMinutes(-1.0))).Result
@@ -932,8 +933,8 @@ type EtclovgFullIntegrationTests() =
         Assert.IsTrue(auditEntries.Length > 0)
 
         // G: No policy/constitution violations
-        Assert.AreEqual(0, result.PolicyViolations.Length)
-        Assert.AreEqual(0, result.ConstitutionViolations.Length)
+        Assert.AreEqual(0, result.PolicyDecisions.PolicyViolations.Length)
+        Assert.AreEqual(0, result.PolicyDecisions.ConstitutionViolations.Length)
 
     [<TestMethod>]
     member _.HarnessBlocksDangerousOutput() =
@@ -961,12 +962,14 @@ type EtclovgFullIntegrationTests() =
                 (request SandboxConfig.Default context agent "How do I get help?"))
                 .Result
 
-        Assert.IsFalse(result.Success)
-        Assert.IsTrue(result.HarnessError.Value.Message.Contains("Output violates constitution"))
-        Assert.IsTrue(result.ConstitutionViolations.Length > 0)
+        match result.Status with
+        | ExecutionTerminalStatus.Denied(HarnessError.ConstitutionViolation _) -> ()
+        | status -> Assert.Fail(sprintf "Expected constitution denial, got %A" status)
+
+        Assert.IsTrue(result.PolicyDecisions.ConstitutionViolations.Length > 0)
 
         Assert.IsTrue(
-            result.ConstitutionViolations
+            result.PolicyDecisions.ConstitutionViolations
             |> List.exists (fun v -> v.RuleId = "privacy-no-pii")
         )
 
@@ -993,9 +996,12 @@ type EtclovgFullIntegrationTests() =
             (EtclovgHarness.runAsync config context agent (request SandboxConfig.Default context agent "do something"))
                 .Result
 
-        Assert.IsFalse(result.Success)
-        Assert.IsTrue(result.HarnessError.Value.Message.Contains("Blocked by policy"))
-        Assert.AreEqual(1, result.PolicyViolations.Length)
+        Assert.AreEqual(
+            ExecutionTerminalStatus.Denied(HarnessError.PolicyBlocked [ "Budget exhausted" ]),
+            result.Status
+        )
+
+        Assert.AreEqual(1, result.PolicyDecisions.PolicyViolations.Length)
 
     [<TestMethod>]
     member _.HarnessWithReadinessGate() =
@@ -1018,9 +1024,12 @@ type EtclovgFullIntegrationTests() =
         let result =
             (EtclovgHarness.runAsync config context agent (request SandboxConfig.Default context agent "query")).Result
 
-        Assert.IsFalse(result.Success)
-        Assert.IsTrue(result.HarnessError.Value.Message.Contains("LLM endpoint unavailable"))
-        Assert.IsTrue(result.HarnessError.Value.Message.Contains("Vector store not initialized"))
+        Assert.AreEqual(
+            ExecutionTerminalStatus.Failed(
+                HarnessError.NotReady [ "LLM endpoint unavailable"; "Vector store not initialized" ]
+            ),
+            result.Status
+        )
 
     [<TestMethod>]
     member _.EndToEndOrchestratorThroughHarness() =
@@ -1061,18 +1070,18 @@ type EtclovgFullIntegrationTests() =
                 .Result
 
         // The orchestrator should have: called LLM -> invoked tool -> called LLM -> produced response
-        Assert.IsTrue(result.Success, sprintf "Failed: %A" result.HarnessError)
-        Assert.IsTrue(result.Response.IsSome)
+        Assert.AreEqual(ExecutionTerminalStatus.Succeeded, result.Status)
+        Assert.IsTrue(result.Outputs.Response.IsSome)
 
         Assert.IsTrue(
-            result.Response.Value.Contains("189.45")
-            || result.Response.Value.Contains("AAPL"),
-            sprintf "Expected stock data in response: %s" result.Response.Value
+            result.Outputs.Response.Value.Contains("189.45")
+            || result.Outputs.Response.Value.Contains("AAPL"),
+            sprintf "Expected stock data in response: %s" result.Outputs.Response.Value
         )
 
         // Observability captured
-        Assert.IsTrue(result.Metrics.IsSome)
-        Assert.IsTrue(result.Metrics.Value.TotalLlmCalls >= 1)
+        Assert.IsTrue(result.Evidence.Metrics.IsSome)
+        Assert.IsTrue(result.Evidence.Metrics.Value.TotalLlmCalls >= 1)
 
         // Trace stored for future regression detection
         let traces = (traceStore.GetTracesAsync agentId 10).Result
@@ -1123,8 +1132,8 @@ type EtclovgFullIntegrationTests() =
                     (request sandbox context orchestrator "What is the stock price of AAPL?")
                 |> _.GetAwaiter().GetResult()
 
-            Assert.IsTrue(result.Success, sprintf "Failed: %A" result.HarnessError)
-            let executionId = result.Trace.Value.Correlation.ExecutionId
+            Assert.AreEqual(ExecutionTerminalStatus.Succeeded, result.Status)
+            let executionId = result.Correlation.ExecutionId
             Assert.AreEqual(correlation.ExecutionId, executionId)
 
             let spans = (Tracers.file root).GetByExecution executionId
