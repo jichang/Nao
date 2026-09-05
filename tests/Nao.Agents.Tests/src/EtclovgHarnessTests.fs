@@ -9,6 +9,13 @@ open Nao.Agents
 [<TestClass>]
 type EtclovgHarnessTests() =
 
+    let authorization =
+        let principal =
+            SecurityPrincipal.create (TenantId.parse "tenant") (UserId.parse "user") []
+
+        AuthorizationScope.tryCreate principal None (WorkspaceId.parse "workspace") (Some(SessionId.parse "session"))
+        |> Option.get
+
     let makeAgent (response: string) =
         Agent.create
             "test-agent"
@@ -19,6 +26,18 @@ type EtclovgHarnessTests() =
             AgentContract.Text
             (fun _context _input -> Task.FromResult response)
             (fun _context _message -> Task.FromResult None)
+
+    let request (context: AgentContext) (agent: Agent) input =
+        ExecutionRequest.create
+            authorization
+            (TurnId.parse "turn")
+            "conversation"
+            agent.Metadata.Id
+            input
+            SandboxConfig.Default
+            Map.empty
+            Map.empty
+            context.Correlation
 
     [<TestMethod>]
     member _.HarnessErrorsExposePlatformCategoryAndRetryability() =
@@ -46,8 +65,10 @@ type EtclovgHarnessTests() =
         let agent = makeAgent "hello world"
         let config = EtclovgConfig.Default
 
+        let context = AgentContext.allowAll ()
+
         let result =
-            (EtclovgHarness.runAsync config (AgentContext.allowAll ()) agent "test").Result
+            (EtclovgHarness.runAsync config context agent (request context agent "test")).Result
 
         Assert.IsTrue(result.Success)
         Assert.AreEqual(Some "hello world", result.Response)
@@ -82,8 +103,10 @@ type EtclovgHarnessTests() =
             { EtclovgConfig.Default with
                 PolicyEngine = Some blockEngine }
 
+        let context = AgentContext.allowAll ()
+
         let result =
-            (EtclovgHarness.runAsync blockConfig (AgentContext.allowAll ()) agent "test").Result
+            (EtclovgHarness.runAsync blockConfig context agent (request context agent "test")).Result
 
         Assert.IsFalse(result.Success)
         Assert.IsTrue(result.HarnessError.Value.Message.Contains("Blocked by policy"))
@@ -101,8 +124,10 @@ type EtclovgHarnessTests() =
             { EtclovgConfig.Default with
                 ReadinessChecks = [ failCheck ] }
 
+        let context = AgentContext.allowAll ()
+
         let result =
-            (EtclovgHarness.runAsync config (AgentContext.allowAll ()) agent "test").Result
+            (EtclovgHarness.runAsync config context agent (request context agent "test")).Result
 
         Assert.IsFalse(result.Success)
         Assert.IsTrue(result.HarnessError.Value.Message.Contains("Not ready"))
@@ -119,8 +144,10 @@ type EtclovgHarnessTests() =
             { EtclovgConfig.Default with
                 Lifecycle = [ blockHook ] }
 
+        let context = AgentContext.allowAll ()
+
         let result =
-            (EtclovgHarness.runAsync config (AgentContext.allowAll ()) agent "test").Result
+            (EtclovgHarness.runAsync config context agent (request context agent "test")).Result
 
         Assert.IsFalse(result.Success)
         Assert.AreEqual(Some(HarnessError.InitializationFailed "init blocked"), result.HarnessError)
@@ -137,8 +164,10 @@ type EtclovgHarnessTests() =
             { EtclovgConfig.Default with
                 Constitution = Some constitution }
 
+        let context = AgentContext.allowAll ()
+
         let result =
-            (EtclovgHarness.runAsync config (AgentContext.allowAll ()) agent "test").Result
+            (EtclovgHarness.runAsync config context agent (request context agent "test")).Result
 
         Assert.IsFalse(result.Success)
         Assert.IsTrue(result.HarnessError.Value.Message.Contains("Output violates constitution"))
@@ -157,7 +186,8 @@ type EtclovgHarnessTests() =
             { (AgentContext.allowAll ()) with
                 SessionKey = "metrics/session" }
 
-        let result = (EtclovgHarness.runAsync config context agent "test").Result
+        let result =
+            (EtclovgHarness.runAsync config context agent (request context agent "test")).Result
 
         Assert.IsTrue(result.Success)
         Assert.IsTrue(result.Metrics.IsSome)
@@ -172,8 +202,10 @@ type EtclovgHarnessTests() =
             { EtclovgConfig.Default with
                 TraceStore = Some store }
 
+        let context = AgentContext.allowAll ()
+
         let result =
-            (EtclovgHarness.runAsync config (AgentContext.allowAll ()) agent "question").Result
+            (EtclovgHarness.runAsync config context agent (request context agent "question")).Result
 
         Assert.IsTrue(result.Success)
         let agentId = "test-agent"
@@ -190,8 +222,10 @@ type EtclovgHarnessTests() =
             { EtclovgConfig.Default with
                 AuditLog = Some audit }
 
+        let context = AgentContext.allowAll ()
+
         let result =
-            (EtclovgHarness.runAsync config (AgentContext.allowAll ()) agent "test").Result
+            (EtclovgHarness.runAsync config context agent (request context agent "test")).Result
 
         Assert.IsTrue(result.Success)
         Assert.AreEqual(1, result.AuditEntries)
@@ -230,10 +264,33 @@ type EtclovgHarnessTests() =
             { (AgentContext.allowAll ()) with
                 SessionKey = "metrics/session" }
 
-        let result = (EtclovgHarness.runAsync config context agent "hello").Result
+        let result =
+            (EtclovgHarness.runAsync config context agent (request context agent "hello")).Result
 
         Assert.IsTrue(result.Success)
         Assert.AreEqual(Some "safe response", result.Response)
         Assert.IsTrue(result.Metrics.IsSome)
         Assert.IsTrue(result.Trace.IsSome)
         Assert.AreEqual(1, result.AuditEntries)
+
+    [<TestMethod>]
+    member _.AgentIdentityMismatchFailsBeforeExecution() =
+        let mutable executed = false
+
+        let agent =
+            Agent.createContextual "actual-agent" "actual-agent" "test" 0 [] AgentContract.Text (fun _ _ ->
+                executed <- true
+                Task.FromResult "unexpected")
+
+        let context = AgentContext.allowAll ()
+
+        let mismatched =
+            { request context agent "test" with
+                AgentId = "requested-agent" }
+
+        let result =
+            (EtclovgHarness.runAsync EtclovgConfig.Default context agent mismatched).Result
+
+        Assert.IsFalse(result.Success)
+        Assert.AreEqual(Some HarnessError.PermissionDenied, result.HarnessError)
+        Assert.IsFalse(executed)

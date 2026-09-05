@@ -61,6 +61,29 @@ type OrchestratorObservabilityTests() =
           Bus = bus
           Scope = scope }
 
+    let request (context: AgentContext) (agent: Agent) input =
+        let principal =
+            SecurityPrincipal.create (TenantId.parse "tenant") (UserId.parse scope.UserId) []
+
+        let authorization =
+            AuthorizationScope.tryCreate
+                principal
+                None
+                (WorkspaceId.parse scope.WorkspaceKey)
+                (Some(SessionId.parse scope.SessionId))
+            |> Option.get
+
+        ExecutionRequest.create
+            authorization
+            (TurnId.parse scope.ActionId)
+            scope.ConversationId
+            agent.Metadata.Id
+            input
+            SandboxConfig.Default
+            Map.empty
+            Map.empty
+            context.Correlation
+
     [<TestMethod>]
     member _.``provider receives the active event correlation``() =
         let observed = ResizeArray<CorrelationContext>()
@@ -102,12 +125,12 @@ type OrchestratorObservabilityTests() =
             { EtclovgConfig.Default with
                 Metrics = Some metrics
                 Tracer = Some tracer
-                ExecutionJournal = Some journal
-                Scope =
-                    { EtclovgConfig.Default.Scope with
-                        Correlation = context.Correlation } }
+                ExecutionJournal = Some journal }
 
-        let result = EtclovgHarness.runAsync harnessConfig context agent "start" |> _.Result
+        let result =
+            EtclovgHarness.runAsync harnessConfig context agent (request context agent "start")
+            |> _.Result
+
         let history = journal.GetHistoryAsync() |> _.Result
 
         Assert.IsTrue(result.Success)
@@ -168,8 +191,10 @@ type OrchestratorObservabilityTests() =
         let agent =
             Orchestrator.createWithProtocol protocol (config provider [ TestTools.echo ] EventBus.none) definition
 
+        let context = AgentContext.allowAll ()
+
         let result =
-            EtclovgHarness.runAsync EtclovgConfig.Default (AgentContext.allowAll ()) agent "start"
+            EtclovgHarness.runAsync EtclovgConfig.Default context agent (request context agent "start")
             |> _.Result
 
         Assert.IsTrue(result.Success)
@@ -209,8 +234,10 @@ type OrchestratorObservabilityTests() =
             { EtclovgConfig.Default with
                 Tracer = Some tracer }
 
+        let context = AgentContext.allowAll ()
+
         let result =
-            EtclovgHarness.runAsync harnessConfig (AgentContext.allowAll ()) parent "start"
+            EtclovgHarness.runAsync harnessConfig context parent (request context parent "start")
             |> _.Result
 
         Assert.IsTrue(result.Success)

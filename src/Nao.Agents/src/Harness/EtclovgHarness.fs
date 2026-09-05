@@ -40,8 +40,7 @@ module HarnessServices =
 
 /// Complete ETCLOVG harness configuration wiring all seven layers together
 type EtclovgConfig =
-    { Execution: SandboxConfig
-      ToolProtocol: ToolProtocol option
+    { ToolProtocol: ToolProtocol option
       ExecutionJournal: ExecutionJournal option
       Lifecycle: LifecycleHook list
       Tracer: Tracer option
@@ -53,12 +52,10 @@ type EtclovgConfig =
       Constitution: Constitution option
       AuditLog: AuditLog option
       PolicyEngine: PolicyEngine option
-      Bus: EventBus
-      Scope: EventScope }
+      Bus: EventBus }
 
     static member Default =
-        { Execution = SandboxConfig.Default
-          ToolProtocol = None
+        { ToolProtocol = None
           ExecutionJournal = None
           Lifecycle = []
           Tracer = None
@@ -70,8 +67,7 @@ type EtclovgConfig =
           Constitution = None
           AuditLog = None
           PolicyEngine = None
-          Bus = EventBus.none
-          Scope = EventScope.CreateEmpty() }
+          Bus = EventBus.none }
 
     static member WithObservability (tracer: Tracer) (metrics: MetricsCollector) =
         { EtclovgConfig.Default with
@@ -118,6 +114,31 @@ type EtclovgResult =
 /// The ETCLOVG Harness — integrates all seven layers into a unified execution pipeline
 module EtclovgHarness =
 
+    let private eventScope (request: ExecutionRequest) =
+        let userId = request.Authorization |> AuthorizationScope.userId |> UserId.value
+
+        let sessionId =
+            request.Authorization
+            |> AuthorizationScope.sessionId
+            |> Option.map SessionId.value
+            |> Option.defaultValue ""
+
+        let sessionKey =
+            if String.IsNullOrEmpty sessionId then
+                ""
+            else
+                sprintf "%s/%s" userId sessionId
+
+        EventScope.Create(
+            userId,
+            sessionId,
+            request.ConversationId,
+            (request.Authorization |> AuthorizationScope.workspaceId |> WorkspaceId.value),
+            (request.TurnId |> TurnId.value),
+            sessionKey,
+            request.Correlation
+        )
+
     let private failResult
         (harnessError: HarnessError)
         (usage: ResourceUsage)
@@ -145,15 +166,20 @@ module EtclovgHarness =
         (config: EtclovgConfig)
         (agentContext: AgentContext)
         (agent: Agent)
-        (input: string)
+        (request: ExecutionRequest)
         : Task<EtclovgResult> =
         task {
+            let input = request.Input
+            let scope = eventScope request
+
             let execCtx =
-                ExecutionContext.CreateWithCorrelation config.Execution config.Scope.Correlation
+                ExecutionContext.CreateWithCorrelation request.Sandbox request.Correlation
 
             let agentContext =
                 { agentContext with
-                    Correlation = execCtx.Correlation }
+                    Correlation = request.Correlation
+                    SessionKey = scope.SessionKey
+                    TurnId = request.TurnId |> TurnId.value }
 
             let mutable trace =
                 Verification.startTrace execCtx.Correlation agent.Metadata.Id input
@@ -161,34 +187,31 @@ module EtclovgHarness =
             let mutable policyViolations = []
             let mutable constitutionViolations = []
 
-            // === G: Policy engine pre-check ===
-            let policyBlocked =
-                match config.PolicyEngine with
-                | Some engine ->
-                    let ctx =
-                        PolicyContext.FromExecutionContext agent.Metadata.Id "execute" (Some input) execCtx
+            // === G: Identity and policy pre-checks ===
+            let preflightError =
+                if request.AgentId <> agent.Metadata.Id then
+                    Some HarnessError.PermissionDenied
+                else
+                    match config.PolicyEngine with
+                    | Some engine ->
+                        let ctx =
+                            PolicyContext.FromExecutionContext agent.Metadata.Id "execute" (Some input) execCtx
 
-                    let result = engine.Evaluate(ctx)
-                    policyViolations <- result.Violations
+                        let result = engine.Evaluate(ctx)
+                        policyViolations <- result.Violations
 
-                    if not result.Proceed then
-                        Some(result.Violations |> List.map (fun v -> v.Message))
-                    else
-                        None
-                | None -> None
+                        if not result.Proceed then
+                            result.Violations
+                            |> List.map (fun violation -> violation.Message)
+                            |> HarnessError.PolicyBlocked
+                            |> Some
+                        else
+                            None
+                    | None -> None
 
-            match policyBlocked with
-            | Some violations ->
-                return
-                    failResult
-                        (HarnessError.PolicyBlocked violations)
-                        execCtx.Usage
-                        trace
-                        policyViolations
-                        []
-                        agentContext.SessionKey
-                        None
-                        0
+            match preflightError with
+            | Some error ->
+                return failResult error execCtx.Usage trace policyViolations [] agentContext.SessionKey None 0
             | None ->
 
                 // === V: Verification — Readiness checks ===
@@ -271,7 +294,7 @@ module EtclovgHarness =
 
                                 tracer.SetAttributes
                                     s
-                                    (Map.ofList [ "sandbox.isolation", string config.Execution.Isolation ])
+                                    (Map.ofList [ "sandbox.isolation", string request.Sandbox.Isolation ])
 
                                 Some s
                             | _ -> None
@@ -446,7 +469,7 @@ module EtclovgHarness =
                                 | _ -> ()
 
                                 EventBus.publishAsync
-                                    (NaoEvent.TurnProgress(config.Scope, ProgressSignal.AnswerProduced response))
+                                    (NaoEvent.TurnProgress(scope, ProgressSignal.AnswerProduced response))
                                     config.Bus
                                 |> ignore
 

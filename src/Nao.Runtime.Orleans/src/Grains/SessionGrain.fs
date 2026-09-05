@@ -295,7 +295,6 @@ type SessionGrain
     let buildHarnessConfig
         (workspace: WorkspaceDefinitions)
         (tools: Tool list)
-        (scope: EventScope)
         (services: HarnessServices)
         : EtclovgConfig =
         let constitution = WorkspaceDefinitions.mergedConstitution workspace
@@ -310,8 +309,7 @@ type SessionGrain
             { EtclovgConfig.Default with
                 Constitution = constitution
                 ToolProtocol = toolProtocol
-                Bus = eventBus
-                Scope = scope }
+                Bus = eventBus }
 
         baseConfig.WithServices(services)
 
@@ -727,8 +725,21 @@ type SessionGrain
                         | Some agent ->
                             let harnessServices = harnessServicesFactory.Invoke(sessionKey, turnId, correlation)
 
-                            let harnessConfig = buildHarnessConfig workspace tools turnScope harnessServices
-                            let! result = EtclovgHarness.runAsync harnessConfig agentContext agent contextualInput
+                            let harnessConfig = buildHarnessConfig workspace tools harnessServices
+
+                            let request =
+                                ExecutionRequest.create
+                                    (requireCurrentScope ())
+                                    (TurnId.parse turnId)
+                                    info.ActiveConversation
+                                    agent.Metadata.Id
+                                    contextualInput
+                                    SandboxConfig.Default
+                                    Map.empty
+                                    Map.empty
+                                    correlation
+
+                            let! result = EtclovgHarness.runAsync harnessConfig agentContext agent request
 
                             match result.Success, result.Response with
                             | true, Some response ->

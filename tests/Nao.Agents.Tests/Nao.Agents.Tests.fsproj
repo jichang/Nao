@@ -22,6 +22,7 @@
     <Compile Include="src/SummarizerTests.fs" />
     <Compile Include="src/SemanticMemoryTests.fs" />
     <Compile Include="src/EnvironmentTests.fs" />
+    <Compile Include="src/ExecutionRequestTests.fs" />
     <Compile Include="src/ToolProtocolTests.fs" />
     <Compile Include="src/ToolSelectionTests.fs" />
     <Compile Include="src/ContextCompactionTests.fs" />

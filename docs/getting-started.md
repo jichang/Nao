@@ -71,9 +71,6 @@ let readinessCheck =
 
 let config =
     { EtclovgConfig.Default with
-        Execution =
-            SandboxConfig.Restricted(
-                ResourceLimits.Constrained 60 50 100000)
         Tracer = Some(Tracer.inMemory ())
         Metrics = Some(InMemory.metrics ())
         Constitution =
@@ -84,9 +81,26 @@ let config =
         TraceStore = Some traceStore
         AuditLog = Some(AuditLog.inMemory ()) }
 
+let request =
+    ExecutionRequest.create
+        authorizationScope
+        turnId
+        conversationId
+        eligibilityAgent.Metadata.Id
+        encodedInput
+        (SandboxConfig.Restricted(
+            ResourceLimits.Constrained 60 50 100000))
+        policyVersions
+        dependencyVersions
+        correlation
+
 let! result =
-    EtclovgHarness.runAsync config agentContext eligibilityAgent encodedInput
+    EtclovgHarness.runAsync config agentContext eligibilityAgent request
 ```
+
+The request is the authoritative execution envelope. Its authorization scope, identity,
+budgets, pinned policy and dependency versions, and correlation data are immutable for the
+run. The harness rejects a request whose agent identity differs from the executable agent.
 
 `ReadinessCheck` and `Judge` are immutable capability records. Their modules provide
 `create` and invocation functions, so harness extensions require no interface implementation,

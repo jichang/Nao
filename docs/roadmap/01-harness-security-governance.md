@@ -17,7 +17,7 @@ This workstream makes the ETCLOVG harness the single reliable execution path and
 
 ## HAR-01 — One execution contract
 
-- [ ] Define one immutable execution request containing identity, input, budgets, policy versions, dependency versions, and correlation data.
+- [x] Define one immutable execution request containing identity, input, budgets, policy versions, dependency versions, and correlation data.
 - [ ] Define an execution result containing outputs, artifacts, usage, evidence, policy decisions, and terminal status.
 - [ ] Route direct agent, tool, delegated-agent, memory-tool, evaluation, and replay execution through the harness.
 - [ ] Eliminate authorization bypasses created by permissive default contexts in production paths.

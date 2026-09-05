@@ -803,6 +803,34 @@ type EtclovgGovernanceTests() =
 [<TestClass>]
 type EtclovgFullIntegrationTests() =
 
+    let request (sandbox: SandboxConfig) (context: AgentContext) (agent: Agent) input =
+        let userId, sessionId =
+            match context.SessionKey.Split('/', 2) with
+            | [| userId; sessionId |] -> userId, sessionId
+            | _ -> "e2e", "session"
+
+        let principal =
+            SecurityPrincipal.create (TenantId.parse "tenant") (UserId.parse userId) []
+
+        let authorization =
+            AuthorizationScope.tryCreate
+                principal
+                None
+                (WorkspaceId.parse "workspace")
+                (Some(SessionId.parse sessionId))
+            |> Option.get
+
+        ExecutionRequest.create
+            authorization
+            (context.TurnId |> TurnId.tryParse |> Option.defaultWith TurnId.generate)
+            "default"
+            agent.Metadata.Id
+            input
+            sandbox
+            Map.empty
+            Map.empty
+            context.Correlation
+
     let makeAgent response =
         Agent.create
             "full-demo-agent"
@@ -851,21 +879,16 @@ type EtclovgFullIntegrationTests() =
 
         // Assemble the full ETCLOVG configuration
         let config: EtclovgConfig =
-            { Execution = sandbox
-              ToolProtocol = None
-              ExecutionJournal = None
-              Lifecycle = [ lifecycleHook ]
-              Tracer = Some tracer
-              Metrics = Some metrics
-              Resilience = ResilienceConfig.Default
-              ReadinessChecks = [ readinessCheck ]
-              TraceStore = Some traceStore
-              Judge = None
-              Constitution = Some constitution
-              AuditLog = Some audit
-              PolicyEngine = Some policyEngine
-              Bus = EventBus.none
-              Scope = EventScope.CreateEmpty() }
+            { EtclovgConfig.Default with
+                Lifecycle = [ lifecycleHook ]
+                Tracer = Some tracer
+                Metrics = Some metrics
+                Resilience = ResilienceConfig.Default
+                ReadinessChecks = [ readinessCheck ]
+                TraceStore = Some traceStore
+                Constitution = Some constitution
+                AuditLog = Some audit
+                PolicyEngine = Some policyEngine }
 
         // Execute
         let agent =
@@ -876,7 +899,12 @@ type EtclovgFullIntegrationTests() =
                 SessionKey = "e2e/full-harness" }
 
         let result =
-            (EtclovgHarness.runAsync config context agent "What is the AAPL stock price?").Result
+            (EtclovgHarness.runAsync
+                config
+                context
+                agent
+                (request sandbox context agent "What is the AAPL stock price?"))
+                .Result
 
         // Verify success
         Assert.IsTrue(result.Success, sprintf "Expected success but got error: %A" result.HarnessError)
@@ -923,8 +951,15 @@ type EtclovgFullIntegrationTests() =
                 AuditLog = Some(InMemory.auditLog ())
                 Lifecycle = [ LifecycleHook.passthrough ] }
 
+        let context = AgentContext.allowAll ()
+
         let result =
-            (EtclovgHarness.runAsync config (AgentContext.allowAll ()) agent "How do I get help?").Result
+            (EtclovgHarness.runAsync
+                config
+                context
+                agent
+                (request SandboxConfig.Default context agent "How do I get help?"))
+                .Result
 
         Assert.IsFalse(result.Success)
         Assert.IsTrue(result.HarnessError.Value.Message.Contains("Output violates constitution"))
@@ -952,8 +987,11 @@ type EtclovgFullIntegrationTests() =
                                 Evaluate = fun _ -> Some "Budget exhausted" } ]
                     ) }
 
+        let context = AgentContext.allowAll ()
+
         let result =
-            (EtclovgHarness.runAsync config (AgentContext.allowAll ()) agent "do something").Result
+            (EtclovgHarness.runAsync config context agent (request SandboxConfig.Default context agent "do something"))
+                .Result
 
         Assert.IsFalse(result.Success)
         Assert.IsTrue(result.HarnessError.Value.Message.Contains("Blocked by policy"))
@@ -975,8 +1013,10 @@ type EtclovgFullIntegrationTests() =
                 ReadinessChecks = [ failedCheck ]
                 Lifecycle = [ LifecycleHook.passthrough ] }
 
+        let context = AgentContext.allowAll ()
+
         let result =
-            (EtclovgHarness.runAsync config (AgentContext.allowAll ()) agent "query").Result
+            (EtclovgHarness.runAsync config context agent (request SandboxConfig.Default context agent "query")).Result
 
         Assert.IsFalse(result.Success)
         Assert.IsTrue(result.HarnessError.Value.Message.Contains("LLM endpoint unavailable"))
@@ -994,11 +1034,12 @@ type EtclovgFullIntegrationTests() =
         let traceStore = InMemoryTraceStore.create ()
         let audit = InMemory.auditLog ()
 
+        let sandbox =
+            { SandboxConfig.Default with
+                Limits = ResourceLimits.Constrained 30 20 50000 }
+
         let config =
             { EtclovgConfig.Default with
-                Execution =
-                    { SandboxConfig.Default with
-                        Limits = ResourceLimits.Constrained 30 20 50000 }
                 Tracer = Some tracer
                 Metrics = Some metrics
                 TraceStore = Some traceStore
@@ -1012,7 +1053,12 @@ type EtclovgFullIntegrationTests() =
                 SessionKey = "e2e/orchestrator" }
 
         let result =
-            (EtclovgHarness.runAsync config context orchestrator "What is the stock price of AAPL?").Result
+            (EtclovgHarness.runAsync
+                config
+                context
+                orchestrator
+                (request sandbox context orchestrator "What is the stock price of AAPL?"))
+                .Result
 
         // The orchestrator should have: called LLM -> invoked tool -> called LLM -> produced response
         Assert.IsTrue(result.Success, sprintf "Failed: %A" result.HarnessError)
@@ -1050,18 +1096,17 @@ type EtclovgFullIntegrationTests() =
             let traceStore = TraceStores.file root
             let audit = AuditLogs.file root
 
+            let sandbox =
+                { SandboxConfig.Default with
+                    Limits = ResourceLimits.Constrained 30 20 50000 }
+
             let config =
                 { EtclovgConfig.Default with
-                    Execution =
-                        { SandboxConfig.Default with
-                            Limits = ResourceLimits.Constrained 30 20 50000 }
                     Tracer = Some tracer
                     Metrics = Some metrics
                     ExecutionJournal = Some journal
                     TraceStore = Some traceStore
                     AuditLog = Some audit
-                    Scope =
-                        EventScope.Create("e2e", "correlation", "default", "workspace", turnId, sessionKey, correlation)
                     Lifecycle = [ LifecycleHook.passthrough ] }
 
             let context =
@@ -1071,7 +1116,11 @@ type EtclovgFullIntegrationTests() =
                     TurnId = turnId }
 
             let result =
-                EtclovgHarness.runAsync config context orchestrator "What is the stock price of AAPL?"
+                EtclovgHarness.runAsync
+                    config
+                    context
+                    orchestrator
+                    (request sandbox context orchestrator "What is the stock price of AAPL?")
                 |> _.GetAwaiter().GetResult()
 
             Assert.IsTrue(result.Success, sprintf "Failed: %A" result.HarnessError)
