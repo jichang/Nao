@@ -15,32 +15,4 @@ After Nao declares a stable release, semantic-versioning and support commitments
 
 ## Guide template
 
-```markdown
-# <version or date> <change name>
-
-## Scope
-
-- First incompatible version:
-- Affected packages and APIs:
-- Affected files, streams, tables, or Orleans state:
-
-## Breaking changes
-
-- <old contract> becomes <new contract>.
-
-## Before upgrade
-
-1. Stop writers.
-2. Back up or export affected data.
-3. Validate that the backup can be restored.
-
-## Migration
-
-1. Transform data externally with explicit identity and ownership mappings, or delete development data when retention is unnecessary.
-2. Deploy the new version.
-3. Validate current-schema reads and writes.
-
-## Rollback
-
-State whether rollback is possible after new-format writes and how to restore the backup.
-```
+Copy the [migration guide template](TEMPLATE.md) and replace every placeholder. Keep the validation section concrete: record the commands, tests, data checks, and rollback evidence used for the change.

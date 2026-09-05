@@ -17,6 +17,7 @@ Nao connects models, agents, tools, memory, knowledge, distributed execution, go
 | [Getting started](docs/getting-started.md) | Restore, build, test, define an agent, use the harness, and register a workspace |
 | [AI platform roadmap](docs/roadmap.md) | Prioritized milestones, trackable tasks, dependencies, and acceptance criteria |
 | [Development and contributing](docs/development.md) | Repository conventions, testing, compatibility, security, and roadmap workflow |
+| [Architecture decisions](docs/decisions/README.md) | Decision criteria, lifecycle, and ADR template for platform contracts |
 
 ### Architecture and capabilities
 

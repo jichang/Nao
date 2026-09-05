@@ -14,6 +14,7 @@ The current implementation provides agent, ETCLOVG harness, persistence, provide
 | [AI platform roadmap](roadmap.html) | Release milestones, detailed checklists, dependencies, and definition of done |
 | [Development and contributing](development.html) | Coding, testing, compatibility, security, documentation, and roadmap workflow |
 | [Durable formats](durable-formats.html) | Current schema markers, decode policy, fail-fast gaps, and migration rules |
+| [Architecture decisions](decisions/README.html) | Decision criteria, lifecycle, and ADR template for platform contracts |
 
 ## Architecture and capabilities
 

@@ -1,0 +1,27 @@
+# Default repository owner
+* @jichang
+
+# Public packages
+/src/Nao.Agents/ @jichang
+/src/Nao.Protocols/ @jichang
+/src/Nao.Eval/ @jichang
+/src/Nao.Persistence/ @jichang
+/src/Nao.Persistence.Infrastructure/ @jichang
+/src/Nao.Persistence.Memory/ @jichang
+/src/Nao.Persistence.Observability/ @jichang
+/src/Nao.Persistence.Feedback/ @jichang
+/src/Nao.Providers/ @jichang
+/src/Nao.Providers.OpenAICompatible/ @jichang
+/src/Nao.Providers.Anthropic/ @jichang
+/src/Nao.Providers.Ollama/ @jichang
+/src/Nao.Runtime.Orleans/ @jichang
+/src/Nao.Runtime.Orleans.Codegen/ @jichang
+
+# Roadmap workstreams
+/docs/roadmap/00-foundations.md @jichang
+/docs/roadmap/01-harness-security-governance.md @jichang
+/docs/roadmap/02-knowledge-rag.md @jichang
+/docs/roadmap/03-evaluation-observability.md @jichang
+/docs/roadmap/04-providers-runtime.md @jichang
+/docs/roadmap/05-ontology-logic.md @jichang
+/docs/roadmap/06-platform-operations-dx.md @jichang

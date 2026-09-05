@@ -31,6 +31,66 @@ REQUIRED_VOCABULARY_TERMS = {
     "Turn",
     "Execution",
 }
+REQUIRED_TEMPLATE_SECTIONS = {
+    "docs/decisions/TEMPLATE.md": {
+        "## Context",
+        "## Decision",
+        "## Options considered",
+        "## Consequences",
+        "## Compatibility and migration",
+        "## Security and trust",
+        "## Validation",
+    },
+    "docs/migrations/TEMPLATE.md": {
+        "## Scope",
+        "## Breaking changes",
+        "## Before upgrade",
+        "## Migration",
+        "## Validation",
+        "## Rollback",
+    },
+    "docs/releases/TEMPLATE.md": {
+        "## Summary",
+        "## Added",
+        "## Changed",
+        "## Fixed",
+        "## Breaking changes",
+        "## Security",
+        "## Upgrade and rollback",
+        "## Validation",
+        "## Known limitations",
+    },
+}
+REQUIRED_CODEOWNER_PATHS = {
+    "/src/Nao.Agents/",
+    "/src/Nao.Protocols/",
+    "/src/Nao.Eval/",
+    "/src/Nao.Persistence/",
+    "/src/Nao.Persistence.Infrastructure/",
+    "/src/Nao.Persistence.Memory/",
+    "/src/Nao.Persistence.Observability/",
+    "/src/Nao.Persistence.Feedback/",
+    "/src/Nao.Providers/",
+    "/src/Nao.Providers.OpenAICompatible/",
+    "/src/Nao.Providers.Anthropic/",
+    "/src/Nao.Providers.Ollama/",
+    "/src/Nao.Runtime.Orleans/",
+    "/src/Nao.Runtime.Orleans.Codegen/",
+    "/docs/roadmap/00-foundations.md",
+    "/docs/roadmap/01-harness-security-governance.md",
+    "/docs/roadmap/02-knowledge-rag.md",
+    "/docs/roadmap/03-evaluation-observability.md",
+    "/docs/roadmap/04-providers-runtime.md",
+    "/docs/roadmap/05-ontology-logic.md",
+    "/docs/roadmap/06-platform-operations-dx.md",
+}
+REQUIRED_PR_CHECKS = {
+    "owning roadmap task",
+    "Updated roadmap checkboxes",
+    "Added or updated an ADR",
+    "Added a migration guide",
+    "Updated release notes",
+}
 
 
 class HtmlLinks(HTMLParser):
@@ -131,6 +191,67 @@ def validate_markdown(root: Path) -> tuple[list[str], int, int]:
     return errors, len(files), link_count
 
 
+def validate_documentation_process(root: Path) -> list[str]:
+    errors: list[str] = []
+
+    for relative_path, required_sections in REQUIRED_TEMPLATE_SECTIONS.items():
+        template = root / relative_path
+        if not template.exists():
+            errors.append(f"missing documentation template: {relative_path}")
+            continue
+        lines = set(template.read_text(encoding="utf-8").splitlines())
+        for section in sorted(required_sections - lines):
+            errors.append(f"{relative_path}: missing required section {section}")
+
+    decisions = root / "docs" / "decisions"
+    if decisions.is_dir():
+        for decision in sorted(decisions.glob("[0-9][0-9][0-9][0-9]-*.md")):
+            text = decision.read_text(encoding="utf-8")
+            for field in ("Status", "Date", "Owners", "Roadmap"):
+                if not re.search(rf"^- {field}: \S.+$", text, re.MULTILINE):
+                    errors.append(
+                        f"{decision.relative_to(root)}: missing non-empty ADR field {field}"
+                    )
+
+    codeowners = root / ".github" / "CODEOWNERS"
+    if not codeowners.exists():
+        errors.append("missing ownership metadata: .github/CODEOWNERS")
+    else:
+        owned_paths = {
+            line.split()[0]
+            for line in codeowners.read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        }
+        for path in sorted(REQUIRED_CODEOWNER_PATHS - owned_paths):
+            errors.append(f".github/CODEOWNERS: missing required ownership path {path}")
+
+    pull_request_template = root / ".github" / "pull_request_template.md"
+    if not pull_request_template.exists():
+        errors.append("missing review checklist: .github/pull_request_template.md")
+    else:
+        text = pull_request_template.read_text(encoding="utf-8")
+        for check in sorted(REQUIRED_PR_CHECKS):
+            if check not in text:
+                errors.append(
+                    f".github/pull_request_template.md: missing required check {check}"
+                )
+
+    docs_workflow = root / ".github" / "workflows" / "docs.yml"
+    if not docs_workflow.exists():
+        errors.append("missing documentation workflow: .github/workflows/docs.yml")
+    else:
+        workflow = docs_workflow.read_text(encoding="utf-8")
+        for command in (
+            "python3 scripts/validate-docs.py",
+            "dotnet fsdocs build",
+            "python3 scripts/validate-docs.py --site ./site",
+        ):
+            if command not in workflow:
+                errors.append(f".github/workflows/docs.yml: missing required command {command}")
+
+    return errors
+
+
 def validate_generated_site(site: Path) -> list[str]:
     errors: list[str] = []
     if not site.is_dir():
@@ -176,6 +297,7 @@ def main() -> int:
 
     root = args.root.resolve()
     errors, file_count, link_count = validate_markdown(root)
+    errors.extend(validate_documentation_process(root))
     if args.site:
         errors.extend(validate_generated_site(args.site.resolve()))
 

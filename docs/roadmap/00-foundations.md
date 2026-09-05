@@ -121,18 +121,20 @@ Core typed identifiers and canonical codecs are implemented, and the Orleans reg
 
 ## FND-07 — Architecture decision and documentation process
 
-- [ ] Add an architecture decision record template.
-- [ ] Require decisions for new platform boundaries, durable contracts, and security models.
-- [ ] Add contributor guidance for updating roadmap checkboxes.
-- [ ] Add ownership metadata for workstreams and public packages.
-- [ ] Define release notes and migration-guide templates.
-- [ ] Add a documentation build/link-validation job.
+- [x] Add an architecture decision record template.
+- [x] Require decisions for new platform boundaries, durable contracts, and security models.
+- [x] Add contributor guidance for updating roadmap checkboxes.
+- [x] Add ownership metadata for workstreams and public packages.
+- [x] Define release notes and migration-guide templates.
+- [x] Add a documentation build/link-validation job.
+
+Architecture decisions use a required template and lifecycle under `docs/decisions/`; pull requests explicitly review ADR, migration, release-note, capability, roadmap, and validation obligations. `CODEOWNERS` assigns all public packages and roadmap workstreams, and documentation validation fails when required ownership entries, process templates, ADR metadata, review checks, or source/generated-site workflow commands are missing. FND-07 is complete.
 
 ### Exit criteria for R0
 
-- [ ] FND-01 through FND-07 are complete.
-- [ ] The capability inventory and solution membership are accurate.
-- [ ] Contract compatibility and dependency rules are enforced by CI.
-- [ ] Roadmap tasks can be linked reliably from issues, commits, and releases.
+- [x] FND-01 through FND-07 are complete.
+- [x] The capability inventory and solution membership are accurate.
+- [x] Contract compatibility and dependency rules are enforced by CI.
+- [x] Roadmap tasks can be linked reliably from issues, commits, and releases.
 
 [Back to roadmap](../roadmap.md)

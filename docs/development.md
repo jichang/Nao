@@ -182,6 +182,20 @@ The [AI platform roadmap](roadmap.md) is the planning source of truth.
 - Do not check a parent milestone until all required child tasks are complete.
 - Record scope changes in the roadmap rather than silently changing the definition of done.
 
+## Architecture decisions
+
+Use an [architecture decision record](decisions/README.md) for any new or materially changed platform boundary, durable contract, or security model. Start from the [ADR template](decisions/TEMPLATE.md), keep the roadmap and owner metadata current, and link a separate migration guide for incompatible contracts. Accepted ADRs are immutable history; supersede them with a new decision instead of rewriting their rationale.
+
+## Ownership and review
+
+`.github/CODEOWNERS` is the machine-readable ownership source for every public package and roadmap workstream. Update it in the same change when adding, renaming, splitting, or transferring a package or workstream. Ownership means reviewing contract, compatibility, security, documentation, and release consequences; it does not imply that only the listed owner may contribute.
+
+The pull request template requires explicit roadmap, ADR, migration, release-note, capability, and validation review. Mark an item not applicable only with a short rationale in the pull request.
+
+## Release notes
+
+Create release notes from the [release template](releases/TEMPLATE.md). Every user-visible or operator-visible change belongs under Added, Changed, Fixed, Breaking changes, or Security. Link migration guides for every incompatible API or durable-format change, state upgrade and rollback limits, and preserve known unsupported guarantees.
+
 ## Documentation
 
 Conceptual documentation lives under `docs/`. The root README is a navigation page. Public API reference is generated from XML documentation comments through FSharp.Formatting.
