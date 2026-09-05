@@ -9,6 +9,36 @@ type TraceId = TraceId of Guid
 /// A span within a trace (represents a unit of work)
 type SpanId = SpanId of Guid
 
+module TraceId =
+    let generate () = TraceId(Guid.NewGuid())
+    let value (TraceId value) = value
+
+    let tryParse (value: string) =
+        match Guid.TryParse value with
+        | true, id -> Some(TraceId id)
+        | _ -> None
+
+    let parse value =
+        tryParse value
+        |> Option.defaultWith (fun () -> invalidArg (nameof value) "Invalid trace ID.")
+
+    let serialize = value >> _.ToString("D")
+
+module SpanId =
+    let generate () = SpanId(Guid.NewGuid())
+    let value (SpanId value) = value
+
+    let tryParse (value: string) =
+        match Guid.TryParse value with
+        | true, id -> Some(SpanId id)
+        | _ -> None
+
+    let parse value =
+        tryParse value
+        |> Option.defaultWith (fun () -> invalidArg (nameof value) "Invalid span ID.")
+
+    let serialize = value >> _.ToString("D")
+
 /// Span status
 [<RequireQualifiedAccess>]
 type SpanStatus =

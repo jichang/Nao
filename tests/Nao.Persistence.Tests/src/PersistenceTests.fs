@@ -664,7 +664,7 @@ let private auditEntry permitted execId : AuditEntry =
 
 let private runAuditRoundTrip (log: AuditLog) =
     task {
-        let exec = Guid.NewGuid()
+        let exec = ExecutionId.generate ()
         let since = DateTimeOffset.UtcNow.AddMinutes -1.0
         do! log.RecordAsync(auditEntry true (Some exec))
         do! log.RecordAsync(auditEntry false (Some exec))

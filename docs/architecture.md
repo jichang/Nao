@@ -24,6 +24,10 @@ These terms are normative across Nao public APIs and documentation:
 
 Identity scopes are ordered from broad to narrow: tenant, organizational group, user, workspace, session, turn, and execution. A narrower identifier never authorizes access by itself. The authenticated host supplies tenant, group, and user identity; Nao currently propagates only part of that context and does not yet provide a canonical security principal.
 
+Nao public contracts use distinct `TenantId`, `GroupId`, `UserId`, `WorkspaceId`, `SessionId`, `TurnId`, `ExecutionId`, `ArtifactId`, `SourceId`, `TraceId`, and `SpanId` types. Host-assigned text identifiers are non-blank, preserve case and exact content, and reject surrounding whitespace; their canonical serialization is the wrapped text. Runtime-generated identifiers use random UUIDs and serialize in lowercase hyphenated `D` format. Parsing never trims, normalizes, or substitutes an identifier. Callers must compare the typed value appropriate to the owning scope rather than compare unrelated serialized strings.
+
+Every root execution creates an execution ID and correlation ID. Delegation creates a distinct execution ID, retains the correlation ID, records the parent execution as causation, and starts at attempt 1. A retry also creates a distinct execution ID, retains correlation, records the previous attempt as causation, and increments the attempt number. This correlation model is implemented by `CorrelationContext`; propagation beyond execution, audit, and telemetry remains in progress.
+
 | Scope | Owner | Lifetime and closure |
 |---|---|---|
 | Tenant | Host identity/control plane | Host-defined; closure must revoke access and apply tenant retention/deletion policy to every narrower scope |

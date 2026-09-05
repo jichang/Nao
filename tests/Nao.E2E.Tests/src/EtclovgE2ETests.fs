@@ -708,7 +708,7 @@ type EtclovgGovernanceTests() =
     [<TestMethod>]
     member _.AuditLogTracksAllActions() =
         let audit = InMemory.auditLog ()
-        let execId = Guid.NewGuid()
+        let execId = ExecutionId.generate ()
 
         // Record a sequence of actions
         audit.RecordAsync(AuditLog.llmCall agentId "gpt-4o" (Some execId)).Wait()

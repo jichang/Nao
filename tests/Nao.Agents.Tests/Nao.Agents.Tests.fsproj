@@ -16,6 +16,7 @@
     <Compile Include="src/PromptAndAgentMessageTests.fs" />
     <Compile Include="src/PromptPatchTests.fs" />
     <Compile Include="src/LlmTypeTests.fs" />
+    <Compile Include="src/IdentityTests.fs" />
     <Compile Include="src/ConversationWindowTests.fs" />
     <Compile Include="src/MemoryStoreTests.fs" />
     <Compile Include="src/SummarizerTests.fs" />

@@ -124,9 +124,9 @@ type AuditLogTests() =
     [<TestMethod>]
     member _.QueryByExecutionFiltersCorrectly() =
         let audit = InMemory.auditLog ()
-        let execId = Guid.NewGuid()
+        let execId = ExecutionId.generate ()
         let entry1 = AuditLog.llmCall agentId "gpt-4" (Some execId)
-        let entry2 = AuditLog.llmCall agentId "gpt-4" (Some(Guid.NewGuid()))
+        let entry2 = AuditLog.llmCall agentId "gpt-4" (Some(ExecutionId.generate ()))
         audit.RecordAsync(entry1).Wait()
         audit.RecordAsync(entry2).Wait()
         let results = (audit.QueryByExecutionAsync execId).Result

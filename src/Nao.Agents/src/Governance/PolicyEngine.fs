@@ -29,10 +29,10 @@ and [<RequireQualifiedAccess>] PolicyEnforcement =
 
 /// Context passed to policy evaluation
 and PolicyContext =
-    { AgentId: string
+    { ExecutionId: Nao.Agents.ExecutionId option
+      AgentId: string
       Action: string
       Input: string option
-      ExecutionId: Guid option
       CurrentUsage: ResourceUsage option }
 
     /// Create a PolicyContext from an ExecutionContext (canonical factory)

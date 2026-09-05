@@ -105,17 +105,19 @@ Nao currently makes no backward-compatibility or rolling-upgrade promise. The mi
 
 ## FND-06 — Stable identity and correlation model
 
-- [ ] Define typed identifiers for tenant, group, user, workspace, session, turn, execution, artifact, source, and trace.
-- [ ] Define identifier generation, uniqueness, parsing, and serialization rules.
+- [x] Define typed identifiers for tenant, group, user, workspace, session, turn, execution, artifact, source, and trace.
+- [x] Define identifier generation, uniqueness, parsing, and serialization rules.
 - [ ] Propagate correlation identifiers through agents, tools, providers, memory, persistence, telemetry, and evaluation.
-- [ ] Define causation and correlation links for delegation and retries.
+- [x] Define causation and correlation links for delegation and retries.
 - [ ] Prevent externally supplied identifiers from escaping authorization scope.
 
 **Acceptance criteria**
 
 - [ ] One execution can be reconstructed across all participating components.
-- [ ] Retries retain causation while receiving distinct attempt identities.
+- [x] Retries retain causation while receiving distinct attempt identities.
 - [ ] Identifier-based cross-tenant access tests fail closed.
+
+Core typed identifiers and canonical codecs are implemented, and the Orleans registry now consumes the core `WorkspaceId` rather than defining a runtime-local duplicate. `ExecutionContext` propagates execution, correlation, causation, and attempt identity through roots, delegation, retries, policy evaluation, audit persistence, and harness telemetry. Event scopes, provider calls, memory, evaluation, and a host-authenticated authorization scope still require end-to-end propagation; therefore FND-06 remains open.
 
 ## FND-07 — Architecture decision and documentation process
 

@@ -25,7 +25,7 @@ type AuditEntry =
         /// Any constitution violations
         ConstitutionViolations: string list
         /// Execution context identifier
-        ExecutionId: Guid option
+        ExecutionId: ExecutionId option
         /// Additional metadata
         Metadata: Map<string, string>
     }
@@ -50,7 +50,7 @@ type AuditLog =
         /// Query audit entries for an agent
         QueryAsync: string -> DateTimeOffset -> Task<AuditEntry list>
         /// Query all entries for an execution
-        QueryByExecutionAsync: Guid -> Task<AuditEntry list>
+        QueryByExecutionAsync: ExecutionId -> Task<AuditEntry list>
         /// Get a count of denied actions for an agent
         GetDeniedCountAsync: string -> DateTimeOffset -> Task<int>
         /// Delete every audit entry owned by an agent
@@ -69,7 +69,7 @@ module AuditLog =
         (output: string)
         (permitted: bool)
         (decision: PermissionDecision)
-        (execId: Guid option)
+        (execId: ExecutionId option)
         : AuditEntry =
         { Id = Guid.NewGuid()
           Timestamp = DateTimeOffset.UtcNow
@@ -84,7 +84,7 @@ module AuditLog =
           Metadata = Map.empty }
 
     /// Create an audit entry for an LLM call
-    let llmCall (agentId: string) (model: string) (execId: Guid option) : AuditEntry =
+    let llmCall (agentId: string) (model: string) (execId: ExecutionId option) : AuditEntry =
         { Id = Guid.NewGuid()
           Timestamp = DateTimeOffset.UtcNow
           AgentId = agentId
@@ -98,7 +98,7 @@ module AuditLog =
           Metadata = Map.empty }
 
     /// Create an audit entry for a constitution check
-    let constitutionCheck (agentId: string) (violations: string list) (execId: Guid option) : AuditEntry =
+    let constitutionCheck (agentId: string) (violations: string list) (execId: ExecutionId option) : AuditEntry =
         { Id = Guid.NewGuid()
           Timestamp = DateTimeOffset.UtcNow
           AgentId = agentId

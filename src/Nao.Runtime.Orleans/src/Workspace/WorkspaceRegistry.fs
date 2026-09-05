@@ -49,17 +49,6 @@ module WorkspaceDefinitions =
 
             Some merged
 
-/// Identifies a loaded workspace
-type WorkspaceId = { Key: string }
-
-module WorkspaceId =
-    let create (key: string) = { Key = key }
-    let defaultId = { Key = "default" }
-
-    /// Build a version-qualified workspace id of the form "key@version".
-    /// Lets two versions of the same logical workspace coexist as distinct entries.
-    let versioned (key: string) (version: string) = { Key = sprintf "%s@%s" key version }
-
 /// Functional registry that manages multiple workspaces within a single silo.
 type WorkspaceRegistry =
     /// Get a workspace by key. Returns None if not registered.
@@ -80,22 +69,21 @@ module WorkspaceRegistry =
     /// Create an in-memory registry backed by a concurrent dictionary.
     let create () : WorkspaceRegistry =
         let workspaces =
-            System.Collections.Concurrent.ConcurrentDictionary<string, WorkspaceDefinitions>()
+            System.Collections.Concurrent.ConcurrentDictionary<string, WorkspaceDefinitions>() in
 
         let tryGet (id: WorkspaceId) =
-            match workspaces.TryGetValue(id.Key) with
+            match workspaces.TryGetValue(WorkspaceId.value id) with
             | true, defs -> Some defs
-            | _ -> None
+            | _ -> None in
 
         { TryGet = tryGet
           Get =
-            fun id ->
-                match tryGet id with
-                | Some defs -> defs
-                | None -> failwithf "Workspace '%s' not registered" id.Key
-          ListKeys = fun () -> workspaces.Keys |> Seq.map WorkspaceId.create |> Seq.toList
-          Register = fun (id, defs) -> workspaces.[id.Key] <- defs
-          Remove = fun id -> workspaces.TryRemove(id.Key) |> fst }
+            (fun id ->
+                tryGet id
+                |> Option.defaultWith (fun () -> failwithf "Workspace '%s' not registered" (WorkspaceId.value id)))
+          ListKeys = (fun () -> workspaces.Keys |> Seq.map WorkspaceId.create |> Seq.toList)
+          Register = (fun (id, defs) -> workspaces.[WorkspaceId.value id] <- defs)
+          Remove = (fun id -> workspaces.TryRemove(WorkspaceId.value id) |> fst) }
 
     /// Create a registry and register a default code-defined workspace.
     let fromWorkspace (defs: WorkspaceDefinitions) : WorkspaceRegistry =

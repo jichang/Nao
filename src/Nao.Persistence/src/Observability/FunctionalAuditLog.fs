@@ -50,7 +50,7 @@ module InMemoryAuditLog =
             |> Seq.toList
             |> Task.FromResult
 
-        let queryByExecutionAsync (executionId: Guid) =
+        let queryByExecutionAsync (executionId: ExecutionId) =
             entries.Values
             |> Seq.filter (fun entry -> entry.ExecutionId = Some executionId)
             |> Seq.sortBy (fun entry -> entry.Timestamp)
@@ -98,7 +98,7 @@ module private AdoAudit =
               Permitted = Ado.getBool reader "permitted"
               Decision = PermissionDecisionCodec.fromString (Ado.getString reader "permission_level")
               ConstitutionViolations = Json.tagsFromJson (Ado.getString reader "violations")
-              ExecutionId = Ado.getStringOpt reader "execution_id" |> Option.map Guid.Parse
+              ExecutionId = Ado.getStringOpt reader "execution_id" |> Option.map ExecutionId.parse
               Metadata = Json.mapFromJson (Ado.getString reader "metadata") }
         with ex ->
             raise (
@@ -135,8 +135,7 @@ module AdoAuditLog =
                     | Some text -> box text
                     | None -> box DBNull.Value
 
-                let execution =
-                    entry.ExecutionId |> Option.map (fun id -> id.ToString("D")) |> value
+                let execution = entry.ExecutionId |> Option.map ExecutionId.serialize |> value
 
                 let! _ =
                     Ado.executeNonQuery
@@ -169,7 +168,7 @@ module AdoAuditLog =
                     |> List.sortByDescending (fun entry -> entry.Timestamp)
             }
 
-        let queryByExecutionAsync (executionId: Guid) =
+        let queryByExecutionAsync (executionId: ExecutionId) =
             task {
                 do! AdoAudit.ensureAsync factory
 
@@ -177,7 +176,7 @@ module AdoAuditLog =
                     Ado.query
                         factory
                         ("SELECT " + AdoAudit.columns + " FROM nao_audit WHERE execution_id = @e")
-                        [ "@e", box (executionId.ToString("D")) ]
+                        [ "@e", box (ExecutionId.serialize executionId) ]
                         AdoAudit.mapEntry
 
                 return entries |> List.sortBy (fun entry -> entry.Timestamp)

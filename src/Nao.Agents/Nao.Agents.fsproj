@@ -13,6 +13,7 @@
      <Compile Include="src/Llm/LlmProvider.fs" />
      <!-- Core agent and tool contracts -->
     <Compile Include="src/Core/Permission.fs" />
+     <Compile Include="src/Core/Identity.fs" />
     <Compile Include="src/Core/AgentContext.fs" />
      <Compile Include="src/Core/PlatformError.fs" />
      <Compile Include="src/Core/ToolSchema.fs" />

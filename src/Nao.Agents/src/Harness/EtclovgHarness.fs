@@ -238,7 +238,7 @@ module EtclovgHarness =
                                     (Map.ofList
                                         [ "agent.name", agent.Metadata.Name
                                           "input", input
-                                          "execution.id", string execCtx.ExecutionId ])
+                                          "execution.id", ExecutionId.serialize execCtx.ExecutionId ])
 
                                 s)
 

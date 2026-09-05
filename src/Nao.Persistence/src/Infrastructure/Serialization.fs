@@ -256,25 +256,20 @@ module Dto =
           Metadata: Dictionary<string, string> }
 
     let toAuditDto (e: AuditEntry) : AuditEntryDto =
-        { Id = e.Id
+        let executionId = e.ExecutionId |> Option.map ExecutionId.serialize |> Option.toObj
+        let input = Option.toObj e.Input
+        let output = Option.toObj e.Output
+
+        { ExecutionId = executionId
+          Id = e.Id
           Timestamp = e.Timestamp
           AgentId = e.AgentId
           ActionJson = AuditActionCodec.toJson e.Action
-          Input =
-            (match e.Input with
-             | Some s -> s
-             | None -> null)
-          Output =
-            (match e.Output with
-             | Some s -> s
-             | None -> null)
+          Input = input
+          Output = output
           Permitted = e.Permitted
           Decision = PermissionDecisionCodec.toString e.Decision
           ConstitutionViolations = List.toArray e.ConstitutionViolations
-          ExecutionId =
-            (match e.ExecutionId with
-             | Some g -> g.ToString("D")
-             | None -> null)
           Metadata = dictOfMap e.Metadata }
 
     let ofAuditDto (d: AuditEntryDto) : AuditEntry =
@@ -291,7 +286,7 @@ module Dto =
             (if isNull d.ExecutionId then
                  None
              else
-                 Some(Guid.Parse d.ExecutionId))
+                 Some(ExecutionId.parse d.ExecutionId))
           Metadata = mapOfDict d.Metadata }
 
 /// Simple file-backed JSON document helpers (whole-file read/write).

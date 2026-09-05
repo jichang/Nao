@@ -7,7 +7,9 @@ open System.Threading
 type ExecutionContext =
     {
         /// Unique identifier for this execution run.
-        ExecutionId: Guid
+        ExecutionId: ExecutionId
+        /// Correlation, causation, and attempt identity for this execution.
+        Correlation: CorrelationContext
         /// Sandbox configuration governing this execution.
         Sandbox: SandboxConfig
         /// Cancellation token for cooperative cancellation.
@@ -21,7 +23,10 @@ type ExecutionContext =
     }
 
     static member Create(sandbox: SandboxConfig) =
-        { ExecutionId = Guid.NewGuid()
+        let correlation = CorrelationContext.root ()
+
+        { ExecutionId = correlation.ExecutionId
+          Correlation = correlation
           Sandbox = sandbox
           CancellationToken = CancellationToken.None
           Usage = ResourceUsage.Zero
@@ -33,8 +38,20 @@ type ExecutionContext =
             CancellationToken = cancellationToken }
 
     member this.CreateChild() =
+        let correlation = CorrelationContext.delegateFrom this.Correlation
+
         { ExecutionContext.Create this.Sandbox with
+            ExecutionId = correlation.ExecutionId
+            Correlation = correlation
             ParentContext = Some this }
+
+    member this.CreateRetry() =
+        let correlation = CorrelationContext.retry this.Correlation
+
+        { ExecutionContext.Create this.Sandbox with
+            ExecutionId = correlation.ExecutionId
+            Correlation = correlation
+            ParentContext = this.ParentContext }
 
     member this.RecordLlmCall(tokens: int, costUsd: decimal) =
         this.Usage <-
