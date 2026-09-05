@@ -23,8 +23,9 @@ type ExecutionContext =
     }
 
     static member Create(sandbox: SandboxConfig) =
-        let correlation = CorrelationContext.root ()
+        ExecutionContext.CreateWithCorrelation sandbox (CorrelationContext.root ())
 
+    static member CreateWithCorrelation (sandbox: SandboxConfig) (correlation: CorrelationContext) =
         { ExecutionId = correlation.ExecutionId
           Correlation = correlation
           Sandbox = sandbox

@@ -35,7 +35,8 @@ type EventBusTests() =
             conversationId = "c1",
             workspaceKey = "ws",
             actionId = "turn-1",
-            sessionKey = "dev/s1"
+            sessionKey = "dev/s1",
+            correlation = CorrelationContext.root ()
         )
 
     let sampleTurn () =
@@ -183,8 +184,11 @@ type EventBusTests() =
         let consumer =
             FeedbackEventConsumer.create (fun key -> Path.Combine(root, key.Replace("/", "_"), "feedback"))
 
-        let scopeA = EventScope.Create("dev", "s1", "c1", "ws", "turn-a", "dev/s1")
-        let scopeB = EventScope.Create("dev", "s2", "c1", "ws", "turn-b", "dev/s2")
+        let scopeA =
+            EventScope.Create("dev", "s1", "c1", "ws", "turn-a", "dev/s1", CorrelationContext.root ())
+
+        let scopeB =
+            EventScope.Create("dev", "s2", "c1", "ws", "turn-b", "dev/s2", CorrelationContext.root ())
 
         EventConsumer.handleAsync (TurnCompleted(scopeA, sampleTurn ())) consumer.Consumer
         |> _.Wait()

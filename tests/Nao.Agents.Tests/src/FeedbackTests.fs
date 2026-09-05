@@ -33,7 +33,9 @@ type TurnRecorderTests() =
     member _.``Pairs tool invocations with their results in order``() =
         let recorder = TurnRecorder.create ("t1", "s1", "u1", "ws", "agent", "hello")
         let consumer = recorder.Consumer
-        let scope = EventScope.Create("u1", "s1", "", "ws", "t1", "u1/s1")
+
+        let scope =
+            EventScope.Create("u1", "s1", "", "ws", "t1", "u1/s1", CorrelationContext.root ())
 
         let send signal =
             EventConsumer.handleAsync (NaoEvent.TurnProgress(scope, signal)) consumer
@@ -59,7 +61,9 @@ type TurnRecorderTests() =
     member _.``Records tool calls from progress events``() =
         let recorder = TurnRecorder.create ("t1", "s1", "u1", "ws", "agent", "hi")
         let consumer = recorder.Consumer
-        let scope = EventScope.Create("u1", "s1", "", "ws", "t1", "u1/s1")
+
+        let scope =
+            EventScope.Create("u1", "s1", "", "ws", "t1", "u1/s1", CorrelationContext.root ())
 
         let send signal =
             EventConsumer.handleAsync (NaoEvent.TurnProgress(scope, signal)) consumer

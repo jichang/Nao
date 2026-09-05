@@ -177,3 +177,54 @@ module CorrelationContext =
           CorrelationId = previous.CorrelationId
           CausationId = Some previous.ExecutionId
           Attempt = previous.Attempt + 1 }
+
+/// Host-authenticated identity. Callers cannot replace its tenant or user with request data.
+type SecurityPrincipal =
+    private
+        { TenantId: TenantId
+          UserId: UserId
+          GroupIds: Set<GroupId> }
+
+/// The complete authorization lineage for one workspace or session operation.
+type AuthorizationScope =
+    private
+        { TenantId: TenantId
+          GroupId: GroupId option
+          UserId: UserId
+          WorkspaceId: WorkspaceId
+          SessionId: SessionId option }
+
+module SecurityPrincipal =
+    let create tenantId userId groupIds =
+        { TenantId = tenantId
+          UserId = userId
+          GroupIds = Set.ofSeq groupIds }
+
+    let tenantId (principal: SecurityPrincipal) = principal.TenantId
+    let userId (principal: SecurityPrincipal) = principal.UserId
+    let groupIds (principal: SecurityPrincipal) = principal.GroupIds
+
+module AuthorizationScope =
+    let tryCreate principal groupId workspaceId sessionId =
+        let groupAllowed =
+            groupId
+            |> Option.forall (fun candidate -> SecurityPrincipal.groupIds principal |> Set.contains candidate)
+
+        if groupAllowed then
+            Some
+                { TenantId = SecurityPrincipal.tenantId principal
+                  GroupId = groupId
+                  UserId = SecurityPrincipal.userId principal
+                  WorkspaceId = workspaceId
+                  SessionId = sessionId }
+        else
+            None
+
+    let tenantId (scope: AuthorizationScope) = scope.TenantId
+    let groupId (scope: AuthorizationScope) = scope.GroupId
+    let userId (scope: AuthorizationScope) = scope.UserId
+    let workspaceId (scope: AuthorizationScope) = scope.WorkspaceId
+    let sessionId (scope: AuthorizationScope) = scope.SessionId
+
+    /// Fail closed unless every authorization-bearing scope component is identical.
+    let contains granted requested = granted = requested

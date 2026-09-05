@@ -138,7 +138,7 @@ The CI workflow validates solution membership, then publishes TRX and Cobertura 
 python3 scripts/validate-test-surface.py
 ```
 
-`Nao.Runtime.Orleans.Tests` owns runtime and generated-code integration coverage. `Nao.Assistant.Tests` remains outside `Nao.slnx` because it is an application-owned cross-solution integration project for the sibling Assistant solution. There is no current `Nao.Loader.Tests` project; generated artifacts with that name do not define a supported test surface.
+`Nao.Runtime.Orleans.Tests` owns runtime and generated-code integration coverage. Cross-solution application tests belong to the consuming application repository and are not part of Nao's test tree. There is no current `Nao.Loader.Tests` project; generated artifacts with that name do not define a supported test surface.
 
 ## Public contract changes
 

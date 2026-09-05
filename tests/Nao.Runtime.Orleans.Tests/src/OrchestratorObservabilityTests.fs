@@ -35,7 +35,15 @@ module private TestOrchestrator =
 [<TestClass>]
 type OrchestratorObservabilityTests() =
     let scope =
-        EventScope.Create("user", "session", "conversation", "default", "turn", "user/session")
+        EventScope.Create(
+            "user",
+            "session",
+            "conversation",
+            "default",
+            "turn",
+            "user/session",
+            CorrelationContext.root ()
+        )
 
     let config provider tools bus =
         { Id = "test"
@@ -72,7 +80,7 @@ type OrchestratorObservabilityTests() =
                 ExecutionJournal = Some journal }
 
         let context =
-            { AgentContext.allowAll with
+            { (AgentContext.allowAll ()) with
                 SessionKey = "user/session"
                 TurnId = "turn" }
 
@@ -120,7 +128,7 @@ type OrchestratorObservabilityTests() =
             Orchestrator.createWithProtocol protocol (config provider [ TestTools.echo ] EventBus.none) definition
 
         let result =
-            EtclovgHarness.runAsync EtclovgConfig.Default AgentContext.allowAll agent "start"
+            EtclovgHarness.runAsync EtclovgConfig.Default (AgentContext.allowAll ()) agent "start"
             |> _.Result
 
         Assert.IsTrue(result.Success)
@@ -161,7 +169,7 @@ type OrchestratorObservabilityTests() =
                 Tracer = Some tracer }
 
         let result =
-            EtclovgHarness.runAsync harnessConfig AgentContext.allowAll parent "start"
+            EtclovgHarness.runAsync harnessConfig (AgentContext.allowAll ()) parent "start"
             |> _.Result
 
         Assert.IsTrue(result.Success)

@@ -23,7 +23,7 @@ type EndToEndAgentTests() =
         let agent = createAgent ()
 
         let result =
-            (Agent.runAsync AgentContext.allowAll "Hello, how are you?" agent).Result
+            (Agent.runAsync (AgentContext.allowAll ()) "Hello, how are you?" agent).Result
 
         Assert.IsTrue(result.Contains("You said:"))
         Assert.IsTrue(result.Contains("Hello, how are you?"))
@@ -33,7 +33,7 @@ type EndToEndAgentTests() =
         let agent = createAgent ()
 
         let result =
-            (Agent.runAsync AgentContext.allowAll "What is the weather in London?" agent).Result
+            (Agent.runAsync (AgentContext.allowAll ()) "What is the weather in London?" agent).Result
 
         Assert.IsTrue(result.Contains("18°C"), sprintf "Expected weather info, got: %s" result)
         Assert.IsTrue(result.Contains("sunny"))
@@ -43,7 +43,7 @@ type EndToEndAgentTests() =
         let agent = createAgent ()
 
         let result =
-            (Agent.runAsync AgentContext.allowAll "Please calculate 2 + 2" agent).Result
+            (Agent.runAsync (AgentContext.allowAll ()) "Please calculate 2 + 2" agent).Result
 
         Assert.IsTrue(result.Contains("4"), sprintf "Expected '4', got: %s" result)
 
@@ -51,7 +51,7 @@ type EndToEndAgentTests() =
     member _.AgentHandlesMessageFromAnotherAgent() =
         let agent = createAgent ()
         let msg = AgentMessage.broadcast "coordinator" "Tell me about the weather in Tokyo"
-        let reply = (Agent.handleMessageAsync AgentContext.allowAll msg agent).Result
+        let reply = (Agent.handleMessageAsync (AgentContext.allowAll ()) msg agent).Result
         Assert.IsTrue(reply.IsSome)
         Assert.IsTrue(reply.Value.Content.Contains("18°C"))
         Assert.AreEqual("coordinator", reply.Value.To.Value)
@@ -64,7 +64,7 @@ type EndToEndWorkspaceTests() =
         let agent = DemoWorkspace.createAgent ()
 
         let result =
-            (Agent.runAsync AgentContext.allowAll "What is the weather in Berlin?" agent).Result
+            (Agent.runAsync (AgentContext.allowAll ()) "What is the weather in Berlin?" agent).Result
 
         Assert.IsTrue(result.Contains("18°C"), sprintf "Expected weather, got: %s" result)
 
@@ -73,7 +73,7 @@ type EndToEndWorkspaceTests() =
         let agent = DemoWorkspace.createAgent ()
 
         let result =
-            (Agent.runAsync AgentContext.allowAll "calculate 2 + 2 for me" agent).Result
+            (Agent.runAsync (AgentContext.allowAll ()) "calculate 2 + 2 for me" agent).Result
 
         Assert.IsTrue(result.Contains("4"), sprintf "Expected '4', got: %s" result)
 
@@ -90,7 +90,7 @@ type EndToEndWorkspaceTests() =
     member _.EachAgentInstanceIsIsolated() =
         let a1 = DemoWorkspace.createAgent ()
         let a2 = DemoWorkspace.createAgent ()
-        let r1 = (Agent.runAsync AgentContext.allowAll "hello" a1).Result
+        let r1 = (Agent.runAsync (AgentContext.allowAll ()) "hello" a1).Result
         // Agents are stateless per call; distinct instances run independently.
         Assert.IsTrue(r1.Length > 0)
         Assert.IsFalse(System.Object.ReferenceEquals(a1, a2))
@@ -99,7 +99,7 @@ type EndToEndWorkspaceTests() =
 type EndToEndToolTests() =
 
     let run tool input =
-        match tool.RunAsync AgentContext.allowAll input |> fun task -> task.Result with
+        match tool.RunAsync (AgentContext.allowAll ()) input |> fun task -> task.Result with
         | Ok output -> output
         | Error failure ->
             Assert.Fail(failure.Message)

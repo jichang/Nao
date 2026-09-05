@@ -76,7 +76,7 @@ The current repository primarily implements the lower four layers. Knowledge, re
 | `Nao.Runtime.Orleans` | Distributed sessions, session discovery, and workspace runtime |
 | `Nao.Runtime.Orleans.Codegen` | Orleans serialization source-generation support |
 
-The repository also contains focused unit, integration, evaluation, loader, assistant, and end-to-end test projects. The [foundations roadmap](roadmap/00-foundations.md) tracks reconciliation of the supported solution and CI test surface.
+The repository contains focused unit, integration, evaluation, runtime, and end-to-end test projects, all declared by `Nao.slnx`. The [foundations roadmap](roadmap/00-foundations.md) tracks the supported solution and CI test surface.
 
 ## Architecture boundaries
 

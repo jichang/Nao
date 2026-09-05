@@ -8,12 +8,6 @@ import sys
 from pathlib import Path
 from xml.etree import ElementTree
 
-EXCLUDED_PROJECTS = {
-    Path("tests/Nao.Assistant.Tests/Nao.Assistant.Tests.fsproj"): (
-        "Assistant-owned cross-solution integration tests"
-    ),
-}
-
 TEST_CATEGORIES = {
     Path("tests/Nao.Agents.Tests/Nao.Agents.Tests.fsproj"): "unit",
     Path("tests/Nao.E2E.Tests/Nao.E2E.Tests.fsproj"): "end-to-end",
@@ -47,17 +41,11 @@ def validate(root: Path) -> list[str]:
     declared = solution_projects(root)
     errors: list[str] = []
 
-    for project in sorted(discovered - declared - EXCLUDED_PROJECTS.keys()):
+    for project in sorted(discovered - declared):
         errors.append(f"project is not declared in Nao.slnx: {project}")
 
     for project in sorted(declared - discovered):
         errors.append(f"Nao.slnx references a missing project: {project}")
-
-    for project, reason in EXCLUDED_PROJECTS.items():
-        if project not in discovered:
-            errors.append(f"obsolete project exclusion: {project} ({reason})")
-        elif project in declared:
-            errors.append(f"excluded project is declared in Nao.slnx: {project} ({reason})")
 
     supported_tests = project_paths(root, "tests") & declared
     for project in sorted(supported_tests - TEST_CATEGORIES.keys()):
@@ -91,10 +79,7 @@ def main() -> int:
         return 0
 
     declared_count = len(solution_projects(root))
-    print(
-        f"Validated {declared_count} solution projects and "
-        f"{len(EXCLUDED_PROJECTS)} documented exclusion."
-    )
+    print(f"Validated {declared_count} solution projects with no exclusions.")
     return 0
 
 

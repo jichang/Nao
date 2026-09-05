@@ -51,7 +51,7 @@ type ObservabilityServicesTests() =
         let bus = InMemoryEventBus.create ()
         let observability = ObservabilityServices.create bus (backingFactory root)
 
-        let services = observability.ServicesFor "dev/s1" ""
+        let services = observability.ServicesFor "dev/s1" "" (CorrelationContext.root ())
         services.Metrics.Value.Record(MetricRecord.llmCall "dev/s1" DateTimeOffset.UtcNow 10 20 5L)
 
         // The write still reaches the real backing store (reads stay correct).
@@ -66,7 +66,7 @@ type ObservabilityServicesTests() =
         EventBus.subscribe consumer bus
         let observability = ObservabilityServices.create bus (backingFactory root)
 
-        let services = observability.ServicesFor "dev/s1" ""
+        let services = observability.ServicesFor "dev/s1" "" (CorrelationContext.root ())
         services.Metrics.Value.Record(MetricRecord.llmCall "dev/s1" DateTimeOffset.UtcNow 10 20 5L)
 
         // The write is teed to the bus as an ObservabilityCaptured event.
@@ -85,7 +85,7 @@ type ObservabilityServicesTests() =
         EventBus.subscribe consumer bus
         let observability = ObservabilityServices.create bus (backingFactory root)
 
-        (observability.ServicesFor "dev/s1" "")
+        (observability.ServicesFor "dev/s1" "" (CorrelationContext.root ()))
             .Metrics.Value.Record(MetricRecord.toolCall "dev/s1" DateTimeOffset.UtcNow "search" 3L true)
 
         match List.ofSeq received with
@@ -96,15 +96,31 @@ type ObservabilityServicesTests() =
         | other -> Assert.Fail(sprintf "unexpected events %A" other)
 
     [<TestMethod>]
+    member _.PreservesExecutionCorrelation() =
+        let root = tempDir ()
+        let bus = InMemoryEventBus.create ()
+        let consumer, received, _ = obsRecordingConsumer ()
+        EventBus.subscribe consumer bus
+        let observability = ObservabilityServices.create bus (backingFactory root)
+        let correlation = CorrelationContext.root ()
+
+        (observability.ServicesFor "dev/s1" "turn-1" correlation)
+            .Metrics.Value.Record(MetricRecord.toolCall "dev/s1" DateTimeOffset.UtcNow "search" 3L true)
+
+        match List.ofSeq received with
+        | [ ObservabilityCaptured(scope, MetricRecorded _) ] -> Assert.AreEqual(correlation, scope.Correlation)
+        | other -> Assert.Fail(sprintf "unexpected events %A" other)
+
+    [<TestMethod>]
     member _.SeparatesDistinctSessions() =
         let root = tempDir ()
         let bus = InMemoryEventBus.create ()
         let observability = ObservabilityServices.create bus (backingFactory root)
 
-        (observability.ServicesFor "dev/s1" "")
+        (observability.ServicesFor "dev/s1" "" (CorrelationContext.root ()))
             .Metrics.Value.Record(MetricRecord.llmCall "dev/s1" DateTimeOffset.UtcNow 1 1 1L)
 
-        (observability.ServicesFor "dev/s2" "")
+        (observability.ServicesFor "dev/s2" "" (CorrelationContext.root ()))
             .Metrics.Value.Record(MetricRecord.llmCall "dev/s2" DateTimeOffset.UtcNow 1 1 1L)
 
         Assert.IsTrue(File.Exists(Path.Combine(root, "dev_s1", "observability", "metrics.jsonl")))
@@ -115,7 +131,7 @@ type ObservabilityServicesTests() =
         let bus = InMemoryEventBus.create ()
         let observability = ObservabilityServices.create bus (fun _ -> HarnessServices.none)
 
-        let services = observability.ServicesFor "dev/s1" ""
+        let services = observability.ServicesFor "dev/s1" "" (CorrelationContext.root ())
 
         // A backing bundle with no sinks stays empty after wrapping (nothing to tee).
         Assert.IsTrue(services.Metrics.IsNone)

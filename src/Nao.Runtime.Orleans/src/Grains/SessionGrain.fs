@@ -205,7 +205,7 @@ type SessionGrain
         provider: LlmProvider,
         orchestratorFactory: OrchestratorFactory,
         conversationStore: ConversationStore,
-        harnessServicesFactory: Func<string, string, HarnessServices>,
+        harnessServicesFactory: Func<string, string, CorrelationContext, HarnessServices>,
         feedbackFactory: Func<string, FeedbackService>,
         eventBus: EventBus,
         memoryStore: MemoryStore,
@@ -233,10 +233,19 @@ type SessionGrain
     /// Build the identity envelope carried by every emitted event. `actionId` is the turn
     /// the event is about. Producers never decide where data lands — a subscribed storage
     /// strategy routes it (per session, per category, ...) from this scope.
-    let makeScope (actionId: string) : EventScope =
+    let makeScope (actionId: string) (correlation: CorrelationContext) : EventScope =
         let info = persistentState.State.Info
         let sessionKey = sprintf "%s/%s" info.UserId info.SessionId
-        EventScope.Create(info.UserId, info.SessionId, info.ActiveConversation, info.WorkspaceKey, actionId, sessionKey)
+
+        EventScope.Create(
+            info.UserId,
+            info.SessionId,
+            info.ActiveConversation,
+            info.WorkspaceKey,
+            actionId,
+            sessionKey,
+            correlation
+        )
 
     let buildHarnessConfig
         (workspace: WorkspaceDefinitions)
@@ -485,8 +494,9 @@ type SessionGrain
                     let contextualInput =
                         ConversationContextRender.withHistory 8 (activeConversation().Messages) llmInput
 
-                    let turnId = Guid.NewGuid().ToString("N")
-                    let turnScope = makeScope turnId
+                    let turnId = TurnId.generate () |> TurnId.value
+                    let correlation = CorrelationContext.root ()
+                    let turnScope = makeScope turnId correlation
                     // The recorder must exist before the agent is built so it can subscribe to the
                     // event bus and capture this turn's whole execution (rounds, tool calls,
                     // delegations) — not just the harness-level final answer. It filters bus events
@@ -616,10 +626,12 @@ type SessionGrain
                         :> Task)
 
                     let agentContext: AgentContext =
-                        { SessionKey = sessionKey
+                        { Correlation = correlation
+                          SessionKey = sessionKey
                           TurnId = turnId
-                          GetData = fun () -> lock contextData (fun () -> List.ofSeq contextData)
-                          GetGrantedResources = fun () -> lock grantedResources (fun () -> List.ofSeq grantedResources)
+                          GetData = (fun () -> lock contextData (fun () -> List.ofSeq contextData))
+                          GetGrantedResources =
+                            (fun () -> lock grantedResources (fun () -> List.ofSeq grantedResources))
                           RequestPermission = requestPermission
                           PublishData = publishData }
 
@@ -636,7 +648,8 @@ type SessionGrain
                                     agentName
                                     persistentState.State.Info.WorkspaceKey
                         | Some agent ->
-                            let harnessServices = harnessServicesFactory.Invoke(sessionKey, turnId)
+                            let harnessServices = harnessServicesFactory.Invoke(sessionKey, turnId, correlation)
+
                             let harnessConfig = buildHarnessConfig workspace tools turnScope harnessServices
                             let! result = EtclovgHarness.runAsync harnessConfig agentContext agent contextualInput
 
@@ -648,7 +661,10 @@ type SessionGrain
                                     { TurnRecorder.snapshot recorder with
                                         Output = response }
 
-                                do! EventBus.publishAsync (TurnCompleted(makeScope turnId, turnRecord)) eventBus
+                                do!
+                                    EventBus.publishAsync
+                                        (TurnCompleted(makeScope turnId correlation, turnRecord))
+                                        eventBus
 
                                 // Persist a CLEAN, user-facing transcript: the display text (no embedded
                                 // attachment content) plus one assistant message carrying the process.
@@ -893,7 +909,8 @@ type SessionGrain
                 let grainKey = this.GetPrimaryKeyString()
 
                 try
-                    let deletionServices = harnessServicesFactory.Invoke(grainKey, "")
+                    let deletionServices =
+                        harnessServicesFactory.Invoke(grainKey, "", CorrelationContext.root ())
 
                     match!
                         SessionDeletion.executeForSessionAsync

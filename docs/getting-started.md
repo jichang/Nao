@@ -58,7 +58,7 @@ Applications own encoding and decoding, allowing JSON, protocol-specific formats
 let! result = Agent.runAsync agentContext encodedInput eligibilityAgent
 ```
 
-`AgentContext.allowAll` is available for isolated tests. Production hosts should construct a context connected to their permission and identity policy.
+`AgentContext.allowAll ()` creates a fresh correlated context for isolated tests. Production hosts should construct a context connected to their permission and identity policy.
 
 ## Use the ETCLOVG harness
 

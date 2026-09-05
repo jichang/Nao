@@ -131,7 +131,7 @@ type ExecutionEnvironmentTests() =
         let agent = makeAgent "hello"
         let ctx = ExecutionContext.Create SandboxConfig.Default
         let env = ExecutionEnvironment.local ()
-        let result = (env.ExecuteAsync ctx AgentContext.allowAll agent "input").Result
+        let result = (env.ExecuteAsync ctx (AgentContext.allowAll ()) agent "input").Result
 
         match result with
         | Ok response -> Assert.AreEqual("hello", response)
@@ -151,7 +151,7 @@ type ExecutionEnvironmentTests() =
         let env = ExecutionEnvironment.local ()
 
         let result =
-            (ExecutionEnvironment.executeWithTimeout env ctx AgentContext.allowAll agent "go").Result
+            (ExecutionEnvironment.executeWithTimeout env ctx (AgentContext.allowAll ()) agent "go").Result
 
         match result with
         | Ok r -> Assert.AreEqual("fast", r)

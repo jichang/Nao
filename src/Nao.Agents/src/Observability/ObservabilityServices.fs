@@ -8,59 +8,65 @@ open System.Threading.Tasks
 /// per turn by the session grain) so each signal is attributed to the turn that produced it.
 module private Observability =
 
-    let buildScope (sessionKey: string) (turnId: string) : EventScope =
+    let buildScope (sessionKey: string) (turnId: string) (correlation: CorrelationContext) : EventScope =
         let userId, sessionId =
             match sessionKey.IndexOf('/') with
             | i when i >= 0 -> sessionKey.Substring(0, i), sessionKey.Substring(i + 1)
             | _ -> sessionKey, sessionKey
 
-        EventScope.Create(userId, sessionId, "", "", turnId, sessionKey)
+        EventScope.Create(userId, sessionId, "", "", turnId, sessionKey, correlation)
 
     /// Fire-and-forget publish for the synchronous (unit-returning) sinks. Safe to ignore:
     /// reads always go to the wrapped backing store, and InMemoryEventBus isolates a failing
     /// consumer, so a subscriber can never break the producer's turn.
-    let emit (bus: EventBus) (sessionKey: string) (turnId: string) (signal: ObservabilitySignal) =
-        EventBus.publishAsync (ObservabilityCaptured(buildScope sessionKey turnId, signal)) bus
+    let emit
+        (bus: EventBus)
+        (sessionKey: string)
+        (turnId: string)
+        (correlation: CorrelationContext)
+        (signal: ObservabilitySignal)
+        =
+        EventBus.publishAsync (ObservabilityCaptured(buildScope sessionKey turnId correlation, signal)) bus
         |> ignore
 
 /// Functional publishing decorators for observability capabilities.
 module private Publishing =
-    let tracer sessionKey turnId bus (inner: Tracer) : Tracer =
+    let tracer sessionKey turnId correlation bus (inner: Tracer) : Tracer =
         { StartTrace =
             fun operationName ->
                 let span = inner.StartTrace operationName
-                Observability.emit bus sessionKey turnId (SpanStarted span)
+                Observability.emit bus sessionKey turnId correlation (SpanStarted span)
                 span
           StartSpan =
             fun parentSpan operationName ->
                 let span = inner.StartSpan parentSpan operationName
-                Observability.emit bus sessionKey turnId (SpanStarted span)
+                Observability.emit bus sessionKey turnId correlation (SpanStarted span)
                 span
           EndSpan =
             fun span status ->
                 inner.EndSpan span status
-                Observability.emit bus sessionKey turnId (SpanEnded(span, status))
+                Observability.emit bus sessionKey turnId correlation (SpanEnded(span, status))
           AddEvent =
             fun span name attributes ->
                 inner.AddEvent span name attributes
-                Observability.emit bus sessionKey turnId (SpanEventAdded(span, name, attributes))
+                Observability.emit bus sessionKey turnId correlation (SpanEventAdded(span, name, attributes))
           SetAttributes =
             fun span attributes ->
                 inner.SetAttributes span attributes
-                Observability.emit bus sessionKey turnId (SpanAttributesSet(span, attributes))
+                Observability.emit bus sessionKey turnId correlation (SpanAttributesSet(span, attributes))
           GetTrace = inner.GetTrace }
 
-    let metrics sessionKey turnId bus (inner: MetricsCollector) : MetricsCollector =
+    let metrics sessionKey turnId correlation bus (inner: MetricsCollector) : MetricsCollector =
         { Record =
             fun record ->
                 inner.Record record
-                Observability.emit bus sessionKey turnId (MetricRecorded record)
+                Observability.emit bus sessionKey turnId correlation (MetricRecorded record)
           GetMetrics = inner.GetMetrics
           EstimateCost = inner.EstimateCost
           DeleteOwnerAsync = inner.DeleteOwnerAsync
           DeleteExpiredAsync = inner.DeleteExpiredAsync }
 
-    let journal sessionKey turnId bus (inner: ExecutionJournal) : ExecutionJournal =
+    let journal sessionKey turnId correlation bus (inner: ExecutionJournal) : ExecutionJournal =
         { RecordAsync =
             fun record ->
                 task {
@@ -68,7 +74,10 @@ module private Publishing =
 
                     do!
                         EventBus.publishAsync
-                            (ObservabilityCaptured(Observability.buildScope sessionKey turnId, ExecutionRecorded record))
+                            (ObservabilityCaptured(
+                                Observability.buildScope sessionKey turnId correlation,
+                                ExecutionRecorded record
+                            ))
                             bus
                 }
                 :> Task
@@ -82,7 +91,7 @@ module private Publishing =
                     do!
                         EventBus.publishAsync
                             (ObservabilityCaptured(
-                                Observability.buildScope sessionKey turnId,
+                                Observability.buildScope sessionKey turnId correlation,
                                 ExecutionReverted recordId
                             ))
                             bus
@@ -91,14 +100,14 @@ module private Publishing =
           DeleteOwnerAsync = inner.DeleteOwnerAsync
           DeleteExpiredAsync = inner.DeleteExpiredAsync }
 
-    let traceStore sessionKey turnId bus (inner: TraceStore) : TraceStore =
+    let traceStore sessionKey turnId correlation bus (inner: TraceStore) : TraceStore =
         let saveAsync trace =
             task {
                 do! inner.SaveAsync trace
 
                 do!
                     EventBus.publishAsync
-                        (ObservabilityCaptured(Observability.buildScope sessionKey turnId, TraceSaved trace))
+                        (ObservabilityCaptured(Observability.buildScope sessionKey turnId correlation, TraceSaved trace))
                         bus
             }
 
@@ -108,14 +117,17 @@ module private Publishing =
           DeleteOwnerAsync = inner.DeleteOwnerAsync
           DeleteExpiredAsync = inner.DeleteExpiredAsync }
 
-    let auditLog sessionKey turnId bus (inner: AuditLog) : AuditLog =
+    let auditLog sessionKey turnId correlation bus (inner: AuditLog) : AuditLog =
         let recordAsync entry =
             task {
                 do! inner.RecordAsync entry
 
                 do!
                     EventBus.publishAsync
-                        (ObservabilityCaptured(Observability.buildScope sessionKey turnId, AuditRecorded entry))
+                        (ObservabilityCaptured(
+                            Observability.buildScope sessionKey turnId correlation,
+                            AuditRecorded entry
+                        ))
                         bus
             }
 
@@ -131,27 +143,32 @@ module private Publishing =
 /// harness, so the full observability stream flows through the bus without the producer ever
 /// deciding where it is stored.
 module PublishingHarnessServices =
-    let create sessionKey turnId bus (backing: HarnessServices) : HarnessServices =
-        let tracer = backing.Tracer |> Option.map (Publishing.tracer sessionKey turnId bus)
+    let create sessionKey turnId correlation bus (backing: HarnessServices) : HarnessServices =
+        let tracer =
+            backing.Tracer
+            |> Option.map (Publishing.tracer sessionKey turnId correlation bus)
 
         let metrics =
-            backing.Metrics |> Option.map (Publishing.metrics sessionKey turnId bus)
+            backing.Metrics
+            |> Option.map (Publishing.metrics sessionKey turnId correlation bus)
 
         let journal =
             backing.ExecutionJournal
-            |> Option.map (Publishing.journal sessionKey turnId bus)
+            |> Option.map (Publishing.journal sessionKey turnId correlation bus)
 
         let traceStore =
-            backing.TraceStore |> Option.map (Publishing.traceStore sessionKey turnId bus)
+            backing.TraceStore
+            |> Option.map (Publishing.traceStore sessionKey turnId correlation bus)
 
         let auditLog =
-            backing.AuditLog |> Option.map (Publishing.auditLog sessionKey turnId bus)
+            backing.AuditLog
+            |> Option.map (Publishing.auditLog sessionKey turnId correlation bus)
 
         HarnessServices.create tracer metrics journal traceStore auditLog
 
 /// Functional facade for obtaining per-turn harness services.
 type ObservabilityServices =
-    { ServicesFor: string -> string -> HarnessServices }
+    { ServicesFor: string -> string -> CorrelationContext -> HarnessServices }
 
 /// Builds the per-turn harness-services bundle handed to the agent harness. Each session's
 /// observability lives in its own backing bundle (e.g. sessions/<key>/observability/), built
@@ -166,4 +183,5 @@ module ObservabilityServices =
             backings.GetOrAdd(sessionKey, fun key -> backingFactory key)
 
         { ServicesFor =
-            fun sessionKey turnId -> PublishingHarnessServices.create sessionKey turnId bus (backingFor sessionKey) }
+            fun sessionKey turnId correlation ->
+                PublishingHarnessServices.create sessionKey turnId correlation bus (backingFor sessionKey) }

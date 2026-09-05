@@ -18,7 +18,8 @@ type AgentContextData =
 /// never be retained or reused by another session. `GetData` and `GetGrantedResources` return
 /// snapshots shared by every agent and tool that receives the same context value.
 type AgentContext =
-    { SessionKey: string
+    { Correlation: CorrelationContext
+      SessionKey: string
       TurnId: string
       GetData: unit -> AgentContextData list
       GetGrantedResources: unit -> ResourceAccess list
@@ -29,8 +30,9 @@ type AgentContext =
 module AgentContext =
     /// Permissive no-op context for isolated tests and hosts without permissions or publishing.
     /// Production hosts should supply session identity and real callbacks.
-    let allowAll =
-        { SessionKey = ""
+    let allowAll () =
+        { Correlation = CorrelationContext.root ()
+          SessionKey = ""
           TurnId = ""
           GetData = (fun () -> [])
           GetGrantedResources = (fun () -> [])

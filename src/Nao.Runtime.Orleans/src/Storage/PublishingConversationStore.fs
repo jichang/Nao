@@ -62,7 +62,7 @@ module PublishingConversationStore =
             | i when i >= 0 -> sessionId.Substring(0, i), sessionId.Substring(i + 1)
             | _ -> sessionId, sessionId
 
-        EventScope.Create(userId, sid, conversationName, "", turnId, sessionId)
+        EventScope.Create(userId, sid, conversationName, "", turnId, sessionId, CorrelationContext.root ())
 
     let create (bus: EventBus) (inner: ConversationStore) : ConversationStore =
         let appendAsync (sessionId: string) (conversationName: string) (messages: PersistedMessage array) =

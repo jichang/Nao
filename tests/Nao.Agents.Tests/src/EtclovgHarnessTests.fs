@@ -47,7 +47,7 @@ type EtclovgHarnessTests() =
         let config = EtclovgConfig.Default
 
         let result =
-            (EtclovgHarness.runAsync config AgentContext.allowAll agent "test").Result
+            (EtclovgHarness.runAsync config (AgentContext.allowAll ()) agent "test").Result
 
         Assert.IsTrue(result.Success)
         Assert.AreEqual(Some "hello world", result.Response)
@@ -83,7 +83,7 @@ type EtclovgHarnessTests() =
                 PolicyEngine = Some blockEngine }
 
         let result =
-            (EtclovgHarness.runAsync blockConfig AgentContext.allowAll agent "test").Result
+            (EtclovgHarness.runAsync blockConfig (AgentContext.allowAll ()) agent "test").Result
 
         Assert.IsFalse(result.Success)
         Assert.IsTrue(result.HarnessError.Value.Message.Contains("Blocked by policy"))
@@ -102,7 +102,7 @@ type EtclovgHarnessTests() =
                 ReadinessChecks = [ failCheck ] }
 
         let result =
-            (EtclovgHarness.runAsync config AgentContext.allowAll agent "test").Result
+            (EtclovgHarness.runAsync config (AgentContext.allowAll ()) agent "test").Result
 
         Assert.IsFalse(result.Success)
         Assert.IsTrue(result.HarnessError.Value.Message.Contains("Not ready"))
@@ -120,7 +120,7 @@ type EtclovgHarnessTests() =
                 Lifecycle = [ blockHook ] }
 
         let result =
-            (EtclovgHarness.runAsync config AgentContext.allowAll agent "test").Result
+            (EtclovgHarness.runAsync config (AgentContext.allowAll ()) agent "test").Result
 
         Assert.IsFalse(result.Success)
         Assert.AreEqual(Some(HarnessError.InitializationFailed "init blocked"), result.HarnessError)
@@ -138,7 +138,7 @@ type EtclovgHarnessTests() =
                 Constitution = Some constitution }
 
         let result =
-            (EtclovgHarness.runAsync config AgentContext.allowAll agent "test").Result
+            (EtclovgHarness.runAsync config (AgentContext.allowAll ()) agent "test").Result
 
         Assert.IsFalse(result.Success)
         Assert.IsTrue(result.HarnessError.Value.Message.Contains("Output violates constitution"))
@@ -154,7 +154,7 @@ type EtclovgHarnessTests() =
                 Metrics = Some metrics }
 
         let context =
-            { AgentContext.allowAll with
+            { (AgentContext.allowAll ()) with
                 SessionKey = "metrics/session" }
 
         let result = (EtclovgHarness.runAsync config context agent "test").Result
@@ -173,7 +173,7 @@ type EtclovgHarnessTests() =
                 TraceStore = Some store }
 
         let result =
-            (EtclovgHarness.runAsync config AgentContext.allowAll agent "question").Result
+            (EtclovgHarness.runAsync config (AgentContext.allowAll ()) agent "question").Result
 
         Assert.IsTrue(result.Success)
         let agentId = "test-agent"
@@ -191,7 +191,7 @@ type EtclovgHarnessTests() =
                 AuditLog = Some audit }
 
         let result =
-            (EtclovgHarness.runAsync config AgentContext.allowAll agent "test").Result
+            (EtclovgHarness.runAsync config (AgentContext.allowAll ()) agent "test").Result
 
         Assert.IsTrue(result.Success)
         Assert.AreEqual(1, result.AuditEntries)
@@ -227,7 +227,7 @@ type EtclovgHarnessTests() =
                 Lifecycle = [ LifecycleHook.passthrough ] }
 
         let context =
-            { AgentContext.allowAll with
+            { (AgentContext.allowAll ()) with
                 SessionKey = "metrics/session" }
 
         let result = (EtclovgHarness.runAsync config context agent "hello").Result

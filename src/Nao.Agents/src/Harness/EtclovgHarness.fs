@@ -71,7 +71,7 @@ type EtclovgConfig =
           AuditLog = None
           PolicyEngine = None
           Bus = EventBus.none
-          Scope = EventScope.Empty }
+          Scope = EventScope.CreateEmpty() }
 
     static member WithObservability (tracer: Tracer) (metrics: MetricsCollector) =
         { EtclovgConfig.Default with
@@ -148,7 +148,13 @@ module EtclovgHarness =
         (input: string)
         : Task<EtclovgResult> =
         task {
-            let execCtx = ExecutionContext.Create config.Execution
+            let execCtx =
+                ExecutionContext.CreateWithCorrelation config.Execution config.Scope.Correlation
+
+            let agentContext =
+                { agentContext with
+                    Correlation = execCtx.Correlation }
+
             let mutable trace = Verification.startTrace agent.Metadata.Id input
             let mutable policyViolations = []
             let mutable constitutionViolations = []

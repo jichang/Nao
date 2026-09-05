@@ -273,7 +273,7 @@ type MemoryToolTests() =
 
     let runTool (tool: Tool) input =
         match
-            tool.RunAsync AgentContext.allowAll input
+            tool.RunAsync (AgentContext.allowAll ()) input
             |> fun task -> task.GetAwaiter().GetResult()
         with
         | Ok output -> output
@@ -360,7 +360,7 @@ type MemoryToolTests() =
 
         match
             forget.RunAsync
-                AgentContext.allowAll
+                (AgentContext.allowAll ())
                 "{\"key\":\"obsolete-decision\",\"reason\":\"Replace old decision\",\"confirmedByUser\":false}"
             |> fun task -> task.GetAwaiter().GetResult()
         with

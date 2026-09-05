@@ -22,6 +22,8 @@ type EventScope =
         ActionId: string
         /// Storage routing key — the full grain key ("userId/sessionId").
         SessionKey: string
+        /// Execution correlation for events emitted within a harness run.
+        Correlation: CorrelationContext
         /// When the event occurred.
         Timestamp: DateTimeOffset
     }
@@ -33,7 +35,8 @@ type EventScope =
             conversationId: string,
             workspaceKey: string,
             actionId: string,
-            sessionKey: string
+            sessionKey: string,
+            correlation: CorrelationContext
         ) : EventScope =
         { UserId = userId
           SessionId = sessionId
@@ -41,10 +44,12 @@ type EventScope =
           WorkspaceKey = workspaceKey
           ActionId = actionId
           SessionKey = sessionKey
+          Correlation = correlation
           Timestamp = DateTimeOffset.UtcNow }
 
     /// An empty scope, used for library/test contexts that run an agent outside a session.
-    static member Empty: EventScope = EventScope.Create("", "", "", "", "", "")
+    static member CreateEmpty() : EventScope =
+        EventScope.Create("", "", "", "", "", "", CorrelationContext.root ())
 
 /// One process step (a tool call or sub-agent delegation) of an assistant turn, in a
 /// transport-neutral shape so the conversation event stream carries no storage-layer types.

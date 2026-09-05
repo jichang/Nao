@@ -45,7 +45,7 @@ module MemoryAgent =
                     MaxTokens = Some 800 }
               MaxRounds = 5
               Bus = EventBus.none
-              Scope = EventScope.Empty }
+              Scope = EventScope.CreateEmpty() }
 
     let asTool (agent: Agent) : Tool =
         AgentTool.create

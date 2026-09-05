@@ -115,9 +115,9 @@ Nao currently makes no backward-compatibility or rolling-upgrade promise. The mi
 
 - [ ] One execution can be reconstructed across all participating components.
 - [x] Retries retain causation while receiving distinct attempt identities.
-- [ ] Identifier-based cross-tenant access tests fail closed.
+- [x] Identifier-based cross-tenant access tests fail closed.
 
-Core typed identifiers and canonical codecs are implemented, and the Orleans registry now consumes the core `WorkspaceId` rather than defining a runtime-local duplicate. `ExecutionContext` propagates execution, correlation, causation, and attempt identity through roots, delegation, retries, policy evaluation, audit persistence, and harness telemetry. Event scopes, provider calls, memory, evaluation, and a host-authenticated authorization scope still require end-to-end propagation; therefore FND-06 remains open.
+Core typed identifiers and canonical codecs are implemented, and the Orleans registry now consumes the core `WorkspaceId` rather than defining a runtime-local duplicate. `SecurityPrincipal` and `AuthorizationScope` bind tenant, group, user, workspace, and optional session identity; cross-tenant and unauthorized-group tests fail closed. A session turn propagates one `CorrelationContext` through event scopes, harness execution, agents, tools, audit persistence, and publishing observability services. Orleans principal integration and provider, memory, broader persistence, and evaluation correlation remain open; therefore FND-06 remains open.
 
 ## FND-07 — Architecture decision and documentation process
 
