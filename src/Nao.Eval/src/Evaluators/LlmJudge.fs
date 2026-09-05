@@ -90,7 +90,7 @@ Where score is a number on the scale described above."""
 
     /// Create an evaluator from the complete judge configuration.
     let withConfig config =
-        Evaluator.create "LlmJudge" (fun (case: EvalCase) (actual: string) ->
+        Evaluator.create "LlmJudge" (fun correlation (case: EvalCase) (actual: string) ->
             task {
                 let prompt = buildPrompt config case actual
 
@@ -103,7 +103,7 @@ Where score is a number on the scale described above."""
                 let conversation =
                     [ { Role = System; Content = system }; { Role = User; Content = prompt } ]
 
-                let! result = config.Provider.CompleteAsync conversation config.Options
+                let! result = config.Provider.CompleteAsync correlation conversation config.Options
                 let (score, reason) = parseScore result.Content
 
                 let verdict =

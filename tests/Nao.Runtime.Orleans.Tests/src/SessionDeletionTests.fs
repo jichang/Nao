@@ -27,6 +27,7 @@ type SessionDeletionTests() =
             let turnOwners = HashSet<string>([ sessionA; sessionB ])
             let journalOwners = HashSet<string>([ sessionA; sessionB ])
             let owner sessionKey = "session:" + sessionKey
+            let correlation = CorrelationContext.root ()
 
             let memory key value =
                 { Key = key
@@ -38,8 +39,8 @@ type SessionDeletionTests() =
             conversations.SaveAsync sessionB "default" [||] |> _.Wait()
             memories.SaveAsync (owner sessionA) (memory "a" "one") |> _.Wait()
             memories.SaveAsync (owner sessionB) (memory "b" "two") |> _.Wait()
-            metrics.Record(MetricRecord.llmCall sessionA DateTimeOffset.UtcNow 10 5 20L)
-            metrics.Record(MetricRecord.llmCall sessionB DateTimeOffset.UtcNow 20 10 30L)
+            metrics.Record(MetricRecord.llmCall correlation sessionA DateTimeOffset.UtcNow 10 5 20L)
+            metrics.Record(MetricRecord.llmCall correlation sessionB DateTimeOffset.UtcNow 20 10 30L)
 
             let deletion =
                 SessionDeletion.create

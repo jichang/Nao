@@ -208,6 +208,10 @@ module Dto =
     [<CLIMutable>]
     type ExecutionRecordDto =
         { Id: Guid
+          ExecutionId: string
+          CorrelationId: string
+          CausationId: string
+          Attempt: int
           Owner: string
           TurnId: string
           ToolName: string
@@ -219,6 +223,13 @@ module Dto =
 
     let toExecutionDto (r: ExecutionRecord) : ExecutionRecordDto =
         { Id = r.Id
+          ExecutionId = ExecutionId.serialize r.Correlation.ExecutionId
+          CorrelationId = CorrelationId.serialize r.Correlation.CorrelationId
+          CausationId =
+            r.Correlation.CausationId
+            |> Option.map ExecutionId.serialize
+            |> Option.defaultValue null
+          Attempt = r.Correlation.Attempt
           Owner = r.Owner
           TurnId = r.TurnId
           ToolName = r.ToolName
@@ -229,7 +240,17 @@ module Dto =
           Metadata = dictOfMap r.Metadata }
 
     let ofExecutionDto (d: ExecutionRecordDto) : ExecutionRecord =
+        if d.Attempt < 1 then
+            invalidArg (nameof d.Attempt) "Correlation attempt must be positive."
+
+        let correlation =
+            { ExecutionId = ExecutionId.parse d.ExecutionId
+              CorrelationId = CorrelationId.parse d.CorrelationId
+              CausationId = Option.ofObj d.CausationId |> Option.map ExecutionId.parse
+              Attempt = d.Attempt }
+
         { Id = d.Id
+          Correlation = correlation
           Owner = d.Owner
           TurnId = d.TurnId
           ToolName = d.ToolName

@@ -18,7 +18,7 @@ A capability can have more than one status when, for example, a core primitive i
 
 | Capability | Status | Source and tests | Current boundary | Roadmap |
 |---|---|---|---|---|
-| Functional agents and explicit contracts | **Implemented** | `Agent` in `src/Nao.Agents/src/Core/Agent.fs`; agent tests in `tests/Nao.Agents.Tests` | Agents are immutable records of metadata and context-aware execution functions; transport schemas remain explicitly authored. | FND-03 |
+| Functional agents and explicit contracts | **Implemented** | `Agent` in `src/Nao.Agents/src/Agent/Agent.fs`; agent tests in `tests/Nao.Agents.Tests` | Agents are immutable records of metadata and context-aware execution functions; transport schemas remain explicitly authored. | FND-03 |
 | Router, pipeline, collaborative groups, and delegation | **Implemented** | `Router`, `Pipeline`, `AgentGroup`, `AgentTool`, `Orchestrator`, `OrchestratorDefinition`, and `OrchestratorRound` under `src/Nao.Agents/src/Orchestration`; orchestrator and end-to-end tests | Execution is bounded, but durable replay and inherited nested budgets are incomplete. | HAR-01, HAR-02 |
 | Collaborative agent groups | **Implemented** | `AgentGroup.create` and `AgentGroup.runAsync`; end-to-end tests | This is agent collaboration, not organizational tenant/group administration. | FND-03 |
 | Organizational group directory | **Planned** | No `GroupDirectoryGrain` or `IGroupDirectoryGrain` exists; `GroupId` fields are metadata | Membership, roles, quotas, lifecycle, and authorization require runtime/control-plane implementation. | RUN-01 |

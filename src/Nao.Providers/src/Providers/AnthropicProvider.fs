@@ -139,7 +139,7 @@ let createWithHandler (config: AnthropicConfig) (httpHandler: HttpMessageHandler
 
     let providerName () = sprintf "Anthropic(%s)" config.Model
 
-    let completeAsync conversation options : Task<CompletionResult> =
+    let completeAsync (_correlation: CorrelationContext) conversation options : Task<CompletionResult> =
         task {
             try
                 use content =
@@ -163,7 +163,7 @@ let createWithHandler (config: AnthropicConfig) (httpHandler: HttpMessageHandler
                     |> PlatformFailure.raiseException
         }
 
-    let streamAsync conversation options onChunk : Task<CompletionResult> =
+    let streamAsync (_correlation: CorrelationContext) conversation options onChunk : Task<CompletionResult> =
         task {
             try
                 use request = new HttpRequestMessage(HttpMethod.Post, messagesUrl)

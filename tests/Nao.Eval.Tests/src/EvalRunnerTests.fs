@@ -20,6 +20,34 @@ type EvalRunnerTests() =
     let owner = "eval-tests"
 
     [<TestMethod>]
+    member _.``RunCase forwards execution correlation to LLM evaluator``() =
+        let observed = ref None
+
+        let provider =
+            LlmProvider.create (fun () -> "capturing") (fun correlation _conversation _options ->
+                observed.Value <- Some correlation
+
+                Task.FromResult(
+                    { Content = """{"score":5,"reason":"correct"}"""
+                      FinishReason = "stop"
+                      TokensUsed = None
+                      Usage = None }
+                    : CompletionResult
+                ))
+
+        let agent = TestAgents.fixedResponse "42"
+        let case = EvalCase.create "correlated" "question" "42"
+        let dataset = EvalDataset.create owner "correlation" [ case ]
+        let run = EvalRun.create owner dataset.Id
+
+        let result =
+            EvalRunner.runCaseLightAsync run (LlmJudge.create provider) agent case
+            |> _.Result
+
+        Assert.IsTrue(observed.Value.IsSome)
+        Assert.AreEqual(result.ExecutionId, observed.Value.Value.ExecutionId)
+
+    [<TestMethod>]
     member _.``RunCaseAsync evaluates a single case``() =
         let agent = TestAgents.fixedResponse "The answer is 42"
         let case = EvalCase.create "q1" "What is the answer?" "42"
@@ -31,6 +59,7 @@ type EvalRunnerTests() =
         Assert.AreEqual(owner, result.Owner)
         Assert.AreEqual(dataset.Id, result.DatasetId)
         Assert.AreEqual(run.Id, result.RunId)
+        Assert.AreNotEqual(ExecutionId.ofGuid System.Guid.Empty, result.ExecutionId)
         Assert.AreEqual(EvalVerdict.Pass, result.Verdict)
         Assert.IsTrue(result.LatencyMs >= 0L)
 

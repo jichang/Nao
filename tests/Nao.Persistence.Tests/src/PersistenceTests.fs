@@ -377,8 +377,9 @@ type MemoryToolTests() =
 
 // ---------------- ExecutionJournal ----------------
 
-let private execRecord (tool: string) (at: DateTimeOffset) =
+let private execRecord (tool: string) (at: DateTimeOffset) : ExecutionRecord =
     { Id = Guid.NewGuid()
+      Correlation = CorrelationContext.root ()
       Owner = "session:test"
       TurnId = "turn:test"
       ToolName = tool
@@ -401,6 +402,13 @@ let private runJournalRoundTrip (journal: ExecutionJournal) =
         // Most recent first
         Assert.AreEqual("tool-b", history.Head.ToolName)
         Assert.AreEqual("1", history.Head.Metadata.["m"])
+        Assert.AreEqual(r2.Correlation, history.Head.Correlation)
+
+        let! forExecution = journal.GetByExecutionAsync r2.Correlation.ExecutionId
+        Assert.AreEqual([ r2 ], forExecution)
+
+        let! unknownExecution = journal.GetByExecutionAsync(ExecutionId.generate ())
+        Assert.IsTrue(unknownExecution.IsEmpty)
 
         let! revertible = journal.GetRevertibleAsync()
         Assert.AreEqual(2, revertible.Length)
@@ -504,6 +512,10 @@ type ExecutionJournalTests() =
         (runJournalRoundTrip (ExecutionJournals.ado factory)).GetAwaiter().GetResult()
 
     [<TestMethod>]
+    member _.InMemoryExecutionJournal_RoundTrips() =
+        (runJournalRoundTrip (InMemoryExecutionJournal.create ())).GetAwaiter().GetResult()
+
+    [<TestMethod>]
     member _.FileExecutionJournal_RoundTrips() =
         let dir = tempDir ()
         (runJournalRoundTrip (ExecutionJournals.file dir)).GetAwaiter().GetResult()
@@ -519,15 +531,12 @@ type ExecutionJournalTests() =
             let journal = ExecutionJournals.file dir
 
             let record =
-                { Id = Guid.NewGuid()
-                  Owner = agent
-                  TurnId = "turn"
-                  ToolName = "tool"
-                  Input = "input"
-                  Output = "output"
-                  ExecutedAt = DateTimeOffset.UtcNow
-                  Reverted = false
-                  Metadata = Map.empty }
+                { execRecord "tool" DateTimeOffset.UtcNow with
+                    Owner = agent
+                    TurnId = "turn"
+                    Input = "input"
+                    Output = "output"
+                    Metadata = Map.empty }
 
             let error =
                 Assert.ThrowsExactly<InvalidDataException>(fun () ->

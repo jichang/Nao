@@ -80,6 +80,7 @@ module ContextCompaction =
 
     /// Summarize a chunk of messages using LLM
     let summarizeChunkAsync
+        (correlation: CorrelationContext)
         (provider: LlmProvider)
         (options: CompletionOptions)
         (messages: Message list)
@@ -95,12 +96,13 @@ module ContextCompaction =
                     Content = compactionPrompt }
                   { Role = User; Content = content } ]
 
-            let! result = provider.CompleteAsync prompt options
+            let! result = provider.CompleteAsync correlation prompt options
             return result.Content
         }
 
     /// Apply hierarchical summarization: chunk -> summarize -> combine
     let hierarchicalCompactAsync
+        (correlation: CorrelationContext)
         (chunkSize: int)
         (provider: LlmProvider)
         (options: CompletionOptions)
@@ -122,7 +124,7 @@ module ContextCompaction =
                 let toSummarize = chunks |> List.take (chunks.Length - 1) |> List.concat
                 let toKeep = chunks |> List.last
 
-                let! summary = summarizeChunkAsync provider options toSummarize
+                let! summary = summarizeChunkAsync correlation provider options toSummarize
 
                 let summaryMsg =
                     { Role = Assistant
@@ -139,6 +141,7 @@ module ContextCompaction =
 
     /// Apply a compaction strategy to a conversation
     let rec applyAsync
+        (correlation: CorrelationContext)
         (strategy: CompactionStrategy)
         (tokenBudget: int)
         (conversation: Conversation)
@@ -159,7 +162,7 @@ module ContextCompaction =
                     let keepCount = min 5 conversation.Length
                     let toSummarize = conversation |> List.take (conversation.Length - keepCount)
                     let toKeep = conversation |> List.skip (conversation.Length - keepCount)
-                    let! summary = summarizeChunkAsync provider options toSummarize
+                    let! summary = summarizeChunkAsync correlation provider options toSummarize
 
                     let summaryMsg =
                         { Role = Assistant
@@ -183,7 +186,7 @@ module ContextCompaction =
                       Summary = None }
 
             | CompactionStrategy.Hierarchical(chunkSize, provider, options) ->
-                return! hierarchicalCompactAsync chunkSize provider options tokenBudget conversation
+                return! hierarchicalCompactAsync correlation chunkSize provider options tokenBudget conversation
 
             | CompactionStrategy.Composite strategies ->
                 let mutable current = conversation
@@ -192,7 +195,7 @@ module ContextCompaction =
                 let mutable lastSummary = None
 
                 for strat in strategies do
-                    let! result = applyAsync strat tokenBudget current
+                    let! result = applyAsync correlation strat tokenBudget current
                     current <- result.Compacted
                     totalRemoved <- totalRemoved + result.MessagesRemoved
                     totalSaved <- totalSaved + result.TokensSaved

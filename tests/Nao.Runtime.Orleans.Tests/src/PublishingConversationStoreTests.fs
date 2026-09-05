@@ -51,14 +51,18 @@ type PublishingConversationStoreTests() =
         if Directory.Exists dir then
             Directory.Delete(dir, true)
 
-    let message role content turnId : PersistedMessage =
+    let messageWith correlation role content turnId : PersistedMessage =
         { Role = role
           Content = content
           Timestamp = DateTimeOffset.UtcNow
+          Correlation = correlation
           TurnId = turnId
           Steps = [||]
           Attachments = [||]
           Data = [||] }
+
+    let message role content turnId =
+        messageWith (CorrelationContext.root ()) role content turnId
 
     /// Build a tee over a real FileConversationStore + a subscribed recorder.
     let setup (root: string) =
@@ -77,14 +81,22 @@ type PublishingConversationStoreTests() =
 
         try
             let store, recorder = setup root
+            let correlation = CorrelationContext.root ()
 
-            store.AppendAsync "dev/s1" "default" [| message "User" "hi" "t1" |]
+            store.AppendAsync "dev/s1" "default" [| messageWith correlation "User" "hi" "t1" |]
             |> fun t -> t.Wait()
 
             // Backing still persisted (reads stay correct).
             let loaded = (store.LoadAsync "dev/s1" "default").Result
             Assert.AreEqual(1, loaded.Length)
             Assert.AreEqual("hi", loaded.[0].Content)
+            Assert.AreEqual(correlation, loaded.[0].Correlation)
+
+            let executionMessages =
+                store.LoadByExecutionAsync correlation.ExecutionId |> _.Result
+
+            Assert.AreEqual(1, executionMessages.Length)
+            Assert.AreEqual(correlation, executionMessages.[0].Correlation)
 
             let messagesPath =
                 Directory.GetFiles(root, "messages.json", SearchOption.AllDirectories)
@@ -104,6 +116,7 @@ type PublishingConversationStoreTests() =
                 Assert.AreEqual(1, msgs.Length)
                 Assert.AreEqual("hi", msgs.[0].Content)
                 Assert.AreEqual("User", msgs.[0].Role)
+                Assert.AreEqual(correlation, msgs.[0].Correlation)
             | other -> Assert.Fail(sprintf "expected one MessagesAppended, got %A" other)
         finally
             cleanup root
@@ -147,6 +160,37 @@ type PublishingConversationStoreTests() =
             CollectionAssert.AreEqual(messagesBefore, File.ReadAllBytes messagesPath)
             CollectionAssert.AreEqual(metaBefore, File.ReadAllBytes metaPath)
             CollectionAssert.AreEqual(indexBefore, File.ReadAllBytes indexPath)
+            Assert.AreEqual(eventsBefore, recorder.Received.Count)
+        finally
+            cleanup root
+
+    [<TestMethod>]
+    member _.Append_RejectsUnsupportedMessagesWithoutMutationOrPublication() =
+        let root = newRoot ()
+
+        try
+            let store, recorder = setup root
+
+            store.AppendAsync "dev/s1" "default" [| message "User" "original" "t1" |]
+            |> _.Wait()
+
+            let messagesPath =
+                Directory.GetFiles(root, "messages.json", SearchOption.AllDirectories)
+                |> Array.exactlyOne
+
+            let versionOne = File.ReadAllText messagesPath
+            let unsupported = versionOne.Replace("\"schemaVersion\":1", "\"schemaVersion\":2")
+            File.WriteAllText(messagesPath, unsupported)
+            let before = File.ReadAllBytes messagesPath
+            let eventsBefore = recorder.Received.Count
+
+            let error =
+                Assert.ThrowsExactly<InvalidDataException>(fun () ->
+                    store.AppendAsync "dev/s1" "default" [| message "User" "new" "t2" |]
+                    |> _.GetAwaiter().GetResult())
+
+            StringAssert.Contains(error.Message, "unsupported schema version 2")
+            CollectionAssert.AreEqual(before, File.ReadAllBytes messagesPath)
             Assert.AreEqual(eventsBefore, recorder.Received.Count)
         finally
             cleanup root
@@ -200,8 +244,9 @@ type PublishingConversationStoreTests() =
 
         try
             let store, recorder = setup root
+            let correlation = CorrelationContext.root ()
 
-            store.AppendAsync "dev/s1" "chat-7" [| message "Assistant" "yo" "turn-9" |]
+            store.AppendAsync "dev/s1" "chat-7" [| messageWith correlation "Assistant" "yo" "turn-9" |]
             |> fun t -> t.Wait()
 
             match List.ofSeq recorder.Received with
@@ -211,6 +256,7 @@ type PublishingConversationStoreTests() =
                 Assert.AreEqual("chat-7", scope.ConversationId)
                 Assert.AreEqual("turn-9", scope.ActionId)
                 Assert.AreEqual("dev/s1", scope.SessionKey)
+                Assert.AreEqual(correlation, scope.Correlation)
             | other -> Assert.Fail(sprintf "unexpected events %A" other)
         finally
             cleanup root

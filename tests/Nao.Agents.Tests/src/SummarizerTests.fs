@@ -1,15 +1,19 @@
 namespace Nao.Agents.Tests
 
+open System
 open System.Threading.Tasks
 open Microsoft.VisualStudio.TestTools.UnitTesting
 open Nao.Agents
+open Nao.Persistence
 
 /// A mock LLM provider that returns predictable summaries
 module MockSummarizerProvider =
-    let create () =
+    let create (observed: CorrelationContext option ref) =
         LlmProvider.create
             (fun () -> "MockSummarizer")
-            (fun (conversation: Conversation) (_options: CompletionOptions) ->
+            (fun correlation (conversation: Conversation) (_options: CompletionOptions) ->
+                observed.Value <- Some correlation
+
                 let lastUserMsg =
                     conversation
                     |> List.tryFindBack (fun m -> m.Role = User)
@@ -23,7 +27,9 @@ module MockSummarizerProvider =
 [<TestClass>]
 type SummarizerTests() =
 
-    let provider = MockSummarizerProvider.create ()
+    let correlation = CorrelationContext.root ()
+    let observed = ref None
+    let provider = MockSummarizerProvider.create observed
 
     let makeConversation (n: int) =
         [ for i in 1..n do
@@ -43,7 +49,7 @@ type SummarizerTests() =
                 KeepRecent = 6 }
 
         let conversation = makeConversation 5 // 10 messages total
-        let result = (Summarizer.applyAsync config conversation).Result
+        let result = (Summarizer.applyAsync correlation config conversation).Result
         Assert.AreEqual(10, result.Length)
 
     [<TestMethod>]
@@ -54,7 +60,7 @@ type SummarizerTests() =
                 KeepRecent = 4 }
 
         let conversation = makeConversation 5 // 10 messages total, > threshold of 6
-        let result = (Summarizer.applyAsync config conversation).Result
+        let result = (Summarizer.applyAsync correlation config conversation).Result
         // Should have: 1 summary message + 4 recent messages = 5
         Assert.AreEqual(5, result.Length)
         Assert.IsTrue(result.[0].Content.Contains("[Conversation Summary]"))
@@ -68,19 +74,21 @@ type SummarizerTests() =
                 KeepRecent = 2 }
 
         let conversation = makeConversation 4 // 8 messages
-        let result = (Summarizer.applyAsync config conversation).Result
+        let result = (Summarizer.applyAsync correlation config conversation).Result
         // Summary should mention the summarized exchanges
         Assert.IsTrue(result.[0].Content.Contains("Summarized"))
 
     [<TestMethod>]
     member _.SummarizeAsync_ProducesSummaryMessage() =
         let messages = makeConversation 3
+        observed.Value <- None
 
         let result =
-            (Summarizer.summarizeAsync provider CompletionOptions.Default messages).Result
+            (Summarizer.summarizeAsync correlation provider CompletionOptions.Default messages).Result
 
         Assert.AreEqual(System, result.Role)
         Assert.IsTrue(result.Content.Contains("[Conversation Summary]"))
+        Assert.AreEqual(Some correlation, observed.Value)
 
     [<TestMethod>]
     member _.ApplyAsync_KeepsRecentMessagesIntact() =
@@ -90,10 +98,43 @@ type SummarizerTests() =
                 KeepRecent = 4 }
 
         let conversation = makeConversation 4 // 8 messages
-        let result = (Summarizer.applyAsync config conversation).Result
+        let result = (Summarizer.applyAsync correlation config conversation).Result
         // Last 4 messages should be preserved exactly
         let lastFour = result |> List.skip 1 // skip summary
         Assert.AreEqual("Message 3 from user", lastFour.[0].Content)
         Assert.AreEqual("Response 3 from assistant", lastFour.[1].Content)
         Assert.AreEqual("Message 4 from user", lastFour.[2].Content)
         Assert.AreEqual("Response 4 from assistant", lastFour.[3].Content)
+
+[<TestClass>]
+type MemoryConsolidationTests() =
+
+    [<TestMethod>]
+    member _.SummarizeUsesSuppliedCorrelation() =
+        let correlation = CorrelationContext.root ()
+        let observed = ref None
+        let store = InMemoryStore.create ()
+        let owner = "consolidation-test"
+
+        for index in 1..10 do
+            store.SaveAsync
+                owner
+                { Key = sprintf "fact-%d" index
+                  Value = sprintf "value-%d" index
+                  Timestamp = DateTimeOffset.UtcNow
+                  Tags = [ "facts" ] }
+            |> _.Wait()
+
+        let provider =
+            LlmProvider.create (fun () -> "capturing") (fun actual _conversation _options ->
+                observed.Value <- Some actual
+                Task.FromResult(CompletionResult.create "consolidated" "stop" None None))
+
+        let strategy = ConsolidationStrategy.Summarize(provider, CompletionOptions.Default)
+
+        let result =
+            MemoryConsolidation.consolidateAsync correlation store owner strategy
+            |> _.Result
+
+        Assert.AreEqual(10, result.Summarized)
+        Assert.AreEqual(Some correlation, observed.Value)

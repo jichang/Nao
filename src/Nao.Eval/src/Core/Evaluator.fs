@@ -1,6 +1,7 @@
 namespace Nao.Eval
 
 open System.Threading.Tasks
+open Nao.Agents
 
 /// Functional evaluator for scoring agent outputs against expectations.
 type Evaluator =
@@ -8,7 +9,7 @@ type Evaluator =
         /// A name identifying this evaluator.
         Name: string
         /// Evaluate the agent's output for a given case.
-        EvaluateAsync: EvalCase -> string -> Task<EvalVerdict * string>
+        EvaluateAsync: CorrelationContext -> EvalCase -> string -> Task<EvalVerdict * string>
     }
 
 /// Functions for constructing and invoking evaluators.
@@ -21,4 +22,5 @@ module Evaluator =
           EvaluateAsync = evaluateAsync }
 
     /// Evaluate an output with an evaluator.
-    let evaluateAsync case actual evaluator = evaluator.EvaluateAsync case actual
+    let evaluateAsync correlation case actual evaluator =
+        evaluator.EvaluateAsync correlation case actual

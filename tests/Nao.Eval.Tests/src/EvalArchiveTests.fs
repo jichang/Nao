@@ -110,6 +110,7 @@ type EvalArchiveTests() =
               Owner = "eval/other"
               DatasetId = datasetId
               RunId = run.Id
+              ExecutionId = ExecutionId.generate ()
               CaseId = "case"
               ActualOutput = "output"
               Verdict = EvalVerdict.Pass
@@ -125,3 +126,52 @@ type EvalArchiveTests() =
         Assert.ThrowsExactly<ArgumentException>(fun () ->
             archive.SaveReportAsync(invalidReport).GetAwaiter().GetResult())
         |> ignore
+
+    [<TestMethod>]
+    member _.ResultsAreScopedByOwnerAndExecutionAcrossBackends() =
+        let ownerA, ownerB = "eval/a", "eval/b"
+        let executionId = ExecutionId.generate ()
+        let distractorExecutionId = ExecutionId.generate ()
+
+        let report owner executionId caseId =
+            let run = EvalRun.create owner (Guid.NewGuid())
+
+            let result: EvalResult =
+                { Id = Guid.NewGuid()
+                  Owner = owner
+                  DatasetId = run.DatasetId
+                  RunId = run.Id
+                  ExecutionId = executionId
+                  CaseId = caseId
+                  ActualOutput = "output"
+                  Verdict = EvalVerdict.Pass
+                  Reason = "ok"
+                  LatencyMs = 1L
+                  EvaluatorName = "test"
+                  Timestamp = run.StartedAt
+                  ExecutionTrace = None }
+
+            EvalReport.fromResults run caseId [ result ]
+
+        let verify make =
+            task {
+                let archive = make ()
+                let expectedA = report ownerA executionId "owner-a"
+                let expectedB = report ownerB executionId "owner-b"
+                do! archive.SaveReportAsync expectedA
+                do! archive.SaveReportAsync(report ownerA distractorExecutionId "distractor")
+                do! archive.SaveReportAsync expectedB
+
+                let reloaded = make ()
+                let! ownerAResults = reloaded.GetResultsByExecutionAsync ownerA executionId
+                let! ownerBResults = reloaded.GetResultsByExecutionAsync ownerB executionId
+                let! unknownResults = reloaded.GetResultsByExecutionAsync ownerA (ExecutionId.generate ())
+                Assert.AreEqual([ expectedA.Results.Head ], ownerAResults)
+                Assert.AreEqual([ expectedB.Results.Head ], ownerBResults)
+                Assert.IsTrue(unknownResults.IsEmpty)
+            }
+
+        let inMemory = EvalArchives.inMemory ()
+        verify (fun () -> inMemory) |> _.GetAwaiter().GetResult()
+        let file = tempFile ()
+        verify (fun () -> EvalArchives.file file) |> _.GetAwaiter().GetResult()

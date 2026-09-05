@@ -89,7 +89,10 @@ type ProviderFactoryTests() =
             )
 
         let conversation = [ { Role = User; Content = "hi" } ]
-        let result = (provider.CompleteAsync conversation CompletionOptions.Default).Result
+
+        let result =
+            (provider.CompleteAsync (CorrelationContext.root ()) conversation CompletionOptions.Default).Result
+
         Assert.AreEqual("error", result.FinishReason)
 
     [<TestMethod>]
@@ -100,7 +103,10 @@ type ProviderFactoryTests() =
 
         let provider = ProviderFactory.create (Anthropic config)
         let conversation = [ { Role = User; Content = "hi" } ]
-        let result = (provider.CompleteAsync conversation CompletionOptions.Default).Result
+
+        let result =
+            (provider.CompleteAsync (CorrelationContext.root ()) conversation CompletionOptions.Default).Result
+
         Assert.AreEqual("error", result.FinishReason)
 
 [<TestClass>]
@@ -157,7 +163,7 @@ type OpenAICompatibleProviderTests() =
                 StopSequences = [ "END" ] }
 
         let result =
-            provider.CompleteAsync [ { Role = User; Content = "Hello" } ] options
+            provider.CompleteAsync (CorrelationContext.root ()) [ { Role = User; Content = "Hello" } ] options
             |> _.Result
 
         Assert.AreEqual(endpoint, requestUrl)
@@ -197,7 +203,10 @@ type OpenAICompatibleProviderTests() =
                 (Some handler)
 
         let result =
-            provider.CompleteAsync [ { Role = User; Content = "Hello" } ] CompletionOptions.Default
+            provider.CompleteAsync
+                (CorrelationContext.root ())
+                [ { Role = User; Content = "Hello" } ]
+                CompletionOptions.Default
             |> _.Result
 
         Assert.AreEqual("error", result.FinishReason)
@@ -256,7 +265,10 @@ type AnthropicProviderTests() =
             AnthropicProvider.createWithHandler config (Some(new WaitingHttpMessageHandler()))
 
         let result =
-            provider.CompleteAsync [ { Role = User; Content = "Wait." } ] CompletionOptions.Default
+            provider.CompleteAsync
+                (CorrelationContext.root ())
+                [ { Role = User; Content = "Wait." } ]
+                CompletionOptions.Default
             |> _.Result
 
         Assert.AreEqual("error", result.FinishReason)
@@ -314,7 +326,9 @@ type AnthropicProviderTests() =
                 MaxTokens = Some 128
                 StopSequences = [ "END" ] }
 
-        let result = provider.CompleteAsync conversation options |> _.Result
+        let result =
+            provider.CompleteAsync (CorrelationContext.root ()) conversation options
+            |> _.Result
 
         Assert.AreEqual("https://anthropic.test/v1/messages", requestUrl)
         Assert.AreEqual("test-key", apiKey)
@@ -361,6 +375,7 @@ type AnthropicProviderTests() =
         let result =
             LlmProvider.streamAsync
                 provider
+                (CorrelationContext.root ())
                 [ { Role = User; Content = "Say hello." } ]
                 CompletionOptions.Default
                 chunks.Add

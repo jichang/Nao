@@ -46,6 +46,7 @@ type TraceStore =
         GetBaselineAsync: string -> string -> Task<ExecutionTrace option>
         /// Get all traces for an agent
         GetTracesAsync: string -> int -> Task<ExecutionTrace list>
+        GetByExecutionAsync: ExecutionId -> Task<ExecutionTrace list>
         /// Delete every trace owned by an agent
         DeleteOwnerAsync: string -> Task<Result<int, PlatformFailure>>
         /// Delete traces owned by an agent that precede a retention cutoff

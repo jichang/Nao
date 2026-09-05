@@ -136,6 +136,7 @@ module Orchestrator =
         /// every subclass gets identical logging and tracing for free — a custom orchestrator only
         /// supplies the prompt and the parser and can never accidentally drop the round's trace.
         let reasonAsync
+            (correlation: CorrelationContext)
             (metricsOwner: string)
             (conversation: Conversation)
             (round: int)
@@ -201,7 +202,13 @@ module Orchestrator =
                     RuntimeMetrics.get ()
                     |> Option.iter (fun metrics ->
                         metrics.Record(
-                            MetricRecord.llmCall metricsOwner DateTimeOffset.UtcNow inputTokens outputTokens elapsedMs
+                            MetricRecord.llmCall
+                                correlation
+                                metricsOwner
+                                DateTimeOffset.UtcNow
+                                inputTokens
+                                outputTokens
+                                elapsedMs
                         ))
 
                 let invokeProvider (attempt: int) (streaming: bool) (prompt: Conversation) =
@@ -212,9 +219,10 @@ module Orchestrator =
                         try
                             let! result =
                                 if streaming then
-                                    LlmProvider.streamAsync config.Provider prompt config.Options (fun _ -> ())
+                                    LlmProvider.streamAsync config.Provider correlation prompt config.Options (fun _ ->
+                                        ())
                                 else
-                                    config.Provider.CompleteAsync prompt config.Options
+                                    config.Provider.CompleteAsync correlation prompt config.Options
 
                             started.Stop()
                             endLlmSpan span SpanStatus.Ok result.Content.Length started.ElapsedMilliseconds
@@ -337,7 +345,12 @@ module Orchestrator =
                     // so logs/traces are captured no matter how a subclass builds the prompt or
                     // parses the response.
                     let! response, parseActions =
-                        reasonAsync agentContext.SessionKey conversation (rounds + 1) successfulToolCalls
+                        reasonAsync
+                            agentContext.Correlation
+                            agentContext.SessionKey
+                            conversation
+                            (rounds + 1)
+                            successfulToolCalls
                     // The assistant's own message joins the running conversation — like before —
                     // so the next round's prompt can include what the model already said.
                     conversation <- conversation @ [ { Role = Assistant; Content = response } ]
@@ -378,6 +391,7 @@ module Orchestrator =
                                         | Some metrics ->
                                             metrics.Record(
                                                 MetricRecord.toolCall
+                                                    agentContext.Correlation
                                                     agentContext.SessionKey
                                                     DateTimeOffset.UtcNow
                                                     toolName
@@ -408,6 +422,7 @@ module Orchestrator =
 
                                                 let record: ExecutionRecord =
                                                     { Id = Guid.NewGuid()
+                                                      Correlation = agentContext.Correlation
                                                       Owner = agentContext.SessionKey
                                                       TurnId = agentContext.TurnId
                                                       ToolName = toolName
@@ -520,7 +535,12 @@ module Orchestrator =
                     conversation <- conversation @ [ forceMsg ]
 
                     let! response, parseActions =
-                        reasonAsync agentContext.SessionKey conversation (rounds + 1) successfulToolCalls
+                        reasonAsync
+                            agentContext.Correlation
+                            agentContext.SessionKey
+                            conversation
+                            (rounds + 1)
+                            successfulToolCalls
 
                     finalAnswer <-
                         parseActions response

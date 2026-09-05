@@ -45,6 +45,13 @@ module InMemoryExecutionJournal =
         let getHistoryAsync () =
             lock entries (fun () -> entries |> Seq.toList) |> Task.FromResult
 
+        let getByExecutionAsync executionId =
+            lock entries (fun () ->
+                entries
+                |> Seq.filter (fun entry -> entry.Correlation.ExecutionId = executionId)
+                |> Seq.toList)
+            |> Task.FromResult
+
         let getRevertibleAsync () =
             lock entries (fun () -> entries |> Seq.filter (fun entry -> not entry.Reverted) |> Seq.toList)
             |> Task.FromResult
@@ -70,6 +77,7 @@ module InMemoryExecutionJournal =
 
         { RecordAsync = recordAsync
           GetHistoryAsync = getHistoryAsync
+          GetByExecutionAsync = getByExecutionAsync
           GetRevertibleAsync = getRevertibleAsync
           MarkRevertedAsync = markRevertedAsync
           DeleteOwnerAsync = deleteOwnerAsync
@@ -84,7 +92,7 @@ module AdoExecutionJournal =
                         factory
                         "execution-journal"
                         "nao_execution_journal"
-                        "CREATE TABLE IF NOT EXISTS nao_execution_journal (record_id TEXT NOT NULL PRIMARY KEY, owner TEXT NOT NULL, turn_id TEXT NOT NULL, tool_name TEXT NOT NULL, tool_input TEXT NOT NULL, tool_output TEXT NOT NULL, executed_at TEXT NOT NULL, reverted INTEGER NOT NULL, metadata TEXT NOT NULL)"
+                        "CREATE TABLE IF NOT EXISTS nao_execution_journal (record_id TEXT NOT NULL PRIMARY KEY, execution_id TEXT NOT NULL, correlation_id TEXT NOT NULL, causation_id TEXT NULL, attempt INTEGER NOT NULL, owner TEXT NOT NULL, turn_id TEXT NOT NULL, tool_name TEXT NOT NULL, tool_input TEXT NOT NULL, tool_output TEXT NOT NULL, executed_at TEXT NOT NULL, reverted INTEGER NOT NULL, metadata TEXT NOT NULL)"
 
                 let! _ =
                     Ado.executeNonQuery
@@ -100,7 +108,19 @@ module AdoExecutionJournal =
             let id = Ado.getString reader "record_id"
 
             try
+                let attempt = Convert.ToInt32(reader.["attempt"])
+
+                if attempt < 1 then
+                    invalidArg (nameof attempt) "Correlation attempt must be positive."
+
+                let correlation =
+                    { ExecutionId = ExecutionId.parse (Ado.getString reader "execution_id")
+                      CorrelationId = CorrelationId.parse (Ado.getString reader "correlation_id")
+                      CausationId = Ado.getStringOpt reader "causation_id" |> Option.map ExecutionId.parse
+                      Attempt = attempt }
+
                 { Id = Guid.Parse id
+                  Correlation = correlation
                   Owner = Ado.getString reader "owner"
                   TurnId = Ado.getString reader "turn_id"
                   ToolName = Ado.getString reader "tool_name"
@@ -124,7 +144,7 @@ module AdoExecutionJournal =
                 let! _ =
                     Ado.query
                         factory
-                        "SELECT record_id, owner, turn_id, tool_name, tool_input, tool_output, executed_at, reverted, metadata FROM nao_execution_journal"
+                        "SELECT record_id, execution_id, correlation_id, causation_id, attempt, owner, turn_id, tool_name, tool_input, tool_output, executed_at, reverted, metadata FROM nao_execution_journal"
                         []
                         mapRecord
 
@@ -136,11 +156,20 @@ module AdoExecutionJournal =
                 JournalOperations.requireOwner record.Owner
                 do! validateAsync ()
 
+                let causationId =
+                    record.Correlation.CausationId
+                    |> Option.map (ExecutionId.serialize >> box)
+                    |> Option.defaultValue null
+
                 let! _ =
                     Ado.executeNonQuery
                         factory
-                        "INSERT INTO nao_execution_journal (record_id, owner, turn_id, tool_name, tool_input, tool_output, executed_at, reverted, metadata) VALUES (@id, @ow, @tr, @tn, @ti, @to, @ea, @rv, @md)"
+                        "INSERT INTO nao_execution_journal (record_id, execution_id, correlation_id, causation_id, attempt, owner, turn_id, tool_name, tool_input, tool_output, executed_at, reverted, metadata) VALUES (@id, @ex, @co, @ca, @at, @ow, @tr, @tn, @ti, @to, @ea, @rv, @md)"
                         [ "@id", box (record.Id.ToString("D"))
+                          "@ex", box (ExecutionId.serialize record.Correlation.ExecutionId)
+                          "@co", box (CorrelationId.serialize record.Correlation.CorrelationId)
+                          "@ca", causationId
+                          "@at", box record.Correlation.Attempt
                           "@ow", box record.Owner
                           "@tr", box record.TurnId
                           "@tn", box record.ToolName
@@ -161,8 +190,20 @@ module AdoExecutionJournal =
                 return!
                     Ado.query
                         factory
-                        "SELECT record_id, owner, turn_id, tool_name, tool_input, tool_output, executed_at, reverted, metadata FROM nao_execution_journal ORDER BY executed_at DESC"
+                        "SELECT record_id, execution_id, correlation_id, causation_id, attempt, owner, turn_id, tool_name, tool_input, tool_output, executed_at, reverted, metadata FROM nao_execution_journal ORDER BY executed_at DESC"
                         []
+                        mapRecord
+            }
+
+        let getByExecutionAsync executionId =
+            task {
+                do! ensureAsync ()
+
+                return!
+                    Ado.query
+                        factory
+                        "SELECT record_id, execution_id, correlation_id, causation_id, attempt, owner, turn_id, tool_name, tool_input, tool_output, executed_at, reverted, metadata FROM nao_execution_journal WHERE execution_id = @ex ORDER BY executed_at DESC"
+                        [ "@ex", box (ExecutionId.serialize executionId) ]
                         mapRecord
             }
 
@@ -173,7 +214,7 @@ module AdoExecutionJournal =
                 return!
                     Ado.query
                         factory
-                        "SELECT record_id, owner, turn_id, tool_name, tool_input, tool_output, executed_at, reverted, metadata FROM nao_execution_journal WHERE reverted = 0 ORDER BY executed_at DESC"
+                        "SELECT record_id, execution_id, correlation_id, causation_id, attempt, owner, turn_id, tool_name, tool_input, tool_output, executed_at, reverted, metadata FROM nao_execution_journal WHERE reverted = 0 ORDER BY executed_at DESC"
                         []
                         mapRecord
             }
@@ -218,6 +259,7 @@ module AdoExecutionJournal =
 
         { RecordAsync = recordAsync
           GetHistoryAsync = getHistoryAsync
+          GetByExecutionAsync = getByExecutionAsync
           GetRevertibleAsync = getRevertibleAsync
           MarkRevertedAsync = markRevertedAsync
           DeleteOwnerAsync = deleteOwnerAsync
@@ -263,6 +305,15 @@ module FileExecutionJournal =
         let getHistoryAsync () =
             task { return lock sync (fun () -> load () |> List.map Dto.ofExecutionDto) }
 
+        let getByExecutionAsync executionId =
+            task {
+                return
+                    lock sync (fun () ->
+                        load ()
+                        |> List.map Dto.ofExecutionDto
+                        |> List.filter (fun record -> record.Correlation.ExecutionId = executionId))
+            }
+
         let getRevertibleAsync () =
             task {
                 return
@@ -307,6 +358,7 @@ module FileExecutionJournal =
 
         { RecordAsync = recordAsync
           GetHistoryAsync = getHistoryAsync
+          GetByExecutionAsync = getByExecutionAsync
           GetRevertibleAsync = getRevertibleAsync
           MarkRevertedAsync = markRevertedAsync
           DeleteOwnerAsync = deleteOwnerAsync

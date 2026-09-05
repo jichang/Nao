@@ -8,7 +8,7 @@
 
 ## Breaking changes
 
-Session and directory state now carry Nao schema version 1 in addition to Orleans field identifiers. Existing records without that version and records with unsupported versions fail grain activation before state access or mutation. Nao does not include a legacy activation path or in-process converter.
+Session and directory state carry independent Nao schema versions in addition to Orleans field identifiers. Both current schemas are version 1; session messages require complete execution correlation, and session metadata requires tenant identity from the host-authenticated principal. Every session operation revalidates that principal against persisted tenant/user/group/session lineage. Existing records without the expected version and records with unsupported versions fail grain activation before state access or mutation. Nao does not include a legacy activation path or in-process converter.
 
 ## Before upgrade
 
@@ -18,7 +18,7 @@ Session and directory state now carry Nao schema version 1 in addition to Orlean
 
 ## Migration
 
-Reset development session state when retention is unnecessary. For retained state, transform provider records externally by setting the top-level Nao `SchemaVersion` field to `1` only after validating that every record matches the current `SessionGrainState` or `SessionDirectoryState` shape. Do not infer users, sessions, permissions, conversations, or directory membership. Deploy one build to all silos and validate activation, reads, writes, and destruction before resuming traffic.
+Reset development session state when retention is unnecessary. For retained session state, populate every conversation message's correlation from authoritative execution data and populate tenant identity from authoritative authentication data before rebuilding the state externally in the current version-1 shape; reset records whose exact correlation or authorization lineage cannot be reconstructed. Register `Func<SecurityPrincipal>` from the host authentication context before activating session grains. Retained session-directory records also use version `1`. Do not infer users, groups, sessions, permissions, execution identity, conversations, or directory membership. Deploy one build to all silos and validate activation, authorization rejection, reads, writes, and destruction before resuming traffic.
 
 ## Rollback
 

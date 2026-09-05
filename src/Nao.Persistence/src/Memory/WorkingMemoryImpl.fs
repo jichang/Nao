@@ -7,11 +7,7 @@ open Nao.Agents
 
 module InMemoryWorkingMemory =
     let create (config: WorkingMemoryConfig) : WorkingMemory =
-        let items = ConcurrentDictionary<string * string, WorkingMemoryItem>()
-
-        let requireOwner owner =
-            if String.IsNullOrWhiteSpace owner then
-                invalidArg (nameof owner) "Working-memory execution ID cannot be blank."
+        let items = ConcurrentDictionary<ExecutionId * string, WorkingMemoryItem>()
 
         let key owner itemKey = owner, itemKey
 
@@ -39,15 +35,12 @@ module InMemoryWorkingMemory =
                 |> Seq.iter (fun item -> items.TryRemove(key owner item.Key) |> ignore)
 
         let setAsync (item: WorkingMemoryItem) =
-            requireOwner item.ExecutionId
             let normalized = normalize item
             items.[key item.ExecutionId item.Key] <- normalized
             evictOverCapacity item.ExecutionId
             Task.FromResult()
 
         let getAsync owner itemKey =
-            requireOwner owner
-
             match items.TryGetValue(key owner itemKey) with
             | true, item ->
                 let boosted =
@@ -59,16 +52,12 @@ module InMemoryWorkingMemory =
             | false, _ -> Task.FromResult None
 
         let getAllAsync owner =
-            requireOwner owner
-
             owned owner
             |> Seq.sortByDescending (fun item -> item.Attention)
             |> Seq.toList
             |> Task.FromResult
 
         let getActiveAsync owner minimum =
-            requireOwner owner
-
             owned owner
             |> Seq.filter (fun item -> item.Attention >= minimum)
             |> Seq.sortByDescending (fun item -> item.Attention)
@@ -76,8 +65,6 @@ module InMemoryWorkingMemory =
             |> Task.FromResult
 
         let update owner itemKey change =
-            requireOwner owner
-
             match items.TryGetValue(key owner itemKey) with
             | true, item -> items.[key owner itemKey] <- change item
             | false, _ -> ()
@@ -90,7 +77,6 @@ module InMemoryWorkingMemory =
                     Attention = min 1.0 (item.Attention + boost) })
 
         let decayAsync owner asOf =
-            requireOwner owner
             let mutable removed = 0
 
             for item in owned owner |> Seq.toArray do
@@ -122,7 +108,6 @@ module InMemoryWorkingMemory =
                     ExpiresAt = Some(asOf + config.DefaultTtl) })
 
         let removeAsync owner itemKey =
-            requireOwner owner
             items.TryRemove(key owner itemKey) |> ignore
             Task.FromResult()
 
@@ -136,21 +121,11 @@ module InMemoryWorkingMemory =
 
         let protect owner operation =
             task {
-                if String.IsNullOrWhiteSpace owner then
-                    return
-                        Error(
-                            PlatformFailure.create
-                                PlatformErrorCategory.InvalidInput
-                                "Working-memory execution ID cannot be blank."
-                                false
-                                None
-                        )
-                else
-                    try
-                        let! count = operation ()
-                        return Ok count
-                    with ex ->
-                        return Error(PlatformFailure.fromException PlatformFailureBoundary.Storage None ex)
+                try
+                    let! count = operation ()
+                    return Ok count
+                with ex ->
+                    return Error(PlatformFailure.fromException PlatformFailureBoundary.Storage None ex)
             }
 
         let deleteOwnerAsync owner =
@@ -164,8 +139,6 @@ module InMemoryWorkingMemory =
                     && (item.ExpiresAt |> Option.exists (fun expiry -> expiry < before))))
 
         let renderContextAsync owner topK =
-            requireOwner owner
-
             owned owner
             |> Seq.sortByDescending (fun item -> item.Attention)
             |> Seq.truncate topK

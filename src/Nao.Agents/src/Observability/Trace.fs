@@ -51,6 +51,8 @@ type Span =
     {
         /// Unique span identifier
         Id: SpanId
+        /// Execution identity, correlation, causation, and attempt for this span.
+        Correlation: CorrelationContext
         /// Parent trace
         TraceId: TraceId
         /// Parent span (None for root spans)
@@ -84,7 +86,7 @@ and SpanEvent =
 type Tracer =
     {
         /// Start a new root trace
-        StartTrace: string -> Span
+        StartTrace: CorrelationContext -> string -> Span
         /// Start a child span under an existing span
         StartSpan: Span -> string -> Span
         /// End a span
@@ -95,4 +97,6 @@ type Tracer =
         SetAttributes: Span -> Map<string, string> -> unit
         /// Get all completed spans for a trace
         GetTrace: TraceId -> Span list
+        /// Get all spans produced by one execution
+        GetByExecution: ExecutionId -> Span list
     }

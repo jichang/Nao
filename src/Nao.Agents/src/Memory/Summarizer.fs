@@ -29,7 +29,12 @@ module Summarizer =
                       "Be brief." ] }
 
     /// Summarize a list of messages into a single condensed message
-    let summarizeAsync (provider: LlmProvider) (options: CompletionOptions) (messages: Conversation) : Task<Message> =
+    let summarizeAsync
+        (correlation: CorrelationContext)
+        (provider: LlmProvider)
+        (options: CompletionOptions)
+        (messages: Conversation)
+        : Task<Message> =
         task {
             let formatted =
                 messages
@@ -48,7 +53,7 @@ module Summarizer =
                     Content = summaryPrompt }
                   { Role = User; Content = formatted } ]
 
-            let! result = provider.CompleteAsync conversation options
+            let! result = provider.CompleteAsync correlation conversation options
 
             return
                 { Role = System
@@ -57,7 +62,11 @@ module Summarizer =
 
     /// Apply summarization to a conversation if it exceeds the threshold.
     /// Returns the trimmed conversation with a summary message prepended.
-    let applyAsync (config: SummarizationConfig) (conversation: Conversation) : Task<Conversation> =
+    let applyAsync
+        (correlation: CorrelationContext)
+        (config: SummarizationConfig)
+        (conversation: Conversation)
+        : Task<Conversation> =
         task {
             if conversation.Length <= config.Threshold then
                 return conversation
@@ -68,6 +77,6 @@ module Summarizer =
                 if toSummarize.IsEmpty then
                     return conversation
                 else
-                    let! summary = summarizeAsync config.Provider config.Options toSummarize
+                    let! summary = summarizeAsync correlation config.Provider config.Options toSummarize
                     return summary :: recent
         }

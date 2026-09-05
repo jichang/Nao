@@ -61,6 +61,10 @@ type SessionInfo() =
     [<Id(12u)>]
     member val RuntimeMode: string = "" with get, set
 
+    /// Tenant identity supplied by the trusted host principal.
+    [<Id(13u)>]
+    member val TenantId: string = "" with get, set
+
 /// A named conversation context within a session
 [<GenerateSerializer>]
 type ConversationContext() =
@@ -124,6 +128,46 @@ type SessionStartOptions() =
     /// to containerize; a runtime name like "deno" to force it for all tools).
     [<Id(5u)>]
     member val RuntimeMode: string = "" with get, set
+
+module internal SessionAuthorization =
+    let tryCreateScope
+        (principal: SecurityPrincipal)
+        (grainUserId: string)
+        (grainSessionId: string)
+        (groupId: string)
+        (workspaceKey: string)
+        =
+        let parsedGroupId =
+            if String.IsNullOrWhiteSpace groupId then
+                Some None
+            else
+                GroupId.tryParse groupId |> Option.map Some
+
+        match
+            UserId.tryParse grainUserId,
+            SessionId.tryParse grainSessionId,
+            parsedGroupId,
+            WorkspaceId.tryParse workspaceKey
+        with
+        | Some userId, Some sessionId, Some requestedGroupId, Some workspaceId when
+            userId = SecurityPrincipal.userId principal
+            ->
+            AuthorizationScope.tryCreate principal requestedGroupId workspaceId (Some sessionId)
+        | _ -> None
+
+    let matchesPersisted (info: SessionInfo) scope =
+        let groupMatches =
+            AuthorizationScope.groupId scope
+            |> Option.map GroupId.value
+            |> Option.defaultValue ""
+            |> (=) info.GroupId
+
+        info.TenantId = (AuthorizationScope.tenantId scope |> TenantId.value)
+        && info.UserId = (AuthorizationScope.userId scope |> UserId.value)
+        && info.SessionId = (AuthorizationScope.sessionId scope
+                             |> Option.map SessionId.value
+                             |> Option.defaultValue "")
+        && groupMatches
 
 /// Orleans grain interface for a user session.
 /// Grain key format: "userId/sessionId"
@@ -205,6 +249,7 @@ type SessionGrain
         provider: LlmProvider,
         orchestratorFactory: OrchestratorFactory,
         conversationStore: ConversationStore,
+        principalAccessor: Func<SecurityPrincipal>,
         harnessServicesFactory: Func<string, string, CorrelationContext, HarnessServices>,
         feedbackFactory: Func<string, FeedbackService>,
         eventBus: EventBus,
@@ -277,6 +322,28 @@ type SessionGrain
         | -1 -> (key, "default")
         | idx -> (key.Substring(0, idx), key.Substring(idx + 1))
 
+    let tryCurrentScope workspaceKey =
+        let info = persistentState.State.Info
+
+        SessionAuthorization.tryCreateScope
+            (principalAccessor.Invoke())
+            info.UserId
+            info.SessionId
+            info.GroupId
+            workspaceKey
+        |> Option.filter (SessionAuthorization.matchesPersisted info)
+
+    let requireCurrentScope () =
+        match tryCurrentScope persistentState.State.Info.WorkspaceKey with
+        | Some scope -> scope
+        | None ->
+            PlatformFailure.create
+                PlatformErrorCategory.PermissionDenied
+                "The authenticated principal is not authorized for this session."
+                false
+                None
+            |> PlatformFailure.raiseException
+
     // ─── Conversation context management ───
 
     let getOrCreateConversation (name: string) : ConversationContext =
@@ -300,17 +367,11 @@ type SessionGrain
         let record = MessageRecord()
         record.Role <- pm.Role
         record.Content <- pm.Content
-        record.TurnId <- (if isNull (box pm.TurnId) then "" else pm.TurnId)
-
-        if not (isNull (box pm.Steps)) then
-            record.Steps <- ResizeArray(pm.Steps)
-
-        if not (isNull (box pm.Attachments)) then
-            record.Attachments <- ResizeArray(pm.Attachments)
-
-        if not (isNull (box pm.Data)) then
-            record.Data <- ResizeArray(pm.Data)
-
+        record.TurnId <- pm.TurnId
+        record.Correlation <- pm.Correlation
+        record.Steps <- ResizeArray(pm.Steps)
+        record.Attachments <- ResizeArray(pm.Attachments)
+        record.Data <- ResizeArray(pm.Data)
         record
 
     let restoreActiveConversationAsync () =
@@ -334,10 +395,20 @@ type SessionGrain
     let toStepRecord (s: TurnStep) : TurnStepRecord =
         TurnStepRecord(Kind = s.Kind, Title = s.Title, Input = s.Input, Output = s.Output)
 
-    let toPersistedMessage timestamp turnId role content messageSteps attachments messageData : PersistedMessage =
+    let toPersistedMessage
+        timestamp
+        correlation
+        turnId
+        role
+        content
+        messageSteps
+        attachments
+        messageData
+        : PersistedMessage =
         { Role = role
           Content = content
           Timestamp = timestamp
+          Correlation = correlation
           TurnId = turnId
           Steps = messageSteps
           Attachments = attachments
@@ -355,6 +426,7 @@ type SessionGrain
         (attachmentNames: string[])
         (response: string)
         (turnId: string)
+        (correlation: CorrelationContext)
         (steps: TurnStep list)
         (data: AgentContextData list)
         : Task =
@@ -372,6 +444,7 @@ type SessionGrain
                     Role = "User",
                     Content = userInput,
                     TurnId = turnId,
+                    Correlation = correlation,
                     Attachments = ResizeArray(attachmentNames)
                 )
 
@@ -380,6 +453,7 @@ type SessionGrain
                     Role = "Assistant",
                     Content = response,
                     TurnId = turnId,
+                    Correlation = correlation,
                     Steps = ResizeArray(stepRecords),
                     Data = ResizeArray(dataRecords)
                 )
@@ -396,9 +470,10 @@ type SessionGrain
                 let now = DateTimeOffset.UtcNow
 
                 let persisted =
-                    [| toPersistedMessage now turnId "User" userInput [||] attachmentNames [||]
+                    [| toPersistedMessage now correlation turnId "User" userInput [||] attachmentNames [||]
                        toPersistedMessage
                            now
+                           correlation
                            turnId
                            "Assistant"
                            response
@@ -426,8 +501,8 @@ type SessionGrain
                     let childName = sprintf "%s/%s-%s-%d" convName title turnId idx
 
                     let childMsgs =
-                        [| toPersistedMessage now turnId "User" s.Input [||] [||] [||]
-                           toPersistedMessage now turnId "Assistant" s.Output [||] [||] [||] |]
+                        [| toPersistedMessage now correlation turnId "User" s.Input [||] [||] [||]
+                           toPersistedMessage now correlation turnId "Assistant" s.Output [||] [||] [||] |]
 
                     do! conversationStore.AppendAsync grainKey childName childMsgs
         }
@@ -470,6 +545,7 @@ type SessionGrain
     /// the rendered transcript so the file body is never stored or shown.
     let processCoreAsync (llmInput: string) (displayText: string) (attachmentNames: string[]) : Task<string> =
         task {
+            requireCurrentScope () |> ignore
             let agentName = persistentState.State.Info.AgentName
 
             if String.IsNullOrEmpty(agentName) then
@@ -504,6 +580,7 @@ type SessionGrain
                     let recorder =
                         TurnRecorder.create (
                             turnId,
+                            correlation,
                             info.SessionId,
                             info.UserId,
                             info.WorkspaceKey,
@@ -674,6 +751,7 @@ type SessionGrain
                                         attachmentNames
                                         response
                                         turnId
+                                        correlation
                                         (TurnRecorder.steps recorder)
                                         (TurnRecorder.data recorder)
 
@@ -700,6 +778,7 @@ type SessionGrain
     /// key ("userId/sessionId") so each session writes them under its own sessions/<key>/.
     override this.OnActivateAsync(cancellationToken: System.Threading.CancellationToken) : Task =
         GrainStateVersion.prepare
+            GrainStateVersion.SessionCurrent
             "Session state"
             persistentState.RecordExists
             persistentState.State.SchemaVersion
@@ -722,36 +801,58 @@ type SessionGrain
                     else
                         options.WorkspaceKey
 
-                match registry.TryGet(WorkspaceId.create workspaceKey) with
+                let scope =
+                    SessionAuthorization.tryCreateScope
+                        (principalAccessor.Invoke())
+                        userId
+                        sessionId
+                        options.GroupId
+                        workspaceKey
+
+                match scope with
                 | None -> return false
-                | Some workspace ->
+                | Some scope when
+                    persistentState.RecordExists
+                    && not (SessionAuthorization.matchesPersisted persistentState.State.Info scope)
+                    ->
+                    return false
+                | Some scope ->
+                    match registry.TryGet(AuthorizationScope.workspaceId scope) with
+                    | None -> return false
+                    | Some workspace ->
 
-                    let agentName = options.AgentName
+                        let agentName = options.AgentName
 
-                    if not (agentExists workspace agentName) then
-                        return false
-                    else
-                        let info = persistentState.State.Info
-                        info.AgentName <- agentName
-                        info.SessionId <- sessionId
-                        info.UserId <- userId
-                        info.GroupId <- options.GroupId
-                        info.WorkspaceKey <- workspaceKey
-                        info.IsActive <- true
-                        info.ToolNames <- ResizeArray(options.ToolNames)
-                        info.RuntimeMode <- options.RuntimeMode
-                        info.ActiveConversation <- "default"
+                        if not (agentExists workspace agentName) then
+                            return false
+                        else
+                            let info = persistentState.State.Info
+                            info.AgentName <- agentName
+                            info.TenantId <- AuthorizationScope.tenantId scope |> TenantId.value
+                            info.SessionId <- AuthorizationScope.sessionId scope |> Option.get |> SessionId.value
+                            info.UserId <- AuthorizationScope.userId scope |> UserId.value
 
-                        if info.CreatedAt = DateTimeOffset.MinValue then
-                            info.CreatedAt <- DateTimeOffset.UtcNow
+                            info.GroupId <-
+                                AuthorizationScope.groupId scope
+                                |> Option.map GroupId.value
+                                |> Option.defaultValue ""
 
-                        info.LastActiveAt <- DateTimeOffset.UtcNow
+                            info.WorkspaceKey <- AuthorizationScope.workspaceId scope |> WorkspaceId.value
+                            info.IsActive <- true
+                            info.ToolNames <- ResizeArray(options.ToolNames)
+                            info.RuntimeMode <- options.RuntimeMode
+                            info.ActiveConversation <- "default"
 
-                        // Ensure default conversation exists
-                        getOrCreateConversation "default" |> ignore
+                            if info.CreatedAt = DateTimeOffset.MinValue then
+                                info.CreatedAt <- DateTimeOffset.UtcNow
 
-                        do! persistentState.WriteStateAsync()
-                        return true
+                            info.LastActiveAt <- DateTimeOffset.UtcNow
+
+                            // Ensure default conversation exists
+                            getOrCreateConversation "default" |> ignore
+
+                            do! persistentState.WriteStateAsync()
+                            return true
             }
 
         member _.ProcessAsync(input: string) : Task<string> = processCoreAsync input input [||]
@@ -762,15 +863,19 @@ type SessionGrain
             processCoreAsync llmInput displayText (if isNull attachmentNames then [||] else attachmentNames)
 
         member _.GetLastTurnIdAsync() : Task<string> =
+            requireCurrentScope () |> ignore
             Task.FromResult(persistentState.State.Info.LastTurnId)
 
         member _.GetLiveStepsAsync() : Task<TurnStepRecord[]> =
+            requireCurrentScope () |> ignore
+
             match currentRecorder with
             | Some recorder -> Task.FromResult(TurnRecorder.steps recorder |> List.map toStepRecord |> List.toArray)
             | None -> Task.FromResult([||])
 
         member _.SubmitFeedbackAsync(sentiment: string, comment: string) : Task<string array> =
             task {
+                requireCurrentScope () |> ignore
                 let info = persistentState.State.Info
 
                 if String.IsNullOrEmpty info.LastTurnId then
@@ -806,22 +911,33 @@ type SessionGrain
 
         member _.SwitchWorkspaceAsync(workspaceKey: string) : Task<bool> =
             task {
-                match registry.TryGet(WorkspaceId.create workspaceKey) with
-                | None -> return false
-                | Some workspace ->
-                    let agentName = persistentState.State.Info.AgentName
+                let info = persistentState.State.Info
 
-                    if not (String.IsNullOrEmpty(agentName)) && not (agentExists workspace agentName) then
-                        return false
-                    else
-                        persistentState.State.Info.WorkspaceKey <- workspaceKey
-                        persistentState.State.Info.LastActiveAt <- DateTimeOffset.UtcNow
-                        do! persistentState.WriteStateAsync()
-                        return true
+                let scope = tryCurrentScope workspaceKey
+
+                match scope with
+                | None -> return false
+                | Some scope ->
+                    match registry.TryGet(AuthorizationScope.workspaceId scope) with
+                    | None -> return false
+                    | Some workspace ->
+                        let agentName = persistentState.State.Info.AgentName
+
+                        if not (String.IsNullOrEmpty(agentName)) && not (agentExists workspace agentName) then
+                            return false
+                        else
+                            persistentState.State.Info.WorkspaceKey <-
+                                AuthorizationScope.workspaceId scope |> WorkspaceId.value
+
+                            persistentState.State.Info.LastActiveAt <- DateTimeOffset.UtcNow
+                            do! persistentState.WriteStateAsync()
+                            return true
             }
 
         member _.SwitchAgentAsync(agentName: string) : Task<bool> =
             task {
+                requireCurrentScope () |> ignore
+
                 match getWorkspace () with
                 | None -> return false
                 | Some workspace ->
@@ -836,6 +952,7 @@ type SessionGrain
 
         member _.SwitchConversationAsync(conversationName: string) : Task =
             task {
+                requireCurrentScope () |> ignore
                 persistentState.State.Info.ActiveConversation <- conversationName
                 getOrCreateConversation conversationName |> ignore
                 persistentState.State.Info.LastActiveAt <- DateTimeOffset.UtcNow
@@ -843,22 +960,27 @@ type SessionGrain
             }
 
         member _.ListConversationsAsync() : Task<string array> =
+            requireCurrentScope () |> ignore
+
             persistentState.State.Conversations
             |> Seq.map (fun c -> c.Name)
             |> Seq.toArray
             |> Task.FromResult
 
         member _.GetInfoAsync() : Task<SessionInfo> =
+            requireCurrentScope () |> ignore
             Task.FromResult(persistentState.State.Info)
 
         member _.GetHistoryAsync() : Task<MessageRecord array> =
             task {
+                requireCurrentScope () |> ignore
                 do! restoreActiveConversationAsync ()
                 return activeConversation().Messages |> Seq.toArray
             }
 
         member this.ClearHistoryAsync() : Task =
             task {
+                requireCurrentScope () |> ignore
                 let ctx = activeConversation ()
                 ctx.Messages.Clear()
                 let grainKey = this.GetPrimaryKeyString()
@@ -869,6 +991,8 @@ type SessionGrain
 
         member _.SaveMemoryAsync(key: string, value: string) : Task =
             task {
+                requireCurrentScope () |> ignore
+
                 let entry =
                     { Key = key
                       Value = value
@@ -880,12 +1004,15 @@ type SessionGrain
 
         member _.RecallMemoryAsync(key: string) : Task<MemoryEntry array> =
             task {
+                requireCurrentScope () |> ignore
                 let! entries = memoryStore.RecallAsync (memoryOwner ()) key
                 return entries |> List.toArray
             }
 
         member _.ClearMemoriesAsync() : Task =
             task {
+                requireCurrentScope () |> ignore
+
                 match! memoryStore.DeleteOwnerAsync(memoryOwner ()) with
                 | Ok _ -> return ()
                 | Error failure -> return PlatformFailure.raiseException failure
@@ -893,12 +1020,14 @@ type SessionGrain
 
         member _.PauseAsync() : Task =
             task {
+                requireCurrentScope () |> ignore
                 persistentState.State.Info.IsActive <- false
                 do! persistentState.WriteStateAsync()
             }
 
         member _.ResumeAsync() : Task =
             task {
+                requireCurrentScope () |> ignore
                 persistentState.State.Info.IsActive <- true
                 persistentState.State.Info.LastActiveAt <- DateTimeOffset.UtcNow
                 do! persistentState.WriteStateAsync()
@@ -906,6 +1035,7 @@ type SessionGrain
 
         member this.DestroyAsync() : Task =
             task {
+                requireCurrentScope () |> ignore
                 let grainKey = this.GetPrimaryKeyString()
 
                 try

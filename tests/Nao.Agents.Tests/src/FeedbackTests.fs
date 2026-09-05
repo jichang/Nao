@@ -19,6 +19,9 @@ let private tempDir () =
     Directory.CreateDirectory d |> ignore
     d
 
+let private emptyTurn () =
+    TurnRecord.empty (CorrelationContext.root ())
+
 let private sqliteFactory () : DbConnectionFactory =
     let path =
         Path.Combine(Path.GetTempPath(), sprintf "nao-feedback-%s.db" (Guid.NewGuid().ToString("N")))
@@ -31,11 +34,14 @@ type TurnRecorderTests() =
 
     [<TestMethod>]
     member _.``Pairs tool invocations with their results in order``() =
-        let recorder = TurnRecorder.create ("t1", "s1", "u1", "ws", "agent", "hello")
+        let correlation = CorrelationContext.root ()
+
+        let recorder =
+            TurnRecorder.create ("t1", correlation, "s1", "u1", "ws", "agent", "hello")
+
         let consumer = recorder.Consumer
 
-        let scope =
-            EventScope.Create("u1", "s1", "", "ws", "t1", "u1/s1", CorrelationContext.root ())
+        let scope = EventScope.Create("u1", "s1", "", "ws", "t1", "u1/s1", correlation)
 
         let send signal =
             EventConsumer.handleAsync (NaoEvent.TurnProgress(scope, signal)) consumer
@@ -56,14 +62,18 @@ type TurnRecorderTests() =
         Assert.AreEqual("helper", snap.SubAgentCalls.[0].Name)
         Assert.AreEqual("subtask", snap.SubAgentCalls.[0].Input)
         Assert.AreEqual("final answer", snap.Output)
+        Assert.AreEqual(correlation, snap.Correlation)
 
     [<TestMethod>]
     member _.``Records tool calls from progress events``() =
-        let recorder = TurnRecorder.create ("t1", "s1", "u1", "ws", "agent", "hi")
+        let correlation = CorrelationContext.root ()
+
+        let recorder =
+            TurnRecorder.create ("t1", correlation, "s1", "u1", "ws", "agent", "hi")
+
         let consumer = recorder.Consumer
 
-        let scope =
-            EventScope.Create("u1", "s1", "", "ws", "t1", "u1/s1", CorrelationContext.root ())
+        let scope = EventScope.Create("u1", "s1", "", "ws", "t1", "u1/s1", correlation)
 
         let send signal =
             EventConsumer.handleAsync (NaoEvent.TurnProgress(scope, signal)) consumer
@@ -84,7 +94,7 @@ type FileStoreTests() =
             let store = FileTurnStore.create dir
 
             let turn =
-                { TurnRecord.Empty with
+                { emptyTurn () with
                     TurnId = "t1"
                     SessionId = "s1"
                     ToolCalls =
@@ -107,6 +117,8 @@ type FileStoreTests() =
             Assert.AreEqual("search", loaded.Value.ToolCalls.[0].Name)
             let! forSession = store.GetForSessionAsync "s1"
             Assert.AreEqual(1, forSession.Length, "The latest TurnId is the authoritative logical record")
+            let! forExecution = store.GetForExecutionAsync turn.Correlation.ExecutionId
+            Assert.AreEqual([ turn.Correlation ], forExecution |> List.map _.Correlation)
         })
             .GetAwaiter()
             .GetResult()
@@ -118,7 +130,7 @@ type FileStoreTests() =
         let invalid: TurnStoreEnvelope =
             { SchemaVersion = 2
               Kind = "turn.upsert"
-              Record = Some TurnRecord.Empty
+              Record = Some(emptyTurn ())
               SessionId = None
               Before = None }
 
@@ -141,7 +153,7 @@ type FileStoreTests() =
 
         let error =
             Assert.ThrowsExactly<InvalidDataException>(fun () ->
-                store.SaveAsync TurnRecord.Empty |> _.GetAwaiter().GetResult())
+                store.SaveAsync(emptyTurn ()) |> _.GetAwaiter().GetResult())
 
         StringAssert.Contains(error.Message, path)
         StringAssert.Contains(error.Message, "line 1")
@@ -171,7 +183,7 @@ type TurnStoreLifecycleTests() =
             let otherCount = Random.Shared.Next(1, 5)
 
             let turn sessionId timestamp =
-                { TurnRecord.Empty with
+                { emptyTurn () with
                     TurnId = Guid.NewGuid().ToString("N")
                     SessionId = sessionId
                     CreatedAt = timestamp }
@@ -219,7 +231,7 @@ type DatabaseStoreTests() =
             let store = AdoTurnStore.create factory
 
             let turn =
-                { TurnRecord.Empty with
+                { emptyTurn () with
                     TurnId = "t1"
                     SessionId = "s1"
                     ToolCalls =
@@ -236,6 +248,8 @@ type DatabaseStoreTests() =
             Assert.AreEqual("search", loaded.Value.ToolCalls.[0].Name)
             let! forSession = store.GetForSessionAsync "s1"
             Assert.AreEqual(1, forSession.Length)
+            let! forExecution = store.GetForExecutionAsync turn.Correlation.ExecutionId
+            Assert.AreEqual([ turn.Correlation ], forExecution |> List.map _.Correlation)
         })
             .GetAwaiter()
             .GetResult()
@@ -403,7 +417,7 @@ type FeedbackServiceTests() =
             let svc = inMemory ()
 
             let turn =
-                { TurnRecord.Empty with
+                { emptyTurn () with
                     TurnId = "t1"
                     SessionId = "s1"
                     ToolCalls =

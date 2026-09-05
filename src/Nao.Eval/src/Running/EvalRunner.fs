@@ -39,14 +39,15 @@ module EvalRunner =
     let runCaseAsync (run: EvalRun) (evaluator: Evaluator) (agent: Agent) (case: EvalCase) : Task<EvalResult> =
         task {
             let sw = Stopwatch.StartNew()
-            let! output = Agent.runAsync (AgentContext.allowAll ()) case.Input agent
+            let context = AgentContext.allowAll ()
+            let! output = Agent.runAsync context case.Input agent
             sw.Stop()
 
-            let! (verdict, reason) = evaluator.EvaluateAsync case output
+            let! (verdict, reason) = evaluator.EvaluateAsync context.Correlation case output
 
             // Capture execution trace for the agent call
             let trace =
-                Verification.startTrace agent.Metadata.Id case.Input
+                Verification.startTrace context.Correlation agent.Metadata.Id case.Input
                 |> Verification.addStep (TraceAction.LlmCall "unknown") case.Input output sw.ElapsedMilliseconds
                 |> Verification.complete output
 
@@ -55,6 +56,7 @@ module EvalRunner =
                    Owner = run.Owner
                    DatasetId = run.DatasetId
                    RunId = run.Id
+                   ExecutionId = context.Correlation.ExecutionId
                    CaseId = case.Id
                    ActualOutput = output
                    Verdict = verdict
@@ -70,16 +72,18 @@ module EvalRunner =
     let runCaseLightAsync (run: EvalRun) (evaluator: Evaluator) (agent: Agent) (case: EvalCase) : Task<EvalResult> =
         task {
             let sw = Stopwatch.StartNew()
-            let! output = Agent.runAsync (AgentContext.allowAll ()) case.Input agent
+            let context = AgentContext.allowAll ()
+            let! output = Agent.runAsync context case.Input agent
             sw.Stop()
 
-            let! (verdict, reason) = evaluator.EvaluateAsync case output
+            let! (verdict, reason) = evaluator.EvaluateAsync context.Correlation case output
 
             return
                 ({ Id = Guid.NewGuid()
                    Owner = run.Owner
                    DatasetId = run.DatasetId
                    RunId = run.Id
+                   ExecutionId = context.Correlation.ExecutionId
                    CaseId = case.Id
                    ActualOutput = output
                    Verdict = verdict

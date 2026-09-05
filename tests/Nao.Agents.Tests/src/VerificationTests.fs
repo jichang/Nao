@@ -10,10 +10,12 @@ open Nao.Persistence
 type VerificationTests() =
 
     let agentId = "test-agent"
+    let correlation = CorrelationContext.root ()
 
     [<TestMethod>]
     member _.StartTraceCreatesNewTrace() =
-        let trace = Verification.startTrace agentId "user input"
+        let trace = Verification.startTrace correlation agentId "user input"
+        Assert.AreEqual(correlation, trace.Correlation)
         Assert.AreEqual(agentId, trace.AgentId)
         Assert.AreEqual("user input", trace.Input)
         Assert.IsTrue(trace.Output.IsNone)
@@ -22,7 +24,7 @@ type VerificationTests() =
 
     [<TestMethod>]
     member _.AddStepAppendsToTrace() =
-        let trace = Verification.startTrace agentId "input"
+        let trace = Verification.startTrace correlation agentId "input"
 
         let updated =
             trace
@@ -36,7 +38,7 @@ type VerificationTests() =
 
     [<TestMethod>]
     member _.CompleteMarksSuccess() =
-        let trace = Verification.startTrace agentId "input"
+        let trace = Verification.startTrace correlation agentId "input"
         let completed = trace |> Verification.complete "final answer"
         Assert.IsTrue(completed.Success)
         Assert.AreEqual(Some "final answer", completed.Output)
@@ -44,11 +46,46 @@ type VerificationTests() =
 
     [<TestMethod>]
     member _.FailMarksFailure() =
-        let trace = Verification.startTrace agentId "input"
+        let trace = Verification.startTrace correlation agentId "input"
         let failed = trace |> Verification.fail "something broke"
         Assert.IsFalse(failed.Success)
         Assert.AreEqual(Some "something broke", failed.Output)
         Assert.IsTrue(failed.CompletedAt.IsSome)
+
+    [<TestMethod>]
+    member _.LlmJudgeUsesTraceCorrelation() =
+        let observed = ref None
+
+        let provider =
+            LlmProvider.create (fun () -> "capturing") (fun actual _conversation _options ->
+                observed.Value <- Some actual
+                Task.FromResult(CompletionResult.create "PASS: verified" "stop" None None))
+
+        let trace =
+            Verification.startTrace correlation agentId "input"
+            |> Verification.complete "output"
+
+        let judge = LlmJudge.create provider CompletionOptions.Default [ "correctness" ]
+        let result = Judge.judgeAsync trace judge |> _.Result
+
+        Assert.AreEqual(JudgementVerdict.Pass, result.Verdict)
+        Assert.AreEqual(Some correlation, observed.Value)
+
+    [<TestMethod>]
+    member _.GroundTaskUsesSuppliedCorrelation() =
+        let observed = ref None
+
+        let provider =
+            LlmProvider.create (fun () -> "capturing") (fun actual _conversation _options ->
+                observed.Value <- Some actual
+                Task.FromResult(CompletionResult.create "understood" "stop" None None))
+
+        let result =
+            Verification.groundTaskAsync correlation provider CompletionOptions.Default "do the work"
+            |> _.Result
+
+        Assert.AreEqual(Some "understood", result.Understanding)
+        Assert.AreEqual(Some correlation, observed.Value)
 
     [<TestMethod>]
     member _.CheckReadinessAllPass() =
@@ -131,10 +168,11 @@ type RegressionTests() =
 
     let agentId = "test"
 
-    let makeTrace success steps duration =
+    let makeTrace success steps duration : ExecutionTrace =
         let startedAt = DateTimeOffset.UtcNow.AddMilliseconds(-duration)
 
         { Id = Guid.NewGuid()
+          Correlation = CorrelationContext.root ()
           AgentId = agentId
           Input = "test"
           Output = Some "result"

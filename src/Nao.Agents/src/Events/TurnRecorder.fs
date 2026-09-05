@@ -21,8 +21,15 @@ type TurnRecorder =
 module TurnRecorder =
 
     let create
-        (turnId: string, sessionId: string, userId: string, workspaceKey: string, agentName: string, input: string)
-        =
+        (
+            turnId: string,
+            correlation: CorrelationContext,
+            sessionId: string,
+            userId: string,
+            workspaceKey: string,
+            agentName: string,
+            input: string
+        ) =
 
         let sync = obj ()
         let toolCalls = ResizeArray<ToolCallRecord>()
@@ -57,6 +64,7 @@ module TurnRecorder =
         let snapshot () : TurnRecord =
             lock sync (fun () ->
                 { TurnId = turnId
+                  Correlation = correlation
                   SessionId = sessionId
                   UserId = userId
                   WorkspaceKey = workspaceKey

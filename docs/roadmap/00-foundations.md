@@ -107,17 +107,17 @@ Nao currently makes no backward-compatibility or rolling-upgrade promise. The mi
 
 - [x] Define typed identifiers for tenant, group, user, workspace, session, turn, execution, artifact, source, and trace.
 - [x] Define identifier generation, uniqueness, parsing, and serialization rules.
-- [ ] Propagate correlation identifiers through agents, tools, providers, memory, persistence, telemetry, and evaluation.
+- [x] Propagate correlation identifiers through agents, tools, providers, memory, persistence, telemetry, and evaluation.
 - [x] Define causation and correlation links for delegation and retries.
-- [ ] Prevent externally supplied identifiers from escaping authorization scope.
+- [x] Prevent externally supplied identifiers from escaping authorization scope.
 
 **Acceptance criteria**
 
-- [ ] One execution can be reconstructed across all participating components.
+- [x] One execution can be reconstructed across all participating components.
 - [x] Retries retain causation while receiving distinct attempt identities.
 - [x] Identifier-based cross-tenant access tests fail closed.
 
-Core typed identifiers and canonical codecs are implemented, and the Orleans registry now consumes the core `WorkspaceId` rather than defining a runtime-local duplicate. `SecurityPrincipal` and `AuthorizationScope` bind tenant, group, user, workspace, and optional session identity; cross-tenant and unauthorized-group tests fail closed. A session turn propagates one `CorrelationContext` through event scopes, harness execution, agents, tools, audit persistence, and publishing observability services. Orleans principal integration and provider, memory, broader persistence, and evaluation correlation remain open; therefore FND-06 remains open.
+Core typed identifiers and canonical codecs are implemented, and the Orleans registry now consumes the core `WorkspaceId` rather than defining a runtime-local duplicate. `SecurityPrincipal` and `AuthorizationScope` bind tenant, group, user, workspace, and optional session identity; cross-tenant and unauthorized-group tests fail closed. Orleans session grains derive scope from a host-injected principal, persist tenant/user/group/workspace/session lineage, and revalidate it before every state operation. A session turn propagates one `CorrelationContext` through event scopes, harness execution, agents, tools, provider requests, audit and execution-journal persistence, execution traces, verification judges, and publishing observability services. Working memory uses typed execution ownership; summarization, compaction, consolidation, and task grounding require and forward caller correlation. Evaluation runners propagate the same correlation through evaluators and LLM judges, and each result retains that execution ID. Conversation, turn, metric, journal, execution-trace, low-level span, audit, working-memory, and evaluation records support typed execution reconstruction; an end-to-end file-reload test proves that one harness execution converges across its participating stores. FND-06 is complete.
 
 ## FND-07 — Architecture decision and documentation process
 

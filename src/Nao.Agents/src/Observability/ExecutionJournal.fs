@@ -7,6 +7,7 @@ open System.Threading.Tasks
 /// A record of a single tool execution (immutable, for journaling)
 type ExecutionRecord =
     { Id: Guid
+      Correlation: CorrelationContext
       Owner: string
       TurnId: string
       ToolName: string
@@ -20,6 +21,7 @@ type ExecutionRecord =
 type ExecutionJournal =
     { RecordAsync: ExecutionRecord -> Task
       GetHistoryAsync: unit -> Task<ExecutionRecord list>
+      GetByExecutionAsync: ExecutionId -> Task<ExecutionRecord list>
       GetRevertibleAsync: unit -> Task<ExecutionRecord list>
       MarkRevertedAsync: Guid -> Task
       DeleteOwnerAsync: string -> Task<Result<int, PlatformFailure>>

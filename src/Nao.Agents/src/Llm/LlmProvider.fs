@@ -5,8 +5,13 @@ open System.Threading.Tasks
 /// Immutable functional capability for invoking a language model.
 type LlmProvider =
     { Name: unit -> string
-      CompleteAsync: Conversation -> CompletionOptions -> Task<CompletionResult>
-      StreamAsync: (Conversation -> CompletionOptions -> (CompletionChunk -> unit) -> Task<CompletionResult>) option
+      CompleteAsync: CorrelationContext -> Conversation -> CompletionOptions -> Task<CompletionResult>
+      StreamAsync:
+          (CorrelationContext
+              -> Conversation
+              -> CompletionOptions
+              -> (CompletionChunk -> unit)
+              -> Task<CompletionResult>) option
       Dispose: unit -> unit }
 
 [<RequireQualifiedAccess>]
@@ -22,16 +27,16 @@ module LlmProvider =
     let name (provider: LlmProvider) = provider.Name()
 
     /// Request a buffered completion.
-    let completeAsync conversation options (provider: LlmProvider) =
-        provider.CompleteAsync conversation options
+    let completeAsync correlation conversation options (provider: LlmProvider) =
+        provider.CompleteAsync correlation conversation options
 
     /// Stream a completion when supported, otherwise emit one buffered chunk.
-    let streamAsync (provider: LlmProvider) conversation options onChunk =
+    let streamAsync (provider: LlmProvider) correlation conversation options onChunk =
         match provider.StreamAsync with
-        | Some stream -> stream conversation options onChunk
+        | Some stream -> stream correlation conversation options onChunk
         | None ->
             task {
-                let! result = provider.CompleteAsync conversation options
+                let! result = provider.CompleteAsync correlation conversation options
 
                 onChunk (
                     CompletionChunk.create result.Content (Some result.FinishReason) result.TokensUsed result.Usage

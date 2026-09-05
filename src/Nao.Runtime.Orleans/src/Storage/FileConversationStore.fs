@@ -6,6 +6,7 @@ open System.Text
 open System.Text.Json
 open System.Text.Json.Serialization
 open System.Threading.Tasks
+open FSharp.SystemTextJson
 
 /// File-based conversation store.
 /// Layout:
@@ -33,6 +34,11 @@ module FileConversationStore =
     let jsonOptions =
         let opts = JsonSerializerOptions(WriteIndented = false)
         opts.DefaultIgnoreCondition <- JsonIgnoreCondition.WhenWritingNull
+
+        opts.Converters.Add(
+            JsonFSharpConverter(JsonUnionEncoding.InternalTag ||| JsonUnionEncoding.UnwrapFieldlessTags)
+        )
+
         opts
 
     let private sessionDir (baseDir: string) (sessionId: string) =
@@ -213,6 +219,18 @@ module FileConversationStore =
         let loadAsync (sessionId: string) (conversationName: string) =
             task { return readMessages baseDir sessionId conversationName }
 
+        let loadByExecutionAsync executionId =
+            task {
+                if Directory.Exists baseDir then
+                    return
+                        Directory.GetFiles(baseDir, "messages.json", SearchOption.AllDirectories)
+                        |> Array.collect (deserializeDocument<PersistedMessage array> "Conversation messages")
+                        |> Array.filter (fun message -> message.Correlation.ExecutionId = executionId)
+                        |> Array.sortBy _.Timestamp
+                else
+                    return [||]
+            }
+
         let listConversationsAsync (sessionId: string) =
             task {
                 let path = indexPath baseDir sessionId
@@ -264,6 +282,7 @@ module FileConversationStore =
         { AppendAsync = appendAsync
           SaveAsync = saveAsync
           LoadAsync = loadAsync
+          LoadByExecutionAsync = loadByExecutionAsync
           ListConversationsAsync = listConversationsAsync
           ListSessionsAsync = listSessionsAsync
           DeleteConversationAsync = deleteConversationAsync

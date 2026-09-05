@@ -35,7 +35,7 @@ module DemoAgent =
                 let userMsg = { Role = User; Content = input }
                 let conv1 = [ systemMsg; userMsg ]
 
-                let! result = provider.CompleteAsync conv1 CompletionOptions.Default
+                let! result = provider.CompleteAsync (CorrelationContext.root ()) conv1 CompletionOptions.Default
 
                 let assistantMsg =
                     { Role = Assistant
@@ -59,7 +59,10 @@ module DemoAgent =
                               Content = "tool_result: " + toolResult }
 
                         let conv3 = conv2 @ [ toolMsg ]
-                        let! finalResult = provider.CompleteAsync conv3 CompletionOptions.Default
+
+                        let! finalResult =
+                            provider.CompleteAsync (CorrelationContext.root ()) conv3 CompletionOptions.Default
+
                         return finalResult.Content
                     | None -> return "Unknown tool: " + toolName
                 | None -> return result.Content

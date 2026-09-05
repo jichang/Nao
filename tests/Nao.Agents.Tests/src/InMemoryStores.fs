@@ -32,6 +32,13 @@ module InMemoryTurnStore =
                 |> List.ofSeq)
             |> Task.FromResult
 
+        let getForExecutionAsync executionId =
+            lock sync (fun () ->
+                items.Values
+                |> Seq.filter (fun turn -> turn.Correlation.ExecutionId = executionId)
+                |> List.ofSeq)
+            |> Task.FromResult
+
         let delete (predicate: TurnRecord -> bool) =
             lock sync (fun () ->
                 let keys =
@@ -65,6 +72,7 @@ module InMemoryTurnStore =
         { SaveAsync = saveAsync
           GetAsync = getAsync
           GetForSessionAsync = getForSessionAsync
+          GetForExecutionAsync = getForExecutionAsync
           DeleteSessionAsync = deleteSessionAsync
           DeleteExpiredAsync = deleteExpiredAsync }
 

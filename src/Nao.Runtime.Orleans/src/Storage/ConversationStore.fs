@@ -44,6 +44,8 @@ type PersistedMessage =
         Role: string
         Content: string
         Timestamp: DateTimeOffset
+        /// Execution identity, correlation, causation, and attempt for this message.
+        Correlation: CorrelationContext
         /// Turn this message belongs to.
         TurnId: string
         /// Process steps for an assistant turn (empty for user messages).
@@ -76,6 +78,9 @@ type ConversationStore =
 
         /// Load the full conversation history for a session+conversation
         LoadAsync: string -> string -> Task<PersistedMessage array>
+
+        /// Load every message produced by one execution
+        LoadByExecutionAsync: ExecutionId -> Task<PersistedMessage array>
 
         /// List all conversations for a session
         ListConversationsAsync: string -> Task<ConversationMeta array>

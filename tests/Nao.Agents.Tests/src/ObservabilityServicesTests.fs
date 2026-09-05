@@ -50,9 +50,10 @@ type ObservabilityServicesTests() =
         let root = tempDir ()
         let bus = InMemoryEventBus.create ()
         let observability = ObservabilityServices.create bus (backingFactory root)
+        let correlation = CorrelationContext.root ()
 
-        let services = observability.ServicesFor "dev/s1" "" (CorrelationContext.root ())
-        services.Metrics.Value.Record(MetricRecord.llmCall "dev/s1" DateTimeOffset.UtcNow 10 20 5L)
+        let services = observability.ServicesFor "dev/s1" "" correlation
+        services.Metrics.Value.Record(MetricRecord.llmCall correlation "dev/s1" DateTimeOffset.UtcNow 10 20 5L)
 
         // The write still reaches the real backing store (reads stay correct).
         let expected = Path.Combine(root, "dev_s1", "observability", "metrics.jsonl")
@@ -65,9 +66,10 @@ type ObservabilityServicesTests() =
         let consumer, _, signals = obsRecordingConsumer ()
         EventBus.subscribe consumer bus
         let observability = ObservabilityServices.create bus (backingFactory root)
+        let correlation = CorrelationContext.root ()
 
-        let services = observability.ServicesFor "dev/s1" "" (CorrelationContext.root ())
-        services.Metrics.Value.Record(MetricRecord.llmCall "dev/s1" DateTimeOffset.UtcNow 10 20 5L)
+        let services = observability.ServicesFor "dev/s1" "" correlation
+        services.Metrics.Value.Record(MetricRecord.llmCall correlation "dev/s1" DateTimeOffset.UtcNow 10 20 5L)
 
         // The write is teed to the bus as an ObservabilityCaptured event.
         match signals () with
@@ -84,9 +86,10 @@ type ObservabilityServicesTests() =
         let consumer, received, _ = obsRecordingConsumer ()
         EventBus.subscribe consumer bus
         let observability = ObservabilityServices.create bus (backingFactory root)
+        let correlation = CorrelationContext.root ()
 
-        (observability.ServicesFor "dev/s1" "" (CorrelationContext.root ()))
-            .Metrics.Value.Record(MetricRecord.toolCall "dev/s1" DateTimeOffset.UtcNow "search" 3L true)
+        (observability.ServicesFor "dev/s1" "" correlation)
+            .Metrics.Value.Record(MetricRecord.toolCall correlation "dev/s1" DateTimeOffset.UtcNow "search" 3L true)
 
         match List.ofSeq received with
         | [ ObservabilityCaptured(scope, MetricRecorded { Payload = MetricPayload.ToolCall("search", 3L, true) }) ] ->
@@ -105,7 +108,7 @@ type ObservabilityServicesTests() =
         let correlation = CorrelationContext.root ()
 
         (observability.ServicesFor "dev/s1" "turn-1" correlation)
-            .Metrics.Value.Record(MetricRecord.toolCall "dev/s1" DateTimeOffset.UtcNow "search" 3L true)
+            .Metrics.Value.Record(MetricRecord.toolCall correlation "dev/s1" DateTimeOffset.UtcNow "search" 3L true)
 
         match List.ofSeq received with
         | [ ObservabilityCaptured(scope, MetricRecorded _) ] -> Assert.AreEqual(correlation, scope.Correlation)
@@ -116,12 +119,14 @@ type ObservabilityServicesTests() =
         let root = tempDir ()
         let bus = InMemoryEventBus.create ()
         let observability = ObservabilityServices.create bus (backingFactory root)
+        let correlation1 = CorrelationContext.root ()
+        let correlation2 = CorrelationContext.root ()
 
-        (observability.ServicesFor "dev/s1" "" (CorrelationContext.root ()))
-            .Metrics.Value.Record(MetricRecord.llmCall "dev/s1" DateTimeOffset.UtcNow 1 1 1L)
+        (observability.ServicesFor "dev/s1" "" correlation1)
+            .Metrics.Value.Record(MetricRecord.llmCall correlation1 "dev/s1" DateTimeOffset.UtcNow 1 1 1L)
 
-        (observability.ServicesFor "dev/s2" "" (CorrelationContext.root ()))
-            .Metrics.Value.Record(MetricRecord.llmCall "dev/s2" DateTimeOffset.UtcNow 1 1 1L)
+        (observability.ServicesFor "dev/s2" "" correlation2)
+            .Metrics.Value.Record(MetricRecord.llmCall correlation2 "dev/s2" DateTimeOffset.UtcNow 1 1 1L)
 
         Assert.IsTrue(File.Exists(Path.Combine(root, "dev_s1", "observability", "metrics.jsonl")))
         Assert.IsTrue(File.Exists(Path.Combine(root, "dev_s2", "observability", "metrics.jsonl")))

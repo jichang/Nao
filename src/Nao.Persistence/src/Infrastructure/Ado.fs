@@ -154,7 +154,7 @@ module AdoSchema =
                 message
         )
 
-    let ensureVersionedTable factory schemaKey tableName createTableSql =
+    let ensureVersionedTableVersion factory schemaKey expectedVersion tableName createTableSql =
         task {
             let! markerExists = tableExists factory MarkerTable
             let! dataTableExists = tableExists factory tableName
@@ -174,12 +174,12 @@ module AdoSchema =
                         raise (invalid schemaKey (sprintf "has an invalid schema marker: %s." ex.Message))
 
                 match versions with
-                | [ version ] when version = CurrentVersion && dataTableExists -> ()
-                | [ version ] when version <> CurrentVersion ->
+                | [ version ] when version = expectedVersion && dataTableExists -> ()
+                | [ version ] when version <> expectedVersion ->
                     raise (
                         invalid
                             schemaKey
-                            (sprintf "uses unsupported schema version %d; expected %d." version CurrentVersion)
+                            (sprintf "uses unsupported schema version %d; expected %d." version expectedVersion)
                     )
                 | [ _ ] -> raise (invalid schemaKey (sprintf "is missing its '%s' table." tableName))
                 | [] when dataTableExists ->
@@ -191,7 +191,7 @@ module AdoSchema =
                             [ sprintf
                                   "INSERT INTO %s (component, schema_version) VALUES (@component, @version)"
                                   MarkerTable,
-                              [ "@component", box schemaKey; "@version", box CurrentVersion ]
+                              [ "@component", box schemaKey; "@version", box expectedVersion ]
                               createTableSql, [] ]
                 | _ -> raise (invalid schemaKey "has duplicate schema markers.")
             else
@@ -203,6 +203,9 @@ module AdoSchema =
                               MarkerTable,
                           []
                           sprintf "INSERT INTO %s (component, schema_version) VALUES (@component, @version)" MarkerTable,
-                          [ "@component", box schemaKey; "@version", box CurrentVersion ]
+                          [ "@component", box schemaKey; "@version", box expectedVersion ]
                           createTableSql, [] ]
         }
+
+    let ensureVersionedTable factory schemaKey tableName createTableSql =
+        ensureVersionedTableVersion factory schemaKey CurrentVersion tableName createTableSql

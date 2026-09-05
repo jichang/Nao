@@ -34,25 +34,29 @@ type MetricPayload =
 /// Durable identity and ownership for a metric observation.
 type MetricRecord =
     { Id: Guid
+      Correlation: CorrelationContext
       Owner: string
       Timestamp: DateTimeOffset
       Payload: MetricPayload }
 
 module MetricRecord =
-    let llmCall owner timestamp inputTokens outputTokens latencyMs : MetricRecord =
+    let llmCall correlation owner timestamp inputTokens outputTokens latencyMs : MetricRecord =
         { Id = Guid.NewGuid()
+          Correlation = correlation
           Owner = owner
           Timestamp = timestamp
           Payload = MetricPayload.LlmCall(inputTokens, outputTokens, latencyMs) }
 
-    let toolCall owner timestamp toolName durationMs success : MetricRecord =
+    let toolCall correlation owner timestamp toolName durationMs success : MetricRecord =
         { Id = Guid.NewGuid()
+          Correlation = correlation
           Owner = owner
           Timestamp = timestamp
           Payload = MetricPayload.ToolCall(toolName, durationMs, success) }
 
-    let custom owner timestamp point : MetricRecord =
+    let custom correlation owner timestamp point : MetricRecord =
         { Id = Guid.NewGuid()
+          Correlation = correlation
           Owner = owner
           Timestamp = timestamp
           Payload = MetricPayload.Custom point }
@@ -113,6 +117,8 @@ type MetricsCollector =
         Record: MetricRecord -> unit
         /// Get aggregated metrics for one owner
         GetMetrics: string -> ExecutionMetrics
+        /// Get observations produced by one execution
+        GetByExecution: ExecutionId -> MetricRecord list
         /// Calculate one owner's cost using a cost model
         EstimateCost: string -> CostModel -> decimal
         /// Delete every metric observation owned by one scope

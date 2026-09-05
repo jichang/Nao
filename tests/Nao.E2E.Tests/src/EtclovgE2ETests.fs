@@ -1,6 +1,7 @@
 namespace Nao.E2E.Tests
 
 open System
+open System.IO
 open System.Text.Json
 open System.Threading.Tasks
 open Microsoft.VisualStudio.TestTools.UnitTesting
@@ -62,33 +63,35 @@ module EtclovgMockProvider =
     let create () =
         let mutable callCount = 0
 
-        LlmProvider.create (fun () -> "EtclovgMock") (fun (conversation: Conversation) (_options: CompletionOptions) ->
-            callCount <- callCount + 1
+        LlmProvider.create
+            (fun () -> "EtclovgMock")
+            (fun _ (conversation: Conversation) (_options: CompletionOptions) ->
+                callCount <- callCount + 1
 
-            let lastMsg =
-                conversation
-                |> List.tryFindBack (fun message -> message.Role = User)
-                |> Option.map (fun message -> message.Content)
-                |> Option.defaultValue ""
+                let lastMsg =
+                    conversation
+                    |> List.tryFindBack (fun message -> message.Role = User)
+                    |> Option.map (fun message -> message.Content)
+                    |> Option.defaultValue ""
 
-            let response =
-                if lastMsg.Contains("[Tool Result") || lastMsg.Contains("[Agent Result") then
-                    let result = lastMsg.Split("]:") |> Array.last |> (fun value -> value.Trim())
-                    sprintf "Based on the data: %s" result
-                elif lastMsg.Contains("stock") || lastMsg.Contains("price") then
-                    """{"action":"tool","name":"get_stock_price","input":"AAPL"}"""
-                elif lastMsg.Contains("email") || lastMsg.Contains("send") then
-                    """{"action":"tool","name":"send_email","input":"team@company.com|Update|Project is on track"}"""
-                elif lastMsg.Contains("search") || lastMsg.Contains("docs") then
-                    """{"action":"tool","name":"search_docs","input":"deployment guide"}"""
-                elif lastMsg.Contains("delete") then
-                    """{"action":"tool","name":"delete_all_data","input":"confirm"}"""
-                elif lastMsg.Contains("delegate") || lastMsg.Contains("specialist") then
-                    """{"action":"delegate","name":"research-agent","input":"find latest trends"}"""
-                else
-                    sprintf "I understand your request: %s. Here's my response." lastMsg
+                let response =
+                    if lastMsg.Contains("[Tool Result") || lastMsg.Contains("[Agent Result") then
+                        let result = lastMsg.Split("]:") |> Array.last |> (fun value -> value.Trim())
+                        sprintf "Based on the data: %s" result
+                    elif lastMsg.Contains("stock") || lastMsg.Contains("price") then
+                        """{"action":"tool","name":"get_stock_price","input":"AAPL"}"""
+                    elif lastMsg.Contains("email") || lastMsg.Contains("send") then
+                        """{"action":"tool","name":"send_email","input":"team@company.com|Update|Project is on track"}"""
+                    elif lastMsg.Contains("search") || lastMsg.Contains("docs") then
+                        """{"action":"tool","name":"search_docs","input":"deployment guide"}"""
+                    elif lastMsg.Contains("delete") then
+                        """{"action":"tool","name":"delete_all_data","input":"confirm"}"""
+                    elif lastMsg.Contains("delegate") || lastMsg.Contains("specialist") then
+                        """{"action":"delegate","name":"research-agent","input":"find latest trends"}"""
+                    else
+                        sprintf "I understand your request: %s. Here's my response." lastMsg
 
-            Task.FromResult(CompletionResult.create response "stop" (Some 150) None))
+                Task.FromResult(CompletionResult.create response "stop" (Some 150) None))
 
     let createOrchestrator tools =
         let parseActions (response: string) =
@@ -281,7 +284,8 @@ type EtclovgContextMemoryTests() =
 
         // Apply drop-oldest strategy with tight budget
         let result =
-            (ContextCompaction.applyAsync CompactionStrategy.DropOldest 200 conversation).Result
+            (ContextCompaction.applyAsync (CorrelationContext.root ()) CompactionStrategy.DropOldest 200 conversation)
+                .Result
 
         Assert.IsTrue(result.MessagesRemoved > 0)
         Assert.IsTrue(result.TokensSaved > 0)
@@ -400,9 +404,10 @@ type EtclovgObservabilityTests() =
     [<TestMethod>]
     member _.DistributedTracingAcrossAgentCalls() =
         let tracer = InMemory.tracer ()
+        let correlation = CorrelationContext.root ()
 
         // Root span: user request arrives
-        let rootSpan = tracer.StartTrace("user-request")
+        let rootSpan = tracer.StartTrace correlation "user-request"
         tracer.SetAttributes rootSpan (Map.ofList [ "user.id", "alice"; "request.type", "stock-query" ])
 
         // Child span: orchestrator processing
@@ -446,12 +451,13 @@ type EtclovgObservabilityTests() =
         let metrics = InMemory.metrics ()
         let owner = "e2e/metrics"
         let startedAt = DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero)
+        let correlation = CorrelationContext.root ()
 
         // Simulate a multi-step agent execution
-        metrics.Record(MetricRecord.llmCall owner startedAt 500 200 150L) // First LLM call: routing decision
-        metrics.Record(MetricRecord.toolCall owner (startedAt.AddSeconds 1) "get_stock_price" 25L true)
-        metrics.Record(MetricRecord.llmCall owner (startedAt.AddSeconds 2) 800 300 200L) // Second LLM call: format response
-        metrics.Record(MetricRecord.llmCall owner (startedAt.AddSeconds 3) 200 100 100L) // Third: summarize
+        metrics.Record(MetricRecord.llmCall correlation owner startedAt 500 200 150L) // First LLM call: routing decision
+        metrics.Record(MetricRecord.toolCall correlation owner (startedAt.AddSeconds 1) "get_stock_price" 25L true)
+        metrics.Record(MetricRecord.llmCall correlation owner (startedAt.AddSeconds 2) 800 300 200L) // Second LLM call: format response
+        metrics.Record(MetricRecord.llmCall correlation owner (startedAt.AddSeconds 3) 200 100 100L) // Third: summarize
 
         let summary = metrics.GetMetrics owner
         Assert.AreEqual(3, summary.TotalLlmCalls)
@@ -565,7 +571,8 @@ type EtclovgVerificationTests() =
     [<TestMethod>]
     member _.ExecutionTraceCapturesFullHistory() =
         // Start a trace for an execution
-        let trace = Verification.startTrace agentId "What is AAPL stock price?"
+        let trace =
+            Verification.startTrace (CorrelationContext.root ()) agentId "What is AAPL stock price?"
 
         // Record each step
         let trace =
@@ -607,7 +614,7 @@ type EtclovgVerificationTests() =
 
         // Save a baseline trace (fast, 2 steps)
         let baseline =
-            Verification.startTrace agentId "get AAPL price"
+            Verification.startTrace (CorrelationContext.root ()) agentId "get AAPL price"
             |> Verification.addStep (TraceAction.LlmCall "model") "" "" 100L
             |> Verification.addStep (TraceAction.ToolInvocation "get_stock_price") "" "" 20L
             |> Verification.complete "$189.45"
@@ -621,7 +628,7 @@ type EtclovgVerificationTests() =
 
         // New execution is much slower with more steps
         let current =
-            Verification.startTrace agentId "get AAPL price"
+            Verification.startTrace (CorrelationContext.root ()) agentId "get AAPL price"
             |> Verification.addStep (TraceAction.LlmCall "model") "" "" 500L
             |> Verification.addStep (TraceAction.LlmCall "model") "" "" 300L
             |> Verification.addStep (TraceAction.LlmCall "model") "" "" 400L
@@ -1025,3 +1032,82 @@ type EtclovgFullIntegrationTests() =
         let traces = (traceStore.GetTracesAsync agentId 10).Result
         Assert.AreEqual(1, traces.Length)
         Assert.IsTrue(traces.[0].Success)
+
+    [<TestMethod>]
+    member _.OneExecutionReconstructsAcrossParticipatingStores() =
+        let root =
+            Path.Combine(Path.GetTempPath(), "nao-correlation-" + Guid.NewGuid().ToString("N"))
+
+        try
+            let tools = [ EtclovgDemoTools.stockPrice; EtclovgDemoTools.searchDocs ]
+            let orchestrator = EtclovgMockProvider.createOrchestrator tools
+            let correlation = CorrelationContext.root ()
+            let sessionKey = "e2e/correlation"
+            let turnId = "turn-correlation"
+            let tracer = Tracers.file root
+            let metrics = MetricsCollectors.file root
+            let journal = ExecutionJournals.file root
+            let traceStore = TraceStores.file root
+            let audit = AuditLogs.file root
+
+            let config =
+                { EtclovgConfig.Default with
+                    Execution =
+                        { SandboxConfig.Default with
+                            Limits = ResourceLimits.Constrained 30 20 50000 }
+                    Tracer = Some tracer
+                    Metrics = Some metrics
+                    ExecutionJournal = Some journal
+                    TraceStore = Some traceStore
+                    AuditLog = Some audit
+                    Scope =
+                        EventScope.Create("e2e", "correlation", "default", "workspace", turnId, sessionKey, correlation)
+                    Lifecycle = [ LifecycleHook.passthrough ] }
+
+            let context =
+                { (AgentContext.allowAll ()) with
+                    Correlation = correlation
+                    SessionKey = sessionKey
+                    TurnId = turnId }
+
+            let result =
+                EtclovgHarness.runAsync config context orchestrator "What is the stock price of AAPL?"
+                |> _.GetAwaiter().GetResult()
+
+            Assert.IsTrue(result.Success, sprintf "Failed: %A" result.HarnessError)
+            let executionId = result.Trace.Value.Correlation.ExecutionId
+            Assert.AreEqual(correlation.ExecutionId, executionId)
+
+            let spans = (Tracers.file root).GetByExecution executionId
+            let metricRecords = (MetricsCollectors.file root).GetByExecution executionId
+
+            let journalRecords =
+                (ExecutionJournals.file root).GetByExecutionAsync executionId |> _.Result
+
+            let traces = (TraceStores.file root).GetByExecutionAsync executionId |> _.Result
+
+            let auditEntries =
+                (AuditLogs.file root).QueryByExecutionAsync executionId |> _.Result
+
+            Assert.IsTrue(spans.Length > 0)
+            Assert.IsTrue(metricRecords.Length > 0)
+            Assert.IsTrue(journalRecords.Length > 0)
+            Assert.IsTrue(traces.Length > 0)
+            Assert.IsTrue(auditEntries.Length > 0)
+            Assert.IsTrue(spans |> List.forall (fun span -> span.Correlation.ExecutionId = executionId))
+
+            Assert.IsTrue(
+                metricRecords
+                |> List.forall (fun metric -> metric.Correlation.ExecutionId = executionId)
+            )
+
+            Assert.IsTrue(
+                journalRecords
+                |> List.forall (fun record -> record.Correlation.ExecutionId = executionId)
+            )
+
+            Assert.IsTrue(traces |> List.forall (fun trace -> trace.Correlation.ExecutionId = executionId))
+            Assert.IsTrue(auditEntries |> List.forall (fun entry -> entry.ExecutionId = Some executionId))
+        finally
+            if Directory.Exists root then
+                Directory.Delete(root, true)

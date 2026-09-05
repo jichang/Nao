@@ -113,7 +113,11 @@ let create (config: OllamaConfig) : LlmProvider =
 
     let providerName () = sprintf "Ollama(%s)" config.Model
 
-    let completeAsync (conversation: Conversation) (options: CompletionOptions) : Task<CompletionResult> =
+    let completeAsync
+        (_correlation: CorrelationContext)
+        (conversation: Conversation)
+        (options: CompletionOptions)
+        : Task<CompletionResult> =
         task {
             try
                 let body = buildRequestBody conversation options false
@@ -138,6 +142,7 @@ let create (config: OllamaConfig) : LlmProvider =
         }
 
     let streamAsync
+        (_correlation: CorrelationContext)
         (conversation: Conversation)
         (options: CompletionOptions)
         (onChunk: CompletionChunk -> unit)

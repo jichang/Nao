@@ -9,6 +9,7 @@ open Nao.Agents
 [<TestClass>]
 type ContextCompactionTests() =
 
+    let correlation = CorrelationContext.root ()
     let makeMsg role content = { Role = role; Content = content }
 
     [<TestMethod>]
@@ -44,7 +45,7 @@ type ContextCompactionTests() =
         let conv = [ for i in 1..20 -> makeMsg User (String.replicate 40 "a") ] // 10 tokens each = 200 total
 
         let result =
-            (ContextCompaction.applyAsync CompactionStrategy.DropOldest 50 conv).Result
+            (ContextCompaction.applyAsync correlation CompactionStrategy.DropOldest 50 conv).Result
 
         Assert.IsTrue(result.Compacted.Length <= 5)
         Assert.IsTrue(result.MessagesRemoved > 0)
@@ -59,9 +60,27 @@ type ContextCompactionTests() =
         // Keep only messages with content length > 5
         let scorer = fun (msg: Message) -> if msg.Content.Length > 5 then 1.0 else 0.0
         let strategy = CompactionStrategy.RelevanceFilter(scorer, 0.5)
-        let result = (ContextCompaction.applyAsync strategy 10000 conv).Result
+        let result = (ContextCompaction.applyAsync correlation strategy 10000 conv).Result
         Assert.AreEqual(2, result.Compacted.Length)
         Assert.AreEqual(2, result.MessagesRemoved)
+
+    [<TestMethod>]
+    member _.ApplyAsyncSummarizeUsesSuppliedCorrelation() =
+        let observed = ref None
+
+        let provider =
+            LlmProvider.create (fun () -> "capturing") (fun actual _conversation _options ->
+                observed.Value <- Some actual
+                Task.FromResult(CompletionResult.create "summary" "stop" None None))
+
+        let conversation = [ for _ in 1..10 -> makeMsg User (String.replicate 40 "x") ]
+        let strategy = CompactionStrategy.Summarize(provider, CompletionOptions.Default)
+
+        let result =
+            ContextCompaction.applyAsync correlation strategy 20 conversation |> _.Result
+
+        Assert.AreEqual(Some "summary", result.Summary)
+        Assert.AreEqual(Some correlation, observed.Value)
 
 [<TestClass>]
 type MemoryTierTests() =

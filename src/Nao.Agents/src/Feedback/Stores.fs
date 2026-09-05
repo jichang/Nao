@@ -28,6 +28,7 @@ type TurnStore =
     { SaveAsync: TurnRecord -> Task
       GetAsync: string -> Task<TurnRecord option>
       GetForSessionAsync: string -> Task<TurnRecord list>
+      GetForExecutionAsync: ExecutionId -> Task<TurnRecord list>
       DeleteSessionAsync: string -> Task<Result<int, PlatformFailure>>
       DeleteExpiredAsync: string -> DateTimeOffset -> Task<Result<int, PlatformFailure>> }
 

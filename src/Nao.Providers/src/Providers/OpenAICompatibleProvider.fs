@@ -126,7 +126,11 @@ let createWithHandler name baseUrl model apiKey timeoutSeconds (httpHandler: Htt
 
     let providerName () = sprintf "%s(%s)" name model
 
-    let completeAsync (conversation: Conversation) (options: CompletionOptions) : Task<CompletionResult> =
+    let completeAsync
+        (_correlation: CorrelationContext)
+        (conversation: Conversation)
+        (options: CompletionOptions)
+        : Task<CompletionResult> =
         task {
             try
                 let body = buildRequestBody conversation options false
@@ -151,6 +155,7 @@ let createWithHandler name baseUrl model apiKey timeoutSeconds (httpHandler: Htt
         }
 
     let streamAsync
+        (_correlation: CorrelationContext)
         (conversation: Conversation)
         (options: CompletionOptions)
         (onChunk: CompletionChunk -> unit)

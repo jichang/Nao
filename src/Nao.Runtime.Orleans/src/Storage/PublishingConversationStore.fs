@@ -3,7 +3,6 @@ namespace Nao.Runtime.Orleans
 open System
 open System.Threading.Tasks
 open Nao.Agents
-open Nao.Agents
 
 /// Tee conversation store: every WRITE is persisted to the wrapped backing store (so history
 /// reads stay correct) and ALSO published to the bus as a `ConversationCaptured` event, so the
@@ -26,19 +25,17 @@ module PublishingConversationStore =
             |> Array.toList
 
         let data =
-            if isNull (box m.Data) then
-                []
-            else
-                m.Data
-                |> Array.map (fun value ->
-                    { AgentContextData.Kind = value.Kind
-                      ContentType = value.ContentType
-                      Payload = value.Payload })
-                |> Array.toList
+            m.Data
+            |> Array.map (fun value ->
+                { AgentContextData.Kind = value.Kind
+                  ContentType = value.ContentType
+                  Payload = value.Payload })
+            |> Array.toList
 
         { Role = m.Role
           Content = m.Content
           Timestamp = m.Timestamp
+          Correlation = m.Correlation
           TurnId = m.TurnId
           Steps = steps
           Attachments = m.Attachments |> Array.toList
@@ -62,7 +59,13 @@ module PublishingConversationStore =
             | i when i >= 0 -> sessionId.Substring(0, i), sessionId.Substring(i + 1)
             | _ -> sessionId, sessionId
 
-        EventScope.Create(userId, sid, conversationName, "", turnId, sessionId, CorrelationContext.root ())
+        let correlation =
+            messages
+            |> Array.tryHead
+            |> Option.map _.Correlation
+            |> Option.defaultWith CorrelationContext.root
+
+        EventScope.Create(userId, sid, conversationName, "", turnId, sessionId, correlation)
 
     let create (bus: EventBus) (inner: ConversationStore) : ConversationStore =
         let appendAsync (sessionId: string) (conversationName: string) (messages: PersistedMessage array) =
@@ -97,6 +100,8 @@ module PublishingConversationStore =
         let loadAsync (sessionId: string) (conversationName: string) =
             inner.LoadAsync sessionId conversationName
 
+        let loadByExecutionAsync executionId = inner.LoadByExecutionAsync executionId
+
         let listConversationsAsync (sessionId: string) = inner.ListConversationsAsync sessionId
 
         let listSessionsAsync () = inner.ListSessionsAsync()
@@ -129,6 +134,7 @@ module PublishingConversationStore =
         { AppendAsync = appendAsync
           SaveAsync = saveAsync
           LoadAsync = loadAsync
+          LoadByExecutionAsync = loadByExecutionAsync
           ListConversationsAsync = listConversationsAsync
           ListSessionsAsync = listSessionsAsync
           DeleteConversationAsync = deleteConversationAsync

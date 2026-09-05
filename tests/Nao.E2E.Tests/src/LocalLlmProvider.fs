@@ -9,7 +9,7 @@ open Nao.Agents
 module LocalLlmProvider =
 
     let create () =
-        LlmProvider.create (fun () -> "LocalTest") (fun (conversation: Conversation) (_options: CompletionOptions) ->
+        LlmProvider.create (fun () -> "LocalTest") (fun _ (conversation: Conversation) (_options: CompletionOptions) ->
             let lastMessage =
                 conversation
                 |> List.tryFindBack (fun m -> m.Role = User)

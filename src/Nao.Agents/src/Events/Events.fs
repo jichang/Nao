@@ -66,6 +66,8 @@ type ConversationMessage =
         Role: string
         Content: string
         Timestamp: DateTimeOffset
+        /// Execution identity, correlation, causation, and attempt for this message.
+        Correlation: CorrelationContext
         /// Turn this message belongs to.
         TurnId: string
         /// Process steps for an assistant turn (empty for user messages).

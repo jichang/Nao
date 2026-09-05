@@ -413,7 +413,7 @@ type TieredTests() =
 
 // ---------------- Working memory ----------------
 
-let private wmItem owner key addedAt expiresAt pinned : WorkingMemoryItem =
+let private wmItem (owner: ExecutionId) key addedAt expiresAt pinned : WorkingMemoryItem =
     { ExecutionId = owner
       Key = key
       Content = "content"
@@ -427,7 +427,7 @@ let private wmItem owner key addedAt expiresAt pinned : WorkingMemoryItem =
 type WorkingMemoryTests() =
     let exercise (make: unit -> WorkingMemory) =
         task {
-            let ownerA, ownerB = Guid.NewGuid().ToString("N"), Guid.NewGuid().ToString("N")
+            let ownerA, ownerB = ExecutionId.generate (), ExecutionId.generate ()
             let cutoff = DateTimeOffset.UtcNow
             let generatedExpiredCount = Random.Shared.Next(2, 6)
             let memory = make ()
@@ -472,9 +472,6 @@ type WorkingMemoryTests() =
             Assert.IsTrue(restored.IsSome)
             Assert.AreEqual(Some(addedAt + WorkingMemoryConfig.Default.DefaultTtl), restored.Value.ExpiresAt)
 
-            match! finalReload.DeleteOwnerAsync " " with
-            | Ok _ -> Assert.Fail "Blank execution owners must be rejected."
-            | Error failure -> Assert.AreEqual(PlatformErrorCategory.InvalidInput, failure.Category)
         }
 
     [<TestMethod>]
@@ -499,11 +496,12 @@ type WorkingMemoryTests() =
         let dir = tempDir ()
         let path = Path.Combine(dir, "working.jsonl")
         let memory = WorkingMemories.file dir WorkingMemoryConfig.Default
-        let original = wmItem agent "original" DateTimeOffset.UtcNow None false
+        let owner = ExecutionId.generate ()
+        let original = wmItem owner "original" DateTimeOffset.UtcNow None false
         memory.SetAsync original |> _.GetAwaiter().GetResult()
         File.AppendAllText(path, "{invalid" + Environment.NewLine)
         let before = File.ReadAllBytes path
-        let added = wmItem agent "added" DateTimeOffset.UtcNow None false
+        let added = wmItem owner "added" DateTimeOffset.UtcNow None false
 
         let error =
             Assert.ThrowsExactly<InvalidDataException>(fun () -> memory.SetAsync added |> _.GetAwaiter().GetResult())
@@ -511,7 +509,7 @@ type WorkingMemoryTests() =
         StringAssert.Contains(error.Message, path)
         StringAssert.Contains(error.Message, "event 2")
         CollectionAssert.AreEqual(before, File.ReadAllBytes path)
-        Assert.IsTrue((memory.GetAsync agent "added" |> _.GetAwaiter().GetResult()).IsNone)
+        Assert.IsTrue((memory.GetAsync owner "added" |> _.GetAwaiter().GetResult()).IsNone)
 
 // ---------------- Metrics ----------------
 
@@ -521,12 +519,14 @@ type MetricsTests() =
         task {
             let ownerA, ownerB = "metrics/a", "metrics/b"
             let cutoff = DateTimeOffset(2026, 6, 1, 12, 0, 0, TimeSpan.Zero)
+            let correlation = CorrelationContext.root ()
             let llmCount = Random.Shared.Next(2, 7)
             let first = make ()
 
             for index in 1..llmCount do
                 first.Record(
                     MetricRecord.llmCall
+                        correlation
                         ownerA
                         (cutoff.AddMinutes(float index))
                         (index * 10)
@@ -536,6 +536,7 @@ type MetricsTests() =
 
             first.Record(
                 MetricRecord.custom
+                    correlation
                     ownerA
                     (cutoff.AddTicks(-1L))
                     { Name = "old"
@@ -545,6 +546,7 @@ type MetricsTests() =
 
             first.Record(
                 MetricRecord.custom
+                    correlation
                     ownerA
                     cutoff
                     { Name = "boundary"
@@ -552,7 +554,7 @@ type MetricsTests() =
                       Labels = Map.empty }
             )
 
-            first.Record(MetricRecord.toolCall ownerB cutoff "search" 30L true)
+            first.Record(MetricRecord.toolCall correlation ownerB cutoff "search" 30L true)
 
             let reloaded = make ()
             let metricsA = reloaded.GetMetrics ownerA
@@ -563,6 +565,7 @@ type MetricsTests() =
             Assert.AreEqual(expectedOutput, metricsA.TotalOutputTokens)
             Assert.AreEqual(0, metricsA.TotalToolCalls)
             Assert.AreEqual(1, (reloaded.GetMetrics ownerB).TotalToolCalls)
+            Assert.AreEqual(llmCount + 3, (reloaded.GetByExecution correlation.ExecutionId).Length)
 
             match! reloaded.DeleteExpiredAsync ownerA cutoff with
             | Error failure -> Assert.Fail failure.Message
@@ -587,7 +590,7 @@ type MetricsTests() =
             Assert.AreEqual(0, (afterDeletion.GetMetrics ownerA).TotalLlmCalls)
             Assert.AreEqual(0, (afterDeletion.GetMetrics ownerB).TotalToolCalls)
 
-            afterDeletion.Record(MetricRecord.llmCall ownerA (cutoff.AddDays 1) 7 3 11L)
+            afterDeletion.Record(MetricRecord.llmCall correlation ownerA (cutoff.AddDays 1) 7 3 11L)
             Assert.AreEqual(1, ((make ()).GetMetrics ownerA).TotalLlmCalls)
         }
 
@@ -613,14 +616,15 @@ type MetricsTests() =
         let dir = tempDir ()
         let path = Path.Combine(dir, "metrics.jsonl")
         let collector = MetricsCollectors.file dir
-        let original = MetricRecord.llmCall agent DateTimeOffset.UtcNow 10 5 20L
+        let correlation = CorrelationContext.root ()
+        let original = MetricRecord.llmCall correlation agent DateTimeOffset.UtcNow 10 5 20L
         collector.Record original
         File.AppendAllText(path, "{invalid" + Environment.NewLine)
         let before = File.ReadAllBytes path
 
         let error =
             Assert.ThrowsExactly<InvalidDataException>(fun () ->
-                collector.Record(MetricRecord.llmCall agent DateTimeOffset.UtcNow 20 10 30L))
+                collector.Record(MetricRecord.llmCall correlation agent DateTimeOffset.UtcNow 20 10 30L))
 
         StringAssert.Contains(error.Message, path)
         StringAssert.Contains(error.Message, "event 2")
@@ -630,8 +634,9 @@ type MetricsTests() =
 
 // ---------------- Trace store ----------------
 
-let private executionTrace () =
+let private executionTrace () : ExecutionTrace =
     { Id = Guid.NewGuid()
+      Correlation = CorrelationContext.root ()
       AgentId = agent
       Input = "in"
       Output = Some "out"
@@ -646,11 +651,19 @@ type TraceStoreTests() =
     let exercise (make: unit -> TraceStore) =
         task {
             let first = make ()
-            do! first.SaveAsync(executionTrace ())
+            let expected = executionTrace ()
+            do! first.SaveAsync expected
             do! first.SaveAsync(executionTrace ())
             let reloaded = make ()
             let! traces = reloaded.GetTracesAsync agent 10
             Assert.AreEqual(2, traces.Length)
+            Assert.IsTrue(traces |> List.exists (fun trace -> trace.Correlation = expected.Correlation))
+
+            let! forExecution = reloaded.GetByExecutionAsync expected.Correlation.ExecutionId
+            Assert.AreEqual([ expected ], forExecution)
+
+            let! unknownExecution = reloaded.GetByExecutionAsync(ExecutionId.generate ())
+            Assert.IsTrue(unknownExecution.IsEmpty)
         }
 
     [<TestMethod>]
@@ -712,6 +725,11 @@ type TraceStoreTests() =
     member _.Ado_Persists() =
         let factory = sqliteFactory ()
         (exercise (fun () -> TraceStores.ado factory)).GetAwaiter().GetResult()
+
+    [<TestMethod>]
+    member _.InMemory_Persists() =
+        let store = InMemoryTraceStore.create ()
+        (exercise (fun () -> store)).GetAwaiter().GetResult()
 
     [<TestMethod>]
     member _.Ado_RejectsUnversionedEventTableBeforeMutation() =
@@ -796,14 +814,17 @@ type TraceStoreTests() =
 [<TestClass>]
 type TracerTests() =
     let exercise (make: unit -> Tracer) =
+        let correlation = CorrelationContext.root ()
         let first = make ()
-        let root = first.StartTrace "op"
+        let root = first.StartTrace correlation "op"
         let child = first.StartSpan root "child"
         first.EndSpan child SpanStatus.Ok
         let traceId = root.TraceId
         let reloaded = make ()
         let spans = reloaded.GetTrace traceId
         Assert.AreEqual(2, spans.Length)
+        Assert.IsTrue(spans |> List.forall (fun span -> span.Correlation = correlation))
+        Assert.AreEqual(2, reloaded.GetByExecution(correlation.ExecutionId).Length)
 
     [<TestMethod>]
     member _.Ado_Persists() =
@@ -820,7 +841,7 @@ type TracerTests() =
         let dir = tempDir ()
         let path = Path.Combine(dir, "tracer.jsonl")
         let tracer = Tracers.file dir
-        let root = tracer.StartTrace "root"
+        let root = tracer.StartTrace (CorrelationContext.root ()) "root"
 
         StringAssert.Contains(File.ReadAllText(path), "\"schemaVersion\":1")
         File.AppendAllText(path, "{invalid" + Environment.NewLine)

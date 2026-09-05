@@ -10,7 +10,7 @@ module RegexEval =
     let create options pattern =
         let regex = Regex(pattern, options ||| RegexOptions.Compiled)
 
-        Evaluator.create "Regex" (fun (_case: EvalCase) (actual: string) ->
+        Evaluator.create "Regex" (fun _correlation (_case: EvalCase) (actual: string) ->
             task {
                 if regex.IsMatch(actual) then
                     return (EvalVerdict.Pass, sprintf "Output matches pattern '%s'" pattern)

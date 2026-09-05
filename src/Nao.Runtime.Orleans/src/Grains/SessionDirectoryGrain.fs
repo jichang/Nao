@@ -68,6 +68,7 @@ type SessionDirectoryGrain
 
     override this.OnActivateAsync(cancellationToken) =
         GrainStateVersion.prepare
+            GrainStateVersion.DirectoryCurrent
             "Session directory state"
             persistentState.RecordExists
             persistentState.State.SchemaVersion

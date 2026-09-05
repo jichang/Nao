@@ -17,11 +17,11 @@ module Composite =
 
     /// Create a composite evaluator using the requested combination mode.
     let create mode evaluators =
-        Evaluator.create (sprintf "Composite(%A)" mode) (fun (case: EvalCase) (actual: string) ->
+        Evaluator.create (sprintf "Composite(%A)" mode) (fun correlation (case: EvalCase) (actual: string) ->
             task {
                 let! results =
                     evaluators
-                    |> List.map (fun e -> e.EvaluateAsync case actual)
+                    |> List.map (fun evaluator -> evaluator.EvaluateAsync correlation case actual)
                     |> fun tasks -> System.Threading.Tasks.Task.WhenAll(tasks)
 
                 let results = results |> Array.toList

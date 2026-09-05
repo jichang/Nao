@@ -6,13 +6,13 @@ open Nao.Agents
 [<RequireQualifiedAccess>]
 type WorkingMemoryEvent =
     | Set of WorkingMemoryItem
-    | Focus of executionId: string * key: string * boost: float
-    | Decay of executionId: string * asOf: DateTimeOffset
-    | Pin of executionId: string * key: string
-    | Unpin of executionId: string * key: string * asOf: DateTimeOffset
-    | Remove of executionId: string * key: string
-    | DeleteOwner of executionId: string
-    | DeleteExpired of executionId: string * before: DateTimeOffset
+    | Focus of executionId: ExecutionId * key: string * boost: float
+    | Decay of executionId: ExecutionId * asOf: DateTimeOffset
+    | Pin of executionId: ExecutionId * key: string
+    | Unpin of executionId: ExecutionId * key: string * asOf: DateTimeOffset
+    | Remove of executionId: ExecutionId * key: string
+    | DeleteOwner of executionId: ExecutionId
+    | DeleteExpired of executionId: ExecutionId * before: DateTimeOffset
 
 type WorkingMemoryDocument =
     { Version: int

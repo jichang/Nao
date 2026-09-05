@@ -138,6 +138,12 @@ module AdoTurnStore =
                 return all |> List.filter (fun t -> t.SessionId = sessionId)
             }
 
+        let getForExecutionAsync executionId =
+            task {
+                let! all = AdoPayload.getAll<TurnRecord> factory table
+                return all |> List.filter (fun turn -> turn.Correlation.ExecutionId = executionId)
+            }
+
         let delete (predicate: TurnRecord -> bool) =
             task {
                 let! all = AdoPayload.getAll<TurnRecord> factory table
@@ -163,6 +169,7 @@ module AdoTurnStore =
         { SaveAsync = saveAsync
           GetAsync = getAsync
           GetForSessionAsync = getForSessionAsync
+          GetForExecutionAsync = getForExecutionAsync
           DeleteSessionAsync = deleteSessionAsync
           DeleteExpiredAsync = deleteExpiredAsync }
 
@@ -419,6 +426,11 @@ module FileTurnStore =
             |> List.filter (fun turn -> turn.SessionId = sessionId)
             |> Task.FromResult
 
+        let getForExecutionAsync executionId =
+            load ()
+            |> List.filter (fun turn -> turn.Correlation.ExecutionId = executionId)
+            |> Task.FromResult
+
         let delete event (predicate: TurnRecord -> bool) =
             let count = load () |> List.filter predicate |> List.length
             Jsonl.append path (FeedbackJson.serialize (LifecycleEnvelope.turn event))
@@ -436,6 +448,7 @@ module FileTurnStore =
         { SaveAsync = saveAsync
           GetAsync = getAsync
           GetForSessionAsync = getForSessionAsync
+          GetForExecutionAsync = getForExecutionAsync
           DeleteSessionAsync = deleteSessionAsync
           DeleteExpiredAsync = deleteExpiredAsync }
 

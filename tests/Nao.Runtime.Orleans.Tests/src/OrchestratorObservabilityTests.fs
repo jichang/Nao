@@ -21,7 +21,7 @@ module private ScriptedProvider =
     let create (responses: string list) =
         let responses = Queue<string>(responses)
 
-        LlmProvider.create (fun () -> "scripted") (fun _ _ ->
+        LlmProvider.create (fun () -> "scripted") (fun _ _ _ ->
             Task.FromResult(CompletionResult.create (responses.Dequeue()) "stop" None None))
 
 module private TestOrchestrator =
@@ -62,6 +62,24 @@ type OrchestratorObservabilityTests() =
           Scope = scope }
 
     [<TestMethod>]
+    member _.``provider receives the active event correlation``() =
+        let observed = ResizeArray<CorrelationContext>()
+
+        let provider =
+            LlmProvider.create (fun () -> "capturing") (fun correlation _ _ ->
+                observed.Add correlation
+                Task.FromResult(CompletionResult.create "done" "stop" None None))
+
+        let agent =
+            TestOrchestrator.create (config provider [] EventBus.none) (fun response -> [ Respond response ])
+
+        let context = AgentContext.allowAll ()
+        let result = Agent.runAsync context "start" agent |> _.Result
+
+        Assert.AreEqual("done", result)
+        CollectionAssert.AreEqual([| context.Correlation |], observed.ToArray())
+
+    [<TestMethod>]
     member _.``harness records tool metrics and successful execution``() =
         let provider = ScriptedProvider.create [ "invoke"; "done" ]
         let tool = TestTools.echo
@@ -72,28 +90,51 @@ type OrchestratorObservabilityTests() =
                 | response -> [ Respond response ])
 
         let metrics = InMemory.metrics ()
+        let tracer = InMemory.tracer ()
         let journal = InMemory.executionJournal ()
-
-        let harnessConfig =
-            { EtclovgConfig.Default with
-                Metrics = Some metrics
-                ExecutionJournal = Some journal }
 
         let context =
             { (AgentContext.allowAll ()) with
                 SessionKey = "user/session"
                 TurnId = "turn" }
 
+        let harnessConfig =
+            { EtclovgConfig.Default with
+                Metrics = Some metrics
+                Tracer = Some tracer
+                ExecutionJournal = Some journal
+                Scope =
+                    { EtclovgConfig.Default.Scope with
+                        Correlation = context.Correlation } }
+
         let result = EtclovgHarness.runAsync harnessConfig context agent "start" |> _.Result
         let history = journal.GetHistoryAsync() |> _.Result
 
         Assert.IsTrue(result.Success)
-        Assert.AreEqual(1, (metrics.GetMetrics context.SessionKey).TotalToolCalls)
+        let aggregate = metrics.GetMetrics context.SessionKey
+        Assert.AreEqual(1, aggregate.TotalToolCalls)
+        let executionMetrics = metrics.GetByExecution context.Correlation.ExecutionId
+        Assert.AreEqual(aggregate.TotalLlmCalls + aggregate.TotalToolCalls, executionMetrics.Length)
+
+        Assert.IsTrue(
+            executionMetrics
+            |> List.forall (fun metric -> metric.Correlation = context.Correlation)
+        )
+
+        let executionSpans = tracer.GetByExecution context.Correlation.ExecutionId
+        Assert.IsTrue(executionSpans.Length >= 2)
+
+        Assert.IsTrue(
+            executionSpans
+            |> List.forall (fun span -> span.Correlation = context.Correlation)
+        )
+
         Assert.AreEqual(1, history.Length)
         Assert.AreEqual("echo", history.Head.ToolName)
         Assert.AreEqual("hello", history.Head.Input)
         Assert.AreEqual("hello", history.Head.Output)
         Assert.AreEqual("user/session", history.Head.Owner)
+        Assert.AreEqual(context.Correlation, history.Head.Correlation)
 
     [<TestMethod>]
     member _.``orchestrator executes tools through injected protocol middleware``() =

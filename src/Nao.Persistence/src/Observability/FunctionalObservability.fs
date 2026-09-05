@@ -19,9 +19,10 @@ module private TracerState =
             spans.[span.Id] <- span
 
         { StartTrace =
-            fun operationName ->
+            fun correlation operationName ->
                 let span =
                     { Id = SpanId(Guid.NewGuid())
+                      Correlation = correlation
                       TraceId = TraceId(Guid.NewGuid())
                       ParentSpanId = None
                       OperationName = operationName
@@ -37,6 +38,7 @@ module private TracerState =
             fun parent operationName ->
                 let span =
                     { Id = SpanId(Guid.NewGuid())
+                      Correlation = parent.Correlation
                       TraceId = parent.TraceId
                       ParentSpanId = Some parent.Id
                       OperationName = operationName
@@ -69,7 +71,13 @@ module private TracerState =
                     { span with
                         Attributes =
                             Map.fold (fun state key value -> Map.add key value state) span.Attributes attributes }
-          GetTrace = fun traceId -> spans.Values |> Seq.filter (fun span -> span.TraceId = traceId) |> Seq.toList }
+          GetTrace = fun traceId -> spans.Values |> Seq.filter (fun span -> span.TraceId = traceId) |> Seq.toList
+          GetByExecution =
+            fun executionId ->
+                spans.Values
+                |> Seq.filter (fun span -> span.Correlation.ExecutionId = executionId)
+                |> Seq.sortBy _.StartTime
+                |> Seq.toList }
 
 module InMemoryTracer =
     let create () = TracerState.create ignore Seq.empty
@@ -177,6 +185,12 @@ module InMemoryMetricsCollector =
 
         { Record = record
           GetMetrics = metrics
+          GetByExecution =
+            fun executionId ->
+                records.Values
+                |> Seq.filter (fun metric -> metric.Correlation.ExecutionId = executionId)
+                |> Seq.sortBy (fun metric -> metric.Timestamp)
+                |> Seq.toList
           EstimateCost =
             fun owner model ->
                 let aggregate = metrics owner
@@ -243,16 +257,24 @@ module InMemoryTraceStore =
             |> Seq.toList
             |> Task.FromResult
 
+        let getByExecutionAsync executionId =
+            traces.Values
+            |> Seq.filter (fun trace -> trace.Correlation.ExecutionId = executionId)
+            |> Seq.sortByDescending (fun trace -> trace.StartedAt)
+            |> Seq.toList
+            |> Task.FromResult
+
         let deleteOwnerAsync (owner: string) =
             TraceOperations.protect owner (fun () -> delete (fun trace -> trace.AgentId = owner))
 
         let deleteExpiredAsync (owner: string) before =
             TraceOperations.protect owner (fun () ->
-                delete (fun trace -> trace.AgentId = owner && trace.StartedAt < before))
+                delete (fun trace -> trace.AgentId = owner && trace.StartedAt < before)) in
 
         { SaveAsync = saveAsync
           GetBaselineAsync = getBaselineAsync
           GetTracesAsync = getTracesAsync
+          GetByExecutionAsync = getByExecutionAsync
           DeleteOwnerAsync = deleteOwnerAsync
           DeleteExpiredAsync = deleteExpiredAsync }
 
@@ -374,6 +396,7 @@ module PersistentMetricsCollector =
                 inner.Record metric
                 append (MetricsEvent.Accepted metric)
           GetMetrics = inner.GetMetrics
+          GetByExecution = inner.GetByExecution
           EstimateCost = inner.EstimateCost
           DeleteOwnerAsync =
             fun owner -> persist (MetricsEvent.DeleteOwner owner) (fun () -> inner.DeleteOwnerAsync owner)
@@ -471,11 +494,12 @@ module PersistentTraceStore =
             persist (TraceStoreEvent.DeleteOwner owner) (inner.DeleteOwnerAsync owner)
 
         let deleteExpiredAsync owner before =
-            persist (TraceStoreEvent.DeleteExpired(owner, before)) (inner.DeleteExpiredAsync owner before)
+            persist (TraceStoreEvent.DeleteExpired(owner, before)) (inner.DeleteExpiredAsync owner before) in
 
         { SaveAsync = saveAsync
           GetBaselineAsync = inner.GetBaselineAsync
           GetTracesAsync = inner.GetTracesAsync
+          GetByExecutionAsync = inner.GetByExecutionAsync
           DeleteOwnerAsync = deleteOwnerAsync
           DeleteExpiredAsync = deleteExpiredAsync }
 

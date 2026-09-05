@@ -8,7 +8,7 @@ module ExactMatch =
 
     /// Create an exact-match evaluator with configurable case sensitivity.
     let create caseSensitive =
-        Evaluator.create "ExactMatch" (fun (case: EvalCase) (actual: string) ->
+        Evaluator.create "ExactMatch" (fun _correlation (case: EvalCase) (actual: string) ->
             task {
                 match case.Expected with
                 | Some expected ->

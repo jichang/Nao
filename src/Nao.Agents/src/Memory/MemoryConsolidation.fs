@@ -30,7 +30,7 @@ type ConsolidationResult =
 type MemoryConsolidation =
     {
         /// Run a consolidation pass
-        ConsolidateAsync: ConsolidationStrategy -> Task<ConsolidationResult>
+        ConsolidateAsync: CorrelationContext -> ConsolidationStrategy -> Task<ConsolidationResult>
         /// Get consolidation statistics
         GetStatsAsync: unit -> Task<ConsolidationResult>
     }
@@ -147,6 +147,7 @@ module MemoryConsolidation =
         }
 
     let summarizeClusterAsync
+        (correlation: CorrelationContext)
         (provider: LlmProvider)
         (options: CompletionOptions)
         (store: MemoryStore)
@@ -181,7 +182,7 @@ module MemoryConsolidation =
                               "Consolidate these memory entries into a single concise summary. Preserve all key facts." }
                           { Role = User; Content = content } ]
 
-                    let! result = provider.CompleteAsync prompt options
+                    let! result = provider.CompleteAsync correlation prompt options
                     // Replace cluster with summary
                     for e in group do
                         do! store.ForgetAsync agentId e.Key
@@ -199,6 +200,7 @@ module MemoryConsolidation =
         }
 
     let rec consolidateAsync
+        (correlation: CorrelationContext)
         (store: MemoryStore)
         (agentId: string)
         (strategy: ConsolidationStrategy)
@@ -242,7 +244,7 @@ module MemoryConsolidation =
                       TotalAfter = afterEntries.Length }
 
             | ConsolidationStrategy.Summarize(provider, options) ->
-                let! summarized = summarizeClusterAsync provider options store agentId
+                let! summarized = summarizeClusterAsync correlation provider options store agentId
                 let! afterEntries = store.RecallAllAsync agentId
 
                 return
@@ -258,7 +260,7 @@ module MemoryConsolidation =
                 let mutable totalSummarized = 0
 
                 for strat in strategies do
-                    let! result = consolidateAsync store agentId strat
+                    let! result = consolidateAsync correlation store agentId strat
                     totalMerged <- totalMerged + result.Merged
                     totalRemoved <- totalRemoved + result.Removed
                     totalSummarized <- totalSummarized + result.Summarized

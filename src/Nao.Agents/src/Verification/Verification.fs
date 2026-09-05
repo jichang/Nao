@@ -48,6 +48,7 @@ module ReadinessCheck =
 /// Captures a complete execution trace for offline analysis
 type ExecutionTrace =
     { Id: Guid
+      Correlation: CorrelationContext
       AgentId: string
       Input: string
       Output: string option
@@ -130,8 +131,9 @@ module Judge =
 module Verification =
 
     /// Create a new execution trace
-    let startTrace (agentId: string) (input: string) : ExecutionTrace =
+    let startTrace (correlation: CorrelationContext) (agentId: string) (input: string) : ExecutionTrace =
         { Id = Guid.NewGuid()
+          Correlation = correlation
           AgentId = agentId
           Input = input
           Output = None
@@ -194,6 +196,7 @@ module Verification =
 
     /// Ground a task by having the agent reformulate its understanding
     let groundTaskAsync
+        (correlation: CorrelationContext)
         (provider: LlmProvider)
         (options: CompletionOptions)
         (taskDescription: string)
@@ -212,7 +215,7 @@ module Verification =
                   { Role = User
                     Content = taskDescription } ]
 
-            let! result = provider.CompleteAsync prompt options
+            let! result = provider.CompleteAsync correlation prompt options
             // Parse the LLM response into structured grounding
             return
                 { Task = taskDescription
@@ -264,7 +267,7 @@ module LlmJudge =
                               (trace.Output |> Option.defaultValue "N/A")
                               traceDescription } ]
 
-                let! result = provider.CompleteAsync prompt options
+                let! result = provider.CompleteAsync trace.Correlation prompt options
 
                 let verdict =
                     if result.Content.StartsWith("PASS") then

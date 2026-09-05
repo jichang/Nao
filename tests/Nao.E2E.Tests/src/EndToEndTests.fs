@@ -134,7 +134,9 @@ type EndToEndProviderTests() =
             [ { Role = User
                 Content = "What's the weather?" } ]
 
-        let result = provider.CompleteAsync conversation CompletionOptions.Default
+        let result =
+            provider.CompleteAsync (CorrelationContext.root ()) conversation CompletionOptions.Default
+
         let r = result.Result
         Assert.AreEqual("stop", r.FinishReason)
         Assert.IsTrue(r.Content.Contains("tool"))
@@ -148,7 +150,9 @@ type EndToEndProviderTests() =
             [ { Role = User
                 Content = "tool_result: 42" } ]
 
-        let result = provider.CompleteAsync conversation CompletionOptions.Default
+        let result =
+            provider.CompleteAsync (CorrelationContext.root ()) conversation CompletionOptions.Default
+
         let r = result.Result
         Assert.IsTrue(r.Content.Contains("42"))
 
@@ -156,6 +160,9 @@ type EndToEndProviderTests() =
     member _.LocalProviderReportsTokensUsed() =
         let provider = LocalLlmProvider.create ()
         let conversation = [ { Role = User; Content = "hello" } ]
-        let r = (provider.CompleteAsync conversation CompletionOptions.Default).Result
+
+        let r =
+            (provider.CompleteAsync (CorrelationContext.root ()) conversation CompletionOptions.Default).Result
+
         Assert.IsTrue(r.TokensUsed.IsSome)
         Assert.IsTrue(r.TokensUsed.Value > 0)

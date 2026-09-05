@@ -16,7 +16,7 @@ module Contains =
     let create caseSensitive =
         let comparison = comparison caseSensitive
 
-        Evaluator.create "Contains" (fun (case: EvalCase) (actual: string) ->
+        Evaluator.create "Contains" (fun _correlation (case: EvalCase) (actual: string) ->
             task {
                 match case.Expected with
                 | Some expected ->
@@ -31,7 +31,7 @@ module Contains =
     let allWithCaseSensitivity caseSensitive (keywords: string list) =
         let comparison = comparison caseSensitive
 
-        Evaluator.create "ContainsAll" (fun (_case: EvalCase) (actual: string) ->
+        Evaluator.create "ContainsAll" (fun _correlation (_case: EvalCase) (actual: string) ->
             task {
                 let found = keywords |> List.filter (fun kw -> actual.Contains(kw, comparison))
 
@@ -50,7 +50,7 @@ module Contains =
     let anyWithCaseSensitivity caseSensitive (keywords: string list) =
         let comparison = comparison caseSensitive
 
-        Evaluator.create "ContainsAny" (fun (_case: EvalCase) (actual: string) ->
+        Evaluator.create "ContainsAny" (fun _correlation (_case: EvalCase) (actual: string) ->
             task {
                 let found = keywords |> List.filter (fun kw -> actual.Contains(kw, comparison))
 

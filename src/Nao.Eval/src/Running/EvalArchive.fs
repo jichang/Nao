@@ -15,6 +15,7 @@ type EvalArchive =
       SaveReportAsync: EvalReport -> Task
       GetDatasetAsync: string -> Guid -> Task<EvalDataset option>
       GetReportsAsync: string -> Guid -> int -> Task<EvalReport list>
+      GetResultsByExecutionAsync: string -> ExecutionId -> Task<EvalResult list>
       DeleteOwnerAsync: string -> Task<Result<int, PlatformFailure>>
       DeleteExpiredAsync: string -> DateTimeOffset -> Task<Result<int, PlatformFailure>> }
 
@@ -144,6 +145,16 @@ module private EvalArchiveState =
                     |> Seq.filter (fun report -> report.Owner = owner && report.DatasetId = datasetId)
                     |> Seq.sortByDescending (fun report -> report.RunAt)
                     |> Seq.truncate limit
+                    |> Seq.toList
+                )
+          GetResultsByExecutionAsync =
+            fun owner executionId ->
+                Task.FromResult(
+                    reports.Values
+                    |> Seq.filter (fun report -> report.Owner = owner)
+                    |> Seq.collect _.Results
+                    |> Seq.filter (fun result -> result.ExecutionId = executionId)
+                    |> Seq.sortByDescending _.Timestamp
                     |> Seq.toList
                 )
           DeleteOwnerAsync = deleteOwnerAsync

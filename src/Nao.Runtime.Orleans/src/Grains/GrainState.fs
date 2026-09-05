@@ -9,19 +9,22 @@ open Nao.Runtime.Orleans
 
 module internal GrainStateVersion =
     [<Literal>]
-    let Current = 1
+    let SessionCurrent = 1
 
-    let prepare kind recordExists version setVersion =
+    [<Literal>]
+    let DirectoryCurrent = 1
+
+    let prepare expectedVersion kind recordExists version setVersion =
         if not recordExists then
-            setVersion Current
-        elif version <> Current then
+            setVersion expectedVersion
+        elif version <> expectedVersion then
             raise (
                 InvalidDataException(
                     sprintf
                         "%s uses unsupported Orleans state version %d; expected %d. Follow docs/migrations before activation."
                         kind
                         version
-                        Current
+                        expectedVersion
                 )
             )
 
@@ -49,6 +52,10 @@ type MessageRecord() =
     /// Structured data published by tools during this turn.
     [<Id(5u)>]
     member val Data: ResizeArray<AgentContextDataRecord> = ResizeArray() with get, set
+
+    /// Execution identity, correlation, causation, and attempt for this message.
+    [<Id(6u)>]
+    member val Correlation: CorrelationContext = Unchecked.defaultof<_> with get, set
 
 /// Mapping between Orleans serializable records and domain types
 module GrainStateMapping =

@@ -6,7 +6,7 @@ open System.Threading.Tasks
 /// A scratchpad item in working memory with priority/attention weight
 type WorkingMemoryItem =
     {
-        ExecutionId: string
+        ExecutionId: ExecutionId
         Key: string
         Content: string
         /// Priority/attention weight — higher means more relevant to current task
@@ -43,14 +43,14 @@ type WorkingMemoryConfig =
 /// Functional task-scoped working-memory (scratchpad) operations.
 type WorkingMemory =
     { SetAsync: WorkingMemoryItem -> Task<unit>
-      GetAsync: string -> string -> Task<WorkingMemoryItem option>
-      GetAllAsync: string -> Task<WorkingMemoryItem list>
-      GetActiveAsync: string -> float -> Task<WorkingMemoryItem list>
-      FocusAsync: string -> string -> float -> Task<unit>
-      DecayAsync: string -> DateTimeOffset -> Task<int>
-      PinAsync: string -> string -> Task<unit>
-      UnpinAsync: string -> string -> DateTimeOffset -> Task<unit>
-      RemoveAsync: string -> string -> Task<unit>
-      DeleteOwnerAsync: string -> Task<Result<int, PlatformFailure>>
-      DeleteExpiredAsync: string -> DateTimeOffset -> Task<Result<int, PlatformFailure>>
-      RenderContextAsync: string -> int -> Task<string> }
+      GetAsync: ExecutionId -> string -> Task<WorkingMemoryItem option>
+      GetAllAsync: ExecutionId -> Task<WorkingMemoryItem list>
+      GetActiveAsync: ExecutionId -> float -> Task<WorkingMemoryItem list>
+      FocusAsync: ExecutionId -> string -> float -> Task<unit>
+      DecayAsync: ExecutionId -> DateTimeOffset -> Task<int>
+      PinAsync: ExecutionId -> string -> Task<unit>
+      UnpinAsync: ExecutionId -> string -> DateTimeOffset -> Task<unit>
+      RemoveAsync: ExecutionId -> string -> Task<unit>
+      DeleteOwnerAsync: ExecutionId -> Task<Result<int, PlatformFailure>>
+      DeleteExpiredAsync: ExecutionId -> DateTimeOffset -> Task<Result<int, PlatformFailure>>
+      RenderContextAsync: ExecutionId -> int -> Task<string> }

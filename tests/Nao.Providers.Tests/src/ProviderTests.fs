@@ -93,7 +93,10 @@ type ProviderFactoryTests() =
         (task {
             let! failure =
                 ProviderFailure.capture (fun () ->
-                    provider.CompleteAsync [ { Role = User; Content = "hi" } ] CompletionOptions.Default)
+                    provider.CompleteAsync
+                        (CorrelationContext.root ())
+                        [ { Role = User; Content = "hi" } ]
+                        CompletionOptions.Default)
 
             Assert.AreEqual(PlatformErrorCategory.TransientDependency, failure.Category)
             Assert.IsTrue(failure.Retryable)
@@ -112,7 +115,10 @@ type ProviderFactoryTests() =
         (task {
             let! failure =
                 ProviderFailure.capture (fun () ->
-                    provider.CompleteAsync [ { Role = User; Content = "hi" } ] CompletionOptions.Default)
+                    provider.CompleteAsync
+                        (CorrelationContext.root ())
+                        [ { Role = User; Content = "hi" } ]
+                        CompletionOptions.Default)
 
             Assert.AreEqual(PlatformErrorCategory.TransientDependency, failure.Category)
             Assert.IsTrue(failure.Retryable)
@@ -171,7 +177,7 @@ type OpenAICompatibleProviderTests() =
                 StopSequences = [ "END" ] }
 
         let result =
-            provider.CompleteAsync [ { Role = User; Content = "Hello" } ] options
+            provider.CompleteAsync (CorrelationContext.root ()) [ { Role = User; Content = "Hello" } ] options
             |> _.Result
 
         Assert.AreEqual(endpoint, requestUrl)
@@ -213,7 +219,10 @@ type OpenAICompatibleProviderTests() =
 
             let! failure =
                 ProviderFailure.capture (fun () ->
-                    provider.CompleteAsync [ { Role = User; Content = "Hello" } ] CompletionOptions.Default)
+                    provider.CompleteAsync
+                        (CorrelationContext.root ())
+                        [ { Role = User; Content = "Hello" } ]
+                        CompletionOptions.Default)
 
             Assert.AreEqual(PlatformErrorCategory.InvalidOutput, failure.Category)
             Assert.IsFalse(failure.Retryable)
@@ -252,7 +261,10 @@ type OpenAICompatibleProviderTests() =
 
                 let! failure =
                     ProviderFailure.capture (fun () ->
-                        provider.CompleteAsync [ { Role = User; Content = "Hello" } ] CompletionOptions.Default)
+                        provider.CompleteAsync
+                            (CorrelationContext.root ())
+                            [ { Role = User; Content = "Hello" } ]
+                            CompletionOptions.Default)
 
                 Assert.AreEqual(expectedCategory, failure.Category, $"HTTP {statusCode}")
                 Assert.AreEqual(expectedRetryable, failure.Retryable, $"HTTP {statusCode}")
@@ -309,7 +321,10 @@ type AnthropicProviderTests() =
 
             let! failure =
                 ProviderFailure.capture (fun () ->
-                    provider.CompleteAsync [ { Role = User; Content = "Wait." } ] CompletionOptions.Default)
+                    provider.CompleteAsync
+                        (CorrelationContext.root ())
+                        [ { Role = User; Content = "Wait." } ]
+                        CompletionOptions.Default)
 
             Assert.AreEqual(PlatformErrorCategory.TransientDependency, failure.Category)
             Assert.IsTrue(failure.Retryable)
@@ -368,7 +383,10 @@ type AnthropicProviderTests() =
                 MaxTokens = Some 128
                 StopSequences = [ "END" ] }
 
-        let result = provider.CompleteAsync conversation options |> _.Result
+        let result =
+            provider.CompleteAsync (CorrelationContext.root ()) conversation options
+            |> _.Result
+
         Assert.AreEqual("https://anthropic.test/v1/messages", requestUrl)
         Assert.AreEqual("test-key", apiKey)
         Assert.AreEqual("2023-06-01", apiVersion)
@@ -414,6 +432,7 @@ type AnthropicProviderTests() =
         let result =
             LlmProvider.streamAsync
                 provider
+                (CorrelationContext.root ())
                 [ { Role = User; Content = "Say hello." } ]
                 CompletionOptions.Default
                 chunks.Add

@@ -33,28 +33,29 @@ module private Observability =
 module private Publishing =
     let tracer sessionKey turnId correlation bus (inner: Tracer) : Tracer =
         { StartTrace =
-            fun operationName ->
-                let span = inner.StartTrace operationName
-                Observability.emit bus sessionKey turnId correlation (SpanStarted span)
+            fun activeCorrelation operationName ->
+                let span = inner.StartTrace activeCorrelation operationName
+                Observability.emit bus sessionKey turnId activeCorrelation (SpanStarted span)
                 span
           StartSpan =
             fun parentSpan operationName ->
                 let span = inner.StartSpan parentSpan operationName
-                Observability.emit bus sessionKey turnId correlation (SpanStarted span)
+                Observability.emit bus sessionKey turnId span.Correlation (SpanStarted span)
                 span
           EndSpan =
             fun span status ->
                 inner.EndSpan span status
-                Observability.emit bus sessionKey turnId correlation (SpanEnded(span, status))
+                Observability.emit bus sessionKey turnId span.Correlation (SpanEnded(span, status))
           AddEvent =
             fun span name attributes ->
                 inner.AddEvent span name attributes
-                Observability.emit bus sessionKey turnId correlation (SpanEventAdded(span, name, attributes))
+                Observability.emit bus sessionKey turnId span.Correlation (SpanEventAdded(span, name, attributes))
           SetAttributes =
             fun span attributes ->
                 inner.SetAttributes span attributes
-                Observability.emit bus sessionKey turnId correlation (SpanAttributesSet(span, attributes))
-          GetTrace = inner.GetTrace }
+                Observability.emit bus sessionKey turnId span.Correlation (SpanAttributesSet(span, attributes))
+          GetTrace = inner.GetTrace
+          GetByExecution = inner.GetByExecution }
 
     let metrics sessionKey turnId correlation bus (inner: MetricsCollector) : MetricsCollector =
         { Record =
@@ -62,6 +63,7 @@ module private Publishing =
                 inner.Record record
                 Observability.emit bus sessionKey turnId correlation (MetricRecorded record)
           GetMetrics = inner.GetMetrics
+          GetByExecution = inner.GetByExecution
           EstimateCost = inner.EstimateCost
           DeleteOwnerAsync = inner.DeleteOwnerAsync
           DeleteExpiredAsync = inner.DeleteExpiredAsync }
@@ -82,6 +84,7 @@ module private Publishing =
                 }
                 :> Task
           GetHistoryAsync = inner.GetHistoryAsync
+          GetByExecutionAsync = inner.GetByExecutionAsync
           GetRevertibleAsync = inner.GetRevertibleAsync
           MarkRevertedAsync =
             fun recordId ->
@@ -114,6 +117,7 @@ module private Publishing =
         { SaveAsync = saveAsync
           GetBaselineAsync = inner.GetBaselineAsync
           GetTracesAsync = inner.GetTracesAsync
+          GetByExecutionAsync = inner.GetByExecutionAsync
           DeleteOwnerAsync = inner.DeleteOwnerAsync
           DeleteExpiredAsync = inner.DeleteExpiredAsync }
 

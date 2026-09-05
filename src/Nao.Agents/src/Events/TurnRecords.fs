@@ -45,6 +45,8 @@ type TurnRecord =
     {
         /// Stable identifier for this turn.
         TurnId: string
+        /// Execution identity, correlation, causation, and attempt for this turn.
+        Correlation: CorrelationContext
         /// Session this turn belongs to.
         SessionId: string
         /// User who initiated the turn.
@@ -67,8 +69,10 @@ type TurnRecord =
         CreatedAt: DateTimeOffset
     }
 
-    static member Empty =
+module TurnRecord =
+    let empty correlation : TurnRecord =
         { TurnId = ""
+          Correlation = correlation
           SessionId = ""
           UserId = ""
           WorkspaceKey = ""

@@ -155,7 +155,9 @@ module EtclovgHarness =
                 { agentContext with
                     Correlation = execCtx.Correlation }
 
-            let mutable trace = Verification.startTrace agent.Metadata.Id input
+            let mutable trace =
+                Verification.startTrace execCtx.Correlation agent.Metadata.Id input
+
             let mutable policyViolations = []
             let mutable constitutionViolations = []
 
@@ -237,7 +239,7 @@ module EtclovgHarness =
                         let rootSpan =
                             config.Tracer
                             |> Option.map (fun t ->
-                                let s = t.StartTrace(sprintf "harness:%s" agent.Metadata.Name)
+                                let s = t.StartTrace execCtx.Correlation (sprintf "harness:%s" agent.Metadata.Name)
 
                                 t.SetAttributes
                                     s

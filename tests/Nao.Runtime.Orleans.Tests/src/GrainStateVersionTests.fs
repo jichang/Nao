@@ -10,14 +10,22 @@ type GrainStateVersionTests() =
     [<TestMethod>]
     member _.NewStateReceivesCurrentVersion() =
         let mutable version = 0
-        GrainStateVersion.prepare "Session state" false version (fun value -> version <- value)
-        Assert.AreEqual(GrainStateVersion.Current, version)
+
+        GrainStateVersion.prepare GrainStateVersion.SessionCurrent "Session state" false version (fun value ->
+            version <- value)
+
+        Assert.AreEqual(GrainStateVersion.SessionCurrent, version)
 
     [<TestMethod>]
     member _.CurrentPersistedStateIsAcceptedWithoutMutation() =
         let mutable setterCalled = false
 
-        GrainStateVersion.prepare "Session state" true GrainStateVersion.Current (fun _ -> setterCalled <- true)
+        GrainStateVersion.prepare
+            GrainStateVersion.SessionCurrent
+            "Session state"
+            true
+            GrainStateVersion.SessionCurrent
+            (fun _ -> setterCalled <- true)
 
         Assert.IsFalse(setterCalled)
 
@@ -27,7 +35,8 @@ type GrainStateVersionTests() =
 
         let error =
             Assert.ThrowsExactly<InvalidDataException>(fun () ->
-                GrainStateVersion.prepare "Session state" true 0 (fun _ -> setterCalled <- true))
+                GrainStateVersion.prepare GrainStateVersion.SessionCurrent "Session state" true 0 (fun _ ->
+                    setterCalled <- true))
 
         StringAssert.Contains(error.Message, "version 0")
         StringAssert.Contains(error.Message, "docs/migrations")

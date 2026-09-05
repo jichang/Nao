@@ -33,6 +33,8 @@ type EvalResult =
         DatasetId: Guid
         /// Evaluation run that produced this result
         RunId: Guid
+        /// Agent execution that produced the evaluated output
+        ExecutionId: ExecutionId
         /// The eval case that was run
         CaseId: string
         /// The agent's actual output

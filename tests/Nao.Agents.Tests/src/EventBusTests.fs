@@ -40,7 +40,7 @@ type EventBusTests() =
         )
 
     let sampleTurn () =
-        { TurnRecord.Empty with
+        { TurnRecord.empty (CorrelationContext.root ()) with
             TurnId = "turn-1"
             SessionId = "s1"
             UserId = "dev"

@@ -9,11 +9,11 @@ module VerificationJudge =
 
     /// Create an evaluator from a verification judge.
     let fromJudge (judge: Judge) (agentId: string) =
-        Evaluator.create (sprintf "judge:%s" judge.Name) (fun (case: EvalCase) (actual: string) ->
+        Evaluator.create (sprintf "judge:%s" judge.Name) (fun correlation (case: EvalCase) (actual: string) ->
             task {
                 // Create an execution trace from the eval case output
                 let trace =
-                    Verification.startTrace agentId case.Input
+                    Verification.startTrace correlation agentId case.Input
                     |> Verification.addStep (TraceAction.LlmCall "unknown") case.Input actual 0L
                     |> Verification.complete actual
 
