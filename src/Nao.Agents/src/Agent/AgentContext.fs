@@ -26,7 +26,7 @@ type AgentContext =
 
 [<RequireQualifiedAccess>]
 module AgentContext =
-    /// Permissive no-op context for isolated tests and hosts without permissions or publishing.
+    /// Permissive no-op context for isolated tests only. Production hosts must use a harness-required context.
     let unrestrictedForTests () =
         { Correlation = CorrelationContext.root ()
           SessionKey = ""

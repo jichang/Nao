@@ -30,6 +30,8 @@ Nao supports only the current durable schema during active development. Until a 
 | Audit log | ADO.NET | Component schema version 1 | Schema and all existing rows are validated before mutation; invalid actions identify their row. |
 | Execution journal | File | `schemaVersion = 1` | Records retain full execution correlation and support execution lookup; unsupported or corrupt documents reject before mutation. |
 | Execution journal | ADO.NET | Component schema version 1 | Indexed execution lookup is supported; schema and all existing rows are validated before mutation with record diagnostics. |
+| Harness checkpoints | File | `schemaVersion = 1` | `harness-checkpoints.json` records accepted, execution-started, and terminal phases with owner and execution identity; unsupported or corrupt documents reject before mutation. |
+| Harness checkpoints | ADO.NET | Component schema version 1 | `nao_harness_checkpoints` provides ordered execution lookup and owner-scoped lifecycle deletion. |
 | Evaluation archive | JSONL | Event envelope version 1 | Results support owner-scoped execution lookup; unsupported versions reject before directory creation or append. |
 | Orleans session state | Orleans provider | Nao schema version 1 plus Orleans field IDs | Conversation messages retain full execution correlation; persisted missing or unsupported versions reject before state access or mutation. |
 | Orleans session-directory state | Orleans provider | Nao schema version 1 plus Orleans field IDs | New state is stamped during activation; persisted missing or unsupported versions reject before state access or mutation. |

@@ -125,6 +125,37 @@ module EtclovgHarness =
             request.Correlation
         )
 
+    let private checkpointPhase =
+        function
+        | ExecutionTerminalStatus.Succeeded -> HarnessCheckpointPhase.Succeeded
+        | ExecutionTerminalStatus.Failed _ -> HarnessCheckpointPhase.Failed
+        | ExecutionTerminalStatus.Denied _ -> HarnessCheckpointPhase.Denied
+        | ExecutionTerminalStatus.Cancelled -> HarnessCheckpointPhase.Cancelled
+        | ExecutionTerminalStatus.TimedOut -> HarnessCheckpointPhase.TimedOut
+        | ExecutionTerminalStatus.LimitExceeded _ -> HarnessCheckpointPhase.LimitExceeded
+        | ExecutionTerminalStatus.Indeterminate _ -> HarnessCheckpointPhase.Indeterminate
+
+    let private saveCheckpoint config request phase =
+        match config.ExecutionJournal with
+        | None -> Task.CompletedTask
+        | Some journal ->
+            let scope = eventScope request
+
+            let owner =
+                if String.IsNullOrWhiteSpace scope.SessionKey then
+                    sprintf "execution:%s" (ExecutionId.serialize request.Correlation.ExecutionId)
+                else
+                    scope.SessionKey
+
+            journal.Checkpoints.Save
+                { Id = Guid.NewGuid()
+                  Correlation = request.Correlation
+                  Owner = owner
+                  TurnId = request.TurnId |> TurnId.value
+                  AgentId = request.AgentId
+                  Phase = phase
+                  RecordedAt = DateTimeOffset.UtcNow }
+
     let private failResult
         (harnessError: HarnessError)
         (correlation: CorrelationContext)
@@ -425,6 +456,9 @@ module EtclovgHarness =
 
                         // === L: Lifecycle — Start ===
                         let! _startedLc = AgentLifecycle.startAsync agent.Metadata.Id effectiveInput initializedLc
+
+                        if parentExecutionContext.IsNone then
+                            do! saveCheckpoint config request HarnessCheckpointPhase.ExecutionStarted
 
                         // === O: Observability — Start trace span ===
                         let rootSpan =
@@ -731,11 +765,15 @@ module EtclovgHarness =
     /// Run an agent through the full ETCLOVG harness with caller cancellation.
     let runAsync config agentContext agent request cancellationToken =
         task {
+            do! saveCheckpoint config request HarnessCheckpointPhase.Accepted
+
             use deadline =
                 new System.Threading.CancellationTokenSource(request.Sandbox.Limits.MaxDuration)
 
             use execution =
                 System.Threading.CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline.Token)
 
-            return! runAgentAsync config agentContext agent request None execution.Token cancellationToken
+            let! result = runAgentAsync config agentContext agent request None execution.Token cancellationToken
+            do! saveCheckpoint config request (checkpointPhase result.Status)
+            return result
         }

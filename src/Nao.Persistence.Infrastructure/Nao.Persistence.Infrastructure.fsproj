@@ -9,6 +9,7 @@
     <Compile Include="..\Nao.Persistence\src\Infrastructure\Ado.fs" Link="src\Infrastructure\Ado.fs" />
     <Compile Include="..\Nao.Persistence\src\Infrastructure\PersistenceMode.fs" Link="src\Infrastructure\PersistenceMode.fs" />
     <Compile Include="..\Nao.Persistence\src\Infrastructure\Serialization.fs" Link="src\Infrastructure\Serialization.fs" />
+    <Compile Include="..\Nao.Persistence\src\Infrastructure\HarnessCheckpointSerialization.fs" Link="src\Infrastructure\HarnessCheckpointSerialization.fs" />
     <Compile Include="..\Nao.Persistence\src\Infrastructure\EventStore.fs" Link="src\Infrastructure\EventStore.fs" />
     <Compile Include="..\Nao.Persistence\src\Events\EventBus.fs" Link="src\Events\EventBus.fs" />
   </ItemGroup>

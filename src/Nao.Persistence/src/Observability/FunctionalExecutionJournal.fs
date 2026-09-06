@@ -36,6 +36,7 @@ module private JournalOperations =
 module InMemoryExecutionJournal =
     let create () : ExecutionJournal =
         let entries = System.Collections.Generic.List<ExecutionRecord>()
+        let checkpoints = System.Collections.Generic.List<HarnessCheckpoint>()
 
         let recordAsync (record: ExecutionRecord) =
             JournalOperations.requireOwner record.Owner
@@ -52,6 +53,19 @@ module InMemoryExecutionJournal =
                 |> Seq.toList)
             |> Task.FromResult
 
+        let saveCheckpoint (checkpoint: HarnessCheckpoint) =
+            JournalOperations.requireOwner checkpoint.Owner
+            lock checkpoints (fun () -> checkpoints.Add checkpoint)
+            Task.CompletedTask
+
+        let getCheckpoints (executionId: ExecutionId) =
+            lock checkpoints (fun () ->
+                checkpoints
+                |> Seq.filter (fun checkpoint -> checkpoint.Correlation.ExecutionId = executionId)
+                |> Seq.sortBy _.RecordedAt
+                |> Seq.toList)
+            |> Task.FromResult
+
         let getRevertibleAsync () =
             lock entries (fun () -> entries |> Seq.filter (fun entry -> not entry.Reverted) |> Seq.toList)
             |> Task.FromResult
@@ -64,16 +78,27 @@ module InMemoryExecutionJournal =
 
             Task.CompletedTask
 
-        let delete (predicate: ExecutionRecord -> bool) =
-            lock entries (fun () -> entries.RemoveAll(fun record -> predicate record))
-            |> Task.FromResult
+        let delete (recordPredicate: ExecutionRecord -> bool) (checkpointPredicate: HarnessCheckpoint -> bool) =
+            let recordsDeleted =
+                lock entries (fun () -> entries.RemoveAll(fun record -> recordPredicate record))
+
+            let checkpointsDeleted =
+                lock checkpoints (fun () -> checkpoints.RemoveAll(fun checkpoint -> checkpointPredicate checkpoint))
+
+            Task.FromResult(recordsDeleted + checkpointsDeleted)
 
         let deleteOwnerAsync owner =
-            JournalOperations.protect owner (fun () -> delete (fun record -> record.Owner = owner))
+            JournalOperations.protect owner (fun () ->
+                delete (fun record -> record.Owner = owner) (fun checkpoint -> checkpoint.Owner = owner))
 
         let deleteExpiredAsync owner before =
             JournalOperations.protect owner (fun () ->
-                delete (fun record -> record.Owner = owner && record.ExecutedAt < before))
+                delete (fun record -> record.Owner = owner && record.ExecutedAt < before) (fun checkpoint ->
+                    checkpoint.Owner = owner && checkpoint.RecordedAt < before))
+
+        let checkpointJournal =
+            { Save = saveCheckpoint
+              GetByExecution = getCheckpoints }
 
         { RecordAsync = recordAsync
           GetHistoryAsync = getHistoryAsync
@@ -81,7 +106,8 @@ module InMemoryExecutionJournal =
           GetRevertibleAsync = getRevertibleAsync
           MarkRevertedAsync = markRevertedAsync
           DeleteOwnerAsync = deleteOwnerAsync
-          DeleteExpiredAsync = deleteExpiredAsync }
+          DeleteExpiredAsync = deleteExpiredAsync
+          Checkpoints = checkpointJournal }
 
 module AdoExecutionJournal =
     let create (factory: DbConnectionFactory) : ExecutionJournal =
@@ -94,10 +120,23 @@ module AdoExecutionJournal =
                         "nao_execution_journal"
                         "CREATE TABLE IF NOT EXISTS nao_execution_journal (record_id TEXT NOT NULL PRIMARY KEY, execution_id TEXT NOT NULL, correlation_id TEXT NOT NULL, causation_id TEXT NULL, attempt INTEGER NOT NULL, owner TEXT NOT NULL, turn_id TEXT NOT NULL, tool_name TEXT NOT NULL, tool_input TEXT NOT NULL, tool_output TEXT NOT NULL, executed_at TEXT NOT NULL, reverted INTEGER NOT NULL, metadata TEXT NOT NULL)"
 
+                do!
+                    AdoSchema.ensureVersionedTable
+                        factory
+                        "harness-checkpoints"
+                        "nao_harness_checkpoints"
+                        "CREATE TABLE IF NOT EXISTS nao_harness_checkpoints (checkpoint_id TEXT NOT NULL PRIMARY KEY, execution_id TEXT NOT NULL, correlation_id TEXT NOT NULL, causation_id TEXT NULL, attempt INTEGER NOT NULL, owner TEXT NOT NULL, turn_id TEXT NOT NULL, agent_id TEXT NOT NULL, phase TEXT NOT NULL, recorded_at TEXT NOT NULL)"
+
                 let! _ =
                     Ado.executeNonQuery
                         factory
                         "CREATE INDEX IF NOT EXISTS nao_execution_journal_owner_time ON nao_execution_journal (owner, executed_at)"
+                        []
+
+                let! _ =
+                    Ado.executeNonQuery
+                        factory
+                        "CREATE INDEX IF NOT EXISTS nao_harness_checkpoints_owner_time ON nao_harness_checkpoints (owner, recorded_at)"
                         []
 
                 return ()
@@ -149,6 +188,69 @@ module AdoExecutionJournal =
                         mapRecord
 
                 return ()
+            }
+
+        let mapCheckpoint (reader: DbDataReader) : HarnessCheckpoint =
+            let id = Ado.getString reader "checkpoint_id"
+
+            try
+                HarnessCheckpointSerialization.ofDto
+                    { Id = Guid.Parse id
+                      ExecutionId = Ado.getString reader "execution_id"
+                      CorrelationId = Ado.getString reader "correlation_id"
+                      CausationId = Ado.getStringOpt reader "causation_id" |> Option.defaultValue null
+                      Attempt = Convert.ToInt32(reader.["attempt"])
+                      Owner = Ado.getString reader "owner"
+                      TurnId = Ado.getString reader "turn_id"
+                      AgentId = Ado.getString reader "agent_id"
+                      Phase = Ado.getString reader "phase"
+                      RecordedAt = Time.fromIso (Ado.getString reader "recorded_at") }
+            with ex ->
+                raise (
+                    InvalidDataException(
+                        sprintf "Harness-checkpoint row '%s' is invalid. Follow docs/migrations before writing." id,
+                        ex
+                    )
+                )
+
+        let saveCheckpoint (checkpoint: HarnessCheckpoint) =
+            task {
+                JournalOperations.requireOwner checkpoint.Owner
+                do! ensureAsync ()
+                let dto = HarnessCheckpointSerialization.toDto checkpoint
+
+                let causationId =
+                    Option.ofObj dto.CausationId |> Option.map box |> Option.defaultValue null
+
+                let! _ =
+                    Ado.executeNonQuery
+                        factory
+                        "INSERT INTO nao_harness_checkpoints (checkpoint_id, execution_id, correlation_id, causation_id, attempt, owner, turn_id, agent_id, phase, recorded_at) VALUES (@id, @ex, @co, @ca, @at, @ow, @tr, @ag, @ph, @ra)"
+                        [ "@id", box (dto.Id.ToString("D"))
+                          "@ex", box dto.ExecutionId
+                          "@co", box dto.CorrelationId
+                          "@ca", causationId
+                          "@at", box dto.Attempt
+                          "@ow", box dto.Owner
+                          "@tr", box dto.TurnId
+                          "@ag", box dto.AgentId
+                          "@ph", box dto.Phase
+                          "@ra", box (Time.toIso dto.RecordedAt) ]
+
+                return ()
+            }
+            :> Task
+
+        let getCheckpoints executionId =
+            task {
+                do! ensureAsync ()
+
+                return!
+                    Ado.query
+                        factory
+                        "SELECT checkpoint_id, execution_id, correlation_id, causation_id, attempt, owner, turn_id, agent_id, phase, recorded_at FROM nao_harness_checkpoints WHERE execution_id = @ex ORDER BY recorded_at ASC"
+                        [ "@ex", box (ExecutionId.serialize executionId) ]
+                        mapCheckpoint
             }
 
         let recordAsync (record: ExecutionRecord) =
@@ -238,11 +340,19 @@ module AdoExecutionJournal =
                 task {
                     do! validateAsync ()
 
-                    return!
+                    let! recordsDeleted =
                         Ado.executeNonQuery
                             factory
                             "DELETE FROM nao_execution_journal WHERE owner = @ow"
                             [ "@ow", box owner ]
+
+                    let! checkpointsDeleted =
+                        Ado.executeNonQuery
+                            factory
+                            "DELETE FROM nao_harness_checkpoints WHERE owner = @ow"
+                            [ "@ow", box owner ]
+
+                    return recordsDeleted + checkpointsDeleted
                 })
 
         let deleteExpiredAsync owner before =
@@ -250,12 +360,24 @@ module AdoExecutionJournal =
                 task {
                     do! validateAsync ()
 
-                    return!
+                    let! recordsDeleted =
                         Ado.executeNonQuery
                             factory
                             "DELETE FROM nao_execution_journal WHERE owner = @ow AND executed_at < @before"
                             [ "@ow", box owner; "@before", box (Time.toIso before) ]
+
+                    let! checkpointsDeleted =
+                        Ado.executeNonQuery
+                            factory
+                            "DELETE FROM nao_harness_checkpoints WHERE owner = @ow AND recorded_at < @before"
+                            [ "@ow", box owner; "@before", box (Time.toIso before) ]
+
+                    return recordsDeleted + checkpointsDeleted
                 })
+
+        let checkpointJournal =
+            { Save = saveCheckpoint
+              GetByExecution = getCheckpoints }
 
         { RecordAsync = recordAsync
           GetHistoryAsync = getHistoryAsync
@@ -263,7 +385,8 @@ module AdoExecutionJournal =
           GetRevertibleAsync = getRevertibleAsync
           MarkRevertedAsync = markRevertedAsync
           DeleteOwnerAsync = deleteOwnerAsync
-          DeleteExpiredAsync = deleteExpiredAsync }
+          DeleteExpiredAsync = deleteExpiredAsync
+          Checkpoints = checkpointJournal }
 
 module FileExecutionJournal =
     [<CLIMutable>]
@@ -271,9 +394,15 @@ module FileExecutionJournal =
         { SchemaVersion: int
           Records: Dto.ExecutionRecordDto list }
 
+    [<CLIMutable>]
+    type CheckpointDocument =
+        { SchemaVersion: int
+          Checkpoints: HarnessCheckpointSerialization.Dto list }
+
     let create baseDir : ExecutionJournal =
         let sync = obj ()
         let file = Path.Combine(baseDir, "execution-journal.json")
+        let checkpointFile = Path.Combine(baseDir, "harness-checkpoints.json")
 
         let load () =
             if not (File.Exists file) then
@@ -298,6 +427,34 @@ module FileExecutionJournal =
         let save records =
             FileJson.write file { SchemaVersion = 1; Records = records }
 
+        let loadCheckpoints () =
+            if not (File.Exists checkpointFile) then
+                []
+            else
+                try
+                    let document =
+                        FileJson.read<CheckpointDocument> checkpointFile Unchecked.defaultof<CheckpointDocument>
+
+                    if isNull (box document) || document.SchemaVersion <> 1 then
+                        raise (InvalidDataException "Expected harness checkpoint schema version 1.")
+
+                    document.Checkpoints
+                with ex ->
+                    raise (
+                        InvalidDataException(
+                            sprintf
+                                "Harness checkpoints '%s' are invalid. Follow docs/migrations before writing."
+                                checkpointFile,
+                            ex
+                        )
+                    )
+
+        let saveCheckpoints checkpoints =
+            FileJson.write
+                checkpointFile
+                { SchemaVersion = 1
+                  Checkpoints = checkpoints }
+
         let recordAsync (record: ExecutionRecord) =
             JournalOperations.requireOwner record.Owner
             task { lock sync (fun () -> save (Dto.toExecutionDto record :: load ())) } :> Task
@@ -312,6 +469,28 @@ module FileExecutionJournal =
                         load ()
                         |> List.map Dto.ofExecutionDto
                         |> List.filter (fun record -> record.Correlation.ExecutionId = executionId))
+            }
+
+        let saveCheckpoint (checkpoint: HarnessCheckpoint) =
+            JournalOperations.requireOwner checkpoint.Owner
+
+            task {
+                lock sync (fun () ->
+                    checkpoint
+                    |> HarnessCheckpointSerialization.toDto
+                    |> fun dto -> loadCheckpoints () @ [ dto ]
+                    |> saveCheckpoints)
+            }
+            :> Task
+
+        let getCheckpoints executionId =
+            task {
+                return
+                    lock sync (fun () ->
+                        loadCheckpoints ()
+                        |> List.map HarnessCheckpointSerialization.ofDto
+                        |> List.filter (fun checkpoint -> checkpoint.Correlation.ExecutionId = executionId)
+                        |> List.sortBy _.RecordedAt)
             }
 
         let getRevertibleAsync () =
@@ -339,22 +518,40 @@ module FileExecutionJournal =
             }
             :> Task
 
-        let delete (predicate: ExecutionRecord -> bool) =
+        let delete (recordPredicate: ExecutionRecord -> bool) (checkpointPredicate: HarnessCheckpoint -> bool) =
             task {
                 return
                     lock sync (fun () ->
                         let records = load () in
-                        let retained = records |> List.filter (Dto.ofExecutionDto >> predicate >> not) in
-                        save retained
-                        records.Length - retained.Length)
+
+                        let retainedRecords =
+                            records |> List.filter (Dto.ofExecutionDto >> recordPredicate >> not) in
+
+                        let checkpoints = loadCheckpoints () in
+
+                        let retainedCheckpoints =
+                            checkpoints
+                            |> List.filter (HarnessCheckpointSerialization.ofDto >> checkpointPredicate >> not) in
+
+                        save retainedRecords
+                        saveCheckpoints retainedCheckpoints
+
+                        records.Length - retainedRecords.Length + checkpoints.Length
+                        - retainedCheckpoints.Length)
             }
 
         let deleteOwnerAsync owner =
-            JournalOperations.protect owner (fun () -> delete (fun record -> record.Owner = owner))
+            JournalOperations.protect owner (fun () ->
+                delete (fun record -> record.Owner = owner) (fun checkpoint -> checkpoint.Owner = owner))
 
         let deleteExpiredAsync owner before =
             JournalOperations.protect owner (fun () ->
-                delete (fun record -> record.Owner = owner && record.ExecutedAt < before))
+                delete (fun record -> record.Owner = owner && record.ExecutedAt < before) (fun checkpoint ->
+                    checkpoint.Owner = owner && checkpoint.RecordedAt < before))
+
+        let checkpointJournal =
+            { Save = saveCheckpoint
+              GetByExecution = getCheckpoints }
 
         { RecordAsync = recordAsync
           GetHistoryAsync = getHistoryAsync
@@ -362,7 +559,8 @@ module FileExecutionJournal =
           GetRevertibleAsync = getRevertibleAsync
           MarkRevertedAsync = markRevertedAsync
           DeleteOwnerAsync = deleteOwnerAsync
-          DeleteExpiredAsync = deleteExpiredAsync }
+          DeleteExpiredAsync = deleteExpiredAsync
+          Checkpoints = checkpointJournal }
 
 module ExecutionJournals =
     let ado factory : ExecutionJournal = AdoExecutionJournal.create factory

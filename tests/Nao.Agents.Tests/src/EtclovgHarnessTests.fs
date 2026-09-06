@@ -98,6 +98,41 @@ type EtclovgHarnessTests() =
         Assert.IsTrue(result.Evidence.Trace.IsSome)
 
     [<TestMethod>]
+    member _.HarnessPersistsTypedBoundaryCheckpoints() =
+        let agent = makeAgent "checkpointed"
+        let journal = InMemoryExecutionJournal.create ()
+
+        let config =
+            { EtclovgConfig.Default with
+                ExecutionJournal = Some journal }
+
+        let context = AgentContext.unrestrictedForTests ()
+        let executionRequest = request context agent "input"
+        let result = (EtclovgHarness.runAsync config context agent executionRequest).Result
+
+        let checkpoints =
+            journal.Checkpoints.GetByExecution result.Correlation.ExecutionId |> _.Result
+
+        CollectionAssert.AreEqual(
+            [| HarnessCheckpointPhase.Accepted
+               HarnessCheckpointPhase.ExecutionStarted
+               HarnessCheckpointPhase.Succeeded |],
+            checkpoints |> List.map _.Phase |> List.toArray
+        )
+
+        Assert.IsTrue(
+            checkpoints
+            |> List.forall (fun checkpoint -> checkpoint.Correlation = result.Correlation)
+        )
+
+        Assert.IsTrue(
+            checkpoints
+            |> List.forall (fun checkpoint -> checkpoint.AgentId = agent.Metadata.Id)
+        )
+
+        Assert.IsTrue(checkpoints |> List.forall (fun checkpoint -> checkpoint.TurnId = "turn"))
+
+    [<TestMethod>]
     member _.DirectAgentExecutionFailsClosedWhenHarnessIsRequired() =
         let mutable executed = false
 

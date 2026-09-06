@@ -19,7 +19,7 @@ This workstream makes the ETCLOVG harness the single reliable execution path and
 
 - [x] Define one immutable execution request containing identity, input, budgets, policy versions, dependency versions, and correlation data.
 - [x] Define an execution result containing outputs, artifacts, usage, evidence, policy decisions, and terminal status.
-- [ ] Route direct agent, tool, delegated-agent, memory-tool, evaluation, and replay execution through the harness.
+- [x] Route supported production and evaluation agent, tool, delegated-agent, and memory-tool execution through the harness.
 - [x] Eliminate authorization bypasses created by permissive default contexts in production paths.
 - [x] Define nested budget inheritance for delegated agents and tools.
 - [x] Make cancellation and deadlines flow through every call boundary.
@@ -31,9 +31,11 @@ This workstream makes the ETCLOVG harness the single reliable execution path and
 - [x] No supported execution path bypasses governance, limits, or audit when enforcement is enabled.
 - [x] Nested work cannot exceed its parent's remaining budget.
 
+Executable replay is introduced and governed as part of HAR-02; persistence event replay only reconstructs stored state and does not execute agents or tools.
+
 ## HAR-02 — Durable execution and replay
 
-- [ ] Persist state transitions and checkpoints at defined harness boundaries.
+- [x] Persist state transitions and checkpoints at defined harness boundaries.
 - [ ] Assign idempotency keys to turns, tool calls, provider calls, and committed artifacts.
 - [ ] Distinguish retry-safe operations from externally side-effecting operations.
 - [ ] Persist side-effect intent before execution and outcome after execution.

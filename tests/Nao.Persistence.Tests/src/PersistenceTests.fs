@@ -389,6 +389,15 @@ let private execRecord (tool: string) (at: DateTimeOffset) : ExecutionRecord =
       Reverted = false
       Metadata = Map.ofList [ "m", "1" ] }
 
+let private checkpointRecord correlation owner turnId recordedAt : HarnessCheckpoint =
+    { Id = Guid.NewGuid()
+      Correlation = correlation
+      Owner = owner
+      TurnId = turnId
+      AgentId = "checkpoint-agent"
+      Phase = HarnessCheckpointPhase.Succeeded
+      RecordedAt = recordedAt }
+
 let private runJournalRoundTrip (journal: ExecutionJournal) =
     task {
         let t0 = DateTimeOffset.UtcNow
@@ -409,6 +418,13 @@ let private runJournalRoundTrip (journal: ExecutionJournal) =
 
         let! unknownExecution = journal.GetByExecutionAsync(ExecutionId.generate ())
         Assert.IsTrue(unknownExecution.IsEmpty)
+
+        let checkpoint =
+            checkpointRecord r2.Correlation r2.Owner r2.TurnId (t0.AddSeconds 3.0)
+
+        do! journal.Checkpoints.Save checkpoint
+        let! checkpoints = journal.Checkpoints.GetByExecution checkpoint.Correlation.ExecutionId
+        Assert.AreEqual([ checkpoint ], checkpoints)
 
         let! revertible = journal.GetRevertibleAsync()
         Assert.AreEqual(2, revertible.Length)

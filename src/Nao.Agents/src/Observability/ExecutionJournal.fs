@@ -17,6 +17,34 @@ type ExecutionRecord =
       Reverted: bool
       Metadata: Map<string, string> }
 
+/// Stable harness boundary represented by a durable checkpoint.
+[<RequireQualifiedAccess>]
+type HarnessCheckpointPhase =
+    | Accepted
+    | ExecutionStarted
+    | Succeeded
+    | Failed
+    | Denied
+    | Cancelled
+    | TimedOut
+    | LimitExceeded
+    | Indeterminate
+
+/// Minimal durable fact about one harness transition.
+type HarnessCheckpoint =
+    { Id: Guid
+      Correlation: CorrelationContext
+      Owner: string
+      TurnId: string
+      AgentId: string
+      Phase: HarnessCheckpointPhase
+      RecordedAt: DateTimeOffset }
+
+/// Persistence operations for harness checkpoints.
+type HarnessCheckpointJournal =
+    { Save: HarnessCheckpoint -> Task
+      GetByExecution: ExecutionId -> Task<HarnessCheckpoint list> }
+
 /// Functional journal operations for tool execution revert/audit support.
 type ExecutionJournal =
     { RecordAsync: ExecutionRecord -> Task
@@ -25,7 +53,8 @@ type ExecutionJournal =
       GetRevertibleAsync: unit -> Task<ExecutionRecord list>
       MarkRevertedAsync: Guid -> Task
       DeleteOwnerAsync: string -> Task<Result<int, PlatformFailure>>
-      DeleteExpiredAsync: string -> DateTimeOffset -> Task<Result<int, PlatformFailure>> }
+      DeleteExpiredAsync: string -> DateTimeOffset -> Task<Result<int, PlatformFailure>>
+      Checkpoints: HarnessCheckpointJournal }
 
 module internal RuntimeExecutionJournal =
     let private current = AsyncLocal<ExecutionJournal option>()
