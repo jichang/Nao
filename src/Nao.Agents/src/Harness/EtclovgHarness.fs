@@ -178,12 +178,30 @@ module EtclovgHarness =
           Evidence = evidence
           PolicyDecisions = decisions }
 
+    let private stoppedResult status correlation artifacts usage trace policyViolations sessionKey metrics =
+        let result =
+            failResult
+                (HarnessError.ExecutionFailed(status.ToString()))
+                correlation
+                artifacts
+                usage
+                trace
+                policyViolations
+                []
+                sessionKey
+                metrics
+                0
+
+        { result with Status = status }
+
     let rec private runAgentAsync
         (config: EtclovgConfig)
         (agentContext: AgentContext)
         (agent: Agent)
         (request: ExecutionRequest)
         (parentExecutionContext: ExecutionContext option)
+        (executionCancellation: System.Threading.CancellationToken)
+        (callerCancellation: System.Threading.CancellationToken)
         : Task<ExecutionResult> =
         task {
             let input = request.Input
@@ -193,7 +211,11 @@ module EtclovgHarness =
             let execCtx =
                 match parentExecutionContext with
                 | Some parent -> parent.CreateChild(request.Correlation)
-                | None -> ExecutionContext.CreateWithCorrelation request.Sandbox request.Correlation
+                | None ->
+                    ExecutionContext.CreateWithCorrelationAndCancellation
+                        request.Sandbox
+                        request.Correlation
+                        executionCancellation
 
             let publishArtifact = agentContext.PublishArtifact
 
@@ -213,7 +235,16 @@ module EtclovgHarness =
                             request.DependencyVersions
                             childCorrelation
 
-                    let! result = runAgentAsync config childContext child childRequest (Some execCtx)
+                    let! result =
+                        runAgentAsync
+                            config
+                            childContext
+                            child
+                            childRequest
+                            (Some execCtx)
+                            executionCancellation
+                            callerCancellation
+
                     artifacts.AddRange result.Outputs.Artifacts
 
                     match result.Status, result.Outputs.Response with
@@ -229,6 +260,9 @@ module EtclovgHarness =
                             )
                     | ExecutionTerminalStatus.LimitExceeded limit, _ ->
                         return raise (ExecutionLimitExceededException limit)
+                    | ExecutionTerminalStatus.Cancelled, _
+                    | ExecutionTerminalStatus.TimedOut, _ ->
+                        return raise (OperationCanceledException(execCtx.CancellationToken))
                     | status, _ ->
                         return
                             Error(
@@ -260,11 +294,15 @@ module EtclovgHarness =
                                     false
                                     (request.Correlation.ExecutionId |> ExecutionId.serialize |> Some)
                             )
-                    | _ ->
+                    | result ->
+                        let effectiveToolInput =
+                            result |> Option.bind _.ModifiedInput |> Option.defaultValue toolInput
+
                         match execCtx.BeginToolCall() with
                         | Some limit -> return raise (ExecutionLimitExceededException limit)
                         | None ->
-                            let! result = tool.RunAsync toolContext toolInput
+                            let! result =
+                                (tool.RunAsync toolContext effectiveToolInput).WaitAsync(execCtx.CancellationToken)
 
                             return
                                 result
@@ -287,17 +325,16 @@ module EtclovgHarness =
                     SessionKey = scope.SessionKey
                     TurnId = request.TurnId |> TurnId.value
                     ExecutionBoundary = ExecutionBoundary.HarnessRequired
+                    CancellationToken = execCtx.CancellationToken
                     PublishArtifact = publishCapturedArtifact }
 
             let dispatcher =
                 { RunAgent = executeChild
                   RunTool = executeTool }
 
-            let mutable trace =
-                Verification.startTrace execCtx.Correlation agent.Metadata.Id input
-
             let mutable policyViolations = []
             let mutable constitutionViolations = []
+            let mutable effectiveInput = input
 
             // === G: Identity and policy pre-checks ===
             let preflightError =
@@ -311,6 +348,7 @@ module EtclovgHarness =
 
                         let result = engine.Evaluate(ctx)
                         policyViolations <- result.Violations
+                        effectiveInput <- result.ModifiedInput |> Option.defaultValue input
 
                         if not result.Proceed then
                             result.Violations
@@ -320,6 +358,9 @@ module EtclovgHarness =
                         else
                             None
                     | None -> None
+
+            let mutable trace =
+                Verification.startTrace execCtx.Correlation agent.Metadata.Id effectiveInput
 
             match preflightError with
             | Some error ->
@@ -340,7 +381,7 @@ module EtclovgHarness =
                 // === V: Verification — Readiness checks ===
                 let! readiness =
                     if config.ReadinessChecks.Length > 0 then
-                        Verification.checkReadiness config.ReadinessChecks agent.Metadata.Id input
+                        Verification.checkReadiness config.ReadinessChecks agent.Metadata.Id effectiveInput
                     else
                         Task.FromResult ReadinessResult.Ready
 
@@ -383,7 +424,7 @@ module EtclovgHarness =
                     | Ok initializedLc ->
 
                         // === L: Lifecycle — Start ===
-                        let! _startedLc = AgentLifecycle.startAsync agent.Metadata.Id input initializedLc
+                        let! _startedLc = AgentLifecycle.startAsync agent.Metadata.Id effectiveInput initializedLc
 
                         // === O: Observability — Start trace span ===
                         let rootSpan =
@@ -395,7 +436,7 @@ module EtclovgHarness =
                                     s
                                     (Map.ofList
                                         [ "agent.name", agent.Metadata.Name
-                                          "input", input
+                                          "input", effectiveInput
                                           "execution.id", ExecutionId.serialize execCtx.ExecutionId ])
 
                                 s)
@@ -441,11 +482,16 @@ module EtclovgHarness =
                             task {
                                 try
                                     try
-                                        let! result = env.ExecuteAsync execCtx governedContext agent input
+                                        let! result = env.ExecuteAsync execCtx governedContext agent effectiveInput
                                         return Ok result
                                     with
                                     | ExecutionLimitExceededException limit ->
-                                        return Error(HarnessError.ResourceLimitExceeded limit)
+                                        return Error(ExecutionTerminalStatus.LimitExceeded limit)
+                                    | :? OperationCanceledException ->
+                                        if callerCancellation.IsCancellationRequested then
+                                            return Error ExecutionTerminalStatus.Cancelled
+                                        else
+                                            return Error ExecutionTerminalStatus.TimedOut
                                     | error ->
                                         return
                                             error
@@ -453,6 +499,7 @@ module EtclovgHarness =
                                                 PlatformFailureBoundary.Agent
                                                 (request.Correlation.ExecutionId |> ExecutionId.serialize |> Some)
                                             |> harnessError
+                                            |> terminalStatus
                                             |> Error
                                 finally
                                     RuntimeMetrics.set previousMetrics
@@ -463,40 +510,56 @@ module EtclovgHarness =
 
                         sw.Stop()
 
+                        let executionOutcome =
+                            match executionOutcome with
+                            | Ok(Error LimitExceeded.Duration) -> Error ExecutionTerminalStatus.TimedOut
+                            | Error(ExecutionTerminalStatus.LimitExceeded LimitExceeded.Duration) ->
+                                Error ExecutionTerminalStatus.TimedOut
+                            | outcome -> outcome
+
                         // === O: End execution span ===
                         match execSpan, config.Tracer with
                         | Some s, Some tracer ->
                             match executionOutcome with
                             | Ok(Ok _) -> tracer.EndSpan s SpanStatus.Ok
                             | Ok(Error limit) -> tracer.EndSpan s (SpanStatus.Error(sprintf "%A" limit))
-                            | Error error -> tracer.EndSpan s (SpanStatus.Error error.Message)
+                            | Error status ->
+                                let failure =
+                                    status.ToPlatformFailure(
+                                        request.Correlation.ExecutionId |> ExecutionId.serialize |> Some
+                                    )
+
+                                tracer.EndSpan s (SpanStatus.Error failure.Message)
                         | _ -> ()
 
                         match executionOutcome with
-                        | Error error ->
-                            let! _ = AgentLifecycle.failAsync agent.Metadata.Id (exn error.Message) _startedLc
-                            trace <- trace |> Verification.fail error.Message
+                        | Error status ->
+                            let failure =
+                                status.ToPlatformFailure(
+                                    request.Correlation.ExecutionId |> ExecutionId.serialize |> Some
+                                )
+
+                            let! _ = AgentLifecycle.failAsync agent.Metadata.Id (exn failure.Message) _startedLc
+                            trace <- trace |> Verification.fail failure.Message
 
                             match config.TraceStore with
                             | Some store -> do! store.SaveAsync trace
                             | None -> ()
 
                             match rootSpan, config.Tracer with
-                            | Some span, Some tracer -> tracer.EndSpan span (SpanStatus.Error error.Message)
+                            | Some span, Some tracer -> tracer.EndSpan span (SpanStatus.Error failure.Message)
                             | _ -> ()
 
                             return
-                                failResult
-                                    error
+                                stoppedResult
+                                    status
                                     request.Correlation
                                     (List.ofSeq artifacts)
                                     execCtx.Usage
                                     trace
                                     policyViolations
-                                    []
                                     agentContext.SessionKey
                                     config.Metrics
-                                    0
 
                         | Ok(Error limitExceeded) ->
                             let! _ =
@@ -585,7 +648,7 @@ module EtclovgHarness =
                                     trace
                                     |> Verification.addStep
                                         (TraceAction.LlmCall "unknown")
-                                        input
+                                        effectiveInput
                                         response
                                         sw.ElapsedMilliseconds
 
@@ -665,6 +728,14 @@ module EtclovgHarness =
                                         decisions
         }
 
-    /// Run an agent through the full ETCLOVG harness.
-    let runAsync config agentContext agent request =
-        runAgentAsync config agentContext agent request None
+    /// Run an agent through the full ETCLOVG harness with caller cancellation.
+    let runAsync config agentContext agent request cancellationToken =
+        task {
+            use deadline =
+                new System.Threading.CancellationTokenSource(request.Sandbox.Limits.MaxDuration)
+
+            use execution =
+                System.Threading.CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline.Token)
+
+            return! runAgentAsync config agentContext agent request None execution.Token cancellationToken
+        }

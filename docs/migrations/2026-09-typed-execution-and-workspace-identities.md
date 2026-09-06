@@ -13,7 +13,7 @@
 - The Orleans-local `{ Key: string }` workspace identity is removed. The registry uses the core `WorkspaceId` type.
 - Harness telemetry serializes execution identifiers through `ExecutionId.serialize`.
 - `EventScope.Create` and `AgentContext` require a `CorrelationContext`; uncorrelated values are not representable.
-- `AgentContext.allowAll` is now a function that creates a fresh correlation root and must be called as `AgentContext.allowAll ()`.
+- `AgentContext.unrestrictedForTests` is a function that creates a fresh correlation root for isolated tests and must be called as `AgentContext.unrestrictedForTests ()`.
 - `EventScope.Empty` is replaced by `EventScope.CreateEmpty()`, which creates a fresh correlation root.
 - `ObservabilityServices.ServicesFor`, `PublishingHarnessServices.create`, and the Orleans session-grain harness-services factory require correlation.
 - `LlmProvider.CompleteAsync` and `StreamAsync` require the current `CorrelationContext`; provider adapters and orchestrators must forward it unchanged.
@@ -42,7 +42,7 @@
 2. Replace GUID formatting and parsing with `ExecutionId.serialize` and `ExecutionId.parse`.
 3. Replace `WorkspaceId.Key` with `WorkspaceId.value`; construct workspace IDs with `WorkspaceId.create` or `WorkspaceId.versioned`.
 4. Pass the existing correlation to events, agent contexts, and observability services participating in an execution. Operations outside an existing execution must create a fresh root with `CorrelationContext.root ()`.
-5. Replace `AgentContext.allowAll` values with `AgentContext.allowAll ()`, and replace `EventScope.Empty` with `EventScope.CreateEmpty()`.
+5. Replace permissive test contexts with `AgentContext.unrestrictedForTests ()`, and replace `EventScope.Empty` with `EventScope.CreateEmpty()`.
 6. Change Orleans harness-service factories to `Func<string, string, CorrelationContext, HarnessServices>`.
 7. Register `Func<SecurityPrincipal>` for Orleans session grains from the host's authenticated identity context. Construct authorization scopes from that principal; do not reconstruct principals from grain keys, routes, or request bodies. Reset or externally rebuild retained session state with exact tenant lineage before reopening it.
 8. Pass the current correlation to every provider completion, streaming request, and evaluator invocation. Populate `EvalResult.ExecutionId` from the case's agent context; do not create a second root for LLM judging.

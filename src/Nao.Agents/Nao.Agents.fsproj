@@ -24,7 +24,6 @@
     <Compile Include="src/Agent/AgentAction.fs" />
     <Compile Include="src/Agent/AgentMessage.fs" />
      <Compile Include="src/Agent/Agent.fs" />
-     <Compile Include="src/Harness/ExecutionRuntime.fs" />
     <Compile Include="src/Core/RetryPolicy.fs" />
     <Compile Include="src/Prompts/PromptExample.fs" />
     <Compile Include="src/Prompts/OutputFormat.fs" />

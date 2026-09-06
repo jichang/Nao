@@ -75,7 +75,10 @@ type ToolProtocolTests() =
     [<TestMethod>]
     member _.InvokeAsyncCallsCorrectTool() =
         let protocol = ToolProtocol.fromTools tools
-        let result = (protocol.InvokeAsync (AgentContext.allowAll ()) "add" "5").Result
+
+        let result =
+            (protocol.InvokeAsync (AgentContext.unrestrictedForTests ()) "add" "5").Result
+
         Assert.IsTrue(result.Success)
         Assert.AreEqual("result:5", result.Output)
         Assert.IsTrue(result.DurationMs >= 0L)
@@ -83,7 +86,10 @@ type ToolProtocolTests() =
     [<TestMethod>]
     member _.InvokeAsyncReturnsErrorForMissingTool() =
         let protocol = ToolProtocol.fromTools tools
-        let result = (protocol.InvokeAsync (AgentContext.allowAll ()) "unknown" "x").Result
+
+        let result =
+            (protocol.InvokeAsync (AgentContext.unrestrictedForTests ()) "unknown" "x").Result
+
         Assert.IsFalse(result.Success)
         Assert.IsTrue(result.Error.IsSome)
         Assert.IsTrue(result.Error.Value.Contains("not found"))
@@ -93,7 +99,10 @@ type ToolProtocolTests() =
     member _.InvokeAsyncHandlesException() =
         let failTools = [ textTool "fail" "Fails" (fun _ -> failwith "boom") ]
         let protocol = ToolProtocol.fromTools failTools
-        let result = (protocol.InvokeAsync (AgentContext.allowAll ()) "fail" "x").Result
+
+        let result =
+            (protocol.InvokeAsync (AgentContext.unrestrictedForTests ()) "fail" "x").Result
+
         Assert.IsFalse(result.Success)
         Assert.IsTrue(result.Error.Value.Contains("boom"))
         Assert.AreEqual(Some PlatformErrorCategory.InternalFailure, result.Failure |> Option.map _.Category)
@@ -120,7 +129,9 @@ type ToolProtocolTests() =
         let protocol =
             ToolProtocol.fromTools tools |> ToolProtocol.withMiddleware blockMiddleware
 
-        let result = (protocol.InvokeAsync (AgentContext.allowAll ()) "add" "5").Result
+        let result =
+            (protocol.InvokeAsync (AgentContext.unrestrictedForTests ()) "add" "5").Result
+
         Assert.IsFalse(result.Success)
         Assert.AreEqual(Some "blocked", result.Error)
 
@@ -165,7 +176,7 @@ type ToolProtocolTests() =
         let asked = ResizeArray<ResourceAccess>()
 
         let context =
-            { (AgentContext.allowAll ()) with
+            { (AgentContext.unrestrictedForTests ()) with
                 RequestPermission =
                     fun access _ _ ->
                         asked.Add access
@@ -186,7 +197,7 @@ type ToolProtocolTests() =
         let composition = ToolComposition.Chain [ ToolStep.Of "add"; ToolStep.Of "sub" ]
 
         let result =
-            ToolComposer.executeAsync (AgentContext.allowAll ()) protocol composition "5"
+            ToolComposer.executeAsync (AgentContext.unrestrictedForTests ()) protocol composition "5"
             |> fun task -> task.Result
 
         Assert.AreEqual("subtracted", result.FinalOutput)
@@ -217,7 +228,7 @@ type ToolProtocolTests() =
         let tool = McpTool.create "docs.search" client definition
 
         let result =
-            tool.RunAsync (AgentContext.allowAll ()) "{\"query\":\"Nao\"}"
+            tool.RunAsync (AgentContext.unrestrictedForTests ()) "{\"query\":\"Nao\"}"
             |> fun task -> task.Result
 
         Assert.AreEqual("docs.search", tool.Name)

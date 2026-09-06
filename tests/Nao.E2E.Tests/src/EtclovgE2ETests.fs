@@ -8,6 +8,10 @@ open Microsoft.VisualStudio.TestTools.UnitTesting
 open Nao.Persistence
 open Nao.Agents
 
+module private EtclovgHarness =
+    let runAsync config context agent request =
+        Nao.Agents.EtclovgHarness.runAsync config context agent request System.Threading.CancellationToken.None
+
 // =============================================================================
 // ETCLOVG Architecture E2E Tests
 // Complete examples demonstrating all seven layers working together
@@ -163,7 +167,7 @@ type EtclovgExecutionTests() =
         let env = ExecutionEnvironment.local ()
 
         let result =
-            (env.ExecuteAsync ctx (AgentContext.allowAll ()) agent "process this").Result
+            (env.ExecuteAsync ctx (AgentContext.unrestrictedForTests ()) agent "process this").Result
 
         match result with
         | Ok response -> Assert.AreEqual("resource-bounded output", response)
@@ -188,7 +192,8 @@ type EtclovgExecutionTests() =
         let agent = makeAgent "should not reach"
         let env = ExecutionEnvironment.local ()
 
-        let result = (env.ExecuteAsync ctx (AgentContext.allowAll ()) agent "query").Result
+        let result =
+            (env.ExecuteAsync ctx (AgentContext.unrestrictedForTests ()) agent "query").Result
 
         match result with
         | Error LimitExceeded.LlmCalls -> Assert.IsTrue(true)
@@ -235,7 +240,7 @@ type EtclovgToolProtocolTests() =
 
         // Invoke tool through protocol
         let result =
-            (protocol.InvokeAsync (AgentContext.allowAll ()) "get_stock_price" "MSFT").Result
+            (protocol.InvokeAsync (AgentContext.unrestrictedForTests ()) "get_stock_price" "MSFT").Result
 
         Assert.IsTrue(result.Success)
         Assert.IsTrue(result.Output.Contains("420.12"))
@@ -252,13 +257,13 @@ type EtclovgToolProtocolTests() =
         // Should work within the rate limit
         for _ in 1..5 do
             let result =
-                (protocol.InvokeAsync (AgentContext.allowAll ()) "get_stock_price" "AAPL").Result
+                (protocol.InvokeAsync (AgentContext.unrestrictedForTests ()) "get_stock_price" "AAPL").Result
 
             Assert.IsTrue(result.Success)
 
         // 6th call should be blocked
         let blocked =
-            (protocol.InvokeAsync (AgentContext.allowAll ()) "get_stock_price" "AAPL").Result
+            (protocol.InvokeAsync (AgentContext.unrestrictedForTests ()) "get_stock_price" "AAPL").Result
 
         Assert.IsFalse(blocked.Success)
         Assert.IsTrue(blocked.Error.Value.Contains("Rate limit"))
@@ -389,9 +394,12 @@ type EtclovgLifecycleTests() =
         let orchestrator = EtclovgMockProvider.createOrchestrator tools
 
         let result =
-            (Agent.runAsync (AgentContext.allowAll ()) "What is the stock price of AAPL?" orchestrator).Result
+            (Agent.runAsync (AgentContext.unrestrictedForTests ()) "What is the stock price of AAPL?" orchestrator)
+                .Result
 
-        Assert.IsTrue(result.Contains("189.45") || result.Contains("AAPL"))
+        match result with
+        | Ok output -> Assert.IsTrue(output.Contains("189.45") || output.Contains("AAPL"))
+        | Error failure -> Assert.Fail(failure.Message)
 
 
 // =============================================================================
@@ -420,7 +428,7 @@ type EtclovgObservabilityTests() =
         // Simulate tool execution
         let toolResult =
             match
-                EtclovgDemoTools.stockPrice.RunAsync (AgentContext.allowAll ()) "AAPL"
+                EtclovgDemoTools.stockPrice.RunAsync (AgentContext.unrestrictedForTests ()) "AAPL"
                 |> fun task -> task.Result
             with
             | Ok output -> output
@@ -894,7 +902,7 @@ type EtclovgFullIntegrationTests() =
             makeAgent "The current AAPL price is $189.45 based on latest market data."
 
         let context =
-            { (AgentContext.allowAll ()) with
+            { (AgentContext.unrestrictedForTests ()) with
                 SessionKey = "e2e/full-harness" }
 
         let result =
@@ -951,7 +959,7 @@ type EtclovgFullIntegrationTests() =
                 AuditLog = Some(InMemory.auditLog ())
                 Lifecycle = [ LifecycleHook.passthrough ] }
 
-        let context = AgentContext.allowAll ()
+        let context = AgentContext.unrestrictedForTests ()
 
         let result =
             (EtclovgHarness.runAsync
@@ -989,7 +997,7 @@ type EtclovgFullIntegrationTests() =
                                 Evaluate = fun _ -> Some "Budget exhausted" } ]
                     ) }
 
-        let context = AgentContext.allowAll ()
+        let context = AgentContext.unrestrictedForTests ()
 
         let result =
             (EtclovgHarness.runAsync config context agent (request SandboxConfig.Default context agent "do something"))
@@ -1018,7 +1026,7 @@ type EtclovgFullIntegrationTests() =
                 ReadinessChecks = [ failedCheck ]
                 Lifecycle = [ LifecycleHook.passthrough ] }
 
-        let context = AgentContext.allowAll ()
+        let context = AgentContext.unrestrictedForTests ()
 
         let result =
             (EtclovgHarness.runAsync config context agent (request SandboxConfig.Default context agent "query")).Result
@@ -1057,7 +1065,7 @@ type EtclovgFullIntegrationTests() =
                 Lifecycle = [ LifecycleHook.passthrough ] }
 
         let context =
-            { (AgentContext.allowAll ()) with
+            { (AgentContext.unrestrictedForTests ()) with
                 SessionKey = "e2e/orchestrator" }
 
         let result =
@@ -1118,7 +1126,7 @@ type EtclovgFullIntegrationTests() =
                     Lifecycle = [ LifecycleHook.passthrough ] }
 
             let context =
-                { (AgentContext.allowAll ()) with
+                { (AgentContext.unrestrictedForTests ()) with
                     Correlation = correlation
                     SessionKey = sessionKey
                     TurnId = turnId }

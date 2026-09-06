@@ -221,12 +221,14 @@ module Orchestrator =
                             | Some limit -> raise (ExecutionLimitExceededException limit)
                             | None -> ()
 
-                            let! result =
+                            let invocation: Task<CompletionResult> =
                                 if streaming then
                                     LlmProvider.streamAsync config.Provider correlation prompt config.Options (fun _ ->
                                         ())
                                 else
                                     config.Provider.CompleteAsync correlation prompt config.Options
+
+                            let! result = invocation.WaitAsync(RuntimeExecutionBudget.cancellationToken ())
 
                             match RuntimeExecutionBudget.recordLlmUsage result.Usage with
                             | Some limit -> raise (ExecutionLimitExceededException limit)

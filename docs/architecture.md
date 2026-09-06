@@ -104,6 +104,7 @@ Trust and authorization are independent. Verified or source-backed content canno
 | Invalid output | Agent, provider, or tool output violates its declared contract or constitution | Repair or retry only under a bounded policy | `ToolFailureKind.OutputContract`, `HarnessError.ConstitutionViolation` |
 | Internal failure | Unexpected implementation defect or invariant violation | Do not automatically retry unless classified by the owning boundary | `HarnessError.ExecutionFailed`; unclassified exceptions |
 | Cancelled | Caller cancellation or execution shutdown | Do not retry automatically; the caller decides whether to start a new execution | Canonically classified cancellation exceptions |
+| Timed out | The execution exceeded its harness deadline | Retry only under explicit policy with an appropriate deadline and idempotent dependencies | `ExecutionTerminalStatus.TimedOut` |
 
 Expected failures cross public boundaries as structured values with category, diagnostic, retryability, and correlation. Agents, tools, providers, storage, and Orleans hosts use `PlatformErrorCategory`; task APIs without an error result transport the same `PlatformFailure` through `PlatformFailureException`.
 
@@ -114,7 +115,7 @@ G: Governance (permissions and policy pre-check)
   → V: Verification (readiness gates)
     → L: Lifecycle (initialize and start)
       → O: Observability (trace spans and LLM metrics)
-        → E: Execution (`Agent.runAsync agentContext input agent`)
+        → E: Execution (`ExecutionEnvironment.ExecuteAsync` invokes the agent program)
       → G: Constitution (output validation)
     → L: Lifecycle (complete or fail)
   → V: Verification (trace store, regression, and judge)

@@ -6,6 +6,10 @@ open Microsoft.VisualStudio.TestTools.UnitTesting
 open Nao.Persistence
 open Nao.Agents
 
+module private EtclovgHarness =
+    let runAsync config context agent request =
+        Nao.Agents.EtclovgHarness.runAsync config context agent request System.Threading.CancellationToken.None
+
 [<TestClass>]
 type EtclovgHarnessTests() =
 
@@ -84,7 +88,7 @@ type EtclovgHarnessTests() =
         let agent = makeAgent "hello world"
         let config = EtclovgConfig.Default
 
-        let context = AgentContext.allowAll ()
+        let context = AgentContext.unrestrictedForTests ()
 
         let result =
             (EtclovgHarness.runAsync config context agent (request context agent "test")).Result
@@ -92,6 +96,75 @@ type EtclovgHarnessTests() =
         Assert.AreEqual(ExecutionTerminalStatus.Succeeded, result.Status)
         Assert.AreEqual(Some "hello world", result.Outputs.Response)
         Assert.IsTrue(result.Evidence.Trace.IsSome)
+
+    [<TestMethod>]
+    member _.DirectAgentExecutionFailsClosedWhenHarnessIsRequired() =
+        let mutable executed = false
+
+        let agent =
+            Agent.create "protected" "protected" "protected" 0 [] AgentContract.Text (fun _ _ ->
+                executed <- true
+                Task.FromResult "unguarded")
+
+        let context =
+            { AgentContext.unrestrictedForTests () with
+                ExecutionBoundary = ExecutionBoundary.HarnessRequired }
+
+        let result = (Agent.runAsync context "input" agent).Result
+
+        match result with
+        | Error failure -> Assert.AreEqual(PlatformErrorCategory.PermissionDenied, failure.Category)
+        | Ok output -> Assert.Fail($"Expected governed execution denial, got: {output}")
+
+        Assert.IsFalse(executed)
+
+    [<TestMethod>]
+    member _.HarnessDeadlineStopsUncooperativeAgent() =
+        let agent =
+            Agent.create "slow" "slow" "slow" 0 [] AgentContract.Text (fun _ _ ->
+                task {
+                    do! Task.Delay(TimeSpan.FromSeconds 5.0)
+                    return "late"
+                })
+
+        let context = AgentContext.unrestrictedForTests ()
+
+        let executionRequest =
+            { request context agent "test" with
+                Sandbox =
+                    { SandboxConfig.Default with
+                        Limits =
+                            { ResourceLimits.Unlimited with
+                                MaxDuration = TimeSpan.FromMilliseconds 25.0 } } }
+
+        let result =
+            (EtclovgHarness.runAsync EtclovgConfig.Default context agent executionRequest).Result
+
+        Assert.AreEqual(ExecutionTerminalStatus.TimedOut, result.Status)
+
+    [<TestMethod>]
+    member _.HarnessPreservesCallerCancellation() =
+        let agent =
+            Agent.create "cancelled" "cancelled" "cancelled" 0 [] AgentContract.Text (fun _ _ ->
+                task {
+                    do! Task.Delay(TimeSpan.FromSeconds 5.0)
+                    return "late"
+                })
+
+        let context = AgentContext.unrestrictedForTests ()
+        use cancellation = new System.Threading.CancellationTokenSource()
+        cancellation.Cancel()
+
+        let result =
+            (Nao.Agents.EtclovgHarness.runAsync
+                EtclovgConfig.Default
+                context
+                agent
+                (request context agent "test")
+                cancellation.Token)
+                .Result
+
+        Assert.AreEqual(ExecutionTerminalStatus.Cancelled, result.Status)
 
     [<TestMethod>]
     member _.PublishedArtifactRetainsIdentityInExecutionOutput() =
@@ -109,7 +182,7 @@ type EtclovgHarnessTests() =
                 })
 
         let context =
-            { (AgentContext.allowAll ()) with
+            { (AgentContext.unrestrictedForTests ()) with
                 PublishArtifact =
                     fun artifact ->
                         published <- Some artifact
@@ -151,7 +224,7 @@ type EtclovgHarnessTests() =
             { EtclovgConfig.Default with
                 PolicyEngine = Some blockEngine }
 
-        let context = AgentContext.allowAll ()
+        let context = AgentContext.unrestrictedForTests ()
 
         let result =
             (EtclovgHarness.runAsync blockConfig context agent (request context agent "test")).Result
@@ -162,6 +235,83 @@ type EtclovgHarnessTests() =
         )
 
         Assert.AreEqual(1, result.PolicyDecisions.PolicyViolations.Length)
+
+    [<TestMethod>]
+    member _.PolicyModifiedInputIsExecuted() =
+        let mutable executedInput = ""
+
+        let agent =
+            Agent.create "modified-agent" "modified-agent" "test" 0 [] AgentContract.Text (fun _ input ->
+                executedInput <- input
+                Task.FromResult input)
+
+        let modify =
+            { Id = "redact"
+              Description = "Redacts input"
+              Enforcement = PolicyEnforcement.Modify(fun _ -> "redacted")
+              Evaluate = fun _ -> Some "sensitive input" }
+
+        let config =
+            { EtclovgConfig.Default with
+                PolicyEngine = Some(PolicyEngine.create [ modify ]) }
+
+        let context = AgentContext.unrestrictedForTests ()
+
+        let result =
+            (EtclovgHarness.runAsync config context agent (request context agent "secret")).Result
+
+        Assert.AreEqual(ExecutionTerminalStatus.Succeeded, result.Status)
+        Assert.AreEqual("redacted", executedInput)
+        Assert.AreEqual(Some "redacted", result.Outputs.Response)
+
+    [<TestMethod>]
+    member _.ToolPolicyModifiedInputIsExecuted() =
+        let mutable executedInput = ""
+
+        let tool =
+            Tool.create
+                "modified-tool"
+                "test"
+                0
+                []
+                ToolCodec.text
+                ToolCodec.text
+                (ToolOperation.create (fun _ input ->
+                    executedInput <- input
+                    Task.FromResult(Ok input)))
+
+        let protocol = ToolProtocol.fromTools [ tool ]
+
+        let agent =
+            Agent.create "tool-policy-agent" "tool-policy-agent" "test" 0 [] AgentContract.Text (fun context input ->
+                task {
+                    let! result = protocol.InvokeAsync context tool.Name input
+                    return result.Output
+                })
+
+        let modifyTool =
+            { Id = "normalize-tool"
+              Description = "Normalizes tool input"
+              Enforcement = PolicyEnforcement.Modify(fun _ -> "normalized")
+              Evaluate =
+                fun policyContext ->
+                    if policyContext.Action = "tool.execute:modified-tool" then
+                        Some "normalize"
+                    else
+                        None }
+
+        let config =
+            { EtclovgConfig.Default with
+                PolicyEngine = Some(PolicyEngine.create [ modifyTool ]) }
+
+        let context = AgentContext.unrestrictedForTests ()
+
+        let result =
+            (EtclovgHarness.runAsync config context agent (request context agent "raw")).Result
+
+        Assert.AreEqual(ExecutionTerminalStatus.Succeeded, result.Status)
+        Assert.AreEqual("normalized", executedInput)
+        Assert.AreEqual(Some "normalized", result.Outputs.Response)
 
     [<TestMethod>]
     member _.ExecutionGraphNodesReenterHarnessPolicy() =
@@ -200,7 +350,7 @@ type EtclovgHarnessTests() =
             { EtclovgConfig.Default with
                 PolicyEngine = Some(PolicyEngine.create [ denyNode ]) }
 
-        let context = AgentContext.allowAll ()
+        let context = AgentContext.unrestrictedForTests ()
 
         let result =
             (EtclovgHarness.runAsync config context graphAgent (request context graphAgent "input")).Result
@@ -241,7 +391,7 @@ type EtclovgHarnessTests() =
             { EtclovgConfig.Default with
                 PolicyEngine = Some(PolicyEngine.create [ denyMember ]) }
 
-        let context = AgentContext.allowAll ()
+        let context = AgentContext.unrestrictedForTests ()
 
         let result =
             (EtclovgHarness.runAsync config context groupAgent (request context groupAgent "input")).Result
@@ -299,13 +449,59 @@ type EtclovgHarnessTests() =
             { EtclovgConfig.Default with
                 PolicyEngine = Some(PolicyEngine.create [ denyTool ]) }
 
-        let context = AgentContext.allowAll ()
+        let context = AgentContext.unrestrictedForTests ()
 
         let result =
             (EtclovgHarness.runAsync config context agent (request context agent "input")).Result
 
         Assert.AreEqual(ExecutionTerminalStatus.Denied HarnessError.PermissionDenied, result.Status)
         Assert.IsFalse(toolExecuted)
+
+    [<TestMethod>]
+    member _.HarnessDeadlineFlowsIntoToolContext() =
+        use observedCancellation = new System.Threading.ManualResetEventSlim(false)
+
+        let tool =
+            Tool.create
+                "cancellable-tool"
+                "Observes execution cancellation"
+                0
+                []
+                ToolCodec.text
+                ToolCodec.text
+                (ToolOperation.create (fun context _ ->
+                    task {
+                        use _registration =
+                            context.CancellationToken.Register(fun () -> observedCancellation.Set())
+
+                        do! Task.Delay(TimeSpan.FromSeconds 5.0, context.CancellationToken)
+                        return Ok "late"
+                    }))
+
+        let protocol = ToolProtocol.fromTools [ tool ]
+
+        let agent =
+            Agent.create "tool-timeout" "tool-timeout" "tool-timeout" 0 [] AgentContract.Text (fun context input ->
+                task {
+                    let! result = protocol.InvokeAsync context tool.Name input
+                    return result.Output
+                })
+
+        let context = AgentContext.unrestrictedForTests ()
+
+        let executionRequest =
+            { request context agent "input" with
+                Sandbox =
+                    { SandboxConfig.Default with
+                        Limits =
+                            { ResourceLimits.Unlimited with
+                                MaxDuration = TimeSpan.FromMilliseconds 500.0 } } }
+
+        let result =
+            (EtclovgHarness.runAsync EtclovgConfig.Default context agent executionRequest).Result
+
+        Assert.AreEqual(ExecutionTerminalStatus.TimedOut, result.Status)
+        Assert.IsTrue(observedCancellation.Wait(TimeSpan.FromSeconds 1.0))
 
     [<TestMethod>]
     member _.NestedAgentsShareParentToolBudget() =
@@ -356,7 +552,7 @@ type EtclovgHarnessTests() =
             { ResourceLimits.Unlimited with
                 MaxToolCalls = 1 }
 
-        let context = AgentContext.allowAll ()
+        let context = AgentContext.unrestrictedForTests ()
 
         let executionRequest =
             { request context parent "input" with
@@ -399,7 +595,7 @@ type EtclovgHarnessTests() =
                 { OrchestratorDefinition.create Task.FromResult with
                     ParseActions = fun response -> [ Respond response ] }
 
-        let context = AgentContext.allowAll ()
+        let context = AgentContext.unrestrictedForTests ()
 
         let executionRequest =
             { request context orchestrator "input" with
@@ -442,7 +638,7 @@ type EtclovgHarnessTests() =
                 { OrchestratorDefinition.create Task.FromResult with
                     ParseActions = fun response -> [ Respond response ] }
 
-        let context = AgentContext.allowAll ()
+        let context = AgentContext.unrestrictedForTests ()
 
         let executionRequest =
             { request context orchestrator "input" with
@@ -458,6 +654,49 @@ type EtclovgHarnessTests() =
         Assert.AreEqual(ExecutionTerminalStatus.LimitExceeded LimitExceeded.TotalTokens, result.Status)
         Assert.AreEqual(1, result.Usage.LlmCalls)
         Assert.AreEqual(7, result.Usage.TotalTokens)
+
+    [<TestMethod>]
+    member _.HarnessDeadlineBoundsProviderCall() =
+        let provider =
+            LlmProvider.create (fun () -> "slow-provider") (fun _ _ _ ->
+                task {
+                    do! Task.Delay(TimeSpan.FromSeconds 5.0)
+                    return CompletionResult.create "late" "stop" None None
+                })
+
+        let orchestrator =
+            Orchestrator.create
+                { Id = "provider-timeout"
+                  Name = "Provider timeout"
+                  Description = "Tests provider deadline enforcement"
+                  Priority = 0
+                  Responsibilities = []
+                  Contract = AgentContract.Text
+                  Provider = provider
+                  Tools = []
+                  SubAgents = []
+                  Prompt = Prompt.Empty
+                  Options = CompletionOptions.Default
+                  MaxRounds = 1
+                  Bus = EventBus.none
+                  Scope = EventScope.CreateEmpty() }
+                { OrchestratorDefinition.create Task.FromResult with
+                    ParseActions = fun response -> [ Respond response ] }
+
+        let context = AgentContext.unrestrictedForTests ()
+
+        let executionRequest =
+            { request context orchestrator "input" with
+                Sandbox =
+                    { SandboxConfig.Default with
+                        Limits =
+                            { ResourceLimits.Unlimited with
+                                MaxDuration = TimeSpan.FromMilliseconds 25.0 } } }
+
+        let result =
+            (EtclovgHarness.runAsync EtclovgConfig.Default context orchestrator executionRequest).Result
+
+        Assert.AreEqual(ExecutionTerminalStatus.TimedOut, result.Status)
 
     [<DataTestMethod>]
     [<DataRow("router-supervisor")>]
@@ -497,7 +736,7 @@ type EtclovgHarnessTests() =
             { EtclovgConfig.Default with
                 PolicyEngine = Some(PolicyEngine.create [ denyAgent ]) }
 
-        let context = AgentContext.allowAll ()
+        let context = AgentContext.unrestrictedForTests ()
 
         let result =
             (EtclovgHarness.runAsync config context routerAgent (request context routerAgent "input")).Result
@@ -523,7 +762,7 @@ type EtclovgHarnessTests() =
             { EtclovgConfig.Default with
                 ReadinessChecks = [ failCheck ] }
 
-        let context = AgentContext.allowAll ()
+        let context = AgentContext.unrestrictedForTests ()
 
         let result =
             (EtclovgHarness.runAsync config context agent (request context agent "test")).Result
@@ -542,7 +781,7 @@ type EtclovgHarnessTests() =
             { EtclovgConfig.Default with
                 Lifecycle = [ blockHook ] }
 
-        let context = AgentContext.allowAll ()
+        let context = AgentContext.unrestrictedForTests ()
 
         let result =
             (EtclovgHarness.runAsync config context agent (request context agent "test")).Result
@@ -561,7 +800,7 @@ type EtclovgHarnessTests() =
             { EtclovgConfig.Default with
                 Constitution = Some constitution }
 
-        let context = AgentContext.allowAll ()
+        let context = AgentContext.unrestrictedForTests ()
 
         let result =
             (EtclovgHarness.runAsync config context agent (request context agent "test")).Result
@@ -582,7 +821,7 @@ type EtclovgHarnessTests() =
                 Metrics = Some metrics }
 
         let context =
-            { (AgentContext.allowAll ()) with
+            { (AgentContext.unrestrictedForTests ()) with
                 SessionKey = "metrics/session" }
 
         let result =
@@ -601,7 +840,7 @@ type EtclovgHarnessTests() =
             { EtclovgConfig.Default with
                 TraceStore = Some store }
 
-        let context = AgentContext.allowAll ()
+        let context = AgentContext.unrestrictedForTests ()
 
         let result =
             (EtclovgHarness.runAsync config context agent (request context agent "question")).Result
@@ -621,7 +860,7 @@ type EtclovgHarnessTests() =
             { EtclovgConfig.Default with
                 AuditLog = Some audit }
 
-        let context = AgentContext.allowAll ()
+        let context = AgentContext.unrestrictedForTests ()
 
         let result =
             (EtclovgHarness.runAsync config context agent (request context agent "test")).Result
@@ -660,7 +899,7 @@ type EtclovgHarnessTests() =
                 Lifecycle = [ LifecycleHook.passthrough ] }
 
         let context =
-            { (AgentContext.allowAll ()) with
+            { (AgentContext.unrestrictedForTests ()) with
                 SessionKey = "metrics/session" }
 
         let result =
@@ -681,7 +920,7 @@ type EtclovgHarnessTests() =
                 executed <- true
                 Task.FromResult "unexpected")
 
-        let context = AgentContext.allowAll ()
+        let context = AgentContext.unrestrictedForTests ()
 
         let mismatched =
             { request context agent "test" with

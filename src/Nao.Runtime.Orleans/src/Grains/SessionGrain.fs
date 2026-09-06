@@ -9,9 +9,6 @@ open System.Threading.Tasks
 open Orleans
 open Orleans.Runtime
 open Nao.Agents
-open Nao.Agents
-open Nao.Agents
-open Nao.Agents
 open Nao.Runtime.Orleans
 
 // Allow the Orleans C# codegen project to access internal F# DU backing fields.
@@ -178,14 +175,16 @@ type ISessionGrain =
     /// Initialize the session with a specific agent, workspace, and optional tool overrides.
     abstract member StartAsync: options: SessionStartOptions -> Task<bool>
 
-    /// Process user input — grain resolves workspace, builds agent, runs ETCLOVG harness.
-    abstract member ProcessAsync: input: string -> Task<string>
+    /// Process user input through the ETCLOVG harness until completion or caller cancellation.
+    abstract member ProcessAsync: input: string * cancellationToken: CancellationToken -> Task<string>
 
     /// Process user input where the LLM prompt and the persisted/display text differ:
     /// `llmInput` (with embedded attachment content) is what the agent sees, while only
-    /// `displayText` plus `attachmentNames` are stored in the transcript.
+    /// `displayText` plus `attachmentNames` are stored in the transcript. Caller cancellation
+    /// flows through the grain boundary into the harness.
     abstract member ProcessWithContextAsync:
-        llmInput: string * displayText: string * attachmentNames: string[] -> Task<string>
+        llmInput: string * displayText: string * attachmentNames: string[] * cancellationToken: CancellationToken ->
+            Task<string>
 
     /// Id of the most recently processed turn (empty if none). Use to attach feedback.
     abstract member GetLastTurnIdAsync: unit -> Task<string>
@@ -546,7 +545,12 @@ type SessionGrain
     /// Core turn processing. `llmInput` is the prompt the agent sees (may contain embedded
     /// attachment content); `displayText` + `attachmentNames` are what gets persisted into
     /// the rendered transcript so the file body is never stored or shown.
-    let processCoreAsync (llmInput: string) (displayText: string) (attachmentNames: string[]) : Task<string> =
+    let processCoreAsync
+        (llmInput: string)
+        (displayText: string)
+        (attachmentNames: string[])
+        (cancellationToken: CancellationToken)
+        : Task<string> =
         task {
             requireCurrentScope () |> ignore
             let agentName = persistentState.State.Info.AgentName
@@ -655,20 +659,17 @@ type SessionGrain
                             then
                                 return true
                             else
-                                match PermissionGate.Prompt with
-                                | None -> return true // no permission system wired → allow
-                                | Some prompt ->
-                                    let! outcome = prompt sessionKey access reason forceConfirm
+                                let! outcome = PermissionGate.resolve sessionKey access reason forceConfirm
 
-                                    if outcome.Decision = PermissionDecision.Allow && outcome.RememberForSession then
-                                        recordGrant access
+                                if outcome.Decision = PermissionDecision.Allow && outcome.RememberForSession then
+                                    recordGrant access
 
-                                        try
-                                            do! persistentState.WriteStateAsync()
-                                        with _ ->
-                                            ()
+                                    try
+                                        do! persistentState.WriteStateAsync()
+                                    with _ ->
+                                        ()
 
-                                    return outcome.Decision = PermissionDecision.Allow
+                                return outcome.Decision = PermissionDecision.Allow
                         }
 
                     let artifacts = ResizeArray<Artifact>()
@@ -710,6 +711,7 @@ type SessionGrain
                           SessionKey = sessionKey
                           TurnId = turnId
                           ExecutionBoundary = ExecutionBoundary.HarnessRequired
+                          CancellationToken = cancellationToken
                           GetArtifacts = (fun () -> lock artifacts (fun () -> List.ofSeq artifacts))
                           GetGrantedResources =
                             (fun () -> lock grantedResources (fun () -> List.ofSeq grantedResources))
@@ -745,7 +747,8 @@ type SessionGrain
                                     Map.empty
                                     correlation
 
-                            let! result = EtclovgHarness.runAsync harnessConfig agentContext agent request
+                            let! result =
+                                EtclovgHarness.runAsync harnessConfig agentContext agent request cancellationToken
 
                             match result.Status, result.Outputs.Response with
                             | ExecutionTerminalStatus.Succeeded, Some response ->
@@ -869,12 +872,17 @@ type SessionGrain
                             return true
             }
 
-        member _.ProcessAsync(input: string) : Task<string> = processCoreAsync input input [||]
+        member _.ProcessAsync(input: string, cancellationToken: CancellationToken) : Task<string> =
+            processCoreAsync input input [||] cancellationToken
 
         member _.ProcessWithContextAsync
-            (llmInput: string, displayText: string, attachmentNames: string[])
+            (llmInput: string, displayText: string, attachmentNames: string[], cancellationToken: CancellationToken)
             : Task<string> =
-            processCoreAsync llmInput displayText (if isNull attachmentNames then [||] else attachmentNames)
+            processCoreAsync
+                llmInput
+                displayText
+                (if isNull attachmentNames then [||] else attachmentNames)
+                cancellationToken
 
         member _.GetLastTurnIdAsync() : Task<string> =
             requireCurrentScope () |> ignore

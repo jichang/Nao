@@ -13,3 +13,15 @@ module PermissionGate =
     /// Optional host callback for resolving permission requests interactively.
     let mutable Prompt: (string -> ResourceAccess -> string -> bool -> Task<PermissionOutcome>) option =
         None
+
+    let resolveWith prompt sessionKey access reason forceConfirm =
+        match prompt with
+        | Some resolve -> resolve sessionKey access reason forceConfirm
+        | None ->
+            Task.FromResult
+                { Decision = PermissionDecision.Deny
+                  RememberForSession = false }
+
+    /// Resolve through the configured host bridge, denying when no bridge is installed.
+    let resolve sessionKey access reason forceConfirm =
+        resolveWith Prompt sessionKey access reason forceConfirm

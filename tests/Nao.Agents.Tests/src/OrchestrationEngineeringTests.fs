@@ -66,7 +66,7 @@ type LoopEngineeringTests() =
                 AgentContract.Text
                 definition
 
-        Assert.AreEqual("READY", (Agent.runAsync (AgentContext.allowAll ()) "ready" agent).Result)
+        Assert.AreEqual(Ok "READY", (Agent.runAsync (AgentContext.unrestrictedForTests ()) "ready" agent).Result)
 
 [<TestClass>]
 type GraphEngineeringTests() =
@@ -93,11 +93,11 @@ type GraphEngineeringTests() =
               MaxSteps = 2 }
 
         let accepted =
-            ExecutionGraph.runAsync (AgentContext.allowAll ()) "yes please" graph
+            ExecutionGraph.runAsync (AgentContext.unrestrictedForTests ()) "yes please" graph
             |> fun task -> task.Result
 
         let rejected =
-            ExecutionGraph.runAsync (AgentContext.allowAll ()) "no thanks" graph
+            ExecutionGraph.runAsync (AgentContext.unrestrictedForTests ()) "no thanks" graph
             |> fun task -> task.Result
 
         match accepted, rejected with
@@ -126,7 +126,7 @@ type GraphEngineeringTests() =
                   ExecutionGraph.edge second.Id first.Id ]
               MaxSteps = 3 }
 
-        match (ExecutionGraph.runAsync (AgentContext.allowAll ()) "input" graph).Result with
+        match (ExecutionGraph.runAsync (AgentContext.unrestrictedForTests ()) "input" graph).Result with
         | Error(StepLimitReached(maxSteps, steps)) ->
             Assert.AreEqual(3, maxSteps)
             Assert.AreEqual(3, steps.Length)
@@ -141,7 +141,7 @@ type GraphEngineeringTests() =
         let graph = ExecutionGraph.linear stages |> Option.get
 
         let output =
-            match (ExecutionGraph.runAsync (AgentContext.allowAll ()) " value " graph).Result with
+            match (ExecutionGraph.runAsync (AgentContext.unrestrictedForTests ()) " value " graph).Result with
             | Ok result -> result.Output
             | Error error -> failwithf "Unexpected graph error: %A" error
 
@@ -181,7 +181,7 @@ type GraphEngineeringTests() =
         ExecutionRuntime.set (Some dispatcher)
 
         try
-            match (ExecutionGraph.runAsync (AgentContext.allowAll ()) "input" graph).Result with
+            match (ExecutionGraph.runAsync (AgentContext.unrestrictedForTests ()) "input" graph).Result with
             | Error(NodeExecutionFailed(nodeId, failure)) ->
                 Assert.AreEqual(denied.Id, nodeId)
                 Assert.AreEqual(PlatformErrorCategory.PermissionDenied, failure.Category)

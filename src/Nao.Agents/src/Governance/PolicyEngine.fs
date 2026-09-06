@@ -78,6 +78,12 @@ type PolicyEngine =
 
 module PolicyEngine =
 
+    let private result proceed violations modifiedInput warnings : PolicyResult =
+        { Proceed = proceed
+          Violations = violations
+          ModifiedInput = modifiedInput
+          Warnings = warnings }
+
     /// Create a policy engine from a list of policies
     let create (policies: Policy list) : PolicyEngine =
         let orderedPolicies =
@@ -94,7 +100,8 @@ module PolicyEngine =
                 let violations = ResizeArray<PolicyViolation>()
                 let warnings = ResizeArray<string>()
                 let mutable blocked = false
-                let mutable modifiedInput = context.Input
+                let mutable effectiveInput = context.Input
+                let mutable inputModified = false
 
                 for policy in orderedPolicies do
                     match policy.Evaluate context with
@@ -109,13 +116,16 @@ module PolicyEngine =
                         | PolicyEnforcement.Block
                         | PolicyEnforcement.Confirm -> blocked <- true
                         | PolicyEnforcement.Warn -> warnings.Add(sprintf "[Policy %s]: %s" policy.Id message)
-                        | PolicyEnforcement.Modify transform -> modifiedInput <- modifiedInput |> Option.map transform
+                        | PolicyEnforcement.Modify transform ->
+                            effectiveInput <- effectiveInput |> Option.map transform
+                            inputModified <- effectiveInput.IsSome
                     | None -> ()
 
-                { Proceed = not blocked
-                  Violations = violations |> Seq.toList
-                  ModifiedInput = modifiedInput
-                  Warnings = warnings |> Seq.toList } }
+                result
+                    (not blocked)
+                    (violations |> Seq.toList)
+                    (if inputModified then effectiveInput else None)
+                    (warnings |> Seq.toList) }
 
     /// Cost budget policy: blocks when estimated cost exceeds budget
     let costBudgetPolicy (maxUsd: decimal) : Policy =

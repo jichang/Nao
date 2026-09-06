@@ -41,6 +41,14 @@ type ExecutionContext =
           StartedAt = DateTimeOffset.UtcNow
           ParentContext = None }
 
+    static member CreateWithCorrelationAndCancellation
+        (sandbox: SandboxConfig)
+        (correlation: CorrelationContext)
+        (cancellationToken: CancellationToken)
+        =
+        { ExecutionContext.CreateWithCorrelation sandbox correlation with
+            CancellationToken = cancellationToken }
+
     member this.Usage = lock this.Budget.SyncRoot (fun () -> this.Budget.Usage)
 
     static member CreateWithCancellation (sandbox: SandboxConfig) (cancellationToken: CancellationToken) =

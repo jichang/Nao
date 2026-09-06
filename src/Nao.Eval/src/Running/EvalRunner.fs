@@ -2,6 +2,7 @@ namespace Nao.Eval
 
 open System
 open System.Diagnostics
+open System.Threading
 open System.Threading.Tasks
 open Nao.Agents
 
@@ -58,13 +59,27 @@ module EvalRunnerConfig =
 /// The evaluation runner: runs cases against an agent and scores them
 module EvalRunner =
 
+    let private sandboxForCase timeoutPerCaseMs (sandbox: SandboxConfig) =
+        match timeoutPerCaseMs with
+        | None -> sandbox
+        | Some timeoutMs when timeoutMs <= 0 -> invalidArg (nameof timeoutPerCaseMs) "Case timeout must be positive."
+        | Some timeoutMs ->
+            let timeout = TimeSpan.FromMilliseconds(float timeoutMs)
+
+            { sandbox with
+                Limits =
+                    { sandbox.Limits with
+                        MaxDuration = min sandbox.Limits.MaxDuration timeout } }
+
     let private runCase
         captureTrace
+        timeoutPerCaseMs
         (execution: EvalExecutionConfig)
         (run: EvalRun)
         (evaluator: Evaluator)
         (agent: Agent)
         (case: EvalCase)
+        (cancellationToken: CancellationToken)
         : Task<EvalResult> =
         task {
             let sw = Stopwatch.StartNew()
@@ -77,19 +92,23 @@ module EvalRunner =
                     (run.Id.ToString("N"))
                     agent.Metadata.Id
                     case.Input
-                    execution.Sandbox
+                    (sandboxForCase timeoutPerCaseMs execution.Sandbox)
                     execution.PolicyVersions
                     execution.DependencyVersions
                     context.Correlation
 
-            let! executionResult = EtclovgHarness.runAsync execution.Harness context agent request
+            let! executionResult = EtclovgHarness.runAsync execution.Harness context agent request cancellationToken
+
             sw.Stop()
 
             let! output, verdict, reason =
                 task {
                     match executionResult.Status, executionResult.Outputs.Response with
                     | ExecutionTerminalStatus.Succeeded, Some output ->
-                        let! verdict, reason = evaluator.EvaluateAsync executionResult.Correlation case output
+                        let! verdict, reason =
+                            evaluator.EvaluateAsync executionResult.Correlation case output
+                            |> _.WaitAsync(cancellationToken)
+
                         return output, verdict, reason
                     | ExecutionTerminalStatus.Succeeded, None ->
                         return "", EvalVerdict.Fail, "Execution succeeded without producing a response."
@@ -125,12 +144,12 @@ module EvalRunner =
         }
 
     /// Run a single eval case against an agent with a given evaluator.
-    let runCaseAsync execution run evaluator agent case =
-        runCase true execution run evaluator agent case
+    let runCaseAsync execution run evaluator agent case cancellationToken =
+        runCase true None execution run evaluator agent case cancellationToken
 
     /// Run a single eval case without trace capture (lightweight)
-    let runCaseLightAsync execution run evaluator agent case =
-        runCase false execution run evaluator agent case
+    let runCaseLightAsync execution run evaluator agent case cancellationToken =
+        runCase false None execution run evaluator agent case cancellationToken
 
     /// Run all cases in a dataset against an agent
     let runDatasetAsync
@@ -138,25 +157,36 @@ module EvalRunner =
         (evaluator: Evaluator)
         (agent: Agent)
         (dataset: EvalDataset)
+        (cancellationToken: CancellationToken)
         : Task<EvalReport> =
         task {
+            if config.MaxParallelism > 1 && config.StopOnFirstFailure then
+                invalidArg
+                    (nameof config)
+                    "StopOnFirstFailure requires sequential execution because parallel cases may already be running."
+
             let results = ResizeArray<EvalResult>()
             let run = EvalRun.create dataset.Owner dataset.Id
 
             let runCase =
                 if config.CaptureTraces then
-                    runCaseAsync config.Execution run
+                    runCase true config.TimeoutPerCaseMs config.Execution run
                 else
-                    runCaseLightAsync config.Execution run
+                    runCase false config.TimeoutPerCaseMs config.Execution run
 
             if config.MaxParallelism <= 1 then
-                // Sequential execution
-                for case in dataset.Cases do
-                    let! result = runCase evaluator agent case
-                    results.Add result
+                let mutable continueRunning = true
 
-                    if config.StopOnFirstFailure && not (EvalResult.passed result) then
-                        () // remaining cases skipped
+                for case in dataset.Cases do
+                    if continueRunning then
+                        let! result = runCase evaluator agent case cancellationToken
+                        results.Add result
+
+                        let shouldStop =
+                            cancellationToken.IsCancellationRequested
+                            || (config.StopOnFirstFailure && not (EvalResult.passed result))
+
+                        continueRunning <- not shouldStop
             else
                 // Parallel execution with bounded concurrency
                 let semaphore = new System.Threading.SemaphoreSlim(config.MaxParallelism)
@@ -165,10 +195,10 @@ module EvalRunner =
                     dataset.Cases
                     |> List.map (fun case ->
                         task {
-                            do! semaphore.WaitAsync()
+                            do! semaphore.WaitAsync(cancellationToken)
 
                             try
-                                let! result = runCase evaluator agent case
+                                let! result = runCase evaluator agent case cancellationToken
                                 lock results (fun () -> results.Add result)
                             finally
                                 semaphore.Release() |> ignore
@@ -185,6 +215,7 @@ module EvalRunner =
         (evaluators: Evaluator list)
         (agent: Agent)
         (dataset: EvalDataset)
+        (cancellationToken: CancellationToken)
         : Task<EvalReport> =
         task {
             let results = ResizeArray<EvalResult>()
@@ -192,14 +223,15 @@ module EvalRunner =
 
             let runCase =
                 if config.CaptureTraces then
-                    runCaseAsync config.Execution run
+                    runCase true config.TimeoutPerCaseMs config.Execution run
                 else
-                    runCaseLightAsync config.Execution run
+                    runCase false config.TimeoutPerCaseMs config.Execution run
 
             for case in dataset.Cases do
                 for evaluator in evaluators do
-                    let! result = runCase evaluator agent case
-                    results.Add result
+                    if not cancellationToken.IsCancellationRequested then
+                        let! result = runCase evaluator agent case cancellationToken
+                        results.Add result
 
             return EvalReport.fromCasesAndResults run dataset.Name dataset.Cases (results |> Seq.toList)
         }
@@ -210,12 +242,14 @@ module EvalRunner =
         (evaluator: Evaluator)
         (agents: (string * Agent) list)
         (dataset: EvalDataset)
+        (cancellationToken: CancellationToken)
         : Task<(string * EvalReport) list> =
         task {
             let mutable reports = []
 
             for (name, agent) in agents do
-                let! report = runDatasetAsync config evaluator agent dataset
+                cancellationToken.ThrowIfCancellationRequested()
+                let! report = runDatasetAsync config evaluator agent dataset cancellationToken
 
                 reports <-
                     reports

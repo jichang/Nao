@@ -7,6 +7,11 @@ module internal RuntimeExecutionBudget =
     let get () = current.Value
     let set context = current.Value <- context
 
+    let cancellationToken () =
+        current.Value
+        |> Option.map _.CancellationToken
+        |> Option.defaultValue System.Threading.CancellationToken.None
+
     let beginLlmCall () =
         current.Value |> Option.bind _.BeginLlmCall()
 

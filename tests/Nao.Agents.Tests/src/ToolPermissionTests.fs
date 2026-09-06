@@ -40,7 +40,7 @@ type ToolPermissionTests() =
         let asked = ResizeArray<ResourceAccess>()
 
         let ctx =
-            { (AgentContext.allowAll ()) with
+            { (AgentContext.unrestrictedForTests ()) with
                 SessionKey = sessionKey
                 RequestPermission =
                     fun access _reason _force ->
@@ -98,7 +98,7 @@ type ToolPermissionTests() =
         let asked = ResizeArray<ResourceAccess>()
 
         let ctx =
-            { (AgentContext.allowAll ()) with
+            { (AgentContext.unrestrictedForTests ()) with
                 SessionKey = ""
                 RequestPermission =
                     fun access _ _ ->
@@ -150,13 +150,13 @@ type ToolPermissionTests() =
         let tool =
             createTool "w" "w" [ ResourceAccess.Web("GET", "https://x.com") ] (fun _ _ -> task { return "done" })
 
-        Assert.AreEqual("done", run tool (AgentContext.allowAll ()) "x" |> outputOf)
+        Assert.AreEqual("done", run tool (AgentContext.unrestrictedForTests ()) "x" |> outputOf)
 
     [<TestMethod>]
     member _.CreateHasNoDeclaredPermissionsByDefault() =
         let tool = createTool "strict" "strict" [] (fun _ input -> task { return input })
         Assert.AreEqual(0, tool.Permissions.Length)
-        Assert.AreEqual("hi", run tool (AgentContext.allowAll ()) "hi" |> outputOf)
+        Assert.AreEqual("hi", run tool (AgentContext.unrestrictedForTests ()) "hi" |> outputOf)
 
     [<TestMethod>]
     member _.PermissionDeniedFormatIncludesHintWhenProvided() =

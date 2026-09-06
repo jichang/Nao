@@ -6,6 +6,10 @@ open Microsoft.VisualStudio.TestTools.UnitTesting
 open Nao.Agents
 open Nao.Persistence
 
+module private EtclovgHarness =
+    let runAsync config context agent request =
+        Nao.Agents.EtclovgHarness.runAsync config context agent request System.Threading.CancellationToken.None
+
 module private TestTools =
     let echo =
         Tool.create
@@ -96,10 +100,10 @@ type OrchestratorObservabilityTests() =
         let agent =
             TestOrchestrator.create (config provider [] EventBus.none) (fun response -> [ Respond response ])
 
-        let context = AgentContext.allowAll ()
+        let context = AgentContext.unrestrictedForTests ()
         let result = Agent.runAsync context "start" agent |> _.Result
 
-        Assert.AreEqual("done", result)
+        Assert.AreEqual(Ok "done", result)
         CollectionAssert.AreEqual([| context.Correlation |], observed.ToArray())
 
     [<TestMethod>]
@@ -117,7 +121,7 @@ type OrchestratorObservabilityTests() =
         let journal = InMemory.executionJournal ()
 
         let context =
-            { (AgentContext.allowAll ()) with
+            { (AgentContext.unrestrictedForTests ()) with
                 SessionKey = "user/session"
                 TurnId = "turn" }
 
@@ -191,7 +195,7 @@ type OrchestratorObservabilityTests() =
         let agent =
             Orchestrator.createWithProtocol protocol (config provider [ TestTools.echo ] EventBus.none) definition
 
-        let context = AgentContext.allowAll ()
+        let context = AgentContext.unrestrictedForTests ()
 
         let result =
             EtclovgHarness.runAsync EtclovgConfig.Default context agent (request context agent "start")
@@ -234,7 +238,7 @@ type OrchestratorObservabilityTests() =
             { EtclovgConfig.Default with
                 Tracer = Some tracer }
 
-        let context = AgentContext.allowAll ()
+        let context = AgentContext.unrestrictedForTests ()
 
         let result =
             EtclovgHarness.runAsync harnessConfig context parent (request context parent "start")
@@ -283,7 +287,7 @@ type OrchestratorObservabilityTests() =
             { EtclovgConfig.Default with
                 PolicyEngine = Some(PolicyEngine.create [ denyChild ]) }
 
-        let context = AgentContext.allowAll ()
+        let context = AgentContext.unrestrictedForTests ()
 
         let result =
             EtclovgHarness.runAsync harnessConfig context parent (request context parent "start")
@@ -328,7 +332,7 @@ type OrchestratorObservabilityTests() =
             { EtclovgConfig.Default with
                 PolicyEngine = Some(PolicyEngine.create [ denyChild ]) }
 
-        let context = AgentContext.allowAll ()
+        let context = AgentContext.unrestrictedForTests ()
 
         let result =
             EtclovgHarness.runAsync harnessConfig context parent (request context parent "start")

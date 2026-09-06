@@ -1,11 +1,16 @@
 namespace Nao.Eval.Tests
 
 open System
+open System.Threading
 open System.Threading.Tasks
 open Microsoft.VisualStudio.TestTools.UnitTesting
 open Nao.Agents
 open Nao.Eval
 open Nao.Eval.Evaluators
+
+module private EtclovgHarness =
+    let runAsync config context agent request =
+        Nao.Agents.EtclovgHarness.runAsync config context agent request CancellationToken.None
 
 module private TestAgents =
     let echo prefix =
@@ -31,7 +36,9 @@ type EvalRunnerTests() =
             (Some(SessionId.parse "eval-session"))
         |> Option.get
 
-    let execution = EvalExecutionConfig.create authorization AgentContext.allowAll
+    let execution =
+        EvalExecutionConfig.create authorization AgentContext.unrestrictedForTests
+
     let defaultConfig = EvalRunnerConfig.create execution
 
     [<TestMethod>]
@@ -56,7 +63,7 @@ type EvalRunnerTests() =
         let run = EvalRun.create owner dataset.Id
 
         let result =
-            EvalRunner.runCaseLightAsync execution run (LlmJudge.create provider) agent case
+            EvalRunner.runCaseLightAsync execution run (LlmJudge.create provider) agent case CancellationToken.None
             |> _.Result
 
         Assert.IsTrue(observed.Value.IsSome)
@@ -69,7 +76,10 @@ type EvalRunnerTests() =
         let evaluator = Contains.evaluator
         let dataset = EvalDataset.create owner "single" [ case ]
         let run = EvalRun.create owner dataset.Id
-        let result = (EvalRunner.runCaseAsync execution run evaluator agent case).Result
+
+        let result =
+            (EvalRunner.runCaseAsync execution run evaluator agent case CancellationToken.None).Result
+
         Assert.AreEqual("q1", result.CaseId)
         Assert.AreEqual(owner, result.Owner)
         Assert.AreEqual(dataset.Id, result.DatasetId)
@@ -93,7 +103,7 @@ type EvalRunnerTests() =
         let evaluator = Contains.evaluator
 
         let report =
-            (EvalRunner.runDatasetAsync defaultConfig evaluator agent dataset).Result
+            (EvalRunner.runDatasetAsync defaultConfig evaluator agent dataset CancellationToken.None).Result
 
         Assert.AreEqual(3, report.TotalCases)
         Assert.AreEqual(2, report.Passed) // "hello" contains "hello", "world" contains "world"
@@ -114,7 +124,9 @@ type EvalRunnerTests() =
 
         let evaluator = Contains.evaluator
         let config = EvalRunnerConfig.withParallelism 3 execution
-        let report = (EvalRunner.runDatasetAsync config evaluator agent dataset).Result
+
+        let report =
+            (EvalRunner.runDatasetAsync config evaluator agent dataset CancellationToken.None).Result
 
         Assert.AreEqual(3, report.TotalCases)
         Assert.AreEqual(3, report.Passed)
@@ -130,7 +142,13 @@ type EvalRunnerTests() =
         let evaluator = Contains.evaluator
 
         let results =
-            (EvalRunner.compareAgentsAsync defaultConfig evaluator [ ("good", agent1); ("bad", agent2) ] dataset).Result
+            (EvalRunner.compareAgentsAsync
+                defaultConfig
+                evaluator
+                [ ("good", agent1); ("bad", agent2) ]
+                dataset
+                CancellationToken.None)
+                .Result
 
         Assert.AreEqual(2, results.Length)
         let (_, report1) = results.[0]
@@ -148,7 +166,7 @@ type EvalRunnerTests() =
         let evaluator = ExactMatch.evaluator
 
         let report =
-            (EvalRunner.runDatasetAsync defaultConfig evaluator agent dataset).Result
+            (EvalRunner.runDatasetAsync defaultConfig evaluator agent dataset CancellationToken.None).Result
 
         let formatted = EvalReport.format report
         Assert.IsTrue(formatted.Contains("format-test"))
@@ -170,7 +188,7 @@ type EvalRunnerTests() =
         let evaluator = Contains.evaluator
 
         let report =
-            (EvalRunner.runDatasetAsync defaultConfig evaluator agent dataset).Result
+            (EvalRunner.runDatasetAsync defaultConfig evaluator agent dataset CancellationToken.None).Result
 
         Assert.IsTrue(report.TagBreakdown.ContainsKey "math")
         Assert.IsTrue(report.TagBreakdown.ContainsKey "general")
@@ -211,7 +229,7 @@ type EvalRunnerTests() =
         let run = EvalRun.create owner dataset.Id
 
         let result =
-            EvalRunner.runCaseLightAsync blockedExecution run evaluator agent case
+            EvalRunner.runCaseLightAsync blockedExecution run evaluator agent case CancellationToken.None
             |> _.Result
 
         Assert.IsFalse(agentExecuted)
@@ -219,3 +237,175 @@ type EvalRunnerTests() =
         Assert.AreEqual(EvalVerdict.Fail, result.Verdict)
         Assert.AreEqual("Blocked by policy: evaluation denied", result.Reason)
         Assert.AreEqual("", result.ActualOutput)
+
+    [<TestMethod>]
+    member _.``Evaluation matches canonical harness execution semantics``() =
+        let agent = TestAgents.echo "executed"
+
+        let policy =
+            { Id = "normalize-input"
+              Description = "Normalizes execution input"
+              Enforcement = PolicyEnforcement.Modify _.ToUpperInvariant()
+              Evaluate = fun _ -> Some "normalize" }
+
+        let configuredExecution =
+            { execution with
+                Harness =
+                    { EtclovgConfig.Default with
+                        PolicyEngine = Some(PolicyEngine.create [ policy ]) }
+                PolicyVersions = Map [ "input", "v1" ]
+                DependencyVersions = Map [ "agent", "v1" ] }
+
+        let input = "same request"
+        let context = configuredExecution.CreateAgentContext()
+
+        let request =
+            ExecutionRequest.create
+                configuredExecution.Authorization
+                (TurnId.parse "parity-turn")
+                "parity-conversation"
+                agent.Metadata.Id
+                input
+                configuredExecution.Sandbox
+                configuredExecution.PolicyVersions
+                configuredExecution.DependencyVersions
+                context.Correlation
+
+        let harnessResult =
+            EtclovgHarness.runAsync configuredExecution.Harness context agent request
+            |> _.Result
+
+        let case = EvalCase.create "parity" input "executed: SAME REQUEST"
+        let dataset = EvalDataset.create owner "parity" [ case ]
+        let run = EvalRun.create owner dataset.Id
+
+        let evalResult =
+            EvalRunner.runCaseLightAsync configuredExecution run ExactMatch.evaluator agent case CancellationToken.None
+            |> _.Result
+
+        Assert.AreEqual(ExecutionTerminalStatus.Succeeded, harnessResult.Status)
+        Assert.AreEqual(harnessResult.Outputs.Response.Value, evalResult.ActualOutput)
+        Assert.AreEqual(EvalVerdict.Pass, evalResult.Verdict)
+
+    [<TestMethod>]
+    member _.``Per-case timeout uses harness deadline semantics``() =
+        let agent =
+            Agent.create "slow" "Slow" "Exceeds the case deadline" 0 [] AgentContract.Text (fun _ _ ->
+                task {
+                    do! Task.Delay(TimeSpan.FromSeconds 5.0)
+                    return "late"
+                })
+
+        let case = EvalCase.create "timeout" "question" "answer"
+        let dataset = EvalDataset.create owner "timeout" [ case ]
+
+        let config =
+            { defaultConfig with
+                TimeoutPerCaseMs = Some 25 }
+
+        let report =
+            EvalRunner.runDatasetAsync config Contains.evaluator agent dataset CancellationToken.None
+            |> _.Result
+
+        Assert.AreEqual(1, report.Failed)
+        Assert.AreEqual("", report.Results.Head.ActualOutput)
+        Assert.AreEqual("Execution timed out", report.Results.Head.Reason)
+
+    [<TestMethod>]
+    member _.``Caller cancellation stops sequential evaluation``() =
+        let mutable executions = 0
+        use cancellation = new CancellationTokenSource()
+
+        let agent =
+            Agent.create "cancel" "Cancel" "Cancels during execution" 0 [] AgentContract.Text (fun _ _ ->
+                executions <- executions + 1
+                cancellation.Cancel()
+                Task.FromResult "late")
+
+        let tailCount = Random.Shared.Next(2, 7)
+
+        let cases =
+            [ for index in 0..tailCount -> EvalCase.create (sprintf "cancel-%d" index) "input" "late" ]
+
+        let dataset = EvalDataset.create owner "caller-cancellation" cases
+
+        let report =
+            EvalRunner.runDatasetAsync defaultConfig ExactMatch.evaluator agent dataset cancellation.Token
+            |> _.Result
+
+        Assert.AreEqual(1, executions)
+        Assert.AreEqual(1, report.TotalCases)
+        Assert.AreEqual(EvalVerdict.Fail, report.Results.Head.Verdict)
+        Assert.AreEqual("Execution cancelled", report.Results.Head.Reason)
+
+    [<TestMethod>]
+    member _.``Caller cancellation interrupts evaluator``() =
+        use cancellation = new CancellationTokenSource()
+
+        let evaluator =
+            Evaluator.create "cancel-evaluator" (fun _ _ _ ->
+                cancellation.Cancel()
+                Task.Delay(TimeSpan.FromSeconds 5.0).ContinueWith(fun _ -> EvalVerdict.Pass, "late"))
+
+        let case = EvalCase.create "cancel-evaluator" "input" "output"
+        let dataset = EvalDataset.create owner "cancel-evaluator" [ case ]
+        let run = EvalRun.create owner dataset.Id
+
+        Assert.ThrowsExactlyAsync<TaskCanceledException>(fun () ->
+            EvalRunner.runCaseLightAsync
+                execution
+                run
+                evaluator
+                (TestAgents.fixedResponse "output")
+                case
+                cancellation.Token
+            :> Task)
+        |> _.Wait()
+
+    [<TestMethod>]
+    member _.``Sequential execution stops after first failure``() =
+        let mutable executions = 0
+
+        let agent =
+            Agent.create "counting" "Counting" "Counts executed cases" 0 [] AgentContract.Text (fun _ input ->
+                executions <- executions + 1
+                Task.FromResult input)
+
+        let tailCount = Random.Shared.Next(2, 7)
+
+        let cases =
+            EvalCase.create "first" "wrong" "expected"
+            :: [ for index in 1..tailCount -> EvalCase.create (sprintf "tail-%d" index) "expected" "expected" ]
+
+        let dataset = EvalDataset.create owner "stop-first" cases
+
+        let config =
+            { defaultConfig with
+                StopOnFirstFailure = true }
+
+        let report =
+            EvalRunner.runDatasetAsync config ExactMatch.evaluator agent dataset CancellationToken.None
+            |> _.Result
+
+        Assert.AreEqual(1, executions)
+        Assert.AreEqual(1, report.TotalCases)
+        Assert.AreEqual(1, report.Failed)
+
+    [<TestMethod>]
+    member _.``Stop-on-first rejects parallel execution``() =
+        let config =
+            { defaultConfig with
+                MaxParallelism = 2
+                StopOnFirstFailure = true }
+
+        let dataset = EvalDataset.create owner "invalid-stop-first" []
+
+        Assert.ThrowsExactlyAsync<ArgumentException>(fun () ->
+            EvalRunner.runDatasetAsync
+                config
+                ExactMatch.evaluator
+                (TestAgents.fixedResponse "")
+                dataset
+                CancellationToken.None
+            :> Task)
+        |> _.Wait()

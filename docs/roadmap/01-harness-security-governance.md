@@ -13,22 +13,22 @@ This workstream makes the ETCLOVG harness the single reliable execution path and
 - [x] Resource permissions support allow, deny, and ask outcomes.
 - [x] Policy, constitution, audit, execution-journal, retry, circuit-breaker, and fallback primitives exist.
 - [ ] Process and container isolation are enforced by real execution environments.
-- [ ] Every tool path uses identical production authorization semantics.
+- [x] Every tool path uses identical production authorization semantics.
 
 ## HAR-01 — One execution contract
 
 - [x] Define one immutable execution request containing identity, input, budgets, policy versions, dependency versions, and correlation data.
 - [x] Define an execution result containing outputs, artifacts, usage, evidence, policy decisions, and terminal status.
 - [ ] Route direct agent, tool, delegated-agent, memory-tool, evaluation, and replay execution through the harness.
-- [ ] Eliminate authorization bypasses created by permissive default contexts in production paths.
+- [x] Eliminate authorization bypasses created by permissive default contexts in production paths.
 - [x] Define nested budget inheritance for delegated agents and tools.
-- [ ] Make cancellation and deadlines flow through every call boundary.
+- [x] Make cancellation and deadlines flow through every call boundary.
 - [x] Define terminal states for success, failure, cancellation, timeout, denial, limit exceeded, and indeterminate outcomes.
 
 **Acceptance criteria**
 
-- [ ] The same request produces equivalent harness semantics in production and evaluation.
-- [ ] No supported execution path bypasses governance, limits, or audit when enforcement is enabled.
+- [x] The same request produces equivalent harness semantics in production and evaluation.
+- [x] No supported execution path bypasses governance, limits, or audit when enforcement is enabled.
 - [x] Nested work cannot exceed its parent's remaining budget.
 
 ## HAR-02 — Durable execution and replay

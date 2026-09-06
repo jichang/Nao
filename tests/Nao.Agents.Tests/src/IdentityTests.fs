@@ -65,8 +65,8 @@ type IdentityTests() =
 
     [<TestMethod>]
     member _.StandaloneContextsReceiveDistinctCorrelationRoots() =
-        let firstAgent = AgentContext.allowAll ()
-        let secondAgent = AgentContext.allowAll ()
+        let firstAgent = AgentContext.unrestrictedForTests ()
+        let secondAgent = AgentContext.unrestrictedForTests ()
         let firstEvent = EventScope.CreateEmpty()
         let secondEvent = EventScope.CreateEmpty()
 

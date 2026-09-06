@@ -8,7 +8,7 @@
 
 ## Breaking changes
 
-- `EtclovgHarness.runAsync` now accepts an `ExecutionRequest` instead of a string input.
+- `EtclovgHarness.runAsync` now accepts an `ExecutionRequest` and caller `CancellationToken` instead of a string input.
 - `EtclovgConfig.Execution` and `EtclovgConfig.Scope` were removed.
 - Execution input, authorization scope, agent and turn identity, conversation identity, sandbox budgets, pinned policy and dependency versions, and correlation now belong to the immutable request.
 - The harness rejects requests whose `AgentId` differs from the supplied executable agent.
@@ -34,7 +34,7 @@
 1. Construct `ExecutionRequest` from host-authenticated identity and the effective execution settings.
 2. Move sandbox configuration from `EtclovgConfig.Execution` to `ExecutionRequest.Sandbox`.
 3. Move event correlation and routing identity from `EtclovgConfig.Scope` to the request identity fields.
-4. Pass the request as the final argument to `EtclovgHarness.runAsync`.
+4. Pass the request and caller cancellation token as the final arguments to `EtclovgHarness.runAsync`.
 5. Pattern-match `ExecutionResult.Status` and read response or artifacts from `Outputs`.
 6. Read observability and verification data from `Evidence`, and governance outcomes from `PolicyDecisions`.
 7. Rename agent artifact callbacks and transcript fields; migrate or remove development conversation files that contain the old `Data` property.

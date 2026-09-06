@@ -147,7 +147,7 @@ Nao currently defines `SandboxConfig`, `ResourceLimits`, and `IExecutionEnvironm
 
 ## Production checklist
 
-- Never use `AgentContext.allowAll ()` for protected production operations.
+- Never use `AgentContext.unrestrictedForTests ()` for protected production operations.
 - Validate resource identifiers after canonicalization.
 - Enforce authorization inside storage/retrieval boundaries, not only in UI code.
 - Keep secret values out of prompts, traces, logs, and errors.

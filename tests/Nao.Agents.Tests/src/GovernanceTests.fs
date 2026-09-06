@@ -7,6 +7,32 @@ open Nao.Agents
 open Nao.Persistence
 
 [<TestClass>]
+type PermissionGateTests() =
+
+    [<TestMethod>]
+    member _.MissingPromptDeniesAccess() =
+        let outcome =
+            PermissionGate.resolveWith None "session" (ResourceAccess.ToolCall "dangerous") "required" false
+            |> _.Result
+
+        Assert.AreEqual(PermissionDecision.Deny, outcome.Decision)
+        Assert.IsFalse(outcome.RememberForSession)
+
+    [<TestMethod>]
+    member _.ConfiguredPromptOutcomeIsPreserved() =
+        let prompt _ _ _ _ =
+            Task.FromResult
+                { Decision = PermissionDecision.Allow
+                  RememberForSession = true }
+
+        let outcome =
+            PermissionGate.resolveWith (Some prompt) "session" (ResourceAccess.ToolCall "approved") "required" true
+            |> _.Result
+
+        Assert.AreEqual(PermissionDecision.Allow, outcome.Decision)
+        Assert.IsTrue(outcome.RememberForSession)
+
+[<TestClass>]
 type ConstitutionTests() =
 
     [<TestMethod>]
@@ -169,6 +195,7 @@ type PolicyEngineTests() =
 
         let result = engine.Evaluate(ctx)
         Assert.IsTrue(result.Proceed)
+        Assert.AreEqual(None, result.ModifiedInput)
         Assert.AreEqual(0, result.Violations.Length)
 
     [<TestMethod>]

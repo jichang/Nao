@@ -14,17 +14,20 @@ module ExecutionEnvironment =
         { ExecuteAsync =
             fun ctx agentContext agent input ->
                 task {
-                    match ctx.CheckLimits() with
-                    | Some exceeded -> return Error exceeded
-                    | None ->
-                        if ctx.CancellationToken.IsCancellationRequested then
-                            return Error LimitExceeded.Duration
-                        else
-                            let! result = Agent.runAsync agentContext input agent
+                    if ctx.CancellationToken.IsCancellationRequested then
+                        return raise (OperationCanceledException(ctx.CancellationToken))
+                    else
+                        match ctx.CheckLimits() with
+                        | Some exceeded -> return Error exceeded
+                        | None ->
+                            let! result = agent.Execute agentContext input |> _.WaitAsync(ctx.CancellationToken)
 
-                            match ctx.CheckLimits() with
-                            | Some exceeded -> return Error exceeded
-                            | None -> return Ok result
+                            if ctx.CancellationToken.IsCancellationRequested then
+                                return raise (OperationCanceledException(ctx.CancellationToken))
+                            else
+                                match ctx.CheckLimits() with
+                                | Some exceeded -> return Error exceeded
+                                | None -> return Ok result
                 } }
 
     /// Execute with timeout wrapping
@@ -37,14 +40,21 @@ module ExecutionEnvironment =
         : Task<Result<string, LimitExceeded>> =
         task {
             let timeout = ctx.Sandbox.Limits.MaxDuration
-            use cts = new System.Threading.CancellationTokenSource(timeout)
+            use deadline = new System.Threading.CancellationTokenSource(timeout)
+
+            use cts =
+                System.Threading.CancellationTokenSource.CreateLinkedTokenSource(ctx.CancellationToken, deadline.Token)
 
             let linkedCtx =
                 { ctx with
                     CancellationToken = cts.Token }
 
+            let linkedAgentContext =
+                { agentContext with
+                    CancellationToken = cts.Token }
+
             try
-                return! env.ExecuteAsync linkedCtx agentContext agent input
+                return! env.ExecuteAsync linkedCtx linkedAgentContext agent input
             with
             | :? TaskCanceledException -> return Error LimitExceeded.Duration
             | :? OperationCanceledException -> return Error LimitExceeded.Duration

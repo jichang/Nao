@@ -1,5 +1,6 @@
 namespace Nao.Agents
 
+open System.Threading
 open System.Threading.Tasks
 
 /// Whether nested execution may run without a harness dispatcher.
@@ -17,6 +18,7 @@ type AgentContext =
       SessionKey: string
       TurnId: string
       ExecutionBoundary: ExecutionBoundary
+      CancellationToken: CancellationToken
       GetArtifacts: unit -> Artifact list
       GetGrantedResources: unit -> ResourceAccess list
       RequestPermission: ResourceAccess -> string -> bool -> Task<bool>
@@ -25,11 +27,12 @@ type AgentContext =
 [<RequireQualifiedAccess>]
 module AgentContext =
     /// Permissive no-op context for isolated tests and hosts without permissions or publishing.
-    let allowAll () =
+    let unrestrictedForTests () =
         { Correlation = CorrelationContext.root ()
           SessionKey = ""
           TurnId = ""
           ExecutionBoundary = ExecutionBoundary.Unrestricted
+          CancellationToken = CancellationToken.None
           GetArtifacts = (fun () -> [])
           GetGrantedResources = (fun () -> [])
           RequestPermission = (fun _ _ _ -> Task.FromResult true)

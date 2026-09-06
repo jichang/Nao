@@ -156,11 +156,33 @@ type ExecutionEnvironmentTests() =
         let ctx = ExecutionContext.Create SandboxConfig.Default
         let env = ExecutionEnvironment.local ()
 
-        let result = (env.ExecuteAsync ctx (AgentContext.allowAll ()) agent "input").Result
+        let result =
+            (env.ExecuteAsync ctx (AgentContext.unrestrictedForTests ()) agent "input").Result
 
         match result with
         | Ok response -> Assert.AreEqual("hello", response)
         | Error _ -> Assert.Fail("Expected Ok")
+
+    [<TestMethod>]
+    member _.LocalEnvironmentEnforcesCancellationToken() =
+        let agent =
+            Agent.create "slow" "slow" "slow" 0 [] AgentContract.Text (fun _ _ ->
+                task {
+                    do! Task.Delay(TimeSpan.FromSeconds 5.0)
+                    return "late"
+                })
+
+        use cancellation = new CancellationTokenSource()
+        cancellation.Cancel()
+
+        let execution =
+            ExecutionContext.CreateWithCancellation SandboxConfig.Default cancellation.Token
+
+        let environment = ExecutionEnvironment.local ()
+
+        Assert.ThrowsExactlyAsync<OperationCanceledException>(fun () ->
+            environment.ExecuteAsync execution (AgentContext.unrestrictedForTests ()) agent "input" :> Task)
+        |> _.Wait()
 
     [<TestMethod>]
     member _.ExecuteWithTimeoutReturnsOnTime() =
@@ -176,7 +198,7 @@ type ExecutionEnvironmentTests() =
         let env = ExecutionEnvironment.local ()
 
         let result =
-            (ExecutionEnvironment.executeWithTimeout env ctx (AgentContext.allowAll ()) agent "go").Result
+            (ExecutionEnvironment.executeWithTimeout env ctx (AgentContext.unrestrictedForTests ()) agent "go").Result
 
         match result with
         | Ok r -> Assert.AreEqual("fast", r)

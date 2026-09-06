@@ -10,6 +10,13 @@ type EndToEndAgentTests() =
     let provider = LocalLlmProvider.create ()
     let tools = [ DemoTools.getWeather; DemoTools.calculator; DemoTools.greeter ]
 
+    let run agent input =
+        match (Agent.runAsync (AgentContext.unrestrictedForTests ()) input agent).Result with
+        | Ok output -> output
+        | Error failure ->
+            Assert.Fail(failure.Message)
+            ""
+
     let prompt =
         { Prompt.Empty with
             Role = "You are a helpful assistant with access to tools."
@@ -22,8 +29,7 @@ type EndToEndAgentTests() =
     member _.AgentRespondsToSimplePrompt() =
         let agent = createAgent ()
 
-        let result =
-            (Agent.runAsync (AgentContext.allowAll ()) "Hello, how are you?" agent).Result
+        let result = run agent "Hello, how are you?"
 
         Assert.IsTrue(result.Contains("You said:"))
         Assert.IsTrue(result.Contains("Hello, how are you?"))
@@ -32,8 +38,7 @@ type EndToEndAgentTests() =
     member _.AgentInvokesWeatherTool() =
         let agent = createAgent ()
 
-        let result =
-            (Agent.runAsync (AgentContext.allowAll ()) "What is the weather in London?" agent).Result
+        let result = run agent "What is the weather in London?"
 
         Assert.IsTrue(result.Contains("18°C"), sprintf "Expected weather info, got: %s" result)
         Assert.IsTrue(result.Contains("sunny"))
@@ -42,20 +47,25 @@ type EndToEndAgentTests() =
     member _.AgentInvokesCalculatorTool() =
         let agent = createAgent ()
 
-        let result =
-            (Agent.runAsync (AgentContext.allowAll ()) "Please calculate 2 + 2" agent).Result
+        let result = run agent "Please calculate 2 + 2"
 
         Assert.IsTrue(result.Contains("4"), sprintf "Expected '4', got: %s" result)
 
 [<TestClass>]
 type EndToEndWorkspaceTests() =
 
+    let run agent input =
+        match (Agent.runAsync (AgentContext.unrestrictedForTests ()) input agent).Result with
+        | Ok output -> output
+        | Error failure ->
+            Assert.Fail(failure.Message)
+            ""
+
     [<TestMethod>]
     member _.WorkspaceAgentProcessesToolCall() =
         let agent = DemoWorkspace.createAgent ()
 
-        let result =
-            (Agent.runAsync (AgentContext.allowAll ()) "What is the weather in Berlin?" agent).Result
+        let result = run agent "What is the weather in Berlin?"
 
         Assert.IsTrue(result.Contains("18°C"), sprintf "Expected weather, got: %s" result)
 
@@ -63,8 +73,7 @@ type EndToEndWorkspaceTests() =
     member _.WorkspaceAgentUsesCalculator() =
         let agent = DemoWorkspace.createAgent ()
 
-        let result =
-            (Agent.runAsync (AgentContext.allowAll ()) "calculate 2 + 2 for me" agent).Result
+        let result = run agent "calculate 2 + 2 for me"
 
         Assert.IsTrue(result.Contains("4"), sprintf "Expected '4', got: %s" result)
 
@@ -81,7 +90,7 @@ type EndToEndWorkspaceTests() =
     member _.EachAgentInstanceIsIsolated() =
         let a1 = DemoWorkspace.createAgent ()
         let a2 = DemoWorkspace.createAgent ()
-        let r1 = (Agent.runAsync (AgentContext.allowAll ()) "hello" a1).Result
+        let r1 = run a1 "hello"
         // Agents are stateless per call; distinct instances run independently.
         Assert.IsTrue(r1.Length > 0)
         Assert.IsFalse(System.Object.ReferenceEquals(a1, a2))
@@ -90,7 +99,10 @@ type EndToEndWorkspaceTests() =
 type EndToEndToolTests() =
 
     let run tool input =
-        match tool.RunAsync (AgentContext.allowAll ()) input |> fun task -> task.Result with
+        match
+            tool.RunAsync (AgentContext.unrestrictedForTests ()) input
+            |> fun task -> task.Result
+        with
         | Ok output -> output
         | Error failure ->
             Assert.Fail(failure.Message)

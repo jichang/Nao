@@ -58,7 +58,7 @@ Applications own encoding and decoding, allowing JSON, protocol-specific formats
 let! result = Agent.runAsync agentContext encodedInput eligibilityAgent
 ```
 
-`AgentContext.allowAll ()` creates a fresh correlated context for isolated tests. Production hosts should construct a context connected to their permission and identity policy.
+The result is `Result<string, PlatformFailure>`. `AgentContext.unrestrictedForTests ()` creates a fresh correlated context for isolated tests. Production hosts must execute through the harness, which installs the governed runtime dispatcher.
 
 ## Use the ETCLOVG harness
 
@@ -95,7 +95,7 @@ let request =
         correlation
 
 let! result =
-    EtclovgHarness.runAsync config agentContext eligibilityAgent request
+    EtclovgHarness.runAsync config agentContext eligibilityAgent request cancellationToken
 
 match result.Status, result.Outputs.Response with
 | ExecutionTerminalStatus.Succeeded, Some response -> printfn "%s" response

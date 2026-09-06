@@ -83,6 +83,7 @@ module ToolProtocol =
                                 return failed sw.ElapsedMilliseconds (ToolFailure.ofPlatformFailure failure)
                         with
                         | ExecutionLimitExceededException limit -> return raise (ExecutionLimitExceededException limit)
+                        | :? System.OperationCanceledException as error -> return raise error
                         | ex ->
                             sw.Stop()
 
