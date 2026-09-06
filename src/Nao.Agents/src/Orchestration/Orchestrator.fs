@@ -217,12 +217,20 @@ module Orchestrator =
                         let span = startLlmSpan attempt prompt.Length
 
                         try
+                            match RuntimeExecutionBudget.beginLlmCall () with
+                            | Some limit -> raise (ExecutionLimitExceededException limit)
+                            | None -> ()
+
                             let! result =
                                 if streaming then
                                     LlmProvider.streamAsync config.Provider correlation prompt config.Options (fun _ ->
                                         ())
                                 else
                                     config.Provider.CompleteAsync correlation prompt config.Options
+
+                            match RuntimeExecutionBudget.recordLlmUsage result.Usage with
+                            | Some limit -> raise (ExecutionLimitExceededException limit)
+                            | None -> ()
 
                             started.Stop()
                             endLlmSpan span SpanStatus.Ok result.Content.Length started.ElapsedMilliseconds
@@ -499,10 +507,25 @@ module Orchestrator =
                                         match config.SubAgents |> List.tryFind (fun a -> a.Metadata.Id = agentId) with
                                         | Some agent ->
                                             report (SubAgentInvoked(agent.Metadata.Name, effectiveAgentInput))
-                                            let! agentResult = Agent.runAsync agentContext effectiveAgentInput agent
-                                            report (SubAgentCompleted(agent.Metadata.Name, agentResult))
-                                            finalAnswer <- agentResult
-                                            finished <- true
+
+                                            let! agentResult =
+                                                ExecutionRuntime.runAgent agentContext agent effectiveAgentInput
+
+                                            match agentResult with
+                                            | Ok response ->
+                                                report (SubAgentCompleted(agent.Metadata.Name, response))
+                                                finalAnswer <- response
+                                                finished <- true
+                                            | Error failure ->
+                                                conversation <-
+                                                    conversation
+                                                    @ [ { Role = User
+                                                          Content =
+                                                            sprintf
+                                                                "[Sub-agent %A Failed for %s]: %s"
+                                                                failure.Category
+                                                                agent.Metadata.Name
+                                                                failure.Message } ]
                                         | None ->
                                             let err =
                                                 sprintf
@@ -554,19 +577,7 @@ module Orchestrator =
                 return finalAnswer
             }
 
-        Agent.create
-            id
-            config.Name
-            config.Description
-            config.Priority
-            config.Responsibilities
-            config.Contract
-            runCore
-            (fun context msg ->
-                task {
-                    let! response = runCore context msg.Content
-                    return Some(AgentMessage.create id msg.From response)
-                })
+        Agent.create id config.Name config.Description config.Priority config.Responsibilities config.Contract runCore
 
     /// Create an orchestrator over its configured local tools.
     let create (config: OrchestratorConfig) (definition: OrchestratorDefinition) : Agent =

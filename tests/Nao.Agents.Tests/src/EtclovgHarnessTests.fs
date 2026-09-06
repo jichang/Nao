@@ -17,15 +17,8 @@ type EtclovgHarnessTests() =
         |> Option.get
 
     let makeAgent (response: string) =
-        Agent.create
-            "test-agent"
-            "test-agent"
-            "test"
-            0
-            []
-            AgentContract.Text
-            (fun _context _input -> Task.FromResult response)
-            (fun _context _message -> Task.FromResult None)
+        Agent.create "test-agent" "test-agent" "test" 0 [] AgentContract.Text (fun _context _input ->
+            Task.FromResult response)
 
     let request (context: AgentContext) (agent: Agent) input =
         ExecutionRequest.create
@@ -106,7 +99,7 @@ type EtclovgHarnessTests() =
         let mutable published: Artifact option = None
 
         let agent =
-            Agent.createContextual "artifact-agent" "artifact-agent" "test" 0 [] AgentContract.Text (fun context _ ->
+            Agent.create "artifact-agent" "artifact-agent" "test" 0 [] AgentContract.Text (fun context _ ->
                 task {
                     let artifact = Artifact.create "report" "application/json" "{\"value\":42}"
                     produced <- Some artifact
@@ -169,6 +162,354 @@ type EtclovgHarnessTests() =
         )
 
         Assert.AreEqual(1, result.PolicyDecisions.PolicyViolations.Length)
+
+    [<TestMethod>]
+    member _.ExecutionGraphNodesReenterHarnessPolicy() =
+        let mutable nodeExecuted = false
+
+        let nodeAgent =
+            Agent.create "blocked-node" "Blocked node" "Must not execute" 0 [] AgentContract.Text (fun _ _ ->
+                nodeExecuted <- true
+                Task.FromResult "unexpected")
+
+        let node =
+            { Id = GraphNodeId.create "blocked"
+              Agent = nodeAgent }
+
+        let graph =
+            { Entry = node.Id
+              Nodes = [ node ]
+              Edges = []
+              MaxSteps = 1 }
+
+        let graphAgent =
+            ExecutionGraph.asAgent "graph" "Graph" "Governed graph" 0 [] AgentContract.Text graph
+
+        let denyNode =
+            { Id = "deny-node"
+              Description = "Blocks only the graph node"
+              Enforcement = PolicyEnforcement.Block
+              Evaluate =
+                fun policyContext ->
+                    if policyContext.AgentId = nodeAgent.Metadata.Id then
+                        Some "graph node denied"
+                    else
+                        None }
+
+        let config =
+            { EtclovgConfig.Default with
+                PolicyEngine = Some(PolicyEngine.create [ denyNode ]) }
+
+        let context = AgentContext.allowAll ()
+
+        let result =
+            (EtclovgHarness.runAsync config context graphAgent (request context graphAgent "input")).Result
+
+        Assert.AreEqual(ExecutionTerminalStatus.Denied HarnessError.PermissionDenied, result.Status)
+        Assert.IsFalse(nodeExecuted)
+
+    [<TestMethod>]
+    member _.AgentGroupMembersReenterHarnessPolicy() =
+        let mutable memberExecuted = false
+
+        let memberAgent =
+            Agent.create "blocked-member" "Blocked member" "Must not execute" 0 [] AgentContract.Text (fun _ _ ->
+                memberExecuted <- true
+                Task.FromResult "unexpected")
+
+        let group = AgentGroup.create [ memberAgent ] (MaxRounds 1)
+
+        let groupAgent =
+            Agent.create "group" "Group" "Governed group" 0 [] AgentContract.Text (fun context input ->
+                task {
+                    let! history = AgentGroup.runAsync context input group
+                    return history |> List.last |> _.Content
+                })
+
+        let denyMember =
+            { Id = "deny-group-member"
+              Description = "Blocks only the group member"
+              Enforcement = PolicyEnforcement.Block
+              Evaluate =
+                fun policyContext ->
+                    if policyContext.AgentId = memberAgent.Metadata.Id then
+                        Some "group member denied"
+                    else
+                        None }
+
+        let config =
+            { EtclovgConfig.Default with
+                PolicyEngine = Some(PolicyEngine.create [ denyMember ]) }
+
+        let context = AgentContext.allowAll ()
+
+        let result =
+            (EtclovgHarness.runAsync config context groupAgent (request context groupAgent "input")).Result
+
+        Assert.AreEqual(ExecutionTerminalStatus.Denied HarnessError.PermissionDenied, result.Status)
+        Assert.IsFalse(memberExecuted)
+
+    [<TestMethod>]
+    member _.ToolInvocationsReenterHarnessPolicy() =
+        let mutable toolExecuted = false
+
+        let tool =
+            Tool.create
+                "blocked-tool"
+                "Must not execute"
+                0
+                []
+                ToolCodec.text
+                ToolCodec.text
+                (ToolOperation.create (fun _ input ->
+                    toolExecuted <- true
+                    Task.FromResult(Ok input)))
+
+        let protocol = ToolProtocol.fromTools [ tool ]
+
+        let agent =
+            Agent.create
+                "tool-agent"
+                "Tool agent"
+                "Invokes a governed tool"
+                0
+                []
+                AgentContract.Text
+                (fun context input ->
+                    task {
+                        let! result = protocol.InvokeAsync context tool.Name input
+
+                        match result.Failure with
+                        | Some failure -> return PlatformFailure.raiseException (failure.ToPlatformFailure None)
+                        | None -> return result.Output
+                    })
+
+        let denyTool =
+            { Id = "deny-tool"
+              Description = "Blocks one tool invocation"
+              Enforcement = PolicyEnforcement.Block
+              Evaluate =
+                fun policyContext ->
+                    if policyContext.Action = "tool.execute:blocked-tool" then
+                        Some "tool execution denied"
+                    else
+                        None }
+
+        let config =
+            { EtclovgConfig.Default with
+                PolicyEngine = Some(PolicyEngine.create [ denyTool ]) }
+
+        let context = AgentContext.allowAll ()
+
+        let result =
+            (EtclovgHarness.runAsync config context agent (request context agent "input")).Result
+
+        Assert.AreEqual(ExecutionTerminalStatus.Denied HarnessError.PermissionDenied, result.Status)
+        Assert.IsFalse(toolExecuted)
+
+    [<TestMethod>]
+    member _.NestedAgentsShareParentToolBudget() =
+        let mutable toolExecutions = 0
+
+        let tool =
+            Tool.create
+                "budgeted-tool"
+                "Counts executions"
+                0
+                []
+                ToolCodec.text
+                ToolCodec.text
+                (ToolOperation.create (fun _ input ->
+                    toolExecutions <- toolExecutions + 1
+                    Task.FromResult(Ok input)))
+
+        let protocol = ToolProtocol.fromTools [ tool ]
+
+        let invokeTool context input =
+            task {
+                let! result = protocol.InvokeAsync context tool.Name input
+
+                match result.Failure with
+                | Some failure -> return PlatformFailure.raiseException (failure.ToPlatformFailure None)
+                | None -> return result.Output
+            }
+
+        let child =
+            Agent.create "budget-child" "Budget child" "Uses one tool call" 0 [] AgentContract.Text invokeTool
+
+        let parent =
+            Agent.create
+                "budget-parent"
+                "Budget parent"
+                "Delegates before using a tool"
+                0
+                []
+                AgentContract.Text
+                (fun context input ->
+                    task {
+                        match! ExecutionRuntime.runAgent context child input with
+                        | Error failure -> return PlatformFailure.raiseException failure
+                        | Ok _ -> return! invokeTool context input
+                    })
+
+        let limits =
+            { ResourceLimits.Unlimited with
+                MaxToolCalls = 1 }
+
+        let context = AgentContext.allowAll ()
+
+        let executionRequest =
+            { request context parent "input" with
+                Sandbox =
+                    { SandboxConfig.Default with
+                        Limits = limits } }
+
+        let result =
+            (EtclovgHarness.runAsync EtclovgConfig.Default context parent executionRequest).Result
+
+        Assert.AreEqual(ExecutionTerminalStatus.LimitExceeded LimitExceeded.ToolCalls, result.Status)
+        Assert.AreEqual(1, toolExecutions)
+        Assert.AreEqual(1, result.Usage.ToolCalls)
+
+    [<TestMethod>]
+    member _.HarnessBlocksLlmCallsBeforeExceedingBudget() =
+        let mutable providerCalls = 0
+
+        let provider =
+            LlmProvider.create (fun () -> "budget-provider") (fun _ _ _ ->
+                providerCalls <- providerCalls + 1
+                Task.FromResult(CompletionResult.create "done" "stop" None None))
+
+        let orchestrator =
+            Orchestrator.create
+                { Id = "llm-call-budget"
+                  Name = "LLM call budget"
+                  Description = "Tests LLM call budget enforcement"
+                  Priority = 0
+                  Responsibilities = []
+                  Contract = AgentContract.Text
+                  Provider = provider
+                  Tools = []
+                  SubAgents = []
+                  Prompt = Prompt.Empty
+                  Options = CompletionOptions.Default
+                  MaxRounds = 1
+                  Bus = EventBus.none
+                  Scope = EventScope.CreateEmpty() }
+                { OrchestratorDefinition.create Task.FromResult with
+                    ParseActions = fun response -> [ Respond response ] }
+
+        let context = AgentContext.allowAll ()
+
+        let executionRequest =
+            { request context orchestrator "input" with
+                Sandbox =
+                    { SandboxConfig.Default with
+                        Limits =
+                            { ResourceLimits.Unlimited with
+                                MaxLlmCalls = 0 } } }
+
+        let result =
+            (EtclovgHarness.runAsync EtclovgConfig.Default context orchestrator executionRequest).Result
+
+        Assert.AreEqual(ExecutionTerminalStatus.LimitExceeded LimitExceeded.LlmCalls, result.Status)
+        Assert.AreEqual(0, providerCalls)
+        Assert.AreEqual(0, result.Usage.LlmCalls)
+
+    [<TestMethod>]
+    member _.HarnessAccountsProviderTokensAgainstBudget() =
+        let provider =
+            LlmProvider.create (fun () -> "token-provider") (fun _ _ _ ->
+                let usage = { InputTokens = 4; OutputTokens = 3 }
+                Task.FromResult(CompletionResult.create "done" "stop" (Some 7) (Some usage)))
+
+        let orchestrator =
+            Orchestrator.create
+                { Id = "token-budget"
+                  Name = "Token budget"
+                  Description = "Tests token budget enforcement"
+                  Priority = 0
+                  Responsibilities = []
+                  Contract = AgentContract.Text
+                  Provider = provider
+                  Tools = []
+                  SubAgents = []
+                  Prompt = Prompt.Empty
+                  Options = CompletionOptions.Default
+                  MaxRounds = 1
+                  Bus = EventBus.none
+                  Scope = EventScope.CreateEmpty() }
+                { OrchestratorDefinition.create Task.FromResult with
+                    ParseActions = fun response -> [ Respond response ] }
+
+        let context = AgentContext.allowAll ()
+
+        let executionRequest =
+            { request context orchestrator "input" with
+                Sandbox =
+                    { SandboxConfig.Default with
+                        Limits =
+                            { ResourceLimits.Unlimited with
+                                MaxTotalTokens = 5 } } }
+
+        let result =
+            (EtclovgHarness.runAsync EtclovgConfig.Default context orchestrator executionRequest).Result
+
+        Assert.AreEqual(ExecutionTerminalStatus.LimitExceeded LimitExceeded.TotalTokens, result.Status)
+        Assert.AreEqual(1, result.Usage.LlmCalls)
+        Assert.AreEqual(7, result.Usage.TotalTokens)
+
+    [<DataTestMethod>]
+    [<DataRow("router-supervisor")>]
+    [<DataRow("router-selected")>]
+    member _.RouterAgentsReenterHarnessPolicy(deniedAgentId: string) =
+        let mutable supervisorExecuted = false
+        let mutable selectedExecuted = false
+
+        let supervisor =
+            Agent.create "router-supervisor" "Router supervisor" "Selects an agent" 0 [] AgentContract.Text (fun _ _ ->
+                supervisorExecuted <- true
+                Task.FromResult "selected")
+
+        let selected =
+            Agent.create "router-selected" "selected" "Handles the request" 0 [] AgentContract.Text (fun _ _ ->
+                selectedExecuted <- true
+                Task.FromResult "done")
+
+        let router = Router.create [ selected ] (ByPrompt supervisor)
+
+        let routerAgent =
+            Agent.create "router" "Router" "Routes requests" 0 [] AgentContract.Text (fun context input ->
+                Router.routeAsync context input router)
+
+        let denyAgent =
+            { Id = "deny-router-agent"
+              Description = "Blocks one router agent"
+              Enforcement = PolicyEnforcement.Block
+              Evaluate =
+                fun policyContext ->
+                    if policyContext.AgentId = deniedAgentId then
+                        Some "router agent denied"
+                    else
+                        None }
+
+        let config =
+            { EtclovgConfig.Default with
+                PolicyEngine = Some(PolicyEngine.create [ denyAgent ]) }
+
+        let context = AgentContext.allowAll ()
+
+        let result =
+            (EtclovgHarness.runAsync config context routerAgent (request context routerAgent "input")).Result
+
+        Assert.AreEqual(ExecutionTerminalStatus.Denied HarnessError.PermissionDenied, result.Status)
+
+        if deniedAgentId = supervisor.Metadata.Id then
+            Assert.IsFalse(supervisorExecuted)
+            Assert.IsFalse(selectedExecuted)
+        else
+            Assert.IsTrue(supervisorExecuted)
+            Assert.IsFalse(selectedExecuted)
 
     [<TestMethod>]
     member _.ReadinessCheckFailureBlocksExecution() =
@@ -336,7 +677,7 @@ type EtclovgHarnessTests() =
         let mutable executed = false
 
         let agent =
-            Agent.createContextual "actual-agent" "actual-agent" "test" 0 [] AgentContract.Text (fun _ _ ->
+            Agent.create "actual-agent" "actual-agent" "test" 0 [] AgentContract.Text (fun _ _ ->
                 executed <- true
                 Task.FromResult "unexpected")
 

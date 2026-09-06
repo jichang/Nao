@@ -209,8 +209,6 @@ Planner definitions do not need to reimplement those operational concerns.
 
 ## Planned platform improvements
 
-- One durable execution request/result contract
-- Budget inheritance across nested agents
 - Idempotent checkpoint and replay
 - Capability-based dynamic selection without arbitrary code loading
 - Richer consensus or bidding protocols where validated by use cases

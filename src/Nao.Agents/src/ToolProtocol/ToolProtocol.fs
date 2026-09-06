@@ -67,7 +67,7 @@ module ToolProtocol =
                     match tools |> List.tryFind (fun tool -> tool.Name = name) with
                     | Some tool ->
                         try
-                            let! result = tool.RunAsync context input
+                            let! result = ExecutionRuntime.runTool context tool input
                             sw.Stop()
 
                             match result with
@@ -79,8 +79,11 @@ module ToolProtocol =
                                       Failure = None
                                       DurationMs = sw.ElapsedMilliseconds
                                       HadSideEffects = false }
-                            | Error failure -> return failed sw.ElapsedMilliseconds failure
-                        with ex ->
+                            | Error failure ->
+                                return failed sw.ElapsedMilliseconds (ToolFailure.ofPlatformFailure failure)
+                        with
+                        | ExecutionLimitExceededException limit -> return raise (ExecutionLimitExceededException limit)
+                        | ex ->
                             sw.Stop()
 
                             let failure =

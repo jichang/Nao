@@ -148,7 +148,6 @@ type EtclovgExecutionTests() =
             []
             AgentContract.Text
             (fun _context _input -> Task.FromResult response)
-            (fun _context _message -> Task.FromResult None)
 
     [<TestMethod>]
     member _.AgentRunsWithinResourceBudget() =
@@ -188,6 +187,7 @@ type EtclovgExecutionTests() =
 
         let agent = makeAgent "should not reach"
         let env = ExecutionEnvironment.local ()
+
         let result = (env.ExecuteAsync ctx (AgentContext.allowAll ()) agent "query").Result
 
         match result with
@@ -840,7 +840,6 @@ type EtclovgFullIntegrationTests() =
             []
             AgentContract.Text
             (fun _context _input -> Task.FromResult response)
-            (fun _context _message -> Task.FromResult None)
 
     [<TestMethod>]
     member _.CompleteHarnessExecution_AllLayersActive() =

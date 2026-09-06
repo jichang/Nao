@@ -19,13 +19,7 @@ module SampleAgents =
         let execute context input =
             runTool context (prepareInput input) tool
 
-        let handleMessage context (message: AgentMessage) =
-            task {
-                let! result = runTool context (prepareInput message.Content) tool
-                return Some(AgentMessage.create id message.From result)
-            }
-
-        Agent.create id id description 0 [] AgentContract.Text execute handleMessage
+        Agent.create id id description 0 [] AgentContract.Text execute
 
     let weather () =
         createToolAgent "weather-agent" "Handles weather queries" id DemoTools.getWeather
@@ -62,11 +56,6 @@ module SampleAgents =
             []
             AgentContract.Text
             (fun _context input -> summarize input)
-            (fun _context message ->
-                task {
-                    let! summary = summarize message.Content
-                    return Some(AgentMessage.create "summarizer" message.From summary)
-                })
 
     /// An orchestrator agent that decides which sub-agent to route to.
     let router () =
@@ -89,7 +78,7 @@ module SampleAgents =
 
             Task.FromResult(agentName)
 
-        Agent.createContextual
+        Agent.create
             "orchestrator"
             "orchestrator"
             "Routes requests to the appropriate specialist"
@@ -276,8 +265,10 @@ type AgentGroupOrchestratorTests() =
             (AgentGroup.runAsync (AgentContext.allowAll ()) "test input" group).Result
 
         let firstMsg = history |> List.head
+        let reply = history |> List.last
         Assert.AreEqual("user", firstMsg.From)
         Assert.AreEqual("test input", firstMsg.Content)
+        Assert.AreEqual("user", reply.To.Value)
 
 
 // =============================================================================

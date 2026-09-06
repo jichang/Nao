@@ -1,5 +1,6 @@
 namespace Nao.Eval.Tests
 
+open System
 open System.Threading.Tasks
 open Microsoft.VisualStudio.TestTools.UnitTesting
 open Nao.Agents
@@ -8,16 +9,30 @@ open Nao.Eval.Evaluators
 
 module private TestAgents =
     let echo prefix =
-        Agent.createContextual "echo" "Echo" "Echoes input with a prefix" 0 [] AgentContract.Text (fun _ input ->
+        Agent.create "echo" "Echo" "Echoes input with a prefix" 0 [] AgentContract.Text (fun _ input ->
             Task.FromResult(sprintf "%s: %s" prefix input))
 
     let fixedResponse response =
-        Agent.createContextual "fixed" "Fixed" "Returns fixed response" 0 [] AgentContract.Text (fun _ _ ->
+        Agent.create "fixed" "Fixed" "Returns fixed response" 0 [] AgentContract.Text (fun _ _ ->
             Task.FromResult response)
 
 [<TestClass>]
 type EvalRunnerTests() =
     let owner = "eval-tests"
+
+    let authorization =
+        let principal =
+            SecurityPrincipal.create (TenantId.parse "eval-tenant") (UserId.parse "eval-user") []
+
+        AuthorizationScope.tryCreate
+            principal
+            None
+            (WorkspaceId.parse "eval-workspace")
+            (Some(SessionId.parse "eval-session"))
+        |> Option.get
+
+    let execution = EvalExecutionConfig.create authorization AgentContext.allowAll
+    let defaultConfig = EvalRunnerConfig.create execution
 
     [<TestMethod>]
     member _.``RunCase forwards execution correlation to LLM evaluator``() =
@@ -41,7 +56,7 @@ type EvalRunnerTests() =
         let run = EvalRun.create owner dataset.Id
 
         let result =
-            EvalRunner.runCaseLightAsync run (LlmJudge.create provider) agent case
+            EvalRunner.runCaseLightAsync execution run (LlmJudge.create provider) agent case
             |> _.Result
 
         Assert.IsTrue(observed.Value.IsSome)
@@ -54,7 +69,7 @@ type EvalRunnerTests() =
         let evaluator = Contains.evaluator
         let dataset = EvalDataset.create owner "single" [ case ]
         let run = EvalRun.create owner dataset.Id
-        let result = (EvalRunner.runCaseAsync run evaluator agent case).Result
+        let result = (EvalRunner.runCaseAsync execution run evaluator agent case).Result
         Assert.AreEqual("q1", result.CaseId)
         Assert.AreEqual(owner, result.Owner)
         Assert.AreEqual(dataset.Id, result.DatasetId)
@@ -78,7 +93,7 @@ type EvalRunnerTests() =
         let evaluator = Contains.evaluator
 
         let report =
-            (EvalRunner.runDatasetAsync EvalRunnerConfig.Default evaluator agent dataset).Result
+            (EvalRunner.runDatasetAsync defaultConfig evaluator agent dataset).Result
 
         Assert.AreEqual(3, report.TotalCases)
         Assert.AreEqual(2, report.Passed) // "hello" contains "hello", "world" contains "world"
@@ -98,7 +113,7 @@ type EvalRunnerTests() =
                   EvalCase.create "p3" "c" "hello" ]
 
         let evaluator = Contains.evaluator
-        let config = EvalRunnerConfig.Parallel 3
+        let config = EvalRunnerConfig.withParallelism 3 execution
         let report = (EvalRunner.runDatasetAsync config evaluator agent dataset).Result
 
         Assert.AreEqual(3, report.TotalCases)
@@ -115,12 +130,7 @@ type EvalRunnerTests() =
         let evaluator = Contains.evaluator
 
         let results =
-            (EvalRunner.compareAgentsAsync
-                EvalRunnerConfig.Default
-                evaluator
-                [ ("good", agent1); ("bad", agent2) ]
-                dataset)
-                .Result
+            (EvalRunner.compareAgentsAsync defaultConfig evaluator [ ("good", agent1); ("bad", agent2) ] dataset).Result
 
         Assert.AreEqual(2, results.Length)
         let (_, report1) = results.[0]
@@ -138,7 +148,7 @@ type EvalRunnerTests() =
         let evaluator = ExactMatch.evaluator
 
         let report =
-            (EvalRunner.runDatasetAsync EvalRunnerConfig.Default evaluator agent dataset).Result
+            (EvalRunner.runDatasetAsync defaultConfig evaluator agent dataset).Result
 
         let formatted = EvalReport.format report
         Assert.IsTrue(formatted.Contains("format-test"))
@@ -160,7 +170,7 @@ type EvalRunnerTests() =
         let evaluator = Contains.evaluator
 
         let report =
-            (EvalRunner.runDatasetAsync EvalRunnerConfig.Default evaluator agent dataset).Result
+            (EvalRunner.runDatasetAsync defaultConfig evaluator agent dataset).Result
 
         Assert.IsTrue(report.TagBreakdown.ContainsKey "math")
         Assert.IsTrue(report.TagBreakdown.ContainsKey "general")
@@ -168,3 +178,44 @@ type EvalRunnerTests() =
         Assert.AreEqual(1.0, report.TagBreakdown.["math"].PassRate)
         Assert.AreEqual(1, report.TagBreakdown.["general"].Count)
         Assert.AreEqual(0.0, report.TagBreakdown.["general"].PassRate)
+
+    [<TestMethod>]
+    member _.``Harness policy denial prevents evaluation execution``() =
+        let mutable agentExecuted = false
+        let mutable evaluatorExecuted = false
+
+        let agent =
+            Agent.create "blocked" "Blocked" "Must not run" 0 [] AgentContract.Text (fun _ _ ->
+                agentExecuted <- true
+                Task.FromResult "unexpected")
+
+        let evaluator =
+            Evaluator.create "blocked-evaluator" (fun _ _ _ ->
+                evaluatorExecuted <- true
+                Task.FromResult(EvalVerdict.Pass, "unexpected"))
+
+        let policy =
+            { Id = "block-evaluation"
+              Description = "Blocks evaluation execution"
+              Enforcement = PolicyEnforcement.Block
+              Evaluate = fun _ -> Some "evaluation denied" }
+
+        let blockedExecution =
+            { execution with
+                Harness =
+                    { EtclovgConfig.Default with
+                        PolicyEngine = Some(PolicyEngine.create [ policy ]) } }
+
+        let case = EvalCase.create "blocked" "question" "answer"
+        let dataset = EvalDataset.create owner "blocked" [ case ]
+        let run = EvalRun.create owner dataset.Id
+
+        let result =
+            EvalRunner.runCaseLightAsync blockedExecution run evaluator agent case
+            |> _.Result
+
+        Assert.IsFalse(agentExecuted)
+        Assert.IsFalse(evaluatorExecuted)
+        Assert.AreEqual(EvalVerdict.Fail, result.Verdict)
+        Assert.AreEqual("Blocked by policy: evaluation denied", result.Reason)
+        Assert.AreEqual("", result.ActualOutput)

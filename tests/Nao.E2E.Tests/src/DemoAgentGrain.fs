@@ -68,21 +68,7 @@ module DemoAgent =
                 | None -> return result.Content
             }
 
-        let handleMessage context (message: AgentMessage) =
-            task {
-                let! response = runCore context message.Content
-                return Some(AgentMessage.create "demo-agent" message.From response)
-            }
-
-        Agent.create
-            "demo-agent"
-            "demo-agent"
-            "A demo agent for E2E testing"
-            0
-            []
-            AgentContract.Text
-            runCore
-            handleMessage
+        Agent.create "demo-agent" "demo-agent" "A demo agent for E2E testing" 0 [] AgentContract.Text runCore
 
 /// Test workspace definitions that provide DemoAgent via built agents/tools
 module DemoWorkspace =

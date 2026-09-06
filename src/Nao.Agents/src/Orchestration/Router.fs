@@ -18,6 +18,13 @@ type Router =
 [<RequireQualifiedAccess>]
 module Router =
 
+    let private invoke context input agent =
+        task {
+            match! ExecutionRuntime.runAgent context agent input with
+            | Ok output -> return output
+            | Error failure -> return PlatformFailure.raiseException failure
+        }
+
     let create agents strategy =
         { Agents = agents; Strategy = strategy }
 
@@ -31,7 +38,7 @@ module Router =
                 | ByName name -> Task.FromResult(findAgent name router)
                 | ByPrompt supervisor ->
                     task {
-                        let! selectedName = Agent.runAsync context input supervisor
+                        let! selectedName = invoke context input supervisor
                         return findAgent (selectedName.Trim()) router
                     }
                 | RoundRobin -> Task.FromResult(List.tryHead router.Agents)
@@ -42,6 +49,6 @@ module Router =
                     }
 
             match selected with
-            | Some agent -> return! Agent.runAsync context input agent
+            | Some agent -> return! invoke context input agent
             | None -> return "No matching agent available"
         }

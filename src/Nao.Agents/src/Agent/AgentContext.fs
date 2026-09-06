@@ -2,6 +2,12 @@ namespace Nao.Agents
 
 open System.Threading.Tasks
 
+/// Whether nested execution may run without a harness dispatcher.
+[<RequireQualifiedAccess>]
+type ExecutionBoundary =
+    | Unrestricted
+    | HarnessRequired
+
 /// Host services and identity scoped to one agent or tool execution.
 /// Session-owned resources must be derived from `SessionKey`; context from one session must
 /// never be retained or reused by another session. `GetArtifacts` and `GetGrantedResources` return
@@ -10,6 +16,7 @@ type AgentContext =
     { Correlation: CorrelationContext
       SessionKey: string
       TurnId: string
+      ExecutionBoundary: ExecutionBoundary
       GetArtifacts: unit -> Artifact list
       GetGrantedResources: unit -> ResourceAccess list
       RequestPermission: ResourceAccess -> string -> bool -> Task<bool>
@@ -18,11 +25,11 @@ type AgentContext =
 [<RequireQualifiedAccess>]
 module AgentContext =
     /// Permissive no-op context for isolated tests and hosts without permissions or publishing.
-    /// Production hosts should supply session identity and real callbacks.
     let allowAll () =
         { Correlation = CorrelationContext.root ()
           SessionKey = ""
           TurnId = ""
+          ExecutionBoundary = ExecutionBoundary.Unrestricted
           GetArtifacts = (fun () -> [])
           GetGrantedResources = (fun () -> [])
           RequestPermission = (fun _ _ _ -> Task.FromResult true)

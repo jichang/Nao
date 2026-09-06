@@ -65,6 +65,8 @@ type LimitExceeded =
     | ToolCalls
     | Memory
 
+exception ExecutionLimitExceededException of LimitExceeded
+
 module ResourceUsage =
     let check (limits: ResourceLimits) (usage: ResourceUsage) : LimitExceeded option =
         if usage.ElapsedTime > limits.MaxDuration then

@@ -19,11 +19,11 @@ A capability can have more than one status when, for example, a core primitive i
 | Capability | Status | Source and tests | Current boundary | Roadmap |
 |---|---|---|---|---|
 | Functional agents and explicit contracts | **Implemented** | `Agent` in `src/Nao.Agents/src/Agent/Agent.fs`; agent tests in `tests/Nao.Agents.Tests` | Agents are immutable records of metadata and context-aware execution functions; transport schemas remain explicitly authored. | FND-03 |
-| Router, pipeline, collaborative groups, and delegation | **Implemented** | `Router`, `Pipeline`, `AgentGroup`, `AgentTool`, `Orchestrator`, `OrchestratorDefinition`, and `OrchestratorRound` under `src/Nao.Agents/src/Orchestration`; orchestrator and end-to-end tests | Execution is bounded, but durable replay and inherited nested budgets are incomplete. | HAR-01, HAR-02 |
+| Router, pipeline, collaborative groups, and delegation | **Implemented** | `Router`, `Pipeline`, `AgentGroup`, `AgentTool`, `Orchestrator`, `OrchestratorDefinition`, and `OrchestratorRound` under `src/Nao.Agents/src/Orchestration`; orchestrator and end-to-end tests | Delegated agents and tools share the parent execution budget; durable replay remains incomplete. | HAR-01, HAR-02 |
 | Collaborative agent groups | **Implemented** | `AgentGroup.create` and `AgentGroup.runAsync`; end-to-end tests | This is agent collaboration, not organizational tenant/group administration. | FND-03 |
 | Organizational group directory | **Planned** | No `GroupDirectoryGrain` or `IGroupDirectoryGrain` exists; `GroupId` fields are metadata | Membership, roles, quotas, lifecycle, and authorization require runtime/control-plane implementation. | RUN-01 |
 | ETCLOVG harness | **Partial** | Immutable `ExecutionRequest`, grouped `ExecutionResult`, `ExecutionTerminalStatus`, and `EtclovgHarness.runAsync`; harness unit and end-to-end tests | Request identity and terminal outcomes are explicit, but result persistence, checkpoints, and replay remain incomplete. | HAR-01, HAR-02 |
-| Resource limit accounting | **Partial** | `ResourceLimits`, `ResourceUsage`, and `ExecutionContext.CheckLimits`; environment tests | In-process checks do not provide operating-system resource isolation or complete cancellation propagation. | HAR-01, HAR-03 |
+| Resource limit accounting | **Partial** | Shared `ExecutionContext` budget accounting for nested LLM and tool calls, tokens, and elapsed time; environment and harness tests | Provider cost data is not available uniformly, and in-process checks do not provide operating-system resource isolation or complete cancellation propagation. | HAR-01, HAR-03 |
 | Process and container execution | **Planned** | `SandboxIsolation.Process` and `SandboxIsolation.Container` are configuration cases only | The harness currently creates local in-process execution; filesystem, environment, network, CPU, and memory isolation are not enforced. | HAR-03, HAR-04 |
 
 ## Tools, security, and governance
@@ -78,7 +78,7 @@ A capability can have more than one status when, for example, a core primitive i
 | Capability | Status | Source and tests | Current boundary | Roadmap |
 |---|---|---|---|---|
 | Deterministic and LLM-based evaluators | **Implemented** primitive | Exact, contains, regex, composite, verification, and LLM-judge evaluators in `Nao.Eval`; evaluator tests | Citation, policy, artifact, resource, retrieval, and tool-sequence evaluators are absent. | EVAL-01, EVAL-03 |
-| Dataset runner and reports | **Partial** | Owner-identified `EvalDataset`, `EvalRun`, `EvalResult`, and `EvalReport`; `EvalArchive` in-memory/file lifecycle implementations; runner and generated archive parity tests | Runner creates a fresh correlated `AgentContext.allowAll ()` per case but bypasses the harness, does not use per-case timeout, and sequential stop-on-first-failure is incomplete. ADO.NET archive support awaits an eval persistence-adapter boundary. | EVAL-01, EVAL-02, HAR-01 |
+| Dataset runner and reports | **Partial** | Owner-identified `EvalDataset`, `EvalRun`, `EvalResult`, and `EvalReport`; harness-backed case execution; `EvalArchive` in-memory/file lifecycle implementations; runner and generated archive parity tests | Each case uses host-supplied harness configuration and context; per-case timeout and sequential stop-on-first-failure remain incomplete. ADO.NET archive support awaits an eval persistence-adapter boundary. | EVAL-01, EVAL-02, HAR-01 |
 | Traces, metrics, journals, and resilience | **Implemented** primitive | Tracer, trace-store owner/cutoff tombstones, session-owned execution-journal deletion, owner-scoped metric records and lifecycle parity, coordinated session destruction, retries, circuit breaker, and fallback; observability, persistence, and runtime tests | Trace and metric tombstones survive file and ADO replay but do not physically erase append-only payloads. Agent-owned traces and governance-retained audit are intentionally outside ordinary session deletion. There is no standard cross-component schema or guaranteed propagation through all external boundaries. | OBS-01 |
 | Telemetry privacy boundary | **Partial** | Harness tracing exists | Raw input can enter trace attributes; centralized classification, redaction, retention, and export controls are absent. | OBS-03 |
 | OpenTelemetry, OTLP, Prometheus, and dashboards | **Planned** | No standard exporter or dashboard implementation exists | Backend selection and operation are deployment-owned through future adapters. | OBS-02, OBS-04 |
@@ -109,10 +109,9 @@ The following are current gaps, not merely future enhancements:
 3. `EtclovgHarness` uses local in-process execution regardless of process/container isolation intent.
 4. Graph relation deletion is incomplete and node deletion can leave dangling relations.
 5. MCP non-stdio transports are placeholders and stdio discovery/framing are incomplete.
-6. `EvalRunner` bypasses the harness with an allow-all context.
-7. Per-case evaluation timeout and sequential stop-on-first-failure behavior are incomplete.
-8. Tenant identifiers exist as data, but security-principal validation is not enforced at grain and storage boundaries.
-9. Trace attributes can contain unredacted input.
+6. Per-case evaluation timeout and sequential stop-on-first-failure behavior are incomplete.
+7. Tenant identifiers exist as data, but security-principal validation is not enforced at grain and storage boundaries.
+8. Trace attributes can contain unredacted input.
 10. Persistence lacks complete migration, idempotency, concurrency, backup, restore, and coordinated-deletion guarantees.
 11. No production source-to-citation knowledge lifecycle exists.
 

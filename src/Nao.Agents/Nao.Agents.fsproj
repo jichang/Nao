@@ -15,8 +15,8 @@
      <Compile Include="src/Llm/LlmProvider.fs" />
      <!-- Core agent and tool contracts -->
     <Compile Include="src/Core/Permission.fs" />
+          <Compile Include="src/Core/PlatformError.fs" />
      <Compile Include="src/Agent/AgentContext.fs" />
-     <Compile Include="src/Core/PlatformError.fs" />
      <Compile Include="src/ToolProtocol/ToolSchema.fs" />
      <Compile Include="src/ToolProtocol/ToolCodec.fs" />
      <Compile Include="src/ToolProtocol/ToolOperation.fs" />
@@ -24,6 +24,7 @@
     <Compile Include="src/Agent/AgentAction.fs" />
     <Compile Include="src/Agent/AgentMessage.fs" />
      <Compile Include="src/Agent/Agent.fs" />
+     <Compile Include="src/Harness/ExecutionRuntime.fs" />
     <Compile Include="src/Core/RetryPolicy.fs" />
     <Compile Include="src/Prompts/PromptExample.fs" />
     <Compile Include="src/Prompts/OutputFormat.fs" />
@@ -32,6 +33,7 @@
     <Compile Include="src/Environment/ResourceLimits.fs" />
     <Compile Include="src/Environment/Sandbox.fs" />
      <Compile Include="src/Environment/ExecutionContext.fs" />
+     <Compile Include="src/Environment/RuntimeExecutionBudget.fs" />
      <Compile Include="src/Harness/ExecutionRequest.fs" />
     <Compile Include="src/Environment/ExecutionEnvironment.fs" />
     <!-- T: Tool Interface & Protocol -->

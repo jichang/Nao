@@ -99,6 +99,18 @@ type SandboxTests() =
         Assert.AreNotEqual(parent.ExecutionId, child.ExecutionId)
 
     [<TestMethod>]
+    member _.CreateChildSharesParentResourceUsage() =
+        let parent = ExecutionContext.Create SandboxConfig.Default
+        let child = parent.CreateChild()
+
+        child.RecordLlmCall(100, 0.01m)
+        parent.RecordToolCall()
+
+        Assert.AreEqual(parent.Usage, child.Usage)
+        Assert.AreEqual(1, parent.Usage.LlmCalls)
+        Assert.AreEqual(1, child.Usage.ToolCalls)
+
+    [<TestMethod>]
     member _.CheckLimitsDetectsExceeded() =
         let limits = ResourceLimits.Constrained 60 1 5000
 
@@ -112,25 +124,38 @@ type SandboxTests() =
         let result = ctx.CheckLimits()
         Assert.AreEqual(Some LimitExceeded.LlmCalls, result)
 
+    [<TestMethod>]
+    member _.NestedCallsReserveSharedLimitsAtomically() =
+        let limits =
+            { ResourceLimits.Unlimited with
+                MaxLlmCalls = 1
+                MaxToolCalls = 1 }
+
+        let parent =
+            ExecutionContext.Create
+                { SandboxConfig.Default with
+                    Limits = limits }
+
+        let child = parent.CreateChild()
+
+        Assert.AreEqual(None, parent.BeginLlmCall())
+        Assert.AreEqual(Some LimitExceeded.LlmCalls, child.BeginLlmCall())
+        Assert.AreEqual(None, child.BeginToolCall())
+        Assert.AreEqual(Some LimitExceeded.ToolCalls, parent.BeginToolCall())
+
 [<TestClass>]
 type ExecutionEnvironmentTests() =
 
     let makeAgent (response: string) =
-        Agent.create
-            "test"
-            "test"
-            "test agent"
-            0
-            []
-            AgentContract.Text
-            (fun _context _input -> Task.FromResult response)
-            (fun _context _message -> Task.FromResult None)
+        Agent.create "test" "test" "test agent" 0 [] AgentContract.Text (fun _context _input ->
+            Task.FromResult response)
 
     [<TestMethod>]
     member _.LocalEnvironmentExecutesAgent() =
         let agent = makeAgent "hello"
         let ctx = ExecutionContext.Create SandboxConfig.Default
         let env = ExecutionEnvironment.local ()
+
         let result = (env.ExecuteAsync ctx (AgentContext.allowAll ()) agent "input").Result
 
         match result with

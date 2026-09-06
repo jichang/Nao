@@ -95,6 +95,11 @@ module EtclovgHarness =
         | HarnessError.ResourceLimitExceeded limit -> ExecutionTerminalStatus.LimitExceeded limit
         | error -> ExecutionTerminalStatus.Failed error
 
+    let private harnessError (failure: PlatformFailure) =
+        match failure.Category with
+        | PlatformErrorCategory.PermissionDenied -> HarnessError.PermissionDenied
+        | _ -> HarnessError.ExecutionFailed failure.Message
+
     let private eventScope (request: ExecutionRequest) =
         let userId = request.Authorization |> AuthorizationScope.userId |> UserId.value
 
@@ -173,12 +178,12 @@ module EtclovgHarness =
           Evidence = evidence
           PolicyDecisions = decisions }
 
-    /// Run an agent through the full ETCLOVG harness
-    let runAsync
+    let rec private runAgentAsync
         (config: EtclovgConfig)
         (agentContext: AgentContext)
         (agent: Agent)
         (request: ExecutionRequest)
+        (parentExecutionContext: ExecutionContext option)
         : Task<ExecutionResult> =
         task {
             let input = request.Input
@@ -186,21 +191,107 @@ module EtclovgHarness =
             let artifacts = ResizeArray<Artifact>()
 
             let execCtx =
-                ExecutionContext.CreateWithCorrelation request.Sandbox request.Correlation
+                match parentExecutionContext with
+                | Some parent -> parent.CreateChild(request.Correlation)
+                | None -> ExecutionContext.CreateWithCorrelation request.Sandbox request.Correlation
 
             let publishArtifact = agentContext.PublishArtifact
 
-            let agentContext =
+            let executeChild childContext (child: Agent) (childInput: string) =
+                task {
+                    let childCorrelation = CorrelationContext.delegateFrom request.Correlation
+
+                    let childRequest =
+                        ExecutionRequest.create
+                            request.Authorization
+                            request.TurnId
+                            request.ConversationId
+                            child.Metadata.Id
+                            childInput
+                            request.Sandbox
+                            request.PolicyVersions
+                            request.DependencyVersions
+                            childCorrelation
+
+                    let! result = runAgentAsync config childContext child childRequest (Some execCtx)
+                    artifacts.AddRange result.Outputs.Artifacts
+
+                    match result.Status, result.Outputs.Response with
+                    | ExecutionTerminalStatus.Succeeded, Some response -> return Ok response
+                    | ExecutionTerminalStatus.Succeeded, None ->
+                        return
+                            Error(
+                                PlatformFailure.create
+                                    PlatformErrorCategory.InvalidOutput
+                                    "Child execution succeeded without producing a response."
+                                    false
+                                    (childCorrelation.ExecutionId |> ExecutionId.serialize |> Some)
+                            )
+                    | ExecutionTerminalStatus.LimitExceeded limit, _ ->
+                        return raise (ExecutionLimitExceededException limit)
+                    | status, _ ->
+                        return
+                            Error(
+                                status.ToPlatformFailure(childCorrelation.ExecutionId |> ExecutionId.serialize |> Some)
+                            )
+                }
+
+            let executeTool toolContext (tool: Tool) (toolInput: string) =
+                task {
+                    let policyResult =
+                        config.PolicyEngine
+                        |> Option.map (fun engine ->
+                            PolicyContext.FromExecutionContext
+                                agent.Metadata.Id
+                                (sprintf "tool.execute:%s" tool.Name)
+                                (Some toolInput)
+                                execCtx
+                            |> engine.Evaluate)
+
+                    match policyResult with
+                    | Some result when not result.Proceed ->
+                        let message = result.Violations |> List.map _.Message |> String.concat "; "
+
+                        return
+                            Error(
+                                PlatformFailure.create
+                                    PlatformErrorCategory.PermissionDenied
+                                    (sprintf "Blocked by policy: %s" message)
+                                    false
+                                    (request.Correlation.ExecutionId |> ExecutionId.serialize |> Some)
+                            )
+                    | _ ->
+                        match execCtx.BeginToolCall() with
+                        | Some limit -> return raise (ExecutionLimitExceededException limit)
+                        | None ->
+                            let! result = tool.RunAsync toolContext toolInput
+
+                            return
+                                result
+                                |> Result.mapError (fun failure ->
+                                    failure.ToPlatformFailure(
+                                        request.Correlation.ExecutionId |> ExecutionId.serialize |> Some
+                                    ))
+                }
+
+            let publishCapturedArtifact artifact : Task =
+                (task {
+                    do! publishArtifact artifact
+                    artifacts.Add artifact
+                }
+                :> Task)
+
+            let governedContext =
                 { agentContext with
                     Correlation = request.Correlation
                     SessionKey = scope.SessionKey
                     TurnId = request.TurnId |> TurnId.value
-                    PublishArtifact =
-                        fun artifact ->
-                            task {
-                                do! publishArtifact artifact
-                                artifacts.Add artifact
-                            } }
+                    ExecutionBoundary = ExecutionBoundary.HarnessRequired
+                    PublishArtifact = publishCapturedArtifact }
+
+            let dispatcher =
+                { RunAgent = executeChild
+                  RunTool = executeTool }
 
             let mutable trace =
                 Verification.startTrace execCtx.Correlation agent.Metadata.Id input
@@ -338,17 +429,36 @@ module EtclovgHarness =
                         // as a child span (tool name, parameters, round) under agent.execute.
                         let previousMetrics = RuntimeMetrics.get ()
                         let previousJournal = RuntimeExecutionJournal.get ()
+                        let previousDispatcher = ExecutionRuntime.get ()
+                        let previousBudget = RuntimeExecutionBudget.get ()
                         RuntimeMetrics.set config.Metrics
                         RuntimeExecutionJournal.set config.ExecutionJournal
+                        ExecutionRuntime.set (Some dispatcher)
+                        RuntimeExecutionBudget.set (Some execCtx)
                         let env = ExecutionEnvironment.local ()
 
-                        let! execResult =
+                        let! executionOutcome =
                             task {
                                 try
-                                    return! env.ExecuteAsync execCtx agentContext agent input
+                                    try
+                                        let! result = env.ExecuteAsync execCtx governedContext agent input
+                                        return Ok result
+                                    with
+                                    | ExecutionLimitExceededException limit ->
+                                        return Error(HarnessError.ResourceLimitExceeded limit)
+                                    | error ->
+                                        return
+                                            error
+                                            |> PlatformFailure.fromException
+                                                PlatformFailureBoundary.Agent
+                                                (request.Correlation.ExecutionId |> ExecutionId.serialize |> Some)
+                                            |> harnessError
+                                            |> Error
                                 finally
                                     RuntimeMetrics.set previousMetrics
                                     RuntimeExecutionJournal.set previousJournal
+                                    ExecutionRuntime.set previousDispatcher
+                                    RuntimeExecutionBudget.set previousBudget
                             }
 
                         sw.Stop()
@@ -356,13 +466,39 @@ module EtclovgHarness =
                         // === O: End execution span ===
                         match execSpan, config.Tracer with
                         | Some s, Some tracer ->
-                            match execResult with
-                            | Ok _ -> tracer.EndSpan s SpanStatus.Ok
-                            | Error e -> tracer.EndSpan s (SpanStatus.Error(sprintf "%A" e))
+                            match executionOutcome with
+                            | Ok(Ok _) -> tracer.EndSpan s SpanStatus.Ok
+                            | Ok(Error limit) -> tracer.EndSpan s (SpanStatus.Error(sprintf "%A" limit))
+                            | Error error -> tracer.EndSpan s (SpanStatus.Error error.Message)
                         | _ -> ()
 
-                        match execResult with
-                        | Error limitExceeded ->
+                        match executionOutcome with
+                        | Error error ->
+                            let! _ = AgentLifecycle.failAsync agent.Metadata.Id (exn error.Message) _startedLc
+                            trace <- trace |> Verification.fail error.Message
+
+                            match config.TraceStore with
+                            | Some store -> do! store.SaveAsync trace
+                            | None -> ()
+
+                            match rootSpan, config.Tracer with
+                            | Some span, Some tracer -> tracer.EndSpan span (SpanStatus.Error error.Message)
+                            | _ -> ()
+
+                            return
+                                failResult
+                                    error
+                                    request.Correlation
+                                    (List.ofSeq artifacts)
+                                    execCtx.Usage
+                                    trace
+                                    policyViolations
+                                    []
+                                    agentContext.SessionKey
+                                    config.Metrics
+                                    0
+
+                        | Ok(Error limitExceeded) ->
                             let! _ =
                                 AgentLifecycle.failAsync
                                     agent.Metadata.Id
@@ -393,7 +529,7 @@ module EtclovgHarness =
                                     config.Metrics
                                     0
 
-                        | Ok response ->
+                        | Ok(Ok response) ->
                             // === G: Constitution — Check output ===
                             let constitutionBlocked =
                                 match config.Constitution with
@@ -528,3 +664,7 @@ module EtclovgHarness =
                                         regression
                                         decisions
         }
+
+    /// Run an agent through the full ETCLOVG harness.
+    let runAsync config agentContext agent request =
+        runAgentAsync config agentContext agent request None

@@ -52,6 +52,7 @@ type GraphExecutionResult =
 /// A graph definition or execution failure.
 type GraphExecutionError =
     | InvalidGraph of problems: string list
+    | NodeExecutionFailed of nodeId: GraphNodeId * failure: PlatformFailure
     | StepLimitReached of maxSteps: int * steps: GraphStep list
 
 [<RequireQualifiedAccess>]
@@ -121,32 +122,38 @@ module ExecutionGraph =
                         fun iteration (nodeId, nodeInput, completedSteps) ->
                             task {
                                 let node = nodes.[nodeId]
-                                let! output = Agent.runAsync context nodeInput node.Agent
+                                let! nodeResult = ExecutionRuntime.runAgent context node.Agent nodeInput
 
-                                let step =
-                                    { NodeId = nodeId
-                                      Input = nodeInput
-                                      Output = output
-                                      Step = iteration }
+                                match nodeResult with
+                                | Error failure -> return Complete(Error(NodeExecutionFailed(nodeId, failure)))
+                                | Ok output ->
+                                    let step =
+                                        { NodeId = nodeId
+                                          Input = nodeInput
+                                          Output = output
+                                          Step = iteration }
 
-                                let nextEdge =
-                                    validGraph.Edges
-                                    |> List.tryFind (fun edge -> edge.From = nodeId && edge.Condition step)
+                                    let nextEdge =
+                                        validGraph.Edges
+                                        |> List.tryFind (fun edge -> edge.From = nodeId && edge.Condition step)
 
-                                match nextEdge with
-                                | Some edge -> return Continue(edge.Target, edge.Transform step, step :: completedSteps)
-                                | None ->
-                                    return
-                                        Complete
-                                            { Output = output
-                                              Steps = List.rev (step :: completedSteps) }
+                                    match nextEdge with
+                                    | Some edge ->
+                                        return Continue(edge.Target, edge.Transform step, step :: completedSteps)
+                                    | None ->
+                                        return
+                                            Complete(
+                                                Ok
+                                                    { Output = output
+                                                      Steps = List.rev (step :: completedSteps) }
+                                            )
                             } }
 
                 let! outcome = Loop.runAsync definition (validGraph.Entry, input, [])
 
                 return
                     match outcome with
-                    | Completed(result, _) -> Ok result
+                    | Completed(result, _) -> result
                     | IterationLimitReached((_, _, completedSteps), _) ->
                         Error(StepLimitReached(validGraph.MaxSteps, List.rev completedSteps))
         }
@@ -192,6 +199,7 @@ module ExecutionGraph =
                     match result with
                     | Ok execution -> execution.Output
                     | Error(InvalidGraph problems) -> raise (InvalidOperationException(String.concat " " problems))
+                    | Error(NodeExecutionFailed(_, failure)) -> PlatformFailure.raiseException failure
                     | Error(StepLimitReached(maxSteps, _)) ->
                         raise (
                             InvalidOperationException(
@@ -200,4 +208,4 @@ module ExecutionGraph =
                         )
             }
 
-        Agent.createContextual id name description priority responsibilities contract execute
+        Agent.create id name description priority responsibilities contract execute

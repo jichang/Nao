@@ -88,4 +88,4 @@ module LoopAgent =
                     | IterationLimitReached(state, _) -> definition.OnLimitReached state
             }
 
-        Agent.createContextual id name description priority responsibilities contract execute
+        Agent.create id name description priority responsibilities contract execute

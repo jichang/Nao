@@ -35,14 +35,13 @@ type AgentMetadata =
 /// Immutable executable agent capability represented entirely by data and functions.
 type Agent =
     { Metadata: AgentMetadata
-      Execute: AgentContext -> string -> Task<string>
-      HandleMessage: AgentContext -> AgentMessage -> Task<AgentMessage option> }
+      Execute: AgentContext -> string -> Task<string> }
 
 [<RequireQualifiedAccess>]
 module Agent =
 
     /// Construct an immutable agent capability from metadata and executable functions.
-    let create id name description priority responsibilities contract execute handleMessage =
+    let create id name description priority responsibilities contract execute =
         let metadata =
             { Id = id
               Name = name
@@ -52,21 +51,7 @@ module Agent =
               Contract = contract }
 
         { Metadata = metadata
-          Execute = execute
-          HandleMessage = handleMessage }
-
-    /// Construct an agent whose message handling delegates to normal execution.
-    let createContextual id name description priority responsibilities contract execute =
-        let handleMessage context (message: AgentMessage) =
-            task {
-                let! output = execute context message.Content
-                return Some(AgentMessage.create id message.From output)
-            }
-
-        create id name description priority responsibilities contract execute handleMessage
+          Execute = execute }
 
     /// Execute an agent program.
     let runAsync context input (agent: Agent) = agent.Execute context input
-
-    /// Deliver an inter-agent message.
-    let handleMessageAsync context message (agent: Agent) = agent.HandleMessage context message

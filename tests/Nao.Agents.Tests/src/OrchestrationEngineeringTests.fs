@@ -7,7 +7,7 @@ open Nao.Agents
 
 module private TestAgent =
     let transform (id: string) (transform: string -> string) : Agent =
-        Agent.createContextual id id id 0 [] AgentContract.Text (fun _ input -> Task.FromResult(transform input))
+        Agent.create id id id 0 [] AgentContract.Text (fun _ input -> Task.FromResult(transform input))
 
 [<TestClass>]
 type LoopEngineeringTests() =
@@ -146,3 +146,47 @@ type GraphEngineeringTests() =
             | Error error -> failwithf "Unexpected graph error: %A" error
 
         Assert.AreEqual("[value]", output)
+
+    [<TestMethod>]
+    member _.GraphStopsWhenNodeGovernanceDeniesExecution() =
+        let first = node "first" id
+        let mutable deniedNodeExecuted = false
+
+        let denied =
+            node "denied" (fun value ->
+                deniedNodeExecuted <- true
+                value)
+
+        let graph =
+            { Entry = first.Id
+              Nodes = [ first; denied ]
+              Edges = [ ExecutionGraph.edge first.Id denied.Id ]
+              MaxSteps = 2 }
+
+        let dispatcher =
+            { RunAgent =
+                fun context agent input ->
+                    if agent.Metadata.Id = denied.Agent.Metadata.Id then
+                        PlatformFailure.create PlatformErrorCategory.PermissionDenied "node denied" false None
+                        |> Error
+                        |> Task.FromResult
+                    else
+                        task {
+                            let! output = agent.Execute context input
+                            return Ok output
+                        }
+              RunTool = fun _ _ _ -> failwith "Tool execution is not expected." }
+
+        let previousDispatcher = ExecutionRuntime.get ()
+        ExecutionRuntime.set (Some dispatcher)
+
+        try
+            match (ExecutionGraph.runAsync (AgentContext.allowAll ()) "input" graph).Result with
+            | Error(NodeExecutionFailed(nodeId, failure)) ->
+                Assert.AreEqual(denied.Id, nodeId)
+                Assert.AreEqual(PlatformErrorCategory.PermissionDenied, failure.Category)
+                Assert.AreEqual("node denied", failure.Message)
+                Assert.IsFalse(deniedNodeExecuted)
+            | result -> Assert.Fail(sprintf "Expected denied node failure, got %A." result)
+        finally
+            ExecutionRuntime.set previousDispatcher

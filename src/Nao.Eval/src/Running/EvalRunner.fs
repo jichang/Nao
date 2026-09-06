@@ -5,9 +5,30 @@ open System.Diagnostics
 open System.Threading.Tasks
 open Nao.Agents
 
+/// Host-owned execution dependencies applied to every evaluated case.
+type EvalExecutionConfig =
+    { Authorization: AuthorizationScope
+      CreateAgentContext: unit -> AgentContext
+      Harness: EtclovgConfig
+      Sandbox: SandboxConfig
+      PolicyVersions: Map<string, string>
+      DependencyVersions: Map<string, string> }
+
+[<RequireQualifiedAccess>]
+module EvalExecutionConfig =
+
+    let create authorization createAgentContext =
+        { Authorization = authorization
+          CreateAgentContext = createAgentContext
+          Harness = EtclovgConfig.Default
+          Sandbox = SandboxConfig.Default
+          PolicyVersions = Map.empty
+          DependencyVersions = Map.empty }
+
 /// Configuration for the evaluation runner
 type EvalRunnerConfig =
     {
+        Execution: EvalExecutionConfig
         /// Maximum parallelism for running eval cases
         MaxParallelism: int
         /// Optional timeout per case in ms
@@ -18,45 +39,80 @@ type EvalRunnerConfig =
         CaptureTraces: bool
     }
 
-    static member Default =
-        { MaxParallelism = 1
+[<RequireQualifiedAccess>]
+module EvalRunnerConfig =
+
+    let create execution =
+        { Execution = execution
+          MaxParallelism = 1
           TimeoutPerCaseMs = None
           StopOnFirstFailure = false
           CaptureTraces = false }
 
-    static member Parallel n =
-        { EvalRunnerConfig.Default with
-            MaxParallelism = n }
+    let withParallelism maxParallelism execution =
+        { create execution with
+            MaxParallelism = maxParallelism }
 
-    static member WithTracing =
-        { EvalRunnerConfig.Default with
-            CaptureTraces = true }
+    let withTracing config = { config with CaptureTraces = true }
 
 /// The evaluation runner: runs cases against an agent and scores them
 module EvalRunner =
 
-    /// Run a single eval case against an agent with a given evaluator
-    let runCaseAsync (run: EvalRun) (evaluator: Evaluator) (agent: Agent) (case: EvalCase) : Task<EvalResult> =
+    let private runCase
+        captureTrace
+        (execution: EvalExecutionConfig)
+        (run: EvalRun)
+        (evaluator: Evaluator)
+        (agent: Agent)
+        (case: EvalCase)
+        : Task<EvalResult> =
         task {
             let sw = Stopwatch.StartNew()
-            let context = AgentContext.allowAll ()
-            let! output = Agent.runAsync context case.Input agent
+            let context = execution.CreateAgentContext()
+
+            let request =
+                ExecutionRequest.create
+                    execution.Authorization
+                    (TurnId.generate ())
+                    (run.Id.ToString("N"))
+                    agent.Metadata.Id
+                    case.Input
+                    execution.Sandbox
+                    execution.PolicyVersions
+                    execution.DependencyVersions
+                    context.Correlation
+
+            let! executionResult = EtclovgHarness.runAsync execution.Harness context agent request
             sw.Stop()
 
-            let! (verdict, reason) = evaluator.EvaluateAsync context.Correlation case output
+            let! output, verdict, reason =
+                task {
+                    match executionResult.Status, executionResult.Outputs.Response with
+                    | ExecutionTerminalStatus.Succeeded, Some output ->
+                        let! verdict, reason = evaluator.EvaluateAsync executionResult.Correlation case output
+                        return output, verdict, reason
+                    | ExecutionTerminalStatus.Succeeded, None ->
+                        return "", EvalVerdict.Fail, "Execution succeeded without producing a response."
+                    | status, _ ->
+                        let correlationId =
+                            executionResult.Correlation.ExecutionId |> ExecutionId.serialize |> Some
 
-            // Capture execution trace for the agent call
+                        let failure = status.ToPlatformFailure correlationId
+                        return "", EvalVerdict.Fail, failure.Message
+                }
+
             let trace =
-                Verification.startTrace context.Correlation agent.Metadata.Id case.Input
-                |> Verification.addStep (TraceAction.LlmCall "unknown") case.Input output sw.ElapsedMilliseconds
-                |> Verification.complete output
+                if captureTrace then
+                    executionResult.Evidence.Trace
+                else
+                    None
 
             return
                 ({ Id = Guid.NewGuid()
                    Owner = run.Owner
                    DatasetId = run.DatasetId
                    RunId = run.Id
-                   ExecutionId = context.Correlation.ExecutionId
+                   ExecutionId = executionResult.Correlation.ExecutionId
                    CaseId = case.Id
                    ActualOutput = output
                    Verdict = verdict
@@ -64,36 +120,17 @@ module EvalRunner =
                    LatencyMs = sw.ElapsedMilliseconds
                    EvaluatorName = evaluator.Name
                    Timestamp = DateTimeOffset.UtcNow
-                   ExecutionTrace = Some trace }
+                   ExecutionTrace = trace }
                 : EvalResult)
         }
+
+    /// Run a single eval case against an agent with a given evaluator.
+    let runCaseAsync execution run evaluator agent case =
+        runCase true execution run evaluator agent case
 
     /// Run a single eval case without trace capture (lightweight)
-    let runCaseLightAsync (run: EvalRun) (evaluator: Evaluator) (agent: Agent) (case: EvalCase) : Task<EvalResult> =
-        task {
-            let sw = Stopwatch.StartNew()
-            let context = AgentContext.allowAll ()
-            let! output = Agent.runAsync context case.Input agent
-            sw.Stop()
-
-            let! (verdict, reason) = evaluator.EvaluateAsync context.Correlation case output
-
-            return
-                ({ Id = Guid.NewGuid()
-                   Owner = run.Owner
-                   DatasetId = run.DatasetId
-                   RunId = run.Id
-                   ExecutionId = context.Correlation.ExecutionId
-                   CaseId = case.Id
-                   ActualOutput = output
-                   Verdict = verdict
-                   Reason = reason
-                   LatencyMs = sw.ElapsedMilliseconds
-                   EvaluatorName = evaluator.Name
-                   Timestamp = DateTimeOffset.UtcNow
-                   ExecutionTrace = None }
-                : EvalResult)
-        }
+    let runCaseLightAsync execution run evaluator agent case =
+        runCase false execution run evaluator agent case
 
     /// Run all cases in a dataset against an agent
     let runDatasetAsync
@@ -108,9 +145,9 @@ module EvalRunner =
 
             let runCase =
                 if config.CaptureTraces then
-                    runCaseAsync run
+                    runCaseAsync config.Execution run
                 else
-                    runCaseLightAsync run
+                    runCaseLightAsync config.Execution run
 
             if config.MaxParallelism <= 1 then
                 // Sequential execution
@@ -155,9 +192,9 @@ module EvalRunner =
 
             let runCase =
                 if config.CaptureTraces then
-                    runCaseAsync run
+                    runCaseAsync config.Execution run
                 else
-                    runCaseLightAsync run
+                    runCaseLightAsync config.Execution run
 
             for case in dataset.Cases do
                 for evaluator in evaluators do

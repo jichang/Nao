@@ -48,14 +48,16 @@ module AgentGroup =
 
                 for agent in group.Agents do
                     if not finished then
-                        let! reply = Agent.handleMessageAsync context history.[history.Count - 1] agent
+                        let previous = history.[history.Count - 1]
+                        let! result = ExecutionRuntime.runAgent context agent previous.Content
 
-                        match reply with
-                        | Some message ->
+                        match result with
+                        | Ok output ->
+                            let message = AgentMessage.create agent.Metadata.Id previous.From output
                             progressed <- true
                             history.Add message
                             finished <- shouldTerminate (history |> Seq.toList) group
-                        | None -> ()
+                        | Error failure -> PlatformFailure.raiseException failure
 
                 if not progressed then
                     finished <- true

@@ -22,6 +22,7 @@ module Pipeline =
                 match result with
                 | Ok execution -> return execution.Output
                 | Error(InvalidGraph problems) -> return raise (InvalidOperationException(String.concat " " problems))
+                | Error(NodeExecutionFailed(_, failure)) -> return PlatformFailure.raiseException failure
                 | Error(StepLimitReached(maxSteps, _)) ->
                     return
                         raise (

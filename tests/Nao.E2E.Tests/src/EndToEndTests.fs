@@ -47,15 +47,6 @@ type EndToEndAgentTests() =
 
         Assert.IsTrue(result.Contains("4"), sprintf "Expected '4', got: %s" result)
 
-    [<TestMethod>]
-    member _.AgentHandlesMessageFromAnotherAgent() =
-        let agent = createAgent ()
-        let msg = AgentMessage.broadcast "coordinator" "Tell me about the weather in Tokyo"
-        let reply = (Agent.handleMessageAsync (AgentContext.allowAll ()) msg agent).Result
-        Assert.IsTrue(reply.IsSome)
-        Assert.IsTrue(reply.Value.Content.Contains("18°C"))
-        Assert.AreEqual("coordinator", reply.Value.To.Value)
-
 [<TestClass>]
 type EndToEndWorkspaceTests() =
 

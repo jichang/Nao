@@ -249,3 +249,91 @@ type OrchestratorObservabilityTests() =
                     eventScope.ActionId = scope.ActionId && exchange.Response = "child done"
                 | _ -> false)
         )
+
+    [<TestMethod>]
+    member _.``agent-backed tool re-enters harness policy``() =
+        let mutable childExecuted = false
+
+        let child =
+            Agent.create "blocked-child" "Blocked child" "Must not execute" 0 [] AgentContract.Text (fun _ _ ->
+                childExecuted <- true
+                Task.FromResult "unexpected")
+
+        let childTool = AgentTool.create "child" "Blocked child." 0 "string" "string" child
+
+        let parentProvider = ScriptedProvider.create [ "invoke"; "parent done" ]
+
+        let parent =
+            TestOrchestrator.create (config parentProvider [ childTool ] EventBus.none) (function
+                | "invoke" -> [ InvokeTool("child", "run") ]
+                | response -> [ Respond response ])
+
+        let denyChild =
+            { Id = "deny-child"
+              Description = "Blocks only the child agent"
+              Enforcement = PolicyEnforcement.Block
+              Evaluate =
+                fun policyContext ->
+                    if policyContext.AgentId = child.Metadata.Id then
+                        Some "child execution denied"
+                    else
+                        None }
+
+        let harnessConfig =
+            { EtclovgConfig.Default with
+                PolicyEngine = Some(PolicyEngine.create [ denyChild ]) }
+
+        let context = AgentContext.allowAll ()
+
+        let result =
+            EtclovgHarness.runAsync harnessConfig context parent (request context parent "start")
+            |> _.Result
+
+        Assert.AreEqual(ExecutionTerminalStatus.Succeeded, result.Status)
+        Assert.AreEqual(Some "parent done", result.Outputs.Response)
+        Assert.IsFalse(childExecuted)
+
+    [<TestMethod>]
+    member _.``direct delegation re-enters harness policy``() =
+        let mutable childExecuted = false
+
+        let child =
+            Agent.create "blocked-delegate" "Blocked delegate" "Must not execute" 0 [] AgentContract.Text (fun _ _ ->
+                childExecuted <- true
+                Task.FromResult "unexpected")
+
+        let parentProvider = ScriptedProvider.create [ "delegate"; "parent done" ]
+
+        let parentConfig =
+            { config parentProvider [] EventBus.none with
+                SubAgents = [ child ] }
+
+        let parent =
+            TestOrchestrator.create parentConfig (function
+                | "delegate" -> [ DelegateToAgent(child.Metadata.Id, "run") ]
+                | response -> [ Respond response ])
+
+        let denyChild =
+            { Id = "deny-delegate"
+              Description = "Blocks only the delegated agent"
+              Enforcement = PolicyEnforcement.Block
+              Evaluate =
+                fun policyContext ->
+                    if policyContext.AgentId = child.Metadata.Id then
+                        Some "delegation denied"
+                    else
+                        None }
+
+        let harnessConfig =
+            { EtclovgConfig.Default with
+                PolicyEngine = Some(PolicyEngine.create [ denyChild ]) }
+
+        let context = AgentContext.allowAll ()
+
+        let result =
+            EtclovgHarness.runAsync harnessConfig context parent (request context parent "start")
+            |> _.Result
+
+        Assert.AreEqual(ExecutionTerminalStatus.Succeeded, result.Status)
+        Assert.AreEqual(Some "parent done", result.Outputs.Response)
+        Assert.IsFalse(childExecuted)

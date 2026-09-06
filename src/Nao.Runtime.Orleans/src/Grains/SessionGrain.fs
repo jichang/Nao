@@ -709,6 +709,7 @@ type SessionGrain
                         { Correlation = correlation
                           SessionKey = sessionKey
                           TurnId = turnId
+                          ExecutionBoundary = ExecutionBoundary.HarnessRequired
                           GetArtifacts = (fun () -> lock artifacts (fun () -> List.ofSeq artifacts))
                           GetGrantedResources =
                             (fun () -> lock grantedResources (fun () -> List.ofSeq grantedResources))
