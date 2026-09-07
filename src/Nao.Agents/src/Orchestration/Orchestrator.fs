@@ -234,18 +234,27 @@ module Orchestrator =
                                 match RuntimeReplayFixtures.get () with
                                 | Some fixtures ->
                                     match fixtures.Providers |> Map.tryFind idempotencyKey with
-                                    | Some fixture when
+                                    | Some(ReplayFixture.Recorded fixture) when
                                         fixture.Provider = LlmProvider.name config.Provider
                                         && fixture.Options = config.Options
                                         && fixture.Messages = messagesForReplay
                                         ->
                                         Task.FromResult fixture.Result
-                                    | Some _ ->
+                                    | Some(ReplayFixture.Recorded _) ->
                                         raise (
                                             GovernedExecutionException(
                                                 sprintf
                                                     "Provider replay fixture '%s' does not match the prepared prompt."
                                                     (IdempotencyKey.value idempotencyKey)
+                                            )
+                                        )
+                                    | Some(ReplayFixture.NonReplayable reason) ->
+                                        raise (
+                                            GovernedExecutionException(
+                                                sprintf
+                                                    "Provider dependency '%s' is explicitly non-replayable: %s"
+                                                    (IdempotencyKey.value idempotencyKey)
+                                                    reason
                                             )
                                         )
                                     | None ->

@@ -88,10 +88,16 @@ type ToolReplayFixture =
       Input: string
       Result: ToolInvocationResult }
 
+/// Declares whether a dependency invocation has a usable recording.
+[<RequireQualifiedAccess>]
+type ReplayFixture<'Fixture> =
+    | Recorded of 'Fixture
+    | NonReplayable of reason: string
+
 /// Immutable operation fixtures indexed by stable idempotency identity.
 type ReplayFixtures =
-    { Providers: Map<IdempotencyKey, ProviderReplayFixture>
-      Tools: Map<IdempotencyKey, ToolReplayFixture> }
+    { Providers: Map<IdempotencyKey, ReplayFixture<ProviderReplayFixture>>
+      Tools: Map<IdempotencyKey, ReplayFixture<ToolReplayFixture>> }
 
 [<RequireQualifiedAccess>]
 module ReplayFixtures =

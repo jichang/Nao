@@ -1043,6 +1043,59 @@ type EtclovgHarnessTests() =
         | status -> Assert.Fail(sprintf "Expected missing replay fixture failure, got %A." status)
 
     [<TestMethod>]
+    member _.ReplayFailsClosedForExplicitlyNonReplayableProvider() =
+        let mutable providerCalled = false
+
+        let provider =
+            LlmProvider.create (fun () -> "non-replayable-provider") (fun _ _ _ ->
+                providerCalled <- true
+                invalidOp "Live provider was called during replay.")
+
+        let orchestrator =
+            Orchestrator.create
+                { Id = "non-replayable-provider"
+                  Name = "Non-replayable provider"
+                  Description = "Fails closed for an explicit replay refusal"
+                  Priority = 0
+                  Responsibilities = []
+                  Contract = AgentContract.Text
+                  Provider = provider
+                  Tools = []
+                  SubAgents = []
+                  Prompt = Prompt.Empty
+                  Options = CompletionOptions.Default
+                  MaxRounds = 1
+                  Bus = EventBus.none
+                  Scope = EventScope.CreateEmpty() }
+                { OrchestratorDefinition.create Task.FromResult with
+                    ParseActions = fun response -> [ Respond response ] }
+
+        let context = AgentContext.unrestrictedForTests ()
+        let executionRequest = request context orchestrator "start"
+
+        let providerKey =
+            executionRequest.IdempotencyKey |> IdempotencyKey.operation "provider" 1
+
+        let fixtures =
+            { ReplayFixtures.empty with
+                Providers = Map.ofList [ providerKey, ReplayFixture.NonReplayable "requires live authorization" ] }
+
+        let config =
+            { EtclovgConfig.Default with
+                ReplayFixtures = Some fixtures }
+
+        let result =
+            (EtclovgHarness.runAsync config context orchestrator executionRequest).Result
+
+        Assert.IsFalse(providerCalled)
+
+        match result.Status with
+        | ExecutionTerminalStatus.Failed(HarnessError.ExecutionFailed message) ->
+            StringAssert.Contains(message, "explicitly non-replayable")
+            StringAssert.Contains(message, "requires live authorization")
+        | status -> Assert.Fail(sprintf "Expected non-replayable dependency failure, got %A." status)
+
+    [<TestMethod>]
     member _.DirectToolReplayUsesPolicyNormalizedFixtureWithoutLiveAccess() =
         let mutable toolCalled = false
 
@@ -1087,14 +1140,14 @@ type EtclovgHarnessTests() =
               DurationMs = 4L
               ReplaySafety = ToolReplaySafety.ExternallySideEffecting }
 
+        let recordedFixture: ToolReplayFixture =
+            { ToolName = tool.Name
+              Input = "normalized"
+              Result = fixtureResult }
+
         let fixtures =
             { ReplayFixtures.empty with
-                Tools =
-                    Map.ofList
-                        [ operationKey,
-                          { ToolName = tool.Name
-                            Input = "normalized"
-                            Result = fixtureResult } ] }
+                Tools = Map.ofList [ operationKey, ReplayFixture.Recorded recordedFixture ] }
 
         let normalize =
             { Id = "normalize-replay-input"
@@ -1118,6 +1171,62 @@ type EtclovgHarnessTests() =
         Assert.AreEqual(Some "recorded", result.Outputs.Response)
         Assert.AreEqual(1, result.Usage.ToolCalls)
         Assert.IsFalse(toolCalled)
+
+    [<TestMethod>]
+    member _.ReplayFailsClosedForExplicitlyNonReplayableTool() =
+        let mutable toolCalled = false
+
+        let tool =
+            Tool.create
+                "non-replayable-tool"
+                "Cannot be replayed"
+                0
+                []
+                ToolCodec.text
+                ToolCodec.text
+                (ToolOperation.create ToolReplaySafety.RetrySafe (fun _ _ ->
+                    toolCalled <- true
+                    invalidOp "Live tool was called during replay."))
+
+        let protocol = ToolProtocol.fromTools [ tool ]
+
+        let agent =
+            Agent.create
+                "non-replayable-tool"
+                "Non-replayable tool"
+                "Fails closed for an explicit replay refusal"
+                0
+                []
+                AgentContract.Text
+                (fun context input ->
+                    task {
+                        let! result = protocol.InvokeAsync context (context.NextToolCallKey()) tool.Name input
+                        return result.Output
+                    })
+
+        let context = AgentContext.unrestrictedForTests ()
+        let executionRequest = request context agent "input"
+
+        let operationKey =
+            executionRequest.IdempotencyKey |> IdempotencyKey.operation "tool" 1
+
+        let fixtures =
+            { ReplayFixtures.empty with
+                Tools = Map.ofList [ operationKey, ReplayFixture.NonReplayable "depends on ephemeral state" ] }
+
+        let config =
+            { EtclovgConfig.Default with
+                ReplayFixtures = Some fixtures }
+
+        let result = (EtclovgHarness.runAsync config context agent executionRequest).Result
+
+        Assert.IsFalse(toolCalled)
+
+        match result.Status with
+        | ExecutionTerminalStatus.Failed(HarnessError.ExecutionFailed message) ->
+            StringAssert.Contains(message, "explicitly non-replayable")
+            StringAssert.Contains(message, "depends on ephemeral state")
+        | status -> Assert.Fail(sprintf "Expected non-replayable dependency failure, got %A." status)
 
     [<TestMethod>]
     member _.RecordedToolFailureReplaysProviderRecoveryWithoutLiveAccess() =

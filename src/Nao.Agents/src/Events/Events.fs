@@ -107,11 +107,13 @@ module RecordedReplayFixtures =
         let providers =
             providerExchanges
             |> List.map (fun exchange ->
-                exchange.IdempotencyKey,
-                { Provider = exchange.Provider
-                  Options = exchange.Options
-                  Messages = exchange.Messages
-                  Result = exchange.Result })
+                let fixture: ProviderReplayFixture =
+                    { Provider = exchange.Provider
+                      Options = exchange.Options
+                      Messages = exchange.Messages
+                      Result = exchange.Result }
+
+                exchange.IdempotencyKey, ReplayFixture.Recorded fixture)
             |> uniqueMap "provider"
 
         let tools =
@@ -132,17 +134,21 @@ module RecordedReplayFixtures =
                         | false, _ -> None)
                     |> Option.defaultValue 0L
 
-                execution.IdempotencyKey,
-                { ToolName = execution.ToolName
-                  Input = execution.Input
-                  Result =
+                let result: ToolInvocationResult =
                     { IdempotencyKey = execution.IdempotencyKey
                       Success = execution.Failure.IsNone
                       Output = execution.Output
                       Error = (execution.Failure |> Option.map _.Message)
                       Failure = execution.Failure
                       DurationMs = durationMs
-                      ReplaySafety = execution.ReplaySafety } })
+                      ReplaySafety = execution.ReplaySafety }
+
+                let fixture: ToolReplayFixture =
+                    { ToolName = execution.ToolName
+                      Input = execution.Input
+                      Result = result }
+
+                execution.IdempotencyKey, ReplayFixture.Recorded fixture)
             |> uniqueMap "tool"
 
         { Providers = providers; Tools = tools }

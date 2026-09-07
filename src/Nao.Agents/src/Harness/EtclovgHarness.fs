@@ -413,19 +413,28 @@ module EtclovgHarness =
                             config.ReplayFixtures
                             |> Option.map (fun fixtures ->
                                 match fixtures.Tools |> Map.tryFind idempotencyKey with
-                                | Some fixture when
+                                | Some(ReplayFixture.Recorded fixture) when
                                     fixture.ToolName = tool.Name
                                     && fixture.Input = effectiveToolInput
                                     && fixture.Result.IdempotencyKey = idempotencyKey
                                     && fixture.Result.ReplaySafety = tool.ReplaySafety
                                     ->
                                     fixture
-                                | Some _ ->
+                                | Some(ReplayFixture.Recorded _) ->
                                     raise (
                                         GovernedExecutionException(
                                             sprintf
                                                 "Tool replay fixture '%s' does not match the governed invocation."
                                                 (IdempotencyKey.value idempotencyKey)
+                                        )
+                                    )
+                                | Some(ReplayFixture.NonReplayable reason) ->
+                                    raise (
+                                        GovernedExecutionException(
+                                            sprintf
+                                                "Tool dependency '%s' is explicitly non-replayable: %s"
+                                                (IdempotencyKey.value idempotencyKey)
+                                                reason
                                         )
                                     )
                                 | None ->
