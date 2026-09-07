@@ -56,7 +56,8 @@ Executable replay is introduced and governed as part of HAR-02; persistence even
 - [x] Implement a process-backed `IExecutionEnvironment`.
 - [x] Define the worker protocol and version handshake.
 - [ ] Run workers under a restricted operating-system identity where supported.
-- [ ] Enforce working-directory and filesystem allowlists.
+- [x] Validate and apply the process working directory.
+- [ ] Enforce filesystem allowlists.
 - [x] Enforce environment-variable allowlists.
 - [ ] Resolve secret handles only inside authorized worker boundaries.
 - [x] Enforce wall-clock timeout and propagate cancellation.

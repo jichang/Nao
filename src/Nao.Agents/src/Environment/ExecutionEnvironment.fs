@@ -63,6 +63,14 @@ module ExecutionEnvironment =
                     startInfo.CreateNoWindow <- true
                     startInfo.Environment.Clear()
 
+                    match ctx.Sandbox.WorkingDirectory with
+                    | Some directory when not (Path.IsPathFullyQualified directory) ->
+                        raise (GovernedExecutionException "Process working directory must be fully qualified.")
+                    | Some directory when not (Directory.Exists directory) ->
+                        raise (GovernedExecutionException "Process working directory does not exist.")
+                    | Some directory -> startInfo.WorkingDirectory <- Path.GetFullPath directory
+                    | None -> ()
+
                     for KeyValue(name, value) in ctx.Sandbox.EnvironmentVariables do
                         startInfo.Environment.Add(name, value)
 

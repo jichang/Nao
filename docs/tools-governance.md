@@ -144,7 +144,7 @@ Nao defines `SandboxConfig`, `ResourceLimits`, and functional `ExecutionEnvironm
 - CPU, memory, time, output, call, token, and cost limits
 - Secret references resolved only inside authorized boundaries
 
-Process workers inherit no host environment variables and receive only the explicit `SandboxConfig.EnvironmentVariables` map. Process execution kills the complete worker process tree when its cancellation token is signalled. Hosts must propagate graceful shutdown through that token.
+Process workers inherit no host environment variables and receive only the explicit `SandboxConfig.EnvironmentVariables` map. A configured working directory is validated and applied before launch, but does not prevent access to paths outside it. Process execution kills the complete worker process tree when its cancellation token is signalled. Hosts must propagate graceful shutdown through that token.
 
 ## Production checklist
 

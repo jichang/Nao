@@ -306,6 +306,75 @@ type ExecutionEnvironmentTests() =
             Environment.SetEnvironmentVariable(variableName, previousValue)
 
     [<TestMethod>]
+    member _.ProcessEnvironmentUsesDeclaredWorkingDirectory() =
+        let workingDirectory =
+            IO.Path.Combine(IO.Path.GetTempPath(), "nao-worker-" + Guid.NewGuid().ToString("N"))
+
+        IO.Directory.CreateDirectory workingDirectory |> ignore
+
+        try
+            let agent =
+                Agent.createWorker
+                    "worker-directory"
+                    "worker-directory"
+                    "process working directory test agent"
+                    0
+                    []
+                    AgentContract.Text
+                    (WorkerAgentReference.create "process-working-directory")
+
+            let sandbox =
+                { SandboxConfig.Default with
+                    WorkingDirectory = Some workingDirectory }
+
+            let execution = ExecutionContext.Create sandbox
+            let environment = processEnvironment WorkerProtocol.CurrentVersion []
+
+            match
+                environment.ExecuteAsync execution (AgentContext.unrestrictedForTests ()) agent ""
+                |> _.Result
+            with
+            | Error limit -> Assert.Fail(sprintf "Expected worker result, got limit %A." limit)
+            | Ok directory -> Assert.AreEqual(IO.Path.GetFullPath workingDirectory, directory)
+        finally
+            IO.Directory.Delete(workingDirectory, true)
+
+    [<TestMethod>]
+    member _.ProcessEnvironmentRejectsMissingWorkingDirectoryBeforeSpawn() =
+        let missingDirectory =
+            IO.Path.Combine(IO.Path.GetTempPath(), "nao-missing-" + Guid.NewGuid().ToString("N"))
+
+        let sandbox =
+            { SandboxConfig.Default with
+                WorkingDirectory = Some missingDirectory }
+
+        let execution = ExecutionContext.Create sandbox
+        let environment = processEnvironment WorkerProtocol.CurrentVersion []
+
+        let error =
+            Assert.ThrowsExactlyAsync<GovernedExecutionException>(fun () ->
+                environment.ExecuteAsync execution (AgentContext.unrestrictedForTests ()) workerAgent "payload" :> Task)
+            |> _.Result
+
+        StringAssert.Contains(error.Message, "working directory does not exist")
+
+    [<TestMethod>]
+    member _.ProcessEnvironmentRejectsRelativeWorkingDirectoryBeforeSpawn() =
+        let sandbox =
+            { SandboxConfig.Default with
+                WorkingDirectory = Some("relative-" + Guid.NewGuid().ToString("N")) }
+
+        let execution = ExecutionContext.Create sandbox
+        let environment = processEnvironment WorkerProtocol.CurrentVersion []
+
+        let error =
+            Assert.ThrowsExactlyAsync<GovernedExecutionException>(fun () ->
+                environment.ExecuteAsync execution (AgentContext.unrestrictedForTests ()) workerAgent "payload" :> Task)
+            |> _.Result
+
+        StringAssert.Contains(error.Message, "working directory must be fully qualified")
+
+    [<TestMethod>]
     [<DoNotParallelize>]
     member _.ProcessEnvironmentKillsChildProcessTreeOnCancellation() =
         let childProcessIdPath = IO.Path.GetTempFileName()

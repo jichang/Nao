@@ -36,6 +36,9 @@ module StandardWorkerHandlers =
         |> Ok
         |> Task.FromResult
 
+    let processWorkingDirectory (_request: WorkerExecutionRequest) =
+        Environment.CurrentDirectory |> Ok |> Task.FromResult
+
     let processTree (request: WorkerExecutionRequest) =
         task {
             let startInfo = ProcessStartInfo()
@@ -57,10 +60,11 @@ module StandardWorkerHandlers =
 
     let all: Map<string, WorkerAgentHandler> =
         Map.ofList
-            [ "process-diagnostic", processDiagnostic
-              "process-delay", processDelay
-              "process-environment", processEnvironment
-              "process-tree", processTree ]
+            [ ("process-diagnostic", processDiagnostic)
+              ("process-delay", processDelay)
+              ("process-environment", processEnvironment)
+              ("process-working-directory", processWorkingDirectory)
+              ("process-tree", processTree) ]
 
 module Program =
     [<EntryPoint>]

@@ -113,7 +113,7 @@ The result groups response and published artifacts under `Outputs`, trace and me
 object expression, or cast. The harness starts all configured readiness checks together and
 retains their configured order when aggregating not-ready reasons.
 
-Worker-resolvable agents can run in a separate process through a host-configured process environment. Process workers inherit no host environment variables and receive only the explicit `SandboxConfig.EnvironmentVariables` map. Restricted identities, filesystem allowlists, secret handles, complete resource enforcement, and container isolation remain roadmap work, so neither the default local environment nor the current process worker is an untrusted-code security boundary.
+Worker-resolvable agents can run in a separate process through a host-configured process environment. Process workers inherit no host environment variables and receive only the explicit `SandboxConfig.EnvironmentVariables` map. A configured fully qualified working directory is applied before launch, but it does not confine filesystem access. Restricted identities, filesystem allowlists, secret handles, complete resource enforcement, and container isolation remain roadmap work, so neither the default local environment nor the current process worker is an untrusted-code security boundary.
 
 ## Register a workspace
 
