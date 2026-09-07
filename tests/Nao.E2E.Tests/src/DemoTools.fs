@@ -7,7 +7,7 @@ open Nao.Agents
 module DemoTools =
 
     let private createText name description execute =
-        Tool.create name description 0 [] ToolCodec.text ToolCodec.text (ToolOperation.create execute)
+        Tool.create name description 0 [] ToolCodec.text ToolCodec.text (ToolOperation.create ToolReplaySafety.RetrySafe execute)
 
     /// A weather lookup tool that returns fake weather data
     let getWeather =

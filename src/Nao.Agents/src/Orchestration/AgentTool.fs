@@ -8,7 +8,7 @@ module AgentTool =
         let output = ToolCodec.create outputSchema Ok Ok
 
         let operation =
-            ToolOperation.create (fun context value ->
+            ToolOperation.create ToolReplaySafety.ExternallySideEffecting (fun context value ->
                 task {
                     let! result = ExecutionRuntime.runAgent context agent value
 

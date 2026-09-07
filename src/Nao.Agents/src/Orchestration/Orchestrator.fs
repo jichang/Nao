@@ -430,7 +430,7 @@ module Orchestrator =
                                                     invalidOp "Execution journaling requires a nonblank turn ID."
 
                                                 let record: ExecutionRecord =
-                                                    { Id = Guid.NewGuid(); IdempotencyKey = toolExecution.IdempotencyKey; Correlation = agentContext.Correlation; Owner = agentContext.SessionKey; TurnId = agentContext.TurnId; ToolName = toolName; Input = toolInput; Output = toolResult; ExecutedAt = DateTimeOffset.UtcNow; Reverted = false; Metadata = Map.ofList [ "duration.ms", durationMs ] }
+                                                    { Id = Guid.NewGuid(); IdempotencyKey = toolExecution.IdempotencyKey; Correlation = agentContext.Correlation; Owner = agentContext.SessionKey; TurnId = agentContext.TurnId; ToolName = toolName; ReplaySafety = toolExecution.ReplaySafety; Input = toolInput; Output = toolResult; ExecutedAt = DateTimeOffset.UtcNow; Reverted = false; Metadata = Map.ofList [ "duration.ms", durationMs ] }
 
                                                 do! journal.RecordAsync record
                                             | None -> ()

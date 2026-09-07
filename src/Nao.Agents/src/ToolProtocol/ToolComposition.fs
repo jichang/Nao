@@ -49,7 +49,7 @@ type CompositionResult =
 /// Executes tool compositions against a tool protocol.
 module ToolComposer =
 
-    let private failed idempotencyKey message retryable =
+    let private failed idempotencyKey replaySafety message retryable =
         { IdempotencyKey = idempotencyKey
           Success = false
           Output = ""
@@ -62,7 +62,7 @@ module ToolComposer =
                 : ToolFailure
             )
           DurationMs = 0L
-          HadSideEffects = false }
+          ReplaySafety = replaySafety }
 
     let private executeStep
         (context: AgentContext)
@@ -79,6 +79,8 @@ module ToolComposer =
             let! result =
                 task {
                     let idempotencyKey = context.NextToolCallKey()
+                    let! tool = protocol.GetTool step.ToolName
+                    let replaySafety = tool |> Option.map _.ReplaySafety |> Option.defaultValue ToolReplaySafety.ExternallySideEffecting
 
                     try
                         let invocation = protocol.InvokeAsync context idempotencyKey step.ToolName transformedInput
@@ -87,7 +89,7 @@ module ToolComposer =
                         | Some timeout -> return! invocation.WaitAsync(timeout)
                         | None -> return! invocation
                     with :? TimeoutException ->
-                        return failed idempotencyKey (sprintf "Tool '%s' timed out." step.ToolName) true
+                        return failed idempotencyKey replaySafety (sprintf "Tool '%s' timed out." step.ToolName) true
                 }
 
             return

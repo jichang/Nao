@@ -20,11 +20,11 @@ module private EtclovgHarness =
 /// Demo tools with richer metadata for the tool protocol layer
 module EtclovgDemoTools =
 
-    let private createText name description execute =
-        Tool.create name description 0 [] ToolCodec.text ToolCodec.text (ToolOperation.create execute)
+    let private createText replaySafety name description execute =
+        Tool.create name description 0 [] ToolCodec.text ToolCodec.text (ToolOperation.create replaySafety execute)
 
     let stockPrice =
-        createText "get_stock_price" "Get the current stock price for a ticker symbol" (fun _ ticker ->
+        createText ToolReplaySafety.RetrySafe "get_stock_price" "Get the current stock price for a ticker symbol" (fun _ ticker ->
             let price =
                 match ticker.Trim().ToUpper() with
                 | "AAPL" -> "189.45"
@@ -36,6 +36,7 @@ module EtclovgDemoTools =
 
     let sendEmail =
         createText
+            ToolReplaySafety.ExternallySideEffecting
             "send_email"
             "Send an email to a recipient. Input format: 'to@email.com|subject|body'"
             (fun _ input ->
@@ -50,13 +51,13 @@ module EtclovgDemoTools =
                 Task.FromResult(Ok output))
 
     let searchDocs =
-        createText "search_docs" "Search internal documentation. Returns relevant passages." (fun _ query ->
+        createText ToolReplaySafety.RetrySafe "search_docs" "Search internal documentation. Returns relevant passages." (fun _ query ->
             Task.FromResult(
                 Ok(sprintf "Found 3 results for '%s': [1] Getting Started Guide [2] API Reference [3] FAQ" query)
             ))
 
     let dangerousDelete =
-        createText "delete_all_data" "Permanently delete all data. DANGEROUS - requires confirmation." (fun _ _ ->
+        createText ToolReplaySafety.ExternallySideEffecting "delete_all_data" "Permanently delete all data. DANGEROUS - requires confirmation." (fun _ _ ->
             Task.FromResult(Ok "All data deleted permanently"))
 
     let allTools = [ stockPrice; sendEmail; searchDocs; dangerousDelete ]

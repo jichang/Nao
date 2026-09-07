@@ -19,7 +19,7 @@ type ToolProtocolTests() =
             []
             ToolCodec.text
             ToolCodec.text
-            (ToolOperation.create (fun _ input ->
+            (ToolOperation.create ToolReplaySafety.RetrySafe (fun _ input ->
                 task {
                     let! output = execute input
                     return Ok output
@@ -86,6 +86,7 @@ type ToolProtocolTests() =
         Assert.IsTrue(result.Success)
         Assert.AreEqual("result:5", result.Output)
         Assert.IsTrue(result.DurationMs >= 0L)
+        Assert.AreEqual(ToolReplaySafety.RetrySafe, result.ReplaySafety)
 
     [<TestMethod>]
     member _.InvokeAsyncReturnsErrorForMissingTool() =
@@ -138,6 +139,7 @@ type ToolProtocolTests() =
 
         Assert.IsFalse(result.Success)
         Assert.AreEqual(Some "blocked", result.Error)
+        Assert.AreEqual(ToolReplaySafety.RetrySafe, result.ReplaySafety)
 
     [<TestMethod>]
     member _.RateLimitMiddlewareAllowsWithinLimit() =
@@ -171,7 +173,7 @@ type ToolProtocolTests() =
                 [ permission ]
                 ToolCodec.text
                 ToolCodec.text
-                (ToolOperation.create (fun _ input ->
+                (ToolOperation.create ToolReplaySafety.ExternallySideEffecting (fun _ input ->
                     task {
                         ran.Value <- true
                         return Ok input
@@ -194,6 +196,7 @@ type ToolProtocolTests() =
         Assert.IsFalse(ran.Value)
         Assert.AreEqual<ResourceAccess>(permission, asked[0])
         Assert.AreEqual(Some ToolFailureKind.PermissionDenied, result.Failure |> Option.map _.Kind)
+        Assert.AreEqual(ToolReplaySafety.ExternallySideEffecting, result.ReplaySafety)
 
     [<TestMethod>]
     member _.CompositionPassesContextAndChainsOutputs() =

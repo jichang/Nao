@@ -15,7 +15,7 @@ type ToolSelectionTests() =
             []
             (ToolCodec.create inputSchema Ok Ok)
             (ToolCodec.create outputSchema Ok Ok)
-            (ToolOperation.create (fun _ input -> Task.FromResult(Ok input)))
+            (ToolOperation.create ToolReplaySafety.RetrySafe (fun _ input -> Task.FromResult(Ok input)))
 
     let selector maxTools threshold =
         ToolSelector.create

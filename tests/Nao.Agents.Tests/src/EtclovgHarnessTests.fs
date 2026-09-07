@@ -312,7 +312,7 @@ type EtclovgHarnessTests() =
                 []
                 ToolCodec.text
                 ToolCodec.text
-                (ToolOperation.create (fun _ input ->
+                (ToolOperation.create ToolReplaySafety.RetrySafe (fun _ input ->
                     executedInput <- input
                     Task.FromResult(Ok input)))
 
@@ -447,7 +447,7 @@ type EtclovgHarnessTests() =
                 []
                 ToolCodec.text
                 ToolCodec.text
-                (ToolOperation.create (fun _ input ->
+                (ToolOperation.create ToolReplaySafety.ExternallySideEffecting (fun _ input ->
                     toolExecuted <- true
                     Task.FromResult(Ok input)))
 
@@ -505,7 +505,7 @@ type EtclovgHarnessTests() =
                 []
                 ToolCodec.text
                 ToolCodec.text
-                (ToolOperation.create (fun context _ ->
+                (ToolOperation.create ToolReplaySafety.RetrySafe (fun context _ ->
                     task {
                         use _registration =
                             context.CancellationToken.Register(fun () -> observedCancellation.Set())
@@ -551,7 +551,7 @@ type EtclovgHarnessTests() =
                 []
                 ToolCodec.text
                 ToolCodec.text
-                (ToolOperation.create (fun _ input ->
+                (ToolOperation.create ToolReplaySafety.RetrySafe (fun _ input ->
                     toolExecutions <- toolExecutions + 1
                     Task.FromResult(Ok input)))
 

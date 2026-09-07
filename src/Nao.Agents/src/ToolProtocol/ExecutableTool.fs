@@ -33,13 +33,7 @@ module PermissionDenied =
 
 /// Executable, discoverable tool value.
 type Tool =
-    { Name: string
-      Description: string
-      Priority: int
-      Schema: ToolSchema
-      Permissions: ResourceAccess list
-      RunAsync: AgentContext -> string -> Task<ToolRunResult>
-      RevertAsync: (RevertContext -> Task<Result<unit, string>>) option }
+        { Name: string; Description: string; Priority: int; Schema: ToolSchema; Permissions: ResourceAccess list; ReplaySafety: ToolReplaySafety; RunAsync: AgentContext -> string -> Task<ToolRunResult>; RevertAsync: (RevertContext -> Task<Result<unit, string>>) option }
 
 [<RequireQualifiedAccess>]
 module Tool =
@@ -125,6 +119,7 @@ module Tool =
           Priority = priority
           Schema = ToolSchema.create input.Schema output.Schema
           Permissions = permissions
+          ReplaySafety = operation.ReplaySafety
           RunAsync = runAsync
           RevertAsync = operation.RevertAsync }
 

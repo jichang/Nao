@@ -17,8 +17,8 @@ type ToolInvocationResult =
         Failure: ToolFailure option
         /// How long the invocation took in milliseconds
         DurationMs: int64
-        /// Whether the tool produced side effects
-        HadSideEffects: bool
+        /// Declared replay behavior known before invocation.
+        ReplaySafety: ToolReplaySafety
     }
 
 /// Middleware functions that wrap tool execution (pre/post processing).
@@ -47,14 +47,14 @@ type ToolProtocol =
 module ToolProtocol =
     open System.Diagnostics
 
-    let private failed idempotencyKey duration failure =
+    let private failed idempotencyKey replaySafety duration failure =
         { IdempotencyKey = idempotencyKey
           Success = false
           Output = ""
           Error = Some failure.Message
           Failure = Some failure
           DurationMs = duration
-          HadSideEffects = false }
+          ReplaySafety = replaySafety }
 
     /// Create a protocol from a list of tools
     let fromTools (tools: Tool list) : ToolProtocol =
@@ -75,10 +75,10 @@ module ToolProtocol =
 
                             match result with
                             | Ok output ->
-                                let invocationResult: ToolInvocationResult = { IdempotencyKey = idempotencyKey; Success = true; Output = output; Error = None; Failure = None; DurationMs = sw.ElapsedMilliseconds; HadSideEffects = false }
+                                let invocationResult: ToolInvocationResult = { IdempotencyKey = idempotencyKey; Success = true; Output = output; Error = None; Failure = None; DurationMs = sw.ElapsedMilliseconds; ReplaySafety = tool.ReplaySafety }
                                 return invocationResult
                             | Error failure ->
-                                return failed idempotencyKey sw.ElapsedMilliseconds (ToolFailure.ofPlatformFailure failure)
+                                return failed idempotencyKey tool.ReplaySafety sw.ElapsedMilliseconds (ToolFailure.ofPlatformFailure failure)
                         with
                         | ExecutionLimitExceededException limit -> return raise (ExecutionLimitExceededException limit)
                         | :? System.OperationCanceledException as error -> return raise error
@@ -89,13 +89,14 @@ module ToolProtocol =
                                 PlatformFailure.fromException PlatformFailureBoundary.Tool None ex
                                 |> ToolFailure.ofPlatformFailure
 
-                            return failed idempotencyKey sw.ElapsedMilliseconds failure
+                            return failed idempotencyKey tool.ReplaySafety sw.ElapsedMilliseconds failure
                     | None ->
                         sw.Stop()
 
                         return
                             failed
                                 idempotencyKey
+                                ToolReplaySafety.ExternallySideEffecting
                                 sw.ElapsedMilliseconds
                                 ({ Kind = ToolFailureKind.InputContract
                                    Message = sprintf "Tool '%s' not found" name
@@ -110,7 +111,10 @@ module ToolProtocol =
         let invoke (context: AgentContext) (idempotencyKey: IdempotencyKey) (name: string) (input: string) =
             task {
                 match! middleware.BeforeExecute name input with
-                | Error failure -> return failed idempotencyKey 0L failure
+                | Error failure ->
+                    let! tool = protocol.GetTool name
+                    let replaySafety = tool |> Option.map _.ReplaySafety |> Option.defaultValue ToolReplaySafety.ExternallySideEffecting
+                    return failed idempotencyKey replaySafety 0L failure
                 | Ok modifiedInput ->
                     let! result = protocol.InvokeAsync context idempotencyKey name modifiedInput
                     return! middleware.AfterExecute name result

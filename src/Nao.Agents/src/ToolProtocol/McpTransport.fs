@@ -121,7 +121,7 @@ module McpTool =
         let input = ToolCodec.create definition.InputSchema Ok Ok
 
         let operation =
-            ToolOperation.create (fun _ arguments ->
+            ToolOperation.create ToolReplaySafety.ExternallySideEffecting (fun _ arguments ->
                 task {
                     match! client.InvokeToolAsync definition.Name arguments with
                     | Ok output -> return Ok output

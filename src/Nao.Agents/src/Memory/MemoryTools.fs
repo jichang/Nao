@@ -201,7 +201,7 @@ module private MemoryTool =
                 (fun _ -> Error "Tool outputs are not decoded by the runtime.")
 
         let operation =
-            ToolOperation.create (fun _ (search: MemorySearchInput) ->
+            ToolOperation.create ToolReplaySafety.RetrySafe (fun _ (search: MemorySearchInput) ->
                 task {
                     let! all = store.RecallAllAsync(owner ())
 
@@ -261,7 +261,7 @@ module private MemoryTool =
                 (fun _ -> Error "Tool outputs are not decoded by the runtime.")
 
         let operation =
-            ToolOperation.create (fun _ (memory: MemoryRememberInput) ->
+            ToolOperation.create ToolReplaySafety.ExternallySideEffecting (fun _ (memory: MemoryRememberInput) ->
                 task {
                     let entry =
                         { Key = memory.Key
@@ -296,7 +296,7 @@ module private MemoryTool =
                 (fun _ -> Error "Tool outputs are not decoded by the runtime.")
 
         let operation =
-            ToolOperation.create (fun _ (request: MemoryForgetInput) ->
+            ToolOperation.create ToolReplaySafety.ExternallySideEffecting (fun _ (request: MemoryForgetInput) ->
                 task {
                     if not request.ConfirmedByUser then
                         return Error(ToolExecError.InvalidInput "Memory deletion requires explicit user confirmation.")

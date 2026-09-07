@@ -19,7 +19,7 @@ module private TestTools =
             []
             ToolCodec.text
             ToolCodec.text
-            (ToolOperation.create (fun _ input -> Task.FromResult(Ok input)))
+            (ToolOperation.create ToolReplaySafety.RetrySafe (fun _ input -> Task.FromResult(Ok input)))
 
 module private ScriptedProvider =
     let create (responses: string list) =
@@ -164,6 +164,7 @@ type OrchestratorObservabilityTests() =
         Assert.AreEqual("user/session", history.Head.Owner)
         Assert.AreEqual(context.Correlation, history.Head.Correlation)
         StringAssert.StartsWith(IdempotencyKey.value history.Head.IdempotencyKey, "tool:")
+        Assert.AreEqual(ToolReplaySafety.RetrySafe, history.Head.ReplaySafety)
 
     [<TestMethod>]
     member _.``orchestrator executes tools through injected protocol middleware``() =

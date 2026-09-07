@@ -19,7 +19,7 @@ type ToolPermissionTests() =
             permissions
             ToolCodec.text
             ToolCodec.text
-            (ToolOperation.create (fun context input ->
+            (ToolOperation.create ToolReplaySafety.ExternallySideEffecting (fun context input ->
                 task {
                     let! output = execute context input
                     return Ok output

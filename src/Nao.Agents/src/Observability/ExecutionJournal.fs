@@ -6,7 +6,7 @@ open System.Threading.Tasks
 
 /// A record of a single tool execution (immutable, for journaling)
 type ExecutionRecord =
-    { Id: Guid; IdempotencyKey: IdempotencyKey; Correlation: CorrelationContext; Owner: string; TurnId: string; ToolName: string; Input: string; Output: string; ExecutedAt: DateTimeOffset; Reverted: bool; Metadata: Map<string, string> }
+    { Id: Guid; IdempotencyKey: IdempotencyKey; Correlation: CorrelationContext; Owner: string; TurnId: string; ToolName: string; ReplaySafety: ToolReplaySafety; Input: string; Output: string; ExecutedAt: DateTimeOffset; Reverted: bool; Metadata: Map<string, string> }
 
 /// Stable harness boundary represented by a durable checkpoint.
 [<RequireQualifiedAccess>]
