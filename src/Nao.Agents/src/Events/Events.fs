@@ -80,7 +80,12 @@ type ConversationMessage =
 
 /// The exact messages sent to an LLM and the raw response it returned.
 type LlmExchange =
-    { IdempotencyKey: IdempotencyKey; Round: int; Attempt: int; IsRepair: bool; Messages: (string * string) list; Response: string }
+    { IdempotencyKey: IdempotencyKey
+      Round: int
+      Attempt: int
+      IsRepair: bool
+      Messages: (string * string) list
+      Response: string }
 
 /// Domain events the system dispatches. Each carries an EventScope plus its payload.
 /// Consumers subscribe to the bus and decide how/where to persist, so adding a storage

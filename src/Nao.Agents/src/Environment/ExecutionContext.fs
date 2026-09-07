@@ -8,7 +8,12 @@ type ResourceBudget =
         { SyncRoot: obj
           mutable Usage: ResourceUsage }
 
-type OperationSequence = private { SyncRoot: obj; mutable ToolCalls: int; mutable ProviderCalls: int; mutable Artifacts: int }
+type OperationSequence =
+    private
+        { SyncRoot: obj
+          mutable ToolCalls: int
+          mutable ProviderCalls: int
+          mutable Artifacts: int }
 
 /// Mutable resource-tracking state for one agent execution.
 type ExecutionContext =
@@ -37,9 +42,28 @@ type ExecutionContext =
 
     static member CreateWithCorrelation (sandbox: SandboxConfig) (correlation: CorrelationContext) =
         let fallbackKey = IdempotencyKey.forExecution correlation.ExecutionId
-        let budget = { SyncRoot = obj (); Usage = ResourceUsage.Zero }
-        let sequence = { SyncRoot = obj (); ToolCalls = 0; ProviderCalls = 0; Artifacts = 0 }
-        let context: ExecutionContext = { ExecutionId = correlation.ExecutionId; Correlation = correlation; Sandbox = sandbox; CancellationToken = CancellationToken.None; Budget = budget; IdempotencyKey = fallbackKey; OperationSequence = sequence; StartedAt = DateTimeOffset.UtcNow; ParentContext = None }
+
+        let budget =
+            { SyncRoot = obj ()
+              Usage = ResourceUsage.Zero }
+
+        let sequence =
+            { SyncRoot = obj ()
+              ToolCalls = 0
+              ProviderCalls = 0
+              Artifacts = 0 }
+
+        let context: ExecutionContext =
+            { ExecutionId = correlation.ExecutionId
+              Correlation = correlation
+              Sandbox = sandbox
+              CancellationToken = CancellationToken.None
+              Budget = budget
+              IdempotencyKey = fallbackKey
+              OperationSequence = sequence
+              StartedAt = DateTimeOffset.UtcNow
+              ParentContext = None }
+
         context
 
     static member CreateWithCorrelationAndCancellation

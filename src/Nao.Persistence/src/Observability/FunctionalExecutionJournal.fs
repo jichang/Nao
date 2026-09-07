@@ -33,10 +33,108 @@ module private JournalOperations =
                     return Error(failure ex)
         }
 
+    let create
+        recordAsync
+        getHistory
+        getByExecution
+        getRevertible
+        markReverted
+        deleteOwner
+        deleteExpired
+        sideEffects
+        checkpoints
+        : ExecutionJournal =
+        { RecordAsync = recordAsync
+          GetHistoryAsync = getHistory
+          GetByExecutionAsync = getByExecution
+          GetRevertibleAsync = getRevertible
+          MarkRevertedAsync = markReverted
+          DeleteOwnerAsync = deleteOwner
+          DeleteExpiredAsync = deleteExpired
+          SideEffects = sideEffects
+          Checkpoints = checkpoints }
+
+[<RequireQualifiedAccess>]
+module ToolSideEffectSerialization =
+    [<CLIMutable>]
+    type Dto =
+        { Id: Guid
+          IdempotencyKey: string
+          ExecutionId: string
+          CorrelationId: string
+          CausationId: string
+          Attempt: int
+          Owner: string
+          TurnId: string
+          ToolName: string
+          Input: string
+          Phase: string
+          Detail: string
+          RecordedAt: DateTimeOffset }
+
+    [<CLIMutable>]
+    type Document =
+        { SchemaVersion: int
+          Transitions: Dto list }
+
+    let private phaseToString =
+        function
+        | ToolSideEffectPhase.IntentRecorded -> "intent-recorded"
+        | ToolSideEffectPhase.Succeeded -> "succeeded"
+        | ToolSideEffectPhase.Failed -> "failed"
+        | ToolSideEffectPhase.Interrupted -> "interrupted"
+
+    let private phaseFromString =
+        function
+        | "intent-recorded" -> ToolSideEffectPhase.IntentRecorded
+        | "succeeded" -> ToolSideEffectPhase.Succeeded
+        | "failed" -> ToolSideEffectPhase.Failed
+        | "interrupted" -> ToolSideEffectPhase.Interrupted
+        | value -> invalidArg (nameof value) "Invalid tool side-effect phase."
+
+    let toDto (transition: ToolSideEffectTransition) : Dto =
+        let causationId =
+            transition.Correlation.CausationId
+            |> Option.map ExecutionId.serialize
+            |> Option.defaultValue null
+
+        { Id = transition.Id
+          IdempotencyKey = IdempotencyKey.value transition.IdempotencyKey
+          ExecutionId = ExecutionId.serialize transition.Correlation.ExecutionId
+          CorrelationId = CorrelationId.serialize transition.Correlation.CorrelationId
+          CausationId = causationId
+          Attempt = transition.Correlation.Attempt
+          Owner = transition.Owner
+          TurnId = transition.TurnId
+          ToolName = transition.ToolName
+          Input = transition.Input
+          Phase = phaseToString transition.Phase
+          Detail = transition.Detail |> Option.defaultValue null
+          RecordedAt = transition.RecordedAt }
+
+    let ofDto (dto: Dto) : ToolSideEffectTransition =
+        let correlation =
+            { ExecutionId = ExecutionId.parse dto.ExecutionId
+              CorrelationId = CorrelationId.parse dto.CorrelationId
+              CausationId = Option.ofObj dto.CausationId |> Option.map ExecutionId.parse
+              Attempt = dto.Attempt }
+
+        { Id = dto.Id
+          IdempotencyKey = IdempotencyKey.parse dto.IdempotencyKey
+          Correlation = correlation
+          Owner = dto.Owner
+          TurnId = dto.TurnId
+          ToolName = dto.ToolName
+          Input = dto.Input
+          Phase = phaseFromString dto.Phase
+          Detail = Option.ofObj dto.Detail
+          RecordedAt = dto.RecordedAt }
+
 module InMemoryExecutionJournal =
     let create () : ExecutionJournal =
         let entries = System.Collections.Generic.List<ExecutionRecord>()
         let checkpoints = System.Collections.Generic.List<HarnessCheckpoint>()
+        let sideEffects = System.Collections.Generic.List<ToolSideEffectTransition>()
 
         let recordAsync (record: ExecutionRecord) =
             JournalOperations.requireOwner record.Owner
@@ -50,6 +148,19 @@ module InMemoryExecutionJournal =
             lock entries (fun () ->
                 entries
                 |> Seq.filter (fun entry -> entry.Correlation.ExecutionId = executionId)
+                |> Seq.toList)
+            |> Task.FromResult
+
+        let saveSideEffect (transition: ToolSideEffectTransition) =
+            JournalOperations.requireOwner transition.Owner
+            lock sideEffects (fun () -> sideEffects.Add transition)
+            Task.CompletedTask
+
+        let getSideEffects (idempotencyKey: IdempotencyKey) =
+            lock sideEffects (fun () ->
+                sideEffects
+                |> Seq.filter (fun transition -> transition.IdempotencyKey = idempotencyKey)
+                |> Seq.sortBy _.RecordedAt
                 |> Seq.toList)
             |> Task.FromResult
 
@@ -78,27 +189,43 @@ module InMemoryExecutionJournal =
 
             Task.CompletedTask
 
-        let delete (recordPredicate: ExecutionRecord -> bool) (checkpointPredicate: HarnessCheckpoint -> bool) =
+        let delete
+            (recordPredicate: ExecutionRecord -> bool)
+            (checkpointPredicate: HarnessCheckpoint -> bool)
+            (sideEffectPredicate: ToolSideEffectTransition -> bool)
+            =
             let recordsDeleted =
                 lock entries (fun () -> entries.RemoveAll(fun record -> recordPredicate record))
 
             let checkpointsDeleted =
                 lock checkpoints (fun () -> checkpoints.RemoveAll(fun checkpoint -> checkpointPredicate checkpoint))
 
-            Task.FromResult(recordsDeleted + checkpointsDeleted)
+            let sideEffectsDeleted =
+                lock sideEffects (fun () -> sideEffects.RemoveAll(fun transition -> sideEffectPredicate transition))
+
+            Task.FromResult(recordsDeleted + checkpointsDeleted + sideEffectsDeleted)
 
         let deleteOwnerAsync owner =
             JournalOperations.protect owner (fun () ->
-                delete (fun record -> record.Owner = owner) (fun checkpoint -> checkpoint.Owner = owner))
+                delete
+                    (fun record -> record.Owner = owner)
+                    (fun checkpoint -> checkpoint.Owner = owner)
+                    (fun transition -> transition.Owner = owner))
 
         let deleteExpiredAsync owner before =
             JournalOperations.protect owner (fun () ->
-                delete (fun record -> record.Owner = owner && record.ExecutedAt < before) (fun checkpoint ->
-                    checkpoint.Owner = owner && checkpoint.RecordedAt < before))
+                delete
+                    (fun record -> record.Owner = owner && record.ExecutedAt < before)
+                    (fun checkpoint -> checkpoint.Owner = owner && checkpoint.RecordedAt < before)
+                    (fun transition -> transition.Owner = owner && transition.RecordedAt < before))
 
-        let checkpointJournal =
+        let checkpointJournal: HarnessCheckpointJournal =
             { Save = saveCheckpoint
               GetByExecution = getCheckpoints }
+
+        let sideEffectJournal: ToolSideEffectJournal =
+            { Save = saveSideEffect
+              GetByIdempotencyKey = getSideEffects }
 
         { RecordAsync = recordAsync
           GetHistoryAsync = getHistoryAsync
@@ -107,6 +234,7 @@ module InMemoryExecutionJournal =
           MarkRevertedAsync = markRevertedAsync
           DeleteOwnerAsync = deleteOwnerAsync
           DeleteExpiredAsync = deleteExpiredAsync
+          SideEffects = sideEffectJournal
           Checkpoints = checkpointJournal }
 
 module AdoExecutionJournal =
@@ -127,6 +255,13 @@ module AdoExecutionJournal =
                         "nao_harness_checkpoints"
                         "CREATE TABLE IF NOT EXISTS nao_harness_checkpoints (checkpoint_id TEXT NOT NULL PRIMARY KEY, execution_id TEXT NOT NULL, correlation_id TEXT NOT NULL, causation_id TEXT NULL, attempt INTEGER NOT NULL, owner TEXT NOT NULL, turn_id TEXT NOT NULL, agent_id TEXT NOT NULL, phase TEXT NOT NULL, recorded_at TEXT NOT NULL)"
 
+                do!
+                    AdoSchema.ensureVersionedTable
+                        factory
+                        "tool-side-effects"
+                        "nao_tool_side_effects"
+                        "CREATE TABLE IF NOT EXISTS nao_tool_side_effects (transition_id TEXT NOT NULL PRIMARY KEY, idempotency_key TEXT NOT NULL, execution_id TEXT NOT NULL, correlation_id TEXT NOT NULL, causation_id TEXT NULL, attempt INTEGER NOT NULL, owner TEXT NOT NULL, turn_id TEXT NOT NULL, tool_name TEXT NOT NULL, tool_input TEXT NOT NULL, phase TEXT NOT NULL, detail TEXT NULL, recorded_at TEXT NOT NULL)"
+
                 let! _ =
                     Ado.executeNonQuery
                         factory
@@ -137,6 +272,12 @@ module AdoExecutionJournal =
                     Ado.executeNonQuery
                         factory
                         "CREATE INDEX IF NOT EXISTS nao_harness_checkpoints_owner_time ON nao_harness_checkpoints (owner, recorded_at)"
+                        []
+
+                let! _ =
+                    Ado.executeNonQuery
+                        factory
+                        "CREATE INDEX IF NOT EXISTS nao_tool_side_effects_key_time ON nao_tool_side_effects (idempotency_key, recorded_at)"
                         []
 
                 return ()
@@ -159,7 +300,19 @@ module AdoExecutionJournal =
                       Attempt = attempt }
 
                 let idempotencyKey = IdempotencyKey.parse (Ado.getString reader "idempotency_key")
-                { Id = Guid.Parse id; IdempotencyKey = idempotencyKey; Correlation = correlation; Owner = Ado.getString reader "owner"; TurnId = Ado.getString reader "turn_id"; ToolName = Ado.getString reader "tool_name"; ReplaySafety = ToolReplaySafety.parse (Ado.getString reader "replay_safety"); Input = Ado.getString reader "tool_input"; Output = Ado.getString reader "tool_output"; ExecutedAt = Time.fromIso (Ado.getString reader "executed_at"); Reverted = Ado.getBool reader "reverted"; Metadata = Json.mapFromJson (Ado.getString reader "metadata") }
+
+                { Id = Guid.Parse id
+                  IdempotencyKey = idempotencyKey
+                  Correlation = correlation
+                  Owner = Ado.getString reader "owner"
+                  TurnId = Ado.getString reader "turn_id"
+                  ToolName = Ado.getString reader "tool_name"
+                  ReplaySafety = ToolReplaySafety.parse (Ado.getString reader "replay_safety")
+                  Input = Ado.getString reader "tool_input"
+                  Output = Ado.getString reader "tool_output"
+                  ExecutedAt = Time.fromIso (Ado.getString reader "executed_at")
+                  Reverted = Ado.getBool reader "reverted"
+                  Metadata = Json.mapFromJson (Ado.getString reader "metadata") }
             with ex ->
                 raise (
                     InvalidDataException(
@@ -245,6 +398,67 @@ module AdoExecutionJournal =
                         mapCheckpoint
             }
 
+        let mapSideEffect (reader: DbDataReader) =
+            ToolSideEffectSerialization.ofDto
+                { Id = Guid.Parse(Ado.getString reader "transition_id")
+                  IdempotencyKey = Ado.getString reader "idempotency_key"
+                  ExecutionId = Ado.getString reader "execution_id"
+                  CorrelationId = Ado.getString reader "correlation_id"
+                  CausationId = Ado.getStringOpt reader "causation_id" |> Option.defaultValue null
+                  Attempt = Convert.ToInt32(reader.["attempt"])
+                  Owner = Ado.getString reader "owner"
+                  TurnId = Ado.getString reader "turn_id"
+                  ToolName = Ado.getString reader "tool_name"
+                  Input = Ado.getString reader "tool_input"
+                  Phase = Ado.getString reader "phase"
+                  Detail = Ado.getStringOpt reader "detail" |> Option.defaultValue null
+                  RecordedAt = Time.fromIso (Ado.getString reader "recorded_at") }
+
+        let saveSideEffect (transition: ToolSideEffectTransition) =
+            task {
+                JournalOperations.requireOwner transition.Owner
+                do! ensureAsync ()
+                let dto = ToolSideEffectSerialization.toDto transition
+
+                let causationId =
+                    Option.ofObj dto.CausationId |> Option.map box |> Option.defaultValue null
+
+                let detail = Option.ofObj dto.Detail |> Option.map box |> Option.defaultValue null
+
+                let! _ =
+                    Ado.executeNonQuery
+                        factory
+                        "INSERT INTO nao_tool_side_effects (transition_id, idempotency_key, execution_id, correlation_id, causation_id, attempt, owner, turn_id, tool_name, tool_input, phase, detail, recorded_at) VALUES (@id, @ik, @ex, @co, @ca, @at, @ow, @tr, @tn, @ti, @ph, @de, @ra)"
+                        [ "@id", box (dto.Id.ToString("D"))
+                          "@ik", box dto.IdempotencyKey
+                          "@ex", box dto.ExecutionId
+                          "@co", box dto.CorrelationId
+                          "@ca", causationId
+                          "@at", box dto.Attempt
+                          "@ow", box dto.Owner
+                          "@tr", box dto.TurnId
+                          "@tn", box dto.ToolName
+                          "@ti", box dto.Input
+                          "@ph", box dto.Phase
+                          "@de", detail
+                          "@ra", box (Time.toIso dto.RecordedAt) ]
+
+                return ()
+            }
+            :> Task
+
+        let getSideEffects idempotencyKey =
+            task {
+                do! ensureAsync ()
+
+                return!
+                    Ado.query
+                        factory
+                        "SELECT transition_id, idempotency_key, execution_id, correlation_id, causation_id, attempt, owner, turn_id, tool_name, tool_input, phase, detail, recorded_at FROM nao_tool_side_effects WHERE idempotency_key = @ik ORDER BY recorded_at ASC"
+                        [ "@ik", box (IdempotencyKey.value idempotencyKey) ]
+                        mapSideEffect
+            }
+
         let recordAsync (record: ExecutionRecord) =
             task {
                 JournalOperations.requireOwner record.Owner
@@ -256,6 +470,7 @@ module AdoExecutionJournal =
                     |> Option.defaultValue null
 
                 let idempotencyParameter = "@ik", box (IdempotencyKey.value record.IdempotencyKey)
+
                 let parameters =
                     idempotencyParameter
                     :: [ "@id", box (record.Id.ToString("D"))
@@ -350,7 +565,13 @@ module AdoExecutionJournal =
                             "DELETE FROM nao_harness_checkpoints WHERE owner = @ow"
                             [ "@ow", box owner ]
 
-                    return recordsDeleted + checkpointsDeleted
+                    let! sideEffectsDeleted =
+                        Ado.executeNonQuery
+                            factory
+                            "DELETE FROM nao_tool_side_effects WHERE owner = @ow"
+                            [ "@ow", box owner ]
+
+                    return recordsDeleted + checkpointsDeleted + sideEffectsDeleted
                 })
 
         let deleteExpiredAsync owner before =
@@ -370,12 +591,22 @@ module AdoExecutionJournal =
                             "DELETE FROM nao_harness_checkpoints WHERE owner = @ow AND recorded_at < @before"
                             [ "@ow", box owner; "@before", box (Time.toIso before) ]
 
-                    return recordsDeleted + checkpointsDeleted
+                    let! sideEffectsDeleted =
+                        Ado.executeNonQuery
+                            factory
+                            "DELETE FROM nao_tool_side_effects WHERE owner = @ow AND recorded_at < @before"
+                            [ "@ow", box owner; "@before", box (Time.toIso before) ]
+
+                    return recordsDeleted + checkpointsDeleted + sideEffectsDeleted
                 })
 
-        let checkpointJournal =
+        let checkpointJournal: HarnessCheckpointJournal =
             { Save = saveCheckpoint
               GetByExecution = getCheckpoints }
+
+        let sideEffectJournal: ToolSideEffectJournal =
+            { Save = saveSideEffect
+              GetByIdempotencyKey = getSideEffects }
 
         { RecordAsync = recordAsync
           GetHistoryAsync = getHistoryAsync
@@ -384,6 +615,7 @@ module AdoExecutionJournal =
           MarkRevertedAsync = markRevertedAsync
           DeleteOwnerAsync = deleteOwnerAsync
           DeleteExpiredAsync = deleteExpiredAsync
+          SideEffects = sideEffectJournal
           Checkpoints = checkpointJournal }
 
 module FileExecutionJournal =
@@ -401,6 +633,7 @@ module FileExecutionJournal =
         let sync = obj ()
         let file = Path.Combine(baseDir, "execution-journal.json")
         let checkpointFile = Path.Combine(baseDir, "harness-checkpoints.json")
+        let sideEffectFile = Path.Combine(baseDir, "tool-side-effects.json")
 
         let load () =
             if not (File.Exists file) then
@@ -452,6 +685,46 @@ module FileExecutionJournal =
                 checkpointFile
                 { SchemaVersion = 1
                   Checkpoints = checkpoints }
+
+        let loadSideEffects () =
+            if not (File.Exists sideEffectFile) then
+                []
+            else
+                let document =
+                    FileJson.read<ToolSideEffectSerialization.Document>
+                        sideEffectFile
+                        Unchecked.defaultof<ToolSideEffectSerialization.Document>
+
+                if isNull (box document) || document.SchemaVersion <> 1 then
+                    raise (InvalidDataException "Expected tool side-effect schema version 1.")
+
+                document.Transitions
+
+        let saveSideEffects transitions =
+            let document: ToolSideEffectSerialization.Document =
+                { SchemaVersion = 1
+                  Transitions = transitions }
+
+            FileJson.write sideEffectFile document
+
+        let saveSideEffect (transition: ToolSideEffectTransition) =
+            JournalOperations.requireOwner transition.Owner
+
+            task {
+                lock sync (fun () ->
+                    saveSideEffects (loadSideEffects () @ [ ToolSideEffectSerialization.toDto transition ]))
+            }
+            :> Task
+
+        let getSideEffects idempotencyKey =
+            task {
+                return
+                    lock sync (fun () ->
+                        loadSideEffects ()
+                        |> List.map ToolSideEffectSerialization.ofDto
+                        |> List.filter (fun transition -> transition.IdempotencyKey = idempotencyKey)
+                        |> List.sortBy _.RecordedAt)
+            }
 
         let recordAsync (record: ExecutionRecord) =
             JournalOperations.requireOwner record.Owner
@@ -516,7 +789,11 @@ module FileExecutionJournal =
             }
             :> Task
 
-        let delete (recordPredicate: ExecutionRecord -> bool) (checkpointPredicate: HarnessCheckpoint -> bool) =
+        let delete
+            (recordPredicate: ExecutionRecord -> bool)
+            (checkpointPredicate: HarnessCheckpoint -> bool)
+            (sideEffectPredicate: ToolSideEffectTransition -> bool)
+            =
             task {
                 return
                     lock sync (fun () ->
@@ -531,34 +808,54 @@ module FileExecutionJournal =
                             checkpoints
                             |> List.filter (HarnessCheckpointSerialization.ofDto >> checkpointPredicate >> not) in
 
+                        let sideEffects = loadSideEffects () in
+
+                        let retainedSideEffects =
+                            sideEffects
+                            |> List.filter (ToolSideEffectSerialization.ofDto >> sideEffectPredicate >> not) in
+
                         save retainedRecords
                         saveCheckpoints retainedCheckpoints
+                        saveSideEffects retainedSideEffects
 
                         records.Length - retainedRecords.Length + checkpoints.Length
-                        - retainedCheckpoints.Length)
+                        - retainedCheckpoints.Length
+                        + sideEffects.Length
+                        - retainedSideEffects.Length)
             }
 
         let deleteOwnerAsync owner =
             JournalOperations.protect owner (fun () ->
-                delete (fun record -> record.Owner = owner) (fun checkpoint -> checkpoint.Owner = owner))
+                delete
+                    (fun record -> record.Owner = owner)
+                    (fun checkpoint -> checkpoint.Owner = owner)
+                    (fun transition -> transition.Owner = owner))
 
         let deleteExpiredAsync owner before =
             JournalOperations.protect owner (fun () ->
-                delete (fun record -> record.Owner = owner && record.ExecutedAt < before) (fun checkpoint ->
-                    checkpoint.Owner = owner && checkpoint.RecordedAt < before))
+                delete
+                    (fun record -> record.Owner = owner && record.ExecutedAt < before)
+                    (fun checkpoint -> checkpoint.Owner = owner && checkpoint.RecordedAt < before)
+                    (fun transition -> transition.Owner = owner && transition.RecordedAt < before))
 
-        let checkpointJournal =
+        let checkpointJournal: HarnessCheckpointJournal =
             { Save = saveCheckpoint
               GetByExecution = getCheckpoints }
 
-        { RecordAsync = recordAsync
-          GetHistoryAsync = getHistoryAsync
-          GetByExecutionAsync = getByExecutionAsync
-          GetRevertibleAsync = getRevertibleAsync
-          MarkRevertedAsync = markRevertedAsync
-          DeleteOwnerAsync = deleteOwnerAsync
-          DeleteExpiredAsync = deleteExpiredAsync
-          Checkpoints = checkpointJournal }
+        let sideEffectJournal: ToolSideEffectJournal =
+            { Save = saveSideEffect
+              GetByIdempotencyKey = getSideEffects }
+
+        JournalOperations.create
+            recordAsync
+            getHistoryAsync
+            getByExecutionAsync
+            getRevertibleAsync
+            markRevertedAsync
+            deleteOwnerAsync
+            deleteExpiredAsync
+            sideEffectJournal
+            checkpointJournal
 
 module ExecutionJournals =
     let ado factory : ExecutionJournal = AdoExecutionJournal.create factory

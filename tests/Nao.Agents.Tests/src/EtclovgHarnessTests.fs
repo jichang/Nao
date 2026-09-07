@@ -209,7 +209,9 @@ type EtclovgHarnessTests() =
         let agent =
             Agent.create "artifact-agent" "artifact-agent" "test" 0 [] AgentContract.Text (fun context _ ->
                 task {
-                    let artifact = Artifact.create (context.NextArtifactKey()) "report" "application/json" "{\"value\":42}"
+                    let artifact =
+                        Artifact.create (context.NextArtifactKey()) "report" "application/json" "{\"value\":42}"
+
                     produced <- Some artifact
                     do! context.PublishArtifact artifact
 

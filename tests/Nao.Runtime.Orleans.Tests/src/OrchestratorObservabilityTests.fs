@@ -101,7 +101,10 @@ type OrchestratorObservabilityTests() =
             TestOrchestrator.create (config provider [] EventBus.none) (fun response -> [ Respond response ])
 
         let context = AgentContext.unrestrictedForTests ()
-        let result = EtclovgHarness.runAsync EtclovgConfig.Default context agent (request context agent "start") |> _.Result
+
+        let result =
+            EtclovgHarness.runAsync EtclovgConfig.Default context agent (request context agent "start")
+            |> _.Result
 
         Assert.AreEqual(ExecutionTerminalStatus.Succeeded, result.Status)
         Assert.AreEqual(Some "done", result.Outputs.Response)
@@ -165,6 +168,146 @@ type OrchestratorObservabilityTests() =
         Assert.AreEqual(context.Correlation, history.Head.Correlation)
         StringAssert.StartsWith(IdempotencyKey.value history.Head.IdempotencyKey, "tool:")
         Assert.AreEqual(ToolReplaySafety.RetrySafe, history.Head.ReplaySafety)
+
+    [<TestMethod>]
+    member _.``external tool intent is durable before execution and outcome follows``() =
+        let journal = InMemory.executionJournal ()
+        let mutable expectedKey = None
+        let mutable intentVisibleDuringExecution = false
+
+        let tool =
+            Tool.create
+                "external"
+                "External side effect."
+                0
+                []
+                ToolCodec.text
+                ToolCodec.text
+                (ToolOperation.create ToolReplaySafety.ExternallySideEffecting (fun _ input ->
+                    task {
+                        let! transitions = journal.SideEffects.GetByIdempotencyKey expectedKey.Value
+
+                        intentVisibleDuringExecution <-
+                            transitions |> List.map _.Phase = [ ToolSideEffectPhase.IntentRecorded ]
+
+                        return Ok input
+                    }))
+
+        let provider = ScriptedProvider.create [ "invoke"; "done" ]
+
+        let agent =
+            TestOrchestrator.create (config provider [ tool ] EventBus.none) (function
+                | "invoke" -> [ InvokeTool("external", "payload") ]
+                | response -> [ Respond response ])
+
+        let context =
+            { (AgentContext.unrestrictedForTests ()) with
+                SessionKey = "user/session"
+                TurnId = "turn" }
+
+        let executionRequest = request context agent "start"
+        let toolKey = IdempotencyKey.operation "tool" 1 executionRequest.IdempotencyKey
+        expectedKey <- Some toolKey
+
+        let harnessConfig =
+            { EtclovgConfig.Default with
+                ExecutionJournal = Some journal }
+
+        let result =
+            EtclovgHarness.runAsync harnessConfig context agent executionRequest |> _.Result
+
+        let transitions = journal.SideEffects.GetByIdempotencyKey toolKey |> _.Result
+
+        Assert.AreEqual(ExecutionTerminalStatus.Succeeded, result.Status)
+        Assert.IsTrue(intentVisibleDuringExecution)
+
+        CollectionAssert.AreEqual(
+            [| ToolSideEffectPhase.IntentRecorded; ToolSideEffectPhase.Succeeded |],
+            transitions |> List.map _.Phase |> List.toArray
+        )
+
+    [<TestMethod>]
+    member _.``external tool does not execute without durable journal``() =
+        let mutable executed = false
+
+        let tool =
+            Tool.create
+                "external"
+                "External side effect."
+                0
+                []
+                ToolCodec.text
+                ToolCodec.text
+                (ToolOperation.create ToolReplaySafety.ExternallySideEffecting (fun _ input ->
+                    executed <- true
+                    Task.FromResult(Ok input)))
+
+        let provider = ScriptedProvider.create [ "invoke" ]
+
+        let agent =
+            TestOrchestrator.create (config provider [ tool ] EventBus.none) (fun _ ->
+                [ InvokeTool("external", "payload") ])
+
+        let context = AgentContext.unrestrictedForTests ()
+
+        let result =
+            EtclovgHarness.runAsync EtclovgConfig.Default context agent (request context agent "start")
+            |> _.Result
+
+        Assert.IsFalse(executed)
+
+        match result.Status with
+        | ExecutionTerminalStatus.Failed(HarnessError.ExecutionFailed message) ->
+            StringAssert.Contains(message, "durable execution journal")
+        | status -> Assert.Fail(sprintf "Expected fail-closed execution, got %A." status)
+
+    [<TestMethod>]
+    member _.``external tool failure persists terminal outcome``() =
+        let journal = InMemory.executionJournal ()
+
+        let tool =
+            Tool.create
+                "external"
+                "External side effect."
+                0
+                []
+                ToolCodec.text
+                ToolCodec.text
+                (ToolOperation.create ToolReplaySafety.ExternallySideEffecting (fun _ _ ->
+                    Task.FromResult(Error(ToolExecError.Failed "declined"))))
+
+        let provider = ScriptedProvider.create [ "invoke"; "done" ]
+
+        let agent =
+            TestOrchestrator.create (config provider [ tool ] EventBus.none) (function
+                | "invoke" -> [ InvokeTool("external", "payload") ]
+                | response -> [ Respond response ])
+
+        let context =
+            { (AgentContext.unrestrictedForTests ()) with
+                SessionKey = "user/session"
+                TurnId = "turn" }
+
+        let executionRequest = request context agent "start"
+        let toolKey = IdempotencyKey.operation "tool" 1 executionRequest.IdempotencyKey
+
+        let harnessConfig =
+            { EtclovgConfig.Default with
+                ExecutionJournal = Some journal }
+
+        let result =
+            EtclovgHarness.runAsync harnessConfig context agent executionRequest |> _.Result
+
+        let transitions = journal.SideEffects.GetByIdempotencyKey toolKey |> _.Result
+
+        Assert.AreEqual(ExecutionTerminalStatus.Succeeded, result.Status)
+
+        CollectionAssert.AreEqual(
+            [| ToolSideEffectPhase.IntentRecorded; ToolSideEffectPhase.Failed |],
+            transitions |> List.map _.Phase |> List.toArray
+        )
+
+        Assert.AreEqual(Some "declined", transitions.[1].Detail)
 
     [<TestMethod>]
     member _.``orchestrator executes tools through injected protocol middleware``() =
@@ -239,7 +382,8 @@ type OrchestratorObservabilityTests() =
 
         let harnessConfig =
             { EtclovgConfig.Default with
-                Tracer = Some tracer }
+                Tracer = Some tracer
+                ExecutionJournal = Some(InMemory.executionJournal ()) }
 
         let context = AgentContext.unrestrictedForTests ()
 
@@ -290,7 +434,8 @@ type OrchestratorObservabilityTests() =
 
         let harnessConfig =
             { EtclovgConfig.Default with
-                PolicyEngine = Some(PolicyEngine.create [ denyChild ]) }
+                PolicyEngine = Some(PolicyEngine.create [ denyChild ])
+                ExecutionJournal = Some(InMemory.executionJournal ()) }
 
         let context = AgentContext.unrestrictedForTests ()
 

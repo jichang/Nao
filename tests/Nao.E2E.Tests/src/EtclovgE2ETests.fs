@@ -24,15 +24,19 @@ module EtclovgDemoTools =
         Tool.create name description 0 [] ToolCodec.text ToolCodec.text (ToolOperation.create replaySafety execute)
 
     let stockPrice =
-        createText ToolReplaySafety.RetrySafe "get_stock_price" "Get the current stock price for a ticker symbol" (fun _ ticker ->
-            let price =
-                match ticker.Trim().ToUpper() with
-                | "AAPL" -> "189.45"
-                | "MSFT" -> "420.12"
-                | "GOOGL" -> "175.30"
-                | value -> sprintf "Unknown ticker: %s" value
+        createText
+            ToolReplaySafety.RetrySafe
+            "get_stock_price"
+            "Get the current stock price for a ticker symbol"
+            (fun _ ticker ->
+                let price =
+                    match ticker.Trim().ToUpper() with
+                    | "AAPL" -> "189.45"
+                    | "MSFT" -> "420.12"
+                    | "GOOGL" -> "175.30"
+                    | value -> sprintf "Unknown ticker: %s" value
 
-            Task.FromResult(Ok(sprintf """{"ticker":"%s","price":%s,"currency":"USD"}""" (ticker.ToUpper()) price)))
+                Task.FromResult(Ok(sprintf """{"ticker":"%s","price":%s,"currency":"USD"}""" (ticker.ToUpper()) price)))
 
     let sendEmail =
         createText
@@ -51,14 +55,21 @@ module EtclovgDemoTools =
                 Task.FromResult(Ok output))
 
     let searchDocs =
-        createText ToolReplaySafety.RetrySafe "search_docs" "Search internal documentation. Returns relevant passages." (fun _ query ->
-            Task.FromResult(
-                Ok(sprintf "Found 3 results for '%s': [1] Getting Started Guide [2] API Reference [3] FAQ" query)
-            ))
+        createText
+            ToolReplaySafety.RetrySafe
+            "search_docs"
+            "Search internal documentation. Returns relevant passages."
+            (fun _ query ->
+                Task.FromResult(
+                    Ok(sprintf "Found 3 results for '%s': [1] Getting Started Guide [2] API Reference [3] FAQ" query)
+                ))
 
     let dangerousDelete =
-        createText ToolReplaySafety.ExternallySideEffecting "delete_all_data" "Permanently delete all data. DANGEROUS - requires confirmation." (fun _ _ ->
-            Task.FromResult(Ok "All data deleted permanently"))
+        createText
+            ToolReplaySafety.ExternallySideEffecting
+            "delete_all_data"
+            "Permanently delete all data. DANGEROUS - requires confirmation."
+            (fun _ _ -> Task.FromResult(Ok "All data deleted permanently"))
 
     let allTools = [ stockPrice; sendEmail; searchDocs; dangerousDelete ]
 
@@ -244,7 +255,8 @@ type EtclovgToolProtocolTests() =
 
         // Invoke tool through protocol
         let result =
-            (protocol.InvokeAsync (AgentContext.unrestrictedForTests ()) (invocationKey 1) "get_stock_price" "MSFT").Result
+            (protocol.InvokeAsync (AgentContext.unrestrictedForTests ()) (invocationKey 1) "get_stock_price" "MSFT")
+                .Result
 
         Assert.IsTrue(result.Success)
         Assert.IsTrue(result.Output.Contains("420.12"))
@@ -260,13 +272,20 @@ type EtclovgToolProtocolTests() =
 
         // Should work within the rate limit
         for ordinal in 1..5 do
-            let result = (protocol.InvokeAsync (AgentContext.unrestrictedForTests ()) (invocationKey ordinal) "get_stock_price" "AAPL").Result
+            let result =
+                (protocol.InvokeAsync
+                    (AgentContext.unrestrictedForTests ())
+                    (invocationKey ordinal)
+                    "get_stock_price"
+                    "AAPL")
+                    .Result
 
             Assert.IsTrue(result.Success)
 
         // 6th call should be blocked
         let blocked =
-            (protocol.InvokeAsync (AgentContext.unrestrictedForTests ()) (invocationKey 6) "get_stock_price" "AAPL").Result
+            (protocol.InvokeAsync (AgentContext.unrestrictedForTests ()) (invocationKey 6) "get_stock_price" "AAPL")
+                .Result
 
         Assert.IsFalse(blocked.Success)
         Assert.IsTrue(blocked.Error.Value.Contains("Rate limit"))
@@ -397,20 +416,35 @@ type EtclovgLifecycleTests() =
         let orchestrator = EtclovgMockProvider.createOrchestrator tools
         let context = AgentContext.unrestrictedForTests ()
 
-        let principal = SecurityPrincipal.create (TenantId.parse "e2e") (UserId.parse "user") []
+        let principal =
+            SecurityPrincipal.create (TenantId.parse "e2e") (UserId.parse "user") []
+
         let authorization =
             AuthorizationScope.tryCreate principal None (WorkspaceId.parse "workspace") None
             |> Option.get
 
         let request =
-            ExecutionRequest.create authorization (TurnId.parse "tool-integration") "conversation" orchestrator.Metadata.Id "What is the stock price of AAPL?" SandboxConfig.Default Map.empty Map.empty context.Correlation
+            ExecutionRequest.create
+                authorization
+                (TurnId.parse "tool-integration")
+                "conversation"
+                orchestrator.Metadata.Id
+                "What is the stock price of AAPL?"
+                SandboxConfig.Default
+                Map.empty
+                Map.empty
+                context.Correlation
 
         let result =
             EtclovgHarness.runAsync EtclovgConfig.Default context orchestrator request
             |> _.Result
 
         Assert.AreEqual(ExecutionTerminalStatus.Succeeded, result.Status)
-        Assert.IsTrue(result.Outputs.Response.Value.Contains("189.45") || result.Outputs.Response.Value.Contains("AAPL"))
+
+        Assert.IsTrue(
+            result.Outputs.Response.Value.Contains("189.45")
+            || result.Outputs.Response.Value.Contains("AAPL")
+        )
 
 
 // =============================================================================

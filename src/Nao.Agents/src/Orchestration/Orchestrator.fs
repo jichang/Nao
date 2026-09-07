@@ -247,14 +247,25 @@ module Orchestrator =
                             return raise ex
                     }
 
-                let recordExchange idempotencyKey (attempt: int) (isRepair: bool) (prompt: Conversation) (result: string) =
+                let recordExchange
+                    idempotencyKey
+                    (attempt: int)
+                    (isRepair: bool)
+                    (prompt: Conversation)
+                    (result: string)
+                    =
                     let messagesForStorage =
                         prompt |> List.map (fun message -> (sprintf "%A" message.Role, message.Content))
 
                     EventBus.publishAsync
                         (NaoEvent.LlmExchangeRecorded(
                             eventScope,
-                            { IdempotencyKey = idempotencyKey; Round = round; Attempt = attempt; IsRepair = isRepair; Messages = messagesForStorage; Response = result }
+                            { IdempotencyKey = idempotencyKey
+                              Round = round
+                              Attempt = attempt
+                              IsRepair = isRepair
+                              Messages = messagesForStorage
+                              Response = result }
                         ))
                         eventBus
                     |> ignore
@@ -389,12 +400,61 @@ module Orchestrator =
                                                     sprintf
                                                         "[Tool Result from %s]: This equivalent successful tool call was already completed. Do not repeat it; respond with the completed result."
                                                         toolName } ]
-                                    | Some _ ->
+                                    | Some tool ->
                                         report (ToolInvoked(toolName, toolInput))
                                         // O: record the prepared invocation (name + normalized parameters + context) as a span.
                                         let toolSpan = startToolSpan toolName toolInput (rounds + 1)
                                         let toolIdempotencyKey = agentContext.NextToolCallKey()
-                                        let! toolExecution = toolProtocol.InvokeAsync agentContext toolIdempotencyKey toolName toolInput
+
+                                        let saveSideEffect phase detail =
+                                            if tool.ReplaySafety = ToolReplaySafety.RetrySafe then
+                                                Task.CompletedTask
+                                            else
+                                                match RuntimeExecutionJournal.get () with
+                                                | Some journal ->
+                                                    journal.SideEffects.Save
+                                                        { Id = Guid.NewGuid()
+                                                          IdempotencyKey = toolIdempotencyKey
+                                                          Correlation = agentContext.Correlation
+                                                          Owner = agentContext.SessionKey
+                                                          TurnId = agentContext.TurnId
+                                                          ToolName = toolName
+                                                          Input = toolInput
+                                                          Phase = phase
+                                                          Detail = detail
+                                                          RecordedAt = DateTimeOffset.UtcNow }
+                                                | None ->
+                                                    invalidOp
+                                                        "Externally side-effecting tools require a durable execution journal."
+
+                                        do! saveSideEffect ToolSideEffectPhase.IntentRecorded None
+
+                                        let! toolExecution =
+                                            task {
+                                                try
+                                                    let! result =
+                                                        toolProtocol.InvokeAsync
+                                                            agentContext
+                                                            toolIdempotencyKey
+                                                            toolName
+                                                            toolInput
+
+                                                    let phase, detail =
+                                                        if result.Success then
+                                                            ToolSideEffectPhase.Succeeded, None
+                                                        else
+                                                            ToolSideEffectPhase.Failed, result.Error
+
+                                                    do! saveSideEffect phase detail
+                                                    return result
+                                                with error ->
+                                                    do!
+                                                        saveSideEffect
+                                                            ToolSideEffectPhase.Interrupted
+                                                            (Some error.Message)
+
+                                                    return raise error
+                                            }
 
                                         match RuntimeMetrics.get () with
                                         | Some metrics ->
@@ -430,7 +490,18 @@ module Orchestrator =
                                                     invalidOp "Execution journaling requires a nonblank turn ID."
 
                                                 let record: ExecutionRecord =
-                                                    { Id = Guid.NewGuid(); IdempotencyKey = toolExecution.IdempotencyKey; Correlation = agentContext.Correlation; Owner = agentContext.SessionKey; TurnId = agentContext.TurnId; ToolName = toolName; ReplaySafety = toolExecution.ReplaySafety; Input = toolInput; Output = toolResult; ExecutedAt = DateTimeOffset.UtcNow; Reverted = false; Metadata = Map.ofList [ "duration.ms", durationMs ] }
+                                                    { Id = Guid.NewGuid()
+                                                      IdempotencyKey = toolExecution.IdempotencyKey
+                                                      Correlation = agentContext.Correlation
+                                                      Owner = agentContext.SessionKey
+                                                      TurnId = agentContext.TurnId
+                                                      ToolName = toolName
+                                                      ReplaySafety = toolExecution.ReplaySafety
+                                                      Input = toolInput
+                                                      Output = toolResult
+                                                      ExecutedAt = DateTimeOffset.UtcNow
+                                                      Reverted = false
+                                                      Metadata = Map.ofList [ "duration.ms", durationMs ] }
 
                                                 do! journal.RecordAsync record
                                             | None -> ()

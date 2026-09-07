@@ -714,7 +714,8 @@ type SessionGrain
                           ExecutionBoundary = ExecutionBoundary.HarnessRequired
                           CancellationToken = cancellationToken
                           NextToolCallKey = (fun () -> invalidOp "Tool keys are allocated by the execution harness.")
-                          NextArtifactKey = (fun () -> invalidOp "Artifact keys are allocated by the execution harness.")
+                          NextArtifactKey =
+                            (fun () -> invalidOp "Artifact keys are allocated by the execution harness.")
                           GetArtifacts = (fun () -> lock artifacts (fun () -> List.ofSeq artifacts))
                           GetGrantedResources =
                             (fun () -> lock grantedResources (fun () -> List.ofSeq grantedResources))

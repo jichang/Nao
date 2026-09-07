@@ -6,7 +6,42 @@ open System.Threading.Tasks
 
 /// A record of a single tool execution (immutable, for journaling)
 type ExecutionRecord =
-    { Id: Guid; IdempotencyKey: IdempotencyKey; Correlation: CorrelationContext; Owner: string; TurnId: string; ToolName: string; ReplaySafety: ToolReplaySafety; Input: string; Output: string; ExecutedAt: DateTimeOffset; Reverted: bool; Metadata: Map<string, string> }
+    { Id: Guid
+      IdempotencyKey: IdempotencyKey
+      Correlation: CorrelationContext
+      Owner: string
+      TurnId: string
+      ToolName: string
+      ReplaySafety: ToolReplaySafety
+      Input: string
+      Output: string
+      ExecutedAt: DateTimeOffset
+      Reverted: bool
+      Metadata: Map<string, string> }
+
+[<RequireQualifiedAccess>]
+type ToolSideEffectPhase =
+    | IntentRecorded
+    | Succeeded
+    | Failed
+    | Interrupted
+
+/// Append-only transition for an externally side-effecting tool invocation.
+type ToolSideEffectTransition =
+    { Id: Guid
+      IdempotencyKey: IdempotencyKey
+      Correlation: CorrelationContext
+      Owner: string
+      TurnId: string
+      ToolName: string
+      Input: string
+      Phase: ToolSideEffectPhase
+      Detail: string option
+      RecordedAt: DateTimeOffset }
+
+type ToolSideEffectJournal =
+    { Save: ToolSideEffectTransition -> Task
+      GetByIdempotencyKey: IdempotencyKey -> Task<ToolSideEffectTransition list> }
 
 /// Stable harness boundary represented by a durable checkpoint.
 [<RequireQualifiedAccess>]
@@ -45,6 +80,7 @@ type ExecutionJournal =
       MarkRevertedAsync: Guid -> Task
       DeleteOwnerAsync: string -> Task<Result<int, PlatformFailure>>
       DeleteExpiredAsync: string -> DateTimeOffset -> Task<Result<int, PlatformFailure>>
+      SideEffects: ToolSideEffectJournal
       Checkpoints: HarnessCheckpointJournal }
 
 module internal RuntimeExecutionJournal =

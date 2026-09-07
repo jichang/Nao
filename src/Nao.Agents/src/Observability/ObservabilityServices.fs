@@ -102,6 +102,7 @@ module private Publishing =
                 :> Task
           DeleteOwnerAsync = inner.DeleteOwnerAsync
           DeleteExpiredAsync = inner.DeleteExpiredAsync
+          SideEffects = inner.SideEffects
           Checkpoints = inner.Checkpoints }
 
     let traceStore sessionKey turnId correlation bus (inner: TraceStore) : TraceStore =

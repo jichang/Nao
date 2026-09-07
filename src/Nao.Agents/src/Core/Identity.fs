@@ -240,13 +240,19 @@ module IdempotencyKey =
         let digest = SHA256.HashData bytes |> Convert.ToHexString |> _.ToLowerInvariant()
         IdempotencyKey(sprintf "%s:%s" scope digest)
 
-    let forExecution executionId = ExecutionId.serialize executionId |> hash "execution"
+    let forExecution executionId =
+        ExecutionId.serialize executionId |> hash "execution"
 
     let turn authorization conversationId turnId =
-        let groupId = AuthorizationScope.groupId authorization |> Option.map GroupId.value |> Option.defaultValue ""
+        let groupId =
+            AuthorizationScope.groupId authorization
+            |> Option.map GroupId.value
+            |> Option.defaultValue ""
 
         let sessionId =
-            AuthorizationScope.sessionId authorization |> Option.map SessionId.value |> Option.defaultValue ""
+            AuthorizationScope.sessionId authorization
+            |> Option.map SessionId.value
+            |> Option.defaultValue ""
 
         [ AuthorizationScope.tenantId authorization |> TenantId.value
           AuthorizationScope.userId authorization |> UserId.value
@@ -271,7 +277,11 @@ module IdempotencyKey =
 
     let tryParse (value: string) =
         match value.Split(':') with
-        | [| scope; digest |] when not (String.IsNullOrWhiteSpace scope) && digest.Length = 64 && digest |> Seq.forall Uri.IsHexDigit ->
+        | [| scope; digest |] when
+            not (String.IsNullOrWhiteSpace scope)
+            && digest.Length = 64
+            && digest |> Seq.forall Uri.IsHexDigit
+            ->
             Some(IdempotencyKey value)
         | _ -> None
 

@@ -190,7 +190,8 @@ type ToolProtocolTests() =
 
         let protocol = ToolProtocol.fromTools [ permissionedTool ]
 
-        let result = (protocol.InvokeAsync context (invocationKey ()) "writer" "content").Result
+        let result =
+            (protocol.InvokeAsync context (invocationKey ()) "writer" "content").Result
 
         Assert.IsFalse(result.Success)
         Assert.IsFalse(ran.Value)

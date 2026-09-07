@@ -207,11 +207,43 @@ module Dto =
     // ---- ExecutionRecord ----
     [<CLIMutable>]
     type ExecutionRecordDto =
-        { Id: Guid; IdempotencyKey: string; ExecutionId: string; CorrelationId: string; CausationId: string; Attempt: int; Owner: string; TurnId: string; ToolName: string; ReplaySafety: string; Input: string; Output: string; ExecutedAt: DateTimeOffset; Reverted: bool; Metadata: Dictionary<string, string> }
+        { Id: Guid
+          IdempotencyKey: string
+          ExecutionId: string
+          CorrelationId: string
+          CausationId: string
+          Attempt: int
+          Owner: string
+          TurnId: string
+          ToolName: string
+          ReplaySafety: string
+          Input: string
+          Output: string
+          ExecutedAt: DateTimeOffset
+          Reverted: bool
+          Metadata: Dictionary<string, string> }
 
     let toExecutionDto (r: ExecutionRecord) : ExecutionRecordDto =
-                let causationId = r.Correlation.CausationId |> Option.map ExecutionId.serialize |> Option.defaultValue null
-                { Id = r.Id; IdempotencyKey = IdempotencyKey.value r.IdempotencyKey; ExecutionId = ExecutionId.serialize r.Correlation.ExecutionId; CorrelationId = CorrelationId.serialize r.Correlation.CorrelationId; CausationId = causationId; Attempt = r.Correlation.Attempt; Owner = r.Owner; TurnId = r.TurnId; ToolName = r.ToolName; ReplaySafety = ToolReplaySafety.serialize r.ReplaySafety; Input = r.Input; Output = r.Output; ExecutedAt = r.ExecutedAt; Reverted = r.Reverted; Metadata = dictOfMap r.Metadata }
+        let causationId =
+            r.Correlation.CausationId
+            |> Option.map ExecutionId.serialize
+            |> Option.defaultValue null
+
+        { Id = r.Id
+          IdempotencyKey = IdempotencyKey.value r.IdempotencyKey
+          ExecutionId = ExecutionId.serialize r.Correlation.ExecutionId
+          CorrelationId = CorrelationId.serialize r.Correlation.CorrelationId
+          CausationId = causationId
+          Attempt = r.Correlation.Attempt
+          Owner = r.Owner
+          TurnId = r.TurnId
+          ToolName = r.ToolName
+          ReplaySafety = ToolReplaySafety.serialize r.ReplaySafety
+          Input = r.Input
+          Output = r.Output
+          ExecutedAt = r.ExecutedAt
+          Reverted = r.Reverted
+          Metadata = dictOfMap r.Metadata }
 
     let ofExecutionDto (d: ExecutionRecordDto) : ExecutionRecord =
         if d.Attempt < 1 then
@@ -223,7 +255,18 @@ module Dto =
               CausationId = Option.ofObj d.CausationId |> Option.map ExecutionId.parse
               Attempt = d.Attempt }
 
-        { Id = d.Id; IdempotencyKey = IdempotencyKey.parse d.IdempotencyKey; Correlation = correlation; Owner = d.Owner; TurnId = d.TurnId; ToolName = d.ToolName; ReplaySafety = ToolReplaySafety.parse d.ReplaySafety; Input = d.Input; Output = d.Output; ExecutedAt = d.ExecutedAt; Reverted = d.Reverted; Metadata = mapOfDict d.Metadata }
+        { Id = d.Id
+          IdempotencyKey = IdempotencyKey.parse d.IdempotencyKey
+          Correlation = correlation
+          Owner = d.Owner
+          TurnId = d.TurnId
+          ToolName = d.ToolName
+          ReplaySafety = ToolReplaySafety.parse d.ReplaySafety
+          Input = d.Input
+          Output = d.Output
+          ExecutedAt = d.ExecutedAt
+          Reverted = d.Reverted
+          Metadata = mapOfDict d.Metadata }
 
     // ---- AuditEntry ----
     [<CLIMutable>]

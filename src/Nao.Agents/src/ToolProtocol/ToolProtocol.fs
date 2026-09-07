@@ -75,10 +75,23 @@ module ToolProtocol =
 
                             match result with
                             | Ok output ->
-                                let invocationResult: ToolInvocationResult = { IdempotencyKey = idempotencyKey; Success = true; Output = output; Error = None; Failure = None; DurationMs = sw.ElapsedMilliseconds; ReplaySafety = tool.ReplaySafety }
+                                let invocationResult: ToolInvocationResult =
+                                    { IdempotencyKey = idempotencyKey
+                                      Success = true
+                                      Output = output
+                                      Error = None
+                                      Failure = None
+                                      DurationMs = sw.ElapsedMilliseconds
+                                      ReplaySafety = tool.ReplaySafety }
+
                                 return invocationResult
                             | Error failure ->
-                                return failed idempotencyKey tool.ReplaySafety sw.ElapsedMilliseconds (ToolFailure.ofPlatformFailure failure)
+                                return
+                                    failed
+                                        idempotencyKey
+                                        tool.ReplaySafety
+                                        sw.ElapsedMilliseconds
+                                        (ToolFailure.ofPlatformFailure failure)
                         with
                         | ExecutionLimitExceededException limit -> return raise (ExecutionLimitExceededException limit)
                         | :? System.OperationCanceledException as error -> return raise error
@@ -113,14 +126,22 @@ module ToolProtocol =
                 match! middleware.BeforeExecute name input with
                 | Error failure ->
                     let! tool = protocol.GetTool name
-                    let replaySafety = tool |> Option.map _.ReplaySafety |> Option.defaultValue ToolReplaySafety.ExternallySideEffecting
+
+                    let replaySafety =
+                        tool
+                        |> Option.map _.ReplaySafety
+                        |> Option.defaultValue ToolReplaySafety.ExternallySideEffecting
+
                     return failed idempotencyKey replaySafety 0L failure
                 | Ok modifiedInput ->
                     let! result = protocol.InvokeAsync context idempotencyKey name modifiedInput
                     return! middleware.AfterExecute name result
             }
 
-        { ListTools = protocol.ListTools; GetTool = protocol.GetTool; IsAvailable = protocol.IsAvailable; InvokeAsync = invoke }
+        { ListTools = protocol.ListTools
+          GetTool = protocol.GetTool
+          IsAvailable = protocol.IsAvailable
+          InvokeAsync = invoke }
 
     /// Create a rate-limiting middleware
     let rateLimitMiddleware (maxCallsPerMinute: int) : ToolMiddleware =

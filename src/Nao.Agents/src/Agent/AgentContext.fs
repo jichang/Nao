@@ -14,7 +14,17 @@ type ExecutionBoundary =
 /// never be retained or reused by another session. `GetArtifacts` and `GetGrantedResources` return
 /// snapshots shared by every agent and tool that receives the same context value.
 type AgentContext =
-    { Correlation: CorrelationContext; SessionKey: string; TurnId: string; ExecutionBoundary: ExecutionBoundary; CancellationToken: CancellationToken; NextToolCallKey: unit -> IdempotencyKey; NextArtifactKey: unit -> IdempotencyKey; GetArtifacts: unit -> Artifact list; GetGrantedResources: unit -> ResourceAccess list; RequestPermission: ResourceAccess -> string -> bool -> Task<bool>; PublishArtifact: Artifact -> Task }
+    { Correlation: CorrelationContext
+      SessionKey: string
+      TurnId: string
+      ExecutionBoundary: ExecutionBoundary
+      CancellationToken: CancellationToken
+      NextToolCallKey: unit -> IdempotencyKey
+      NextArtifactKey: unit -> IdempotencyKey
+      GetArtifacts: unit -> Artifact list
+      GetGrantedResources: unit -> ResourceAccess list
+      RequestPermission: ResourceAccess -> string -> bool -> Task<bool>
+      PublishArtifact: Artifact -> Task }
 
 [<RequireQualifiedAccess>]
 module AgentContext =

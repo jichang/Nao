@@ -80,10 +80,15 @@ module ToolComposer =
                 task {
                     let idempotencyKey = context.NextToolCallKey()
                     let! tool = protocol.GetTool step.ToolName
-                    let replaySafety = tool |> Option.map _.ReplaySafety |> Option.defaultValue ToolReplaySafety.ExternallySideEffecting
+
+                    let replaySafety =
+                        tool
+                        |> Option.map _.ReplaySafety
+                        |> Option.defaultValue ToolReplaySafety.ExternallySideEffecting
 
                     try
-                        let invocation = protocol.InvokeAsync context idempotencyKey step.ToolName transformedInput
+                        let invocation =
+                            protocol.InvokeAsync context idempotencyKey step.ToolName transformedInput
 
                         match step.Timeout with
                         | Some timeout -> return! invocation.WaitAsync(timeout)

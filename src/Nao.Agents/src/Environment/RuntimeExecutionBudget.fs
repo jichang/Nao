@@ -16,7 +16,9 @@ module internal RuntimeExecutionBudget =
         current.Value
         |> Option.defaultWith (fun () -> invalidOp "Operation identity requires a governed execution context.")
 
-    let nextProviderCallKey () = (requireContext ()).NextProviderCallKey()
+    let nextProviderCallKey () =
+        (requireContext ()).NextProviderCallKey()
+
     let nextToolCallKey () = (requireContext ()).NextToolCallKey()
     let nextArtifactKey () = (requireContext ()).NextArtifactKey()
 

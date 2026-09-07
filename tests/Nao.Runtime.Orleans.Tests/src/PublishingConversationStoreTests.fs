@@ -88,10 +88,12 @@ type PublishingConversationStoreTests() =
                 [| for index in 1..artifactCount ->
                        let artifact = ArtifactRecord()
                        artifact.Id <- ArtifactId.generate () |> ArtifactId.serialize
+
                        artifact.IdempotencyKey <-
                            IdempotencyKey.forExecution correlation.ExecutionId
                            |> IdempotencyKey.operation "artifact" index
                            |> IdempotencyKey.value
+
                        artifact.Kind <- sprintf "artifact-%d" index
                        artifact.ContentType <- "application/json"
                        artifact.Payload <- sprintf "{\"index\":%d}" index

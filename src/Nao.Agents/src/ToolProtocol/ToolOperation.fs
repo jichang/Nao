@@ -84,18 +84,22 @@ type ToolReplaySafety =
 
 [<RequireQualifiedAccess>]
 module ToolReplaySafety =
-    let serialize = function
+    let serialize =
+        function
         | ToolReplaySafety.RetrySafe -> "retry-safe"
         | ToolReplaySafety.ExternallySideEffecting -> "externally-side-effecting"
 
-    let parse = function
+    let parse =
+        function
         | "retry-safe" -> ToolReplaySafety.RetrySafe
         | "externally-side-effecting" -> ToolReplaySafety.ExternallySideEffecting
         | value -> invalidArg (nameof value) "Invalid tool replay safety."
 
 /// Typed business operation used to construct an executable tool.
 type ToolOperation<'Input, 'Output> =
-    { ReplaySafety: ToolReplaySafety; ExecuteAsync: AgentContext -> 'Input -> Task<Result<'Output, ToolExecError>>; RevertAsync: (RevertContext -> Task<Result<unit, string>>) option }
+    { ReplaySafety: ToolReplaySafety
+      ExecuteAsync: AgentContext -> 'Input -> Task<Result<'Output, ToolExecError>>
+      RevertAsync: (RevertContext -> Task<Result<unit, string>>) option }
 
 [<RequireQualifiedAccess>]
 module ToolOperation =

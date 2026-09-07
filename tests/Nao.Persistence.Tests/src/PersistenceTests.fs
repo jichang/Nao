@@ -379,8 +379,23 @@ type MemoryToolTests() =
 
 let private execRecord (tool: string) (at: DateTimeOffset) : ExecutionRecord =
     let correlation = CorrelationContext.root ()
-    let idempotencyKey = IdempotencyKey.forExecution correlation.ExecutionId |> IdempotencyKey.operation "tool" 1
-    { Id = Guid.NewGuid(); IdempotencyKey = idempotencyKey; Correlation = correlation; Owner = "session:test"; TurnId = "turn:test"; ToolName = tool; ReplaySafety = ToolReplaySafety.ExternallySideEffecting; Input = "in"; Output = "out"; ExecutedAt = at; Reverted = false; Metadata = Map.ofList [ "m", "1" ] }
+
+    let idempotencyKey =
+        IdempotencyKey.forExecution correlation.ExecutionId
+        |> IdempotencyKey.operation "tool" 1
+
+    { Id = Guid.NewGuid()
+      IdempotencyKey = idempotencyKey
+      Correlation = correlation
+      Owner = "session:test"
+      TurnId = "turn:test"
+      ToolName = tool
+      ReplaySafety = ToolReplaySafety.ExternallySideEffecting
+      Input = "in"
+      Output = "out"
+      ExecutedAt = at
+      Reverted = false
+      Metadata = Map.ofList [ "m", "1" ] }
 
 let private checkpointRecord correlation owner turnId recordedAt : HarnessCheckpoint =
     { Id = Guid.NewGuid()
@@ -419,6 +434,22 @@ let private runJournalRoundTrip (journal: ExecutionJournal) =
         let! checkpoints = journal.Checkpoints.GetByExecution checkpoint.Correlation.ExecutionId
         Assert.AreEqual([ checkpoint ], checkpoints)
 
+        let transition: ToolSideEffectTransition =
+            { Id = Guid.NewGuid()
+              IdempotencyKey = r2.IdempotencyKey
+              Correlation = r2.Correlation
+              Owner = r2.Owner
+              TurnId = r2.TurnId
+              ToolName = r2.ToolName
+              Input = r2.Input
+              Phase = ToolSideEffectPhase.IntentRecorded
+              Detail = None
+              RecordedAt = t0.AddSeconds 4.0 }
+
+        do! journal.SideEffects.Save transition
+        let! transitions = journal.SideEffects.GetByIdempotencyKey transition.IdempotencyKey
+        Assert.AreEqual([ transition ], transitions)
+
         let! revertible = journal.GetRevertibleAsync()
         Assert.AreEqual(2, revertible.Length)
 
@@ -426,6 +457,13 @@ let private runJournalRoundTrip (journal: ExecutionJournal) =
         let! afterRevert = journal.GetRevertibleAsync()
         Assert.AreEqual(1, afterRevert.Length)
         Assert.AreEqual("tool-a", afterRevert.Head.ToolName)
+
+        match! journal.DeleteOwnerAsync r2.Owner with
+        | Error failure -> Assert.Fail(failure.Message)
+        | Ok deleted -> Assert.AreEqual(4, deleted)
+
+        let! deletedTransitions = journal.SideEffects.GetByIdempotencyKey transition.IdempotencyKey
+        Assert.IsTrue(deletedTransitions.IsEmpty)
     }
 
 [<TestClass>]
