@@ -269,9 +269,11 @@ module EtclovgHarness =
                         |> Seq.exists (fun (_, transitions) ->
                             match transitions |> Seq.maxBy _.RecordedAt |> _.Phase with
                             | ToolSideEffectPhase.IntentRecorded
-                            | ToolSideEffectPhase.Interrupted -> true
+                            | ToolSideEffectPhase.Interrupted
+                            | ToolSideEffectPhase.CompensationFailed -> true
                             | ToolSideEffectPhase.Succeeded
-                            | ToolSideEffectPhase.Failed -> false)
+                            | ToolSideEffectPhase.Failed
+                            | ToolSideEffectPhase.CompensationSucceeded -> false)
 
                     if hasAmbiguousSideEffect then
                         return
@@ -374,6 +376,73 @@ module EtclovgHarness =
                             )
                 }
 
+            let reversibleExecutions = ResizeArray<ExecutionRecord * Tool>()
+
+            let successfulToolRecord
+                (toolContext: AgentContext)
+                (idempotencyKey: IdempotencyKey)
+                (tool: Tool)
+                (input: string)
+                (output: string)
+                (durationMs: int64)
+                : ExecutionRecord =
+                { Id = Guid.NewGuid()
+                  IdempotencyKey = idempotencyKey
+                  Correlation = request.Correlation
+                  Owner = toolContext.SessionKey
+                  TurnId = toolContext.TurnId
+                  ToolName = tool.Name
+                  ReplaySafety = tool.ReplaySafety
+                  Input = input
+                  Output = output
+                  Failure = None
+                  ExecutedAt = DateTimeOffset.UtcNow
+                  Reverted = false
+                  Metadata = Map.ofList [ "duration.ms", string durationMs ] }
+
+            let compensateReversibleExecutions () =
+                task {
+                    match config.ExecutionJournal with
+                    | None -> ()
+                    | Some journal ->
+                        for record, tool in reversibleExecutions |> Seq.rev do
+                            let revertContext: RevertContext =
+                                { Input = record.Input
+                                  Output = record.Output
+                                  ExecutedAt = record.ExecutedAt
+                                  Metadata = record.Metadata }
+
+                            let! result =
+                                task {
+                                    try
+                                        return! Tool.revertAsync revertContext tool
+                                    with error ->
+                                        return Error error.Message
+                                }
+
+                            let phase, detail =
+                                match result with
+                                | Ok() -> ToolSideEffectPhase.CompensationSucceeded, None
+                                | Error message -> ToolSideEffectPhase.CompensationFailed, Some message
+
+                            do!
+                                journal.SideEffects.Save
+                                    { Id = Guid.NewGuid()
+                                      IdempotencyKey = record.IdempotencyKey
+                                      Correlation = record.Correlation
+                                      Owner = record.Owner
+                                      TurnId = record.TurnId
+                                      ToolName = record.ToolName
+                                      Input = record.Input
+                                      Phase = phase
+                                      Detail = detail
+                                      RecordedAt = DateTimeOffset.UtcNow }
+
+                            match result with
+                            | Ok() -> do! journal.MarkRevertedAsync record.Id
+                            | Error _ -> ()
+                }
+
             let executeTool
                 (toolContext: AgentContext)
                 (idempotencyKey: IdempotencyKey)
@@ -465,8 +534,14 @@ module EtclovgHarness =
                             | None ->
                                 let journal = config.ExecutionJournal
 
+                                if Tool.canRevert tool && journal.IsNone then
+                                    raise (
+                                        GovernedExecutionException
+                                            "Reversible tools require a durable execution journal."
+                                    )
+
                                 let saveSideEffect phase detail =
-                                    if tool.ReplaySafety = ToolReplaySafety.RetrySafe then
+                                    if tool.ReplaySafety = ToolReplaySafety.RetrySafe && not (Tool.canRevert tool) then
                                         Task.CompletedTask
                                     else
                                         match journal with
@@ -504,22 +579,19 @@ module EtclovgHarness =
 
                                         match journal with
                                         | Some value ->
-                                            do!
-                                                value.RecordAsync
-                                                    { Id = Guid.NewGuid()
-                                                      IdempotencyKey = idempotencyKey
-                                                      Correlation = request.Correlation
-                                                      Owner = toolContext.SessionKey
-                                                      TurnId = toolContext.TurnId
-                                                      ToolName = tool.Name
-                                                      ReplaySafety = tool.ReplaySafety
-                                                      Input = effectiveToolInput
-                                                      Output = output
-                                                      Failure = None
-                                                      ExecutedAt = DateTimeOffset.UtcNow
-                                                      Reverted = false
-                                                      Metadata =
-                                                        Map.ofList [ "duration.ms", string started.ElapsedMilliseconds ] }
+                                            let record =
+                                                successfulToolRecord
+                                                    toolContext
+                                                    idempotencyKey
+                                                    tool
+                                                    effectiveToolInput
+                                                    output
+                                                    started.ElapsedMilliseconds
+
+                                            do! value.RecordAsync record
+
+                                            if Tool.canRevert tool then
+                                                reversibleExecutions.Add(record, tool)
                                         | None -> ()
 
                                         return Ok output
@@ -782,6 +854,8 @@ module EtclovgHarness =
 
                         match executionOutcome with
                         | Error status ->
+                            do! compensateReversibleExecutions ()
+
                             let failure =
                                 status.ToPlatformFailure(
                                     request.Correlation.ExecutionId |> ExecutionId.serialize |> Some
@@ -810,6 +884,8 @@ module EtclovgHarness =
                                     config.Metrics
 
                         | Ok(Error limitExceeded) ->
+                            do! compensateReversibleExecutions ()
+
                             let! _ =
                                 AgentLifecycle.failAsync
                                     agent.Metadata.Id
@@ -851,6 +927,8 @@ module EtclovgHarness =
                                 | None -> false
 
                             if constitutionBlocked then
+                                do! compensateReversibleExecutions ()
+
                                 // Audit the violation
                                 match config.AuditLog with
                                 | Some audit ->

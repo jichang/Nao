@@ -26,6 +26,8 @@ type ToolSideEffectPhase =
     | Succeeded
     | Failed
     | Interrupted
+    | CompensationSucceeded
+    | CompensationFailed
 
 /// Append-only transition for an externally side-effecting tool invocation.
 type ToolSideEffectTransition =

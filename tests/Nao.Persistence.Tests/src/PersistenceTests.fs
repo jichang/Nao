@@ -463,11 +463,19 @@ let private runJournalRoundTrip (journal: ExecutionJournal) =
               RecordedAt = t0.AddSeconds 4.0 }
 
         do! journal.SideEffects.Save transition
+
+        let compensation =
+            { transition with
+                Id = Guid.NewGuid()
+                Phase = ToolSideEffectPhase.CompensationSucceeded
+                RecordedAt = t0.AddSeconds 5.0 }
+
+        do! journal.SideEffects.Save compensation
         let! transitions = journal.SideEffects.GetByIdempotencyKey transition.IdempotencyKey
-        Assert.AreEqual([ transition ], transitions)
+        Assert.AreEqual([ transition; compensation ], transitions)
 
         let! executionTransitions = journal.SideEffects.GetByExecution transition.Correlation.ExecutionId
-        Assert.AreEqual([ transition ], executionTransitions)
+        Assert.AreEqual([ transition; compensation ], executionTransitions)
 
         let! revertible = journal.GetRevertibleAsync()
         Assert.AreEqual(2, revertible.Length)
@@ -479,7 +487,7 @@ let private runJournalRoundTrip (journal: ExecutionJournal) =
 
         match! journal.DeleteOwnerAsync r2.Owner with
         | Error failure -> Assert.Fail(failure.Message)
-        | Ok deleted -> Assert.AreEqual(5, deleted)
+        | Ok deleted -> Assert.AreEqual(6, deleted)
 
         let! deletedTransitions = journal.SideEffects.GetByIdempotencyKey transition.IdempotencyKey
         Assert.IsTrue(deletedTransitions.IsEmpty)

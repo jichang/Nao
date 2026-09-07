@@ -83,6 +83,8 @@ module ToolSideEffectSerialization =
         | ToolSideEffectPhase.Succeeded -> "succeeded"
         | ToolSideEffectPhase.Failed -> "failed"
         | ToolSideEffectPhase.Interrupted -> "interrupted"
+        | ToolSideEffectPhase.CompensationSucceeded -> "compensation-succeeded"
+        | ToolSideEffectPhase.CompensationFailed -> "compensation-failed"
 
     let private phaseFromString =
         function
@@ -90,6 +92,8 @@ module ToolSideEffectSerialization =
         | "succeeded" -> ToolSideEffectPhase.Succeeded
         | "failed" -> ToolSideEffectPhase.Failed
         | "interrupted" -> ToolSideEffectPhase.Interrupted
+        | "compensation-succeeded" -> ToolSideEffectPhase.CompensationSucceeded
+        | "compensation-failed" -> ToolSideEffectPhase.CompensationFailed
         | value -> invalidArg (nameof value) "Invalid tool side-effect phase."
 
     let toDto (transition: ToolSideEffectTransition) : Dto =

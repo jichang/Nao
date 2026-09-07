@@ -243,6 +243,7 @@ type EtclovgHarnessTests() =
     [<DataTestMethod>]
     [<DataRow("intent")>]
     [<DataRow("interrupted")>]
+    [<DataRow("compensation-failed")>]
     member _.RetryFailsClosedForAmbiguousExternalSideEffect(phaseName: string) =
         let mutable executed = false
 
@@ -264,6 +265,7 @@ type EtclovgHarnessTests() =
             match phaseName with
             | "intent" -> ToolSideEffectPhase.IntentRecorded
             | "interrupted" -> ToolSideEffectPhase.Interrupted
+            | "compensation-failed" -> ToolSideEffectPhase.CompensationFailed
             | value -> invalidArg (nameof value) "Unknown side-effect phase."
 
         journal.Checkpoints.Save
@@ -1339,6 +1341,133 @@ type EtclovgHarnessTests() =
         Assert.IsTrue((journal.GetRevertibleAsync() |> _.Result).IsEmpty)
         Assert.AreEqual(2, providerCalls)
         Assert.AreEqual(1, toolCalls)
+
+    [<TestMethod>]
+    member _.FailedExecutionCompensatesReversibleToolsDurably() =
+        let reverted = ResizeArray<RevertContext>()
+
+        let operation =
+            ToolOperation.create ToolReplaySafety.ExternallySideEffecting (fun _ input ->
+                Task.FromResult(Ok(sprintf "created:%s" input)))
+            |> ToolOperation.withRevert (fun context ->
+                reverted.Add context
+                Task.FromResult(Ok()))
+
+        let tool =
+            Tool.create "create" "Creates a reversible value" 0 [] ToolCodec.text ToolCodec.text operation
+
+        let protocol = ToolProtocol.fromTools [ tool ]
+
+        let agent =
+            Agent.create
+                "compensated-agent"
+                "Compensated agent"
+                "Fails after a reversible tool succeeds"
+                0
+                []
+                AgentContract.Text
+                (fun context input ->
+                    task {
+                        let! _ = protocol.InvokeAsync context (context.NextToolCallKey()) tool.Name input
+                        let! _ = protocol.InvokeAsync context (context.NextToolCallKey()) tool.Name (input + "-second")
+                        return raise (InvalidOperationException "fail after tool")
+                    })
+
+        let journal = InMemoryExecutionJournal.create ()
+        let context = AgentContext.unrestrictedForTests ()
+        let executionRequest = request context agent "value"
+
+        let config =
+            { EtclovgConfig.Default with
+                ExecutionJournal = Some journal }
+
+        let result = (EtclovgHarness.runAsync config context agent executionRequest).Result
+        let history = journal.GetHistoryAsync() |> _.Result
+
+        let transitions =
+            journal.SideEffects.GetByExecution result.Correlation.ExecutionId |> _.Result
+
+        match result.Status with
+        | ExecutionTerminalStatus.Failed _ -> ()
+        | status -> Assert.Fail(sprintf "Expected failed execution, got %A." status)
+
+        Assert.AreEqual(2, reverted.Count)
+        Assert.AreEqual("value-second", reverted.[0].Input)
+        Assert.AreEqual("created:value-second", reverted.[0].Output)
+        Assert.AreEqual("value", reverted.[1].Input)
+        Assert.AreEqual("created:value", reverted.[1].Output)
+        Assert.AreEqual(2, history.Length)
+        Assert.IsTrue(history |> List.forall _.Reverted)
+        Assert.IsTrue((journal.GetRevertibleAsync() |> _.Result).IsEmpty)
+
+        CollectionAssert.AreEqual(
+            [| ToolSideEffectPhase.IntentRecorded
+               ToolSideEffectPhase.Succeeded
+               ToolSideEffectPhase.IntentRecorded
+               ToolSideEffectPhase.Succeeded
+               ToolSideEffectPhase.CompensationSucceeded
+               ToolSideEffectPhase.CompensationSucceeded |],
+            transitions |> List.map _.Phase |> List.toArray
+        )
+
+        Assert.IsTrue(
+            transitions
+            |> List.forall (fun transition -> transition.Correlation = result.Correlation)
+        )
+
+        CollectionAssert.AreEqual(
+            history |> List.map _.IdempotencyKey |> List.toArray,
+            transitions
+            |> List.filter (fun transition -> transition.Phase = ToolSideEffectPhase.CompensationSucceeded)
+            |> List.map _.IdempotencyKey
+            |> List.toArray
+        )
+
+    [<TestMethod>]
+    member _.FailedCompensationRemainsDurableAndRevertible() =
+        let operation =
+            ToolOperation.create ToolReplaySafety.ExternallySideEffecting (fun _ input ->
+                Task.FromResult(Ok(sprintf "created:%s" input)))
+            |> ToolOperation.withRevert (fun _ -> Task.FromResult(Error "cannot undo"))
+
+        let tool =
+            Tool.create "create" "Creates a reversible value" 0 [] ToolCodec.text ToolCodec.text operation
+
+        let protocol = ToolProtocol.fromTools [ tool ]
+
+        let agent =
+            Agent.create
+                "failed-compensation-agent"
+                "Failed compensation agent"
+                "Fails after a reversible tool succeeds"
+                0
+                []
+                AgentContract.Text
+                (fun context input ->
+                    task {
+                        let! _ = protocol.InvokeAsync context (context.NextToolCallKey()) tool.Name input
+                        return raise (InvalidOperationException "fail after tool")
+                    })
+
+        let journal = InMemoryExecutionJournal.create ()
+        let context = AgentContext.unrestrictedForTests ()
+        let executionRequest = request context agent "value"
+
+        let config =
+            { EtclovgConfig.Default with
+                ExecutionJournal = Some journal }
+
+        let result = (EtclovgHarness.runAsync config context agent executionRequest).Result
+        let history = journal.GetHistoryAsync() |> _.Result
+
+        let transitions =
+            journal.SideEffects.GetByExecution result.Correlation.ExecutionId |> _.Result
+
+        Assert.AreEqual(1, history.Length)
+        Assert.IsFalse(history.Head.Reverted)
+        Assert.AreEqual([ history.Head ], journal.GetRevertibleAsync() |> _.Result)
+        Assert.AreEqual(ToolSideEffectPhase.CompensationFailed, transitions |> List.last |> _.Phase)
+        Assert.AreEqual(Some "cannot undo", transitions |> List.last |> _.Detail)
 
     [<TestMethod>]
     member _.HarnessDeadlineBoundsProviderCall() =
