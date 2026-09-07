@@ -139,11 +139,12 @@ A revert hook is not automatically a transaction. Durable execution must record 
 Nao defines `SandboxConfig`, `ResourceLimits`, and functional `ExecutionEnvironment` values. Worker-resolvable agents can run in a separate process through a versioned protocol, but this is not yet an operating-system security boundary. Untrusted tools still require:
 
 - Restricted identities
-- Filesystem and environment allowlists
+- Filesystem allowlists
 - Denied-by-default network access
 - CPU, memory, time, output, call, token, and cost limits
-- Child-process cleanup
 - Secret references resolved only inside authorized boundaries
+
+Process workers inherit no host environment variables and receive only the explicit `SandboxConfig.EnvironmentVariables` map. Process execution kills the complete worker process tree when its cancellation token is signalled. Hosts must propagate graceful shutdown through that token.
 
 ## Production checklist
 

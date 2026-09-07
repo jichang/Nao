@@ -57,18 +57,20 @@ Executable replay is introduced and governed as part of HAR-02; persistence even
 - [x] Define the worker protocol and version handshake.
 - [ ] Run workers under a restricted operating-system identity where supported.
 - [ ] Enforce working-directory and filesystem allowlists.
-- [ ] Enforce environment-variable allowlists and secret handles.
-- [ ] Enforce wall-clock timeout and propagate cancellation.
+- [x] Enforce environment-variable allowlists.
+- [ ] Resolve secret handles only inside authorized worker boundaries.
+- [x] Enforce wall-clock timeout and propagate cancellation.
 - [ ] Enforce output, tool-call, token, and cost budgets.
 - [ ] Enforce memory and CPU limits on supported operating systems.
-- [ ] Kill complete child-process trees after timeout, cancellation, or host shutdown.
+- [x] Kill complete child-process trees after timeout, cancellation, or host shutdown.
 - [ ] Capture bounded stdout/stderr as redacted artifacts.
 - [ ] Document platform-specific enforcement differences.
 
 **Acceptance criteria**
 
-- [ ] A worker cannot read undeclared test files or environment variables.
-- [ ] A worker cannot retain child processes after cancellation.
+- [ ] A worker cannot read undeclared test files.
+- [x] A worker cannot read undeclared environment variables.
+- [x] A worker cannot retain child processes after cancellation.
 - [ ] Every configured limit has a deterministic test and structured result.
 
 ## HAR-04 — Container isolation

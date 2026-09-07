@@ -61,6 +61,10 @@ module ExecutionEnvironment =
                     startInfo.RedirectStandardOutput <- true
                     startInfo.RedirectStandardError <- true
                     startInfo.CreateNoWindow <- true
+                    startInfo.Environment.Clear()
+
+                    for KeyValue(name, value) in ctx.Sandbox.EnvironmentVariables do
+                        startInfo.Environment.Add(name, value)
 
                     for argument in config.Arguments do
                         startInfo.ArgumentList.Add argument
@@ -160,6 +164,7 @@ module ExecutionEnvironment =
             try
                 return! env.ExecuteAsync linkedCtx linkedAgentContext agent input
             with
-            | :? TaskCanceledException -> return Error LimitExceeded.Duration
+            | :? OperationCanceledException when ctx.CancellationToken.IsCancellationRequested ->
+                return raise (OperationCanceledException(ctx.CancellationToken))
             | :? OperationCanceledException -> return Error LimitExceeded.Duration
         }

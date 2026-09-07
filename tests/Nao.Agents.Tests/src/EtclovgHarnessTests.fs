@@ -103,6 +103,97 @@ type EtclovgHarnessTests() =
         Assert.AreEqual("payload", fields.[1])
 
     [<TestMethod>]
+    member _.HarnessDeadlineStopsBlockedProcessWorker() =
+        let workerAgent =
+            Agent.createWorker
+                "worker-delay"
+                "worker-delay"
+                "blocking process worker test agent"
+                0
+                []
+                AgentContract.Text
+                (WorkerAgentReference.create "process-delay")
+
+        let workerDirectory =
+            typeof<WorkerAssemblyMarker>.Assembly.Location
+            |> IO.Path.GetDirectoryName
+            |> Option.ofObj
+            |> Option.defaultWith (fun () -> invalidOp "Worker assembly directory is unavailable.")
+
+        let processEnvironment =
+            ExecutionEnvironment.processWorker
+                { FileName = IO.Path.Combine(workerDirectory, "Nao.Agents.Worker")
+                  Arguments = []
+                  ProtocolVersion = WorkerProtocol.CurrentVersion }
+
+        let context = AgentContext.unrestrictedForTests ()
+
+        let executionRequest =
+            { request context workerAgent "30000" with
+                Sandbox =
+                    { SandboxConfig.Default with
+                        Isolation = SandboxIsolation.Process
+                        Limits =
+                            { ResourceLimits.Unlimited with
+                                MaxDuration = TimeSpan.FromMilliseconds 500.0 } } }
+
+        let config =
+            { EtclovgConfig.Default with
+                ProcessEnvironment = Some processEnvironment }
+
+        let result =
+            (EtclovgHarness.runAsync config context workerAgent executionRequest).Result
+
+        Assert.AreEqual(ExecutionTerminalStatus.TimedOut, result.Status)
+
+    [<TestMethod>]
+    member _.HarnessPropagatesCallerCancellationToBlockedProcessWorker() =
+        let workerAgent =
+            Agent.createWorker
+                "worker-delay"
+                "worker-delay"
+                "blocking process worker test agent"
+                0
+                []
+                AgentContract.Text
+                (WorkerAgentReference.create "process-delay")
+
+        let workerDirectory =
+            typeof<WorkerAssemblyMarker>.Assembly.Location
+            |> IO.Path.GetDirectoryName
+            |> Option.ofObj
+            |> Option.defaultWith (fun () -> invalidOp "Worker assembly directory is unavailable.")
+
+        let processEnvironment =
+            ExecutionEnvironment.processWorker
+                { FileName = IO.Path.Combine(workerDirectory, "Nao.Agents.Worker")
+                  Arguments = []
+                  ProtocolVersion = WorkerProtocol.CurrentVersion }
+
+        let context = AgentContext.unrestrictedForTests ()
+
+        let executionRequest =
+            { request context workerAgent "30000" with
+                Sandbox =
+                    { SandboxConfig.Default with
+                        Isolation = SandboxIsolation.Process
+                        Limits =
+                            { ResourceLimits.Unlimited with
+                                MaxDuration = TimeSpan.FromSeconds 30.0 } } }
+
+        let config =
+            { EtclovgConfig.Default with
+                ProcessEnvironment = Some processEnvironment }
+
+        use cancellation =
+            new System.Threading.CancellationTokenSource(TimeSpan.FromMilliseconds 500.0)
+
+        let result =
+            (Nao.Agents.EtclovgHarness.runAsync config context workerAgent executionRequest cancellation.Token).Result
+
+        Assert.AreEqual(ExecutionTerminalStatus.Cancelled, result.Status)
+
+    [<TestMethod>]
     member _.HarnessRejectsUnconfiguredProcessIsolation() =
         let agent = makeAgent "must not execute locally"
         let context = AgentContext.unrestrictedForTests ()

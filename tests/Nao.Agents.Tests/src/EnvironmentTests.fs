@@ -263,6 +263,95 @@ type ExecutionEnvironmentTests() =
         StringAssert.Contains(error.Message, "no process-worker reference")
 
     [<TestMethod>]
+    [<DoNotParallelize>]
+    member _.ProcessEnvironmentExposesOnlyDeclaredEnvironmentVariables() =
+        let variableName = "NAO_PROCESS_TEST_" + Guid.NewGuid().ToString("N")
+        let inheritedValue = "host-value"
+        let declaredValue = "declared-value"
+        let previousValue = Environment.GetEnvironmentVariable variableName
+
+        try
+            Environment.SetEnvironmentVariable(variableName, inheritedValue)
+
+            let agent =
+                Agent.createWorker
+                    "worker-environment"
+                    "worker-environment"
+                    "process environment test agent"
+                    0
+                    []
+                    AgentContract.Text
+                    (WorkerAgentReference.create "process-environment")
+
+            let environment = processEnvironment WorkerProtocol.CurrentVersion []
+
+            let run sandbox =
+                let execution = ExecutionContext.Create sandbox
+
+                environment.ExecuteAsync execution (AgentContext.unrestrictedForTests ()) agent variableName
+                |> _.Result
+
+            match run SandboxConfig.Default with
+            | Error limit -> Assert.Fail(sprintf "Expected worker result, got limit %A." limit)
+            | Ok value -> Assert.AreEqual("<missing>", value)
+
+            let declaredSandbox =
+                { SandboxConfig.Default with
+                    EnvironmentVariables = Map.ofList [ variableName, declaredValue ] }
+
+            match run declaredSandbox with
+            | Error limit -> Assert.Fail(sprintf "Expected worker result, got limit %A." limit)
+            | Ok value -> Assert.AreEqual(declaredValue, value)
+        finally
+            Environment.SetEnvironmentVariable(variableName, previousValue)
+
+    [<TestMethod>]
+    [<DoNotParallelize>]
+    member _.ProcessEnvironmentKillsChildProcessTreeOnCancellation() =
+        let childProcessIdPath = IO.Path.GetTempFileName()
+        IO.File.Delete childProcessIdPath
+
+        try
+            let agent =
+                Agent.createWorker
+                    "worker-tree"
+                    "worker-tree"
+                    "process tree test agent"
+                    0
+                    []
+                    AgentContract.Text
+                    (WorkerAgentReference.create "process-tree")
+
+            use cancellation = new CancellationTokenSource()
+
+            let execution =
+                ExecutionContext.CreateWithCancellation SandboxConfig.Default cancellation.Token
+
+            let environment = processEnvironment WorkerProtocol.CurrentVersion []
+
+            let running =
+                environment.ExecuteAsync execution (AgentContext.unrestrictedForTests ()) agent childProcessIdPath
+
+            let rendezvousDeadline = DateTime.UtcNow + TimeSpan.FromSeconds 5.0
+
+            while not (IO.File.Exists childProcessIdPath) && DateTime.UtcNow < rendezvousDeadline do
+                Task.Delay(TimeSpan.FromMilliseconds 10.0).Wait()
+
+            Assert.IsTrue(IO.File.Exists childProcessIdPath, "Worker did not publish its child process ID.")
+
+            let childProcessId = IO.File.ReadAllText childProcessIdPath |> Int32.Parse
+            use child = Diagnostics.Process.GetProcessById childProcessId
+            cancellation.Cancel()
+
+            Assert.ThrowsExactlyAsync<OperationCanceledException>(fun () -> running :> Task)
+            |> _.Wait()
+
+            Assert.IsTrue(child.WaitForExit(5000), "Worker child process survived cancellation.")
+        finally
+            IO.File.Delete childProcessIdPath
+            IO.File.Delete(childProcessIdPath + ".pending")
+
+    [<TestMethod>]
     member _.LocalEnvironmentEnforcesCancellationToken() =
         let agent =
             Agent.create "slow" "slow" "slow" 0 [] AgentContract.Text (fun _ _ ->
@@ -302,3 +391,23 @@ type ExecutionEnvironmentTests() =
         match result with
         | Ok r -> Assert.AreEqual("fast", r)
         | Error _ -> Assert.Fail("Expected Ok")
+
+    [<TestMethod>]
+    member _.ExecuteWithTimeoutPreservesCallerCancellation() =
+        use cancellation = new CancellationTokenSource()
+        cancellation.Cancel()
+
+        let ctx =
+            ExecutionContext.CreateWithCancellation SandboxConfig.Default cancellation.Token
+
+        let environment = ExecutionEnvironment.local ()
+
+        Assert.ThrowsExactlyAsync<OperationCanceledException>(fun () ->
+            ExecutionEnvironment.executeWithTimeout
+                environment
+                ctx
+                (AgentContext.unrestrictedForTests ())
+                (makeAgent "unused")
+                "input"
+            :> Task)
+        |> _.Wait()
