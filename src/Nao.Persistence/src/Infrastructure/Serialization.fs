@@ -219,6 +219,9 @@ module Dto =
           ReplaySafety: string
           Input: string
           Output: string
+          FailureKind: string
+          FailureMessage: string
+          FailureRetryable: Nullable<bool>
           ExecutedAt: DateTimeOffset
           Reverted: bool
           Metadata: Dictionary<string, string> }
@@ -241,6 +244,15 @@ module Dto =
           ReplaySafety = ToolReplaySafety.serialize r.ReplaySafety
           Input = r.Input
           Output = r.Output
+          FailureKind =
+            r.Failure
+            |> Option.map (_.Kind >> ToolFailureKind.serialize)
+            |> Option.defaultValue null
+          FailureMessage = r.Failure |> Option.map _.Message |> Option.defaultValue null
+          FailureRetryable =
+            r.Failure
+            |> Option.map (_.Retryable >> Nullable)
+            |> Option.defaultValue (Nullable())
           ExecutedAt = r.ExecutedAt
           Reverted = r.Reverted
           Metadata = dictOfMap r.Metadata }
@@ -255,6 +267,16 @@ module Dto =
               CausationId = Option.ofObj d.CausationId |> Option.map ExecutionId.parse
               Attempt = d.Attempt }
 
+        let failure =
+            match Option.ofObj d.FailureKind, Option.ofObj d.FailureMessage, d.FailureRetryable.HasValue with
+            | None, None, false -> None
+            | Some kind, Some message, true ->
+                Some
+                    { Kind = ToolFailureKind.parse kind
+                      Message = message
+                      Retryable = d.FailureRetryable.Value }
+            | _ -> invalidArg (nameof d.FailureKind) "Incomplete tool failure record."
+
         { Id = d.Id
           IdempotencyKey = IdempotencyKey.parse d.IdempotencyKey
           Correlation = correlation
@@ -264,6 +286,7 @@ module Dto =
           ReplaySafety = ToolReplaySafety.parse d.ReplaySafety
           Input = d.Input
           Output = d.Output
+          Failure = failure
           ExecutedAt = d.ExecutedAt
           Reverted = d.Reverted
           Metadata = mapOfDict d.Metadata }

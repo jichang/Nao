@@ -194,7 +194,10 @@ module InMemoryExecutionJournal =
             |> Task.FromResult
 
         let getRevertibleAsync () =
-            lock entries (fun () -> entries |> Seq.filter (fun entry -> not entry.Reverted) |> Seq.toList)
+            lock entries (fun () ->
+                entries
+                |> Seq.filter (fun entry -> not entry.Reverted && entry.Failure.IsNone)
+                |> Seq.toList)
             |> Task.FromResult
 
         let markRevertedAsync (recordId: Guid) =
@@ -264,7 +267,7 @@ module AdoExecutionJournal =
                         factory
                         "execution-journal"
                         "nao_execution_journal"
-                        "CREATE TABLE IF NOT EXISTS nao_execution_journal (record_id TEXT NOT NULL PRIMARY KEY, idempotency_key TEXT NOT NULL, execution_id TEXT NOT NULL, correlation_id TEXT NOT NULL, causation_id TEXT NULL, attempt INTEGER NOT NULL, owner TEXT NOT NULL, turn_id TEXT NOT NULL, tool_name TEXT NOT NULL, replay_safety TEXT NOT NULL, tool_input TEXT NOT NULL, tool_output TEXT NOT NULL, executed_at TEXT NOT NULL, reverted INTEGER NOT NULL, metadata TEXT NOT NULL)"
+                        "CREATE TABLE IF NOT EXISTS nao_execution_journal (record_id TEXT NOT NULL PRIMARY KEY, idempotency_key TEXT NOT NULL, execution_id TEXT NOT NULL, correlation_id TEXT NOT NULL, causation_id TEXT NULL, attempt INTEGER NOT NULL, owner TEXT NOT NULL, turn_id TEXT NOT NULL, tool_name TEXT NOT NULL, replay_safety TEXT NOT NULL, tool_input TEXT NOT NULL, tool_output TEXT NOT NULL, failure_kind TEXT NULL, failure_message TEXT NULL, failure_retryable INTEGER NULL, executed_at TEXT NOT NULL, reverted INTEGER NOT NULL, metadata TEXT NOT NULL)"
 
                 do!
                     AdoSchema.ensureVersionedTable
@@ -325,6 +328,20 @@ module AdoExecutionJournal =
 
                 let idempotencyKey = IdempotencyKey.parse (Ado.getString reader "idempotency_key")
 
+                let failure =
+                    match
+                        Ado.getStringOpt reader "failure_kind",
+                        Ado.getStringOpt reader "failure_message",
+                        reader.IsDBNull(reader.GetOrdinal "failure_retryable")
+                    with
+                    | None, None, true -> None
+                    | Some kind, Some message, false ->
+                        Some
+                            { Kind = ToolFailureKind.parse kind
+                              Message = message
+                              Retryable = Ado.getBool reader "failure_retryable" }
+                    | _ -> invalidArg "failure_kind" "Incomplete tool failure row."
+
                 { Id = Guid.Parse id
                   IdempotencyKey = idempotencyKey
                   Correlation = correlation
@@ -334,6 +351,7 @@ module AdoExecutionJournal =
                   ReplaySafety = ToolReplaySafety.parse (Ado.getString reader "replay_safety")
                   Input = Ado.getString reader "tool_input"
                   Output = Ado.getString reader "tool_output"
+                  Failure = failure
                   ExecutedAt = Time.fromIso (Ado.getString reader "executed_at")
                   Reverted = Ado.getBool reader "reverted"
                   Metadata = Json.mapFromJson (Ado.getString reader "metadata") }
@@ -352,7 +370,7 @@ module AdoExecutionJournal =
                 let! _ =
                     Ado.query
                         factory
-                        "SELECT record_id, idempotency_key, execution_id, correlation_id, causation_id, attempt, owner, turn_id, tool_name, replay_safety, tool_input, tool_output, executed_at, reverted, metadata FROM nao_execution_journal"
+                        "SELECT record_id, idempotency_key, execution_id, correlation_id, causation_id, attempt, owner, turn_id, tool_name, replay_safety, tool_input, tool_output, failure_kind, failure_message, failure_retryable, executed_at, reverted, metadata FROM nao_execution_journal"
                         []
                         mapRecord
 
@@ -547,6 +565,14 @@ module AdoExecutionJournal =
 
                 let idempotencyParameter = "@ik", box (IdempotencyKey.value record.IdempotencyKey)
 
+                let failureKind, failureMessage, failureRetryable =
+                    match record.Failure with
+                    | Some failure ->
+                        box (ToolFailureKind.serialize failure.Kind),
+                        box failure.Message,
+                        Ado.boolValue failure.Retryable
+                    | None -> null, null, null
+
                 let parameters =
                     idempotencyParameter
                     :: [ "@id", box (record.Id.ToString("D"))
@@ -560,6 +586,9 @@ module AdoExecutionJournal =
                          "@rs", box (ToolReplaySafety.serialize record.ReplaySafety)
                          "@ti", box record.Input
                          "@to", box record.Output
+                         "@fk", failureKind
+                         "@fm", failureMessage
+                         "@fr", failureRetryable
                          "@ea", box (Time.toIso record.ExecutedAt)
                          "@rv", Ado.boolValue record.Reverted
                          "@md", box (Json.mapToJson record.Metadata) ]
@@ -567,7 +596,7 @@ module AdoExecutionJournal =
                 let! _ =
                     Ado.executeNonQuery
                         factory
-                        "INSERT INTO nao_execution_journal (record_id, idempotency_key, execution_id, correlation_id, causation_id, attempt, owner, turn_id, tool_name, replay_safety, tool_input, tool_output, executed_at, reverted, metadata) VALUES (@id, @ik, @ex, @co, @ca, @at, @ow, @tr, @tn, @rs, @ti, @to, @ea, @rv, @md)"
+                        "INSERT INTO nao_execution_journal (record_id, idempotency_key, execution_id, correlation_id, causation_id, attempt, owner, turn_id, tool_name, replay_safety, tool_input, tool_output, failure_kind, failure_message, failure_retryable, executed_at, reverted, metadata) VALUES (@id, @ik, @ex, @co, @ca, @at, @ow, @tr, @tn, @rs, @ti, @to, @fk, @fm, @fr, @ea, @rv, @md)"
                         parameters
 
                 return ()
@@ -581,7 +610,7 @@ module AdoExecutionJournal =
                 return!
                     Ado.query
                         factory
-                        "SELECT record_id, idempotency_key, execution_id, correlation_id, causation_id, attempt, owner, turn_id, tool_name, replay_safety, tool_input, tool_output, executed_at, reverted, metadata FROM nao_execution_journal ORDER BY executed_at DESC"
+                        "SELECT record_id, idempotency_key, execution_id, correlation_id, causation_id, attempt, owner, turn_id, tool_name, replay_safety, tool_input, tool_output, failure_kind, failure_message, failure_retryable, executed_at, reverted, metadata FROM nao_execution_journal ORDER BY executed_at DESC"
                         []
                         mapRecord
             }
@@ -593,7 +622,7 @@ module AdoExecutionJournal =
                 return!
                     Ado.query
                         factory
-                        "SELECT record_id, idempotency_key, execution_id, correlation_id, causation_id, attempt, owner, turn_id, tool_name, replay_safety, tool_input, tool_output, executed_at, reverted, metadata FROM nao_execution_journal WHERE execution_id = @ex ORDER BY executed_at DESC"
+                        "SELECT record_id, idempotency_key, execution_id, correlation_id, causation_id, attempt, owner, turn_id, tool_name, replay_safety, tool_input, tool_output, failure_kind, failure_message, failure_retryable, executed_at, reverted, metadata FROM nao_execution_journal WHERE execution_id = @ex ORDER BY executed_at DESC"
                         [ "@ex", box (ExecutionId.serialize executionId) ]
                         mapRecord
             }
@@ -605,7 +634,7 @@ module AdoExecutionJournal =
                 return!
                     Ado.query
                         factory
-                        "SELECT record_id, idempotency_key, execution_id, correlation_id, causation_id, attempt, owner, turn_id, tool_name, replay_safety, tool_input, tool_output, executed_at, reverted, metadata FROM nao_execution_journal WHERE reverted = 0 ORDER BY executed_at DESC"
+                        "SELECT record_id, idempotency_key, execution_id, correlation_id, causation_id, attempt, owner, turn_id, tool_name, replay_safety, tool_input, tool_output, failure_kind, failure_message, failure_retryable, executed_at, reverted, metadata FROM nao_execution_journal WHERE reverted = 0 AND failure_kind IS NULL ORDER BY executed_at DESC"
                         []
                         mapRecord
             }
@@ -883,7 +912,7 @@ module FileExecutionJournal =
                     lock sync (fun () ->
                         load ()
                         |> List.map Dto.ofExecutionDto
-                        |> List.filter (fun record -> not record.Reverted))
+                        |> List.filter (fun record -> not record.Reverted && record.Failure.IsNone))
             }
 
         let markRevertedAsync (recordId: Guid) =

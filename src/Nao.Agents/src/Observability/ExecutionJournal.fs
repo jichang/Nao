@@ -7,6 +7,7 @@ open System.Threading.Tasks
 /// A record of a single tool execution (immutable, for journaling)
 type ExecutionRecord =
     { Id: Guid
+      Failure: ToolFailure option
       IdempotencyKey: IdempotencyKey
       Correlation: CorrelationContext
       Owner: string
@@ -73,6 +74,36 @@ type HarnessCheckpointJournal =
     { Save: HarnessCheckpoint -> Task
       GetByExecution: ExecutionId -> Task<HarnessCheckpoint list>
       GetByIdempotencyKey: IdempotencyKey -> Task<HarnessCheckpoint list> }
+
+/// Exact recorded provider invocation used for deterministic replay.
+type ProviderReplayFixture =
+    { Provider: string
+      Options: CompletionOptions
+      Messages: (string * string) list
+      Result: CompletionResult }
+
+/// Exact recorded tool invocation used for deterministic replay.
+type ToolReplayFixture =
+    { ToolName: string
+      Input: string
+      Result: ToolInvocationResult }
+
+/// Immutable operation fixtures indexed by stable idempotency identity.
+type ReplayFixtures =
+    { Providers: Map<IdempotencyKey, ProviderReplayFixture>
+      Tools: Map<IdempotencyKey, ToolReplayFixture> }
+
+[<RequireQualifiedAccess>]
+module ReplayFixtures =
+    let empty: ReplayFixtures =
+        { Providers = Map.empty
+          Tools = Map.empty }
+
+module internal RuntimeReplayFixtures =
+    let private current = AsyncLocal<ReplayFixtures option>()
+
+    let get () = current.Value
+    let set value = current.Value <- value
 
 /// Functional journal operations for tool execution revert/audit support.
 type ExecutionJournal =

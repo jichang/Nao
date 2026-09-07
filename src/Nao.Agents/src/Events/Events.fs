@@ -78,14 +78,74 @@ type ConversationMessage =
         Artifacts: Artifact list
     }
 
-/// The exact messages sent to an LLM and the raw response it returned.
+/// The exact messages sent to an LLM and the complete result it returned.
 type LlmExchange =
     { IdempotencyKey: IdempotencyKey
       Round: int
       Attempt: int
       IsRepair: bool
+      Provider: string
+      Options: CompletionOptions
       Messages: (string * string) list
-      Response: string }
+      Result: CompletionResult }
+
+[<RequireQualifiedAccess>]
+module RecordedReplayFixtures =
+    let private uniqueMap kind entries =
+        entries
+        |> List.fold
+            (fun fixtures (key, fixture) ->
+                if fixtures |> Map.containsKey key then
+                    invalidArg
+                        (nameof entries)
+                        (sprintf "Duplicate %s replay fixture '%s'." kind (IdempotencyKey.value key))
+
+                fixtures |> Map.add key fixture)
+            Map.empty
+
+    let create (providerExchanges: LlmExchange list) (toolExecutions: ExecutionRecord list) =
+        let providers =
+            providerExchanges
+            |> List.map (fun exchange ->
+                exchange.IdempotencyKey,
+                { Provider = exchange.Provider
+                  Options = exchange.Options
+                  Messages = exchange.Messages
+                  Result = exchange.Result })
+            |> uniqueMap "provider"
+
+        let tools =
+            toolExecutions
+            |> List.map (fun execution ->
+                let durationMs =
+                    execution.Metadata
+                    |> Map.tryFind "duration.ms"
+                    |> Option.bind (fun value ->
+                        match
+                            Int64.TryParse(
+                                value,
+                                Globalization.NumberStyles.Integer,
+                                Globalization.CultureInfo.InvariantCulture
+                            )
+                        with
+                        | true, duration -> Some duration
+                        | false, _ -> None)
+                    |> Option.defaultValue 0L
+
+                execution.IdempotencyKey,
+                { ToolName = execution.ToolName
+                  Input = execution.Input
+                  Result =
+                    { IdempotencyKey = execution.IdempotencyKey
+                      Success = execution.Failure.IsNone
+                      Output = execution.Output
+                      Error = (execution.Failure |> Option.map _.Message)
+                      Failure = execution.Failure
+                      DurationMs = durationMs
+                      ReplaySafety = execution.ReplaySafety } })
+            |> uniqueMap "tool"
+
+        { Providers = providers; Tools = tools }
 
 /// Domain events the system dispatches. Each carries an EventScope plus its payload.
 /// Consumers subscribe to the bus and decide how/where to persist, so adding a storage

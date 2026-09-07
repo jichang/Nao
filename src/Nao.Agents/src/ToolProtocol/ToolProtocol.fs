@@ -70,7 +70,7 @@ module ToolProtocol =
                     match tools |> List.tryFind (fun tool -> tool.Name = name) with
                     | Some tool ->
                         try
-                            let! result = ExecutionRuntime.runTool context tool input
+                            let! result = ExecutionRuntime.runTool context idempotencyKey tool input
                             sw.Stop()
 
                             match result with
@@ -94,6 +94,7 @@ module ToolProtocol =
                                         (ToolFailure.ofPlatformFailure failure)
                         with
                         | ExecutionLimitExceededException limit -> return raise (ExecutionLimitExceededException limit)
+                        | :? GovernedExecutionException as error -> return raise error
                         | :? System.OperationCanceledException as error -> return raise error
                         | ex ->
                             sw.Stop()

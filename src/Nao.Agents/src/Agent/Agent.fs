@@ -38,10 +38,13 @@ type Agent =
     { Metadata: AgentMetadata
       Execute: AgentContext -> string -> Task<string> }
 
+/// Fail-closed violation raised by a governed execution boundary.
+exception GovernedExecutionException of message: string
+
 /// Canonical agent and tool dispatch installed for the current asynchronous execution flow.
 type ExecutionDispatcher =
     { RunAgent: AgentContext -> Agent -> string -> Task<Result<string, PlatformFailure>>
-      RunTool: AgentContext -> Tool -> string -> Task<Result<string, PlatformFailure>> }
+      RunTool: AgentContext -> IdempotencyKey -> Tool -> string -> Task<Result<string, PlatformFailure>> }
 
 [<RequireQualifiedAccess>]
 module ExecutionRuntime =
@@ -69,9 +72,9 @@ module ExecutionRuntime =
             }
         | None, ExecutionBoundary.HarnessRequired -> missingHarness context "Agent"
 
-    let runTool context (tool: Tool) input =
+    let runTool context idempotencyKey (tool: Tool) input =
         match current.Value, context.ExecutionBoundary with
-        | Some dispatcher, _ -> dispatcher.RunTool context tool input
+        | Some dispatcher, _ -> dispatcher.RunTool context idempotencyKey tool input
         | None, ExecutionBoundary.Unrestricted ->
             task {
                 let! result = tool.RunAsync context input

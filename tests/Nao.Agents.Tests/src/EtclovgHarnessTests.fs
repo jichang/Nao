@@ -867,6 +867,371 @@ type EtclovgHarnessTests() =
         Assert.AreEqual(7, result.Usage.TotalTokens)
 
     [<TestMethod>]
+    member _.RecordedProviderAndToolFixturesReplayWithoutLiveAccess() =
+        let exchanges = ResizeArray<LlmExchange>()
+        let bus = InMemoryEventBus.create ()
+
+        EventBus.subscribe
+            (EventConsumer.create (function
+                | LlmExchangeRecorded(_, exchange) ->
+                    exchanges.Add exchange
+                    Task.CompletedTask
+                | _ -> Task.CompletedTask))
+            bus
+
+        let liveResponses = ResizeArray [ "invoke"; "done" ]
+        let mutable liveProviderCalls = 0
+        let mutable liveToolCalls = 0
+
+        let liveProvider =
+            LlmProvider.create (fun () -> "recording-provider") (fun _ _ _ ->
+                let response = liveResponses.[liveProviderCalls]
+                liveProviderCalls <- liveProviderCalls + 1
+                let usage = { InputTokens = 2; OutputTokens = 1 }
+                Task.FromResult(CompletionResult.create response "stop" (Some 3) (Some usage)))
+
+        let liveTool =
+            Tool.create
+                "echo"
+                "Echoes input"
+                0
+                []
+                ToolCodec.text
+                ToolCodec.text
+                (ToolOperation.create ToolReplaySafety.RetrySafe (fun _ input ->
+                    liveToolCalls <- liveToolCalls + 1
+                    Task.FromResult(Ok(sprintf "echo:%s" input))))
+
+        let definition =
+            { OrchestratorDefinition.create Task.FromResult with
+                ParseActions =
+                    function
+                    | "invoke" -> [ InvokeTool("echo", "hello") ]
+                    | response -> [ Respond response ] }
+
+        let createOrchestrator provider tool =
+            Orchestrator.create
+                { Id = "deterministic-replay"
+                  Name = "Deterministic replay"
+                  Description = "Records and replays provider and tool fixtures"
+                  Priority = 0
+                  Responsibilities = []
+                  Contract = AgentContract.Text
+                  Provider = provider
+                  Tools = [ tool ]
+                  SubAgents = []
+                  Prompt = Prompt.Empty
+                  Options = CompletionOptions.Default
+                  MaxRounds = 2
+                  Bus = bus
+                  Scope = EventScope.CreateEmpty() }
+                definition
+
+        let liveAgent = createOrchestrator liveProvider liveTool
+        let journal = InMemoryExecutionJournal.create ()
+
+        let liveConfig =
+            { EtclovgConfig.Default with
+                ExecutionJournal = Some journal }
+
+        let context = AgentContext.unrestrictedForTests ()
+
+        let liveResult =
+            (EtclovgHarness.runAsync liveConfig context liveAgent (request context liveAgent "start")).Result
+
+        let records = journal.GetHistoryAsync() |> _.Result
+        let fixtures = RecordedReplayFixtures.create (List.ofSeq exchanges) records
+
+        let mutable replayProviderCalled = false
+        let mutable replayToolCalled = false
+
+        let replayProvider =
+            LlmProvider.create (fun () -> "recording-provider") (fun _ _ _ ->
+                replayProviderCalled <- true
+                invalidOp "Live provider was called during replay.")
+
+        let replayTool =
+            Tool.create
+                "echo"
+                "Echoes input"
+                0
+                []
+                ToolCodec.text
+                ToolCodec.text
+                (ToolOperation.create ToolReplaySafety.RetrySafe (fun _ _ ->
+                    replayToolCalled <- true
+                    invalidOp "Live tool was called during replay."))
+
+        let replayAgent = createOrchestrator replayProvider replayTool
+
+        let replayContext =
+            { context with
+                Correlation = CorrelationContext.retry context.Correlation }
+
+        let replayJournal = InMemoryExecutionJournal.create ()
+
+        let replayConfig =
+            { EtclovgConfig.Default with
+                ReplayFixtures = Some fixtures
+                ExecutionJournal = Some replayJournal }
+
+        let replayResult =
+            EtclovgHarness.runAsync replayConfig replayContext replayAgent (request replayContext replayAgent "start")
+            |> _.Result
+
+        Assert.AreEqual(ExecutionTerminalStatus.Succeeded, liveResult.Status)
+        Assert.AreEqual(liveResult.Status, replayResult.Status)
+        Assert.AreEqual(liveResult.Outputs, replayResult.Outputs)
+        Assert.AreEqual(liveResult.Usage.LlmCalls, replayResult.Usage.LlmCalls)
+        Assert.AreEqual(liveResult.Usage.TotalTokens, replayResult.Usage.TotalTokens)
+        Assert.AreEqual(liveResult.Usage.ToolCalls, replayResult.Usage.ToolCalls)
+        Assert.AreEqual(liveResult.Usage.EstimatedCostUsd, replayResult.Usage.EstimatedCostUsd)
+        Assert.AreEqual(2, liveProviderCalls)
+        Assert.AreEqual(1, liveToolCalls)
+        Assert.IsFalse(replayProviderCalled)
+        Assert.IsFalse(replayToolCalled)
+        Assert.IsTrue((replayJournal.GetHistoryAsync() |> _.Result).IsEmpty)
+
+        let replaySideEffects =
+            replayJournal.SideEffects.GetByExecution replayResult.Correlation.ExecutionId
+            |> _.Result
+
+        Assert.IsTrue(replaySideEffects.IsEmpty)
+
+    [<TestMethod>]
+    member _.ReplayFailsClosedWhenProviderFixtureIsMissing() =
+        let mutable providerCalled = false
+
+        let provider =
+            LlmProvider.create (fun () -> "disabled-provider") (fun _ _ _ ->
+                providerCalled <- true
+                invalidOp "Live provider was called during replay.")
+
+        let orchestrator =
+            Orchestrator.create
+                { Id = "missing-replay-fixture"
+                  Name = "Missing replay fixture"
+                  Description = "Fails closed without a recording"
+                  Priority = 0
+                  Responsibilities = []
+                  Contract = AgentContract.Text
+                  Provider = provider
+                  Tools = []
+                  SubAgents = []
+                  Prompt = Prompt.Empty
+                  Options = CompletionOptions.Default
+                  MaxRounds = 1
+                  Bus = EventBus.none
+                  Scope = EventScope.CreateEmpty() }
+                { OrchestratorDefinition.create Task.FromResult with
+                    ParseActions = fun response -> [ Respond response ] }
+
+        let config =
+            { EtclovgConfig.Default with
+                ReplayFixtures = Some ReplayFixtures.empty }
+
+        let context = AgentContext.unrestrictedForTests ()
+
+        let result =
+            (EtclovgHarness.runAsync config context orchestrator (request context orchestrator "start")).Result
+
+        Assert.IsFalse(providerCalled)
+
+        match result.Status with
+        | ExecutionTerminalStatus.Failed(HarnessError.ExecutionFailed message) ->
+            StringAssert.Contains(message, "live provider access is disabled")
+        | status -> Assert.Fail(sprintf "Expected missing replay fixture failure, got %A." status)
+
+    [<TestMethod>]
+    member _.DirectToolReplayUsesPolicyNormalizedFixtureWithoutLiveAccess() =
+        let mutable toolCalled = false
+
+        let tool =
+            Tool.create
+                "normalized-tool"
+                "Must be replayed"
+                0
+                []
+                ToolCodec.text
+                ToolCodec.text
+                (ToolOperation.create ToolReplaySafety.ExternallySideEffecting (fun _ _ ->
+                    toolCalled <- true
+                    invalidOp "Live tool was called during replay."))
+
+        let protocol = ToolProtocol.fromTools [ tool ]
+
+        let agent =
+            Agent.create
+                "direct-tool-replay"
+                "Direct tool replay"
+                "Replays a direct tool call"
+                0
+                []
+                AgentContract.Text
+                (fun context input ->
+                    task {
+                        let! result = protocol.InvokeAsync context (context.NextToolCallKey()) tool.Name input
+                        return result.Output
+                    })
+
+        let context = AgentContext.unrestrictedForTests ()
+        let executionRequest = request context agent "raw"
+        let operationKey = IdempotencyKey.operation "tool" 1 executionRequest.IdempotencyKey
+
+        let fixtureResult: ToolInvocationResult =
+            { IdempotencyKey = operationKey
+              Success = true
+              Output = "recorded"
+              Error = None
+              Failure = None
+              DurationMs = 4L
+              ReplaySafety = ToolReplaySafety.ExternallySideEffecting }
+
+        let fixtures =
+            { ReplayFixtures.empty with
+                Tools =
+                    Map.ofList
+                        [ operationKey,
+                          { ToolName = tool.Name
+                            Input = "normalized"
+                            Result = fixtureResult } ] }
+
+        let normalize =
+            { Id = "normalize-replay-input"
+              Description = "Normalizes replay input"
+              Enforcement = PolicyEnforcement.Modify(fun _ -> "normalized")
+              Evaluate =
+                fun policyContext ->
+                    if policyContext.Action = "tool.execute:normalized-tool" then
+                        Some "normalize"
+                    else
+                        None }
+
+        let config =
+            { EtclovgConfig.Default with
+                ReplayFixtures = Some fixtures
+                PolicyEngine = Some(PolicyEngine.create [ normalize ]) }
+
+        let result = (EtclovgHarness.runAsync config context agent executionRequest).Result
+
+        Assert.AreEqual(ExecutionTerminalStatus.Succeeded, result.Status)
+        Assert.AreEqual(Some "recorded", result.Outputs.Response)
+        Assert.AreEqual(1, result.Usage.ToolCalls)
+        Assert.IsFalse(toolCalled)
+
+    [<TestMethod>]
+    member _.RecordedToolFailureReplaysProviderRecoveryWithoutLiveAccess() =
+        let exchanges = ResizeArray<LlmExchange>()
+        let bus = InMemoryEventBus.create ()
+
+        EventBus.subscribe
+            (EventConsumer.create (function
+                | LlmExchangeRecorded(_, exchange) ->
+                    exchanges.Add exchange
+                    Task.CompletedTask
+                | _ -> Task.CompletedTask))
+            bus
+
+        let responses = ResizeArray [ "invoke"; "recovered" ]
+        let mutable providerCalls = 0
+        let mutable toolCalls = 0
+
+        let provider =
+            LlmProvider.create (fun () -> "failure-provider") (fun _ _ _ ->
+                let response = responses.[providerCalls]
+                providerCalls <- providerCalls + 1
+                Task.FromResult(CompletionResult.create response "stop" None None))
+
+        let tool =
+            Tool.create
+                "failing"
+                "Returns a recorded failure"
+                0
+                []
+                ToolCodec.text
+                ToolCodec.text
+                (ToolOperation.create ToolReplaySafety.RetrySafe (fun _ _ ->
+                    toolCalls <- toolCalls + 1
+                    Task.FromResult(Error(ToolExecError.Failed "recorded failure"))))
+
+        let definition =
+            { OrchestratorDefinition.create Task.FromResult with
+                ParseActions =
+                    function
+                    | "invoke" -> [ InvokeTool("failing", "input") ]
+                    | response -> [ Respond response ] }
+
+        let createOrchestrator provider tool =
+            Orchestrator.create
+                { Id = "failed-tool-replay"
+                  Name = "Failed tool replay"
+                  Description = "Records and replays a failed tool"
+                  Priority = 0
+                  Responsibilities = []
+                  Contract = AgentContract.Text
+                  Provider = provider
+                  Tools = [ tool ]
+                  SubAgents = []
+                  Prompt = Prompt.Empty
+                  Options = CompletionOptions.Default
+                  MaxRounds = 2
+                  Bus = bus
+                  Scope = EventScope.CreateEmpty() }
+                definition
+
+        let liveAgent = createOrchestrator provider tool
+        let journal = InMemoryExecutionJournal.create ()
+
+        let liveConfig =
+            { EtclovgConfig.Default with
+                ExecutionJournal = Some journal }
+
+        let context = AgentContext.unrestrictedForTests ()
+
+        let liveResult =
+            (EtclovgHarness.runAsync liveConfig context liveAgent (request context liveAgent "start")).Result
+
+        let records = journal.GetHistoryAsync() |> _.Result
+        let fixtures = RecordedReplayFixtures.create (List.ofSeq exchanges) records
+
+        let replayProvider =
+            LlmProvider.create (fun () -> "failure-provider") (fun _ _ _ ->
+                invalidOp "Live provider was called during replay.")
+
+        let replayTool =
+            Tool.create
+                "failing"
+                "Returns a recorded failure"
+                0
+                []
+                ToolCodec.text
+                ToolCodec.text
+                (ToolOperation.create ToolReplaySafety.RetrySafe (fun _ _ ->
+                    invalidOp "Live tool was called during replay."))
+
+        let replayAgent = createOrchestrator replayProvider replayTool
+
+        let replayContext =
+            { context with
+                Correlation = CorrelationContext.retry context.Correlation }
+
+        let replayConfig =
+            { EtclovgConfig.Default with
+                ReplayFixtures = Some fixtures }
+
+        let replayResult =
+            EtclovgHarness.runAsync replayConfig replayContext replayAgent (request replayContext replayAgent "start")
+            |> _.Result
+
+        Assert.AreEqual(ExecutionTerminalStatus.Succeeded, liveResult.Status)
+        Assert.AreEqual(liveResult.Outputs, replayResult.Outputs)
+        Assert.AreEqual(1, records.Length)
+        Assert.AreEqual(Some "recorded failure", records.Head.Failure |> Option.map _.Message)
+        Assert.IsTrue((journal.GetRevertibleAsync() |> _.Result).IsEmpty)
+        Assert.AreEqual(2, providerCalls)
+        Assert.AreEqual(1, toolCalls)
+
+    [<TestMethod>]
     member _.HarnessDeadlineBoundsProviderCall() =
         let provider =
             LlmProvider.create (fun () -> "slow-provider") (fun _ _ _ ->

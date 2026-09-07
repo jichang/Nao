@@ -142,21 +142,25 @@ module Orchestrator =
             (round: int)
             (successfulToolCalls: Collections.Generic.HashSet<string * string>)
             : Task<string * (string -> AgentAction list)> =
+            let prepareDefault () =
+                task {
+                    let! messages = definition.GenerateReasoningPrompt conversation
+
+                    let prepared: OrchestratorRound =
+                        { Messages = messages
+                          ResponseProtocol = definition.ResponseProtocol
+                          ParseActions = definition.ParseActions
+                          ValidateResponse = definition.ValidateResponse
+                          BuildRepairMessage = definition.BuildRepairMessage }
+
+                    return prepared
+                }
+
             task {
                 let! prepared =
                     match definition.PrepareRound with
                     | Some prepare -> prepare conversation
-                    | None ->
-                        task {
-                            let! messages = definition.GenerateReasoningPrompt conversation
-
-                            return
-                                { Messages = messages
-                                  ResponseProtocol = definition.ResponseProtocol
-                                  ParseActions = definition.ParseActions
-                                  ValidateResponse = definition.ValidateResponse
-                                  BuildRepairMessage = definition.BuildRepairMessage }
-                        }
+                    | None -> prepareDefault ()
 
                 let messages = prepared.Messages
                 let roundSpan = startRoundSpan round
@@ -223,12 +227,45 @@ module Orchestrator =
 
                             let idempotencyKey = RuntimeExecutionBudget.nextProviderCallKey ()
 
+                            let messagesForReplay =
+                                prompt |> List.map (fun message -> (sprintf "%A" message.Role, message.Content))
+
                             let invocation: Task<CompletionResult> =
-                                if streaming then
-                                    LlmProvider.streamAsync config.Provider correlation prompt config.Options (fun _ ->
-                                        ())
-                                else
-                                    config.Provider.CompleteAsync correlation prompt config.Options
+                                match RuntimeReplayFixtures.get () with
+                                | Some fixtures ->
+                                    match fixtures.Providers |> Map.tryFind idempotencyKey with
+                                    | Some fixture when
+                                        fixture.Provider = LlmProvider.name config.Provider
+                                        && fixture.Options = config.Options
+                                        && fixture.Messages = messagesForReplay
+                                        ->
+                                        Task.FromResult fixture.Result
+                                    | Some _ ->
+                                        raise (
+                                            GovernedExecutionException(
+                                                sprintf
+                                                    "Provider replay fixture '%s' does not match the prepared prompt."
+                                                    (IdempotencyKey.value idempotencyKey)
+                                            )
+                                        )
+                                    | None ->
+                                        raise (
+                                            GovernedExecutionException(
+                                                sprintf
+                                                    "Provider replay fixture '%s' is missing; live provider access is disabled."
+                                                    (IdempotencyKey.value idempotencyKey)
+                                            )
+                                        )
+                                | None ->
+                                    if streaming then
+                                        LlmProvider.streamAsync
+                                            config.Provider
+                                            correlation
+                                            prompt
+                                            config.Options
+                                            (fun _ -> ())
+                                    else
+                                        config.Provider.CompleteAsync correlation prompt config.Options
 
                             let! result = invocation.WaitAsync(RuntimeExecutionBudget.cancellationToken ())
 
@@ -252,7 +289,7 @@ module Orchestrator =
                     (attempt: int)
                     (isRepair: bool)
                     (prompt: Conversation)
-                    (result: string)
+                    (result: CompletionResult)
                     =
                     let messagesForStorage =
                         prompt |> List.map (fun message -> (sprintf "%A" message.Role, message.Content))
@@ -264,15 +301,16 @@ module Orchestrator =
                               Round = round
                               Attempt = attempt
                               IsRepair = isRepair
+                              Provider = LlmProvider.name config.Provider
+                              Options = config.Options
                               Messages = messagesForStorage
-                              Response = result }
+                              Result = result }
                         ))
                         eventBus
-                    |> ignore
 
                 try
                     let! idempotencyKey, result = invokeProvider 1 true messages
-                    recordExchange idempotencyKey 1 false messages result.Content
+                    do! recordExchange idempotencyKey 1 false messages result
                     let mutable working = result.Content
                     // Validate-and-repair: ask the model to correct an invalid response (bounded)
                     // before it is parsed. A response protocol owns structured diagnostics and
@@ -316,7 +354,7 @@ module Orchestrator =
 
                         convo <- convo @ [ { Role = Assistant; Content = working }; fixMsg ]
                         let! repairIdempotencyKey, fixResult = invokeProvider (repairAttempts + 1) false convo
-                        recordExchange repairIdempotencyKey (repairAttempts + 1) true convo fixResult.Content
+                        do! recordExchange repairIdempotencyKey (repairAttempts + 1) true convo fixResult
                         working <- fixResult.Content
                         let nextProtocolError, nextValidationError = validate working
                         protocolError <- nextProtocolError
@@ -406,55 +444,8 @@ module Orchestrator =
                                         let toolSpan = startToolSpan toolName toolInput (rounds + 1)
                                         let toolIdempotencyKey = agentContext.NextToolCallKey()
 
-                                        let saveSideEffect phase detail =
-                                            if tool.ReplaySafety = ToolReplaySafety.RetrySafe then
-                                                Task.CompletedTask
-                                            else
-                                                match RuntimeExecutionJournal.get () with
-                                                | Some journal ->
-                                                    journal.SideEffects.Save
-                                                        { Id = Guid.NewGuid()
-                                                          IdempotencyKey = toolIdempotencyKey
-                                                          Correlation = agentContext.Correlation
-                                                          Owner = agentContext.SessionKey
-                                                          TurnId = agentContext.TurnId
-                                                          ToolName = toolName
-                                                          Input = toolInput
-                                                          Phase = phase
-                                                          Detail = detail
-                                                          RecordedAt = DateTimeOffset.UtcNow }
-                                                | None ->
-                                                    invalidOp
-                                                        "Externally side-effecting tools require a durable execution journal."
-
-                                        do! saveSideEffect ToolSideEffectPhase.IntentRecorded None
-
                                         let! toolExecution =
-                                            task {
-                                                try
-                                                    let! result =
-                                                        toolProtocol.InvokeAsync
-                                                            agentContext
-                                                            toolIdempotencyKey
-                                                            toolName
-                                                            toolInput
-
-                                                    let phase, detail =
-                                                        if result.Success then
-                                                            ToolSideEffectPhase.Succeeded, None
-                                                        else
-                                                            ToolSideEffectPhase.Failed, result.Error
-
-                                                    do! saveSideEffect phase detail
-                                                    return result
-                                                with error ->
-                                                    do!
-                                                        saveSideEffect
-                                                            ToolSideEffectPhase.Interrupted
-                                                            (Some error.Message)
-
-                                                    return raise error
-                                            }
+                                            toolProtocol.InvokeAsync agentContext toolIdempotencyKey toolName toolInput
 
                                         match RuntimeMetrics.get () with
                                         | Some metrics ->
@@ -475,36 +466,6 @@ module Orchestrator =
                                             let resultContent = sprintf "[Tool Result from %s]: %s" toolName toolResult
                                             conversation <- conversation @ [ { Role = User; Content = resultContent } ]
                                             successfulToolCalls.Add((toolName, toolInput)) |> ignore
-
-                                            let durationMs =
-                                                toolExecution.DurationMs.ToString(
-                                                    Globalization.CultureInfo.InvariantCulture
-                                                )
-
-                                            match RuntimeExecutionJournal.get () with
-                                            | Some journal ->
-                                                if String.IsNullOrWhiteSpace agentContext.SessionKey then
-                                                    invalidOp "Execution journaling requires a nonblank session key."
-
-                                                if String.IsNullOrWhiteSpace agentContext.TurnId then
-                                                    invalidOp "Execution journaling requires a nonblank turn ID."
-
-                                                let record: ExecutionRecord =
-                                                    { Id = Guid.NewGuid()
-                                                      IdempotencyKey = toolExecution.IdempotencyKey
-                                                      Correlation = agentContext.Correlation
-                                                      Owner = agentContext.SessionKey
-                                                      TurnId = agentContext.TurnId
-                                                      ToolName = toolName
-                                                      ReplaySafety = toolExecution.ReplaySafety
-                                                      Input = toolInput
-                                                      Output = toolResult
-                                                      ExecutedAt = DateTimeOffset.UtcNow
-                                                      Reverted = false
-                                                      Metadata = Map.ofList [ "duration.ms", durationMs ] }
-
-                                                do! journal.RecordAsync record
-                                            | None -> ()
 
                                             endToolSpan
                                                 toolSpan

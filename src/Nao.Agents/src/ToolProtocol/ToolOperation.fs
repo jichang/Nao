@@ -25,6 +25,31 @@ type ToolFailureKind =
     | InternalFailure
     | Cancelled
 
+[<RequireQualifiedAccess>]
+module ToolFailureKind =
+    let serialize =
+        function
+        | ToolFailureKind.InputContract -> "input-contract"
+        | ToolFailureKind.PermissionDenied -> "permission-denied"
+        | ToolFailureKind.NotReady -> "not-ready"
+        | ToolFailureKind.ResourceExhausted -> "resource-exhausted"
+        | ToolFailureKind.OutputContract -> "output-contract"
+        | ToolFailureKind.Execution -> "execution"
+        | ToolFailureKind.Cancelled -> "cancelled"
+        | ToolFailureKind.InternalFailure -> "internal-failure"
+
+    let parse =
+        function
+        | "input-contract" -> ToolFailureKind.InputContract
+        | "permission-denied" -> ToolFailureKind.PermissionDenied
+        | "not-ready" -> ToolFailureKind.NotReady
+        | "resource-exhausted" -> ToolFailureKind.ResourceExhausted
+        | "output-contract" -> ToolFailureKind.OutputContract
+        | "execution" -> ToolFailureKind.Execution
+        | "cancelled" -> ToolFailureKind.Cancelled
+        | "internal-failure" -> ToolFailureKind.InternalFailure
+        | value -> invalidArg (nameof value) "Invalid tool failure kind."
+
 /// Runtime failure containing its pipeline stage, caller-facing diagnostic, and whether changing
 /// the invocation input may allow a retry to succeed.
 type ToolFailure =

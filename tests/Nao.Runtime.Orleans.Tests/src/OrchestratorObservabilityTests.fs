@@ -398,7 +398,7 @@ type OrchestratorObservabilityTests() =
             |> Seq.exists (function
                 | LlmExchangeRecorded(eventScope, exchange) ->
                     eventScope.ActionId = scope.ActionId
-                    && exchange.Response = "child done"
+                    && exchange.Result.Content = "child done"
                     && IdempotencyKey.value exchange.IdempotencyKey |> _.StartsWith("provider:")
                 | _ -> false)
         )

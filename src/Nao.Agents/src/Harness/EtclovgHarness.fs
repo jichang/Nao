@@ -42,6 +42,7 @@ module HarnessServices =
 type EtclovgConfig =
     { ToolProtocol: ToolProtocol option
       ExecutionJournal: ExecutionJournal option
+      ReplayFixtures: ReplayFixtures option
       Lifecycle: LifecycleHook list
       Tracer: Tracer option
       Metrics: MetricsCollector option
@@ -57,6 +58,7 @@ type EtclovgConfig =
     static member Default =
         { ToolProtocol = None
           ExecutionJournal = None
+          ReplayFixtures = None
           Lifecycle = []
           Tracer = None
           Metrics = None
@@ -372,7 +374,12 @@ module EtclovgHarness =
                             )
                 }
 
-            let executeTool toolContext (tool: Tool) (toolInput: string) =
+            let executeTool
+                (toolContext: AgentContext)
+                (idempotencyKey: IdempotencyKey)
+                (tool: Tool)
+                (toolInput: string)
+                =
                 task {
                     let policyResult =
                         config.PolicyEngine
@@ -400,18 +407,140 @@ module EtclovgHarness =
                         let effectiveToolInput =
                             result |> Option.bind _.ModifiedInput |> Option.defaultValue toolInput
 
+                        let correlationId = request.Correlation.ExecutionId |> ExecutionId.serialize |> Some
+
+                        let replayFixture =
+                            config.ReplayFixtures
+                            |> Option.map (fun fixtures ->
+                                match fixtures.Tools |> Map.tryFind idempotencyKey with
+                                | Some fixture when
+                                    fixture.ToolName = tool.Name
+                                    && fixture.Input = effectiveToolInput
+                                    && fixture.Result.IdempotencyKey = idempotencyKey
+                                    && fixture.Result.ReplaySafety = tool.ReplaySafety
+                                    ->
+                                    fixture
+                                | Some _ ->
+                                    raise (
+                                        GovernedExecutionException(
+                                            sprintf
+                                                "Tool replay fixture '%s' does not match the governed invocation."
+                                                (IdempotencyKey.value idempotencyKey)
+                                        )
+                                    )
+                                | None ->
+                                    raise (
+                                        GovernedExecutionException(
+                                            sprintf
+                                                "Tool replay fixture '%s' is missing; live tool access is disabled."
+                                                (IdempotencyKey.value idempotencyKey)
+                                        )
+                                    ))
+
                         match execCtx.BeginToolCall() with
                         | Some limit -> return raise (ExecutionLimitExceededException limit)
                         | None ->
-                            let! result =
-                                (tool.RunAsync toolContext effectiveToolInput).WaitAsync(execCtx.CancellationToken)
+                            match replayFixture with
+                            | Some fixture when fixture.Result.Success -> return Ok fixture.Result.Output
+                            | Some fixture ->
+                                return
+                                    fixture.Result.Failure
+                                    |> Option.map (fun failure -> failure.ToPlatformFailure correlationId)
+                                    |> Option.defaultWith (fun () ->
+                                        PlatformFailure.create
+                                            PlatformErrorCategory.PermanentDependency
+                                            (fixture.Result.Error |> Option.defaultValue "Recorded tool failure.")
+                                            false
+                                            correlationId)
+                                    |> Error
+                            | None ->
+                                let journal = config.ExecutionJournal
 
-                            return
-                                result
-                                |> Result.mapError (fun failure ->
-                                    failure.ToPlatformFailure(
-                                        request.Correlation.ExecutionId |> ExecutionId.serialize |> Some
-                                    ))
+                                let saveSideEffect phase detail =
+                                    if tool.ReplaySafety = ToolReplaySafety.RetrySafe then
+                                        Task.CompletedTask
+                                    else
+                                        match journal with
+                                        | Some value ->
+                                            value.SideEffects.Save
+                                                { Id = Guid.NewGuid()
+                                                  IdempotencyKey = idempotencyKey
+                                                  Correlation = request.Correlation
+                                                  Owner = toolContext.SessionKey
+                                                  TurnId = toolContext.TurnId
+                                                  ToolName = tool.Name
+                                                  Input = effectiveToolInput
+                                                  Phase = phase
+                                                  Detail = detail
+                                                  RecordedAt = DateTimeOffset.UtcNow }
+                                        | None ->
+                                            raise (
+                                                GovernedExecutionException
+                                                    "Externally side-effecting tools require a durable execution journal."
+                                            )
+
+                                do! saveSideEffect ToolSideEffectPhase.IntentRecorded None
+                                let started = Stopwatch.StartNew()
+
+                                try
+                                    let! result =
+                                        (tool.RunAsync toolContext effectiveToolInput)
+                                            .WaitAsync(execCtx.CancellationToken)
+
+                                    started.Stop()
+
+                                    match result with
+                                    | Ok output ->
+                                        do! saveSideEffect ToolSideEffectPhase.Succeeded None
+
+                                        match journal with
+                                        | Some value ->
+                                            do!
+                                                value.RecordAsync
+                                                    { Id = Guid.NewGuid()
+                                                      IdempotencyKey = idempotencyKey
+                                                      Correlation = request.Correlation
+                                                      Owner = toolContext.SessionKey
+                                                      TurnId = toolContext.TurnId
+                                                      ToolName = tool.Name
+                                                      ReplaySafety = tool.ReplaySafety
+                                                      Input = effectiveToolInput
+                                                      Output = output
+                                                      Failure = None
+                                                      ExecutedAt = DateTimeOffset.UtcNow
+                                                      Reverted = false
+                                                      Metadata =
+                                                        Map.ofList [ "duration.ms", string started.ElapsedMilliseconds ] }
+                                        | None -> ()
+
+                                        return Ok output
+                                    | Error failure ->
+                                        do! saveSideEffect ToolSideEffectPhase.Failed (Some failure.Message)
+
+                                        match journal with
+                                        | Some value ->
+                                            do!
+                                                value.RecordAsync
+                                                    { Id = Guid.NewGuid()
+                                                      IdempotencyKey = idempotencyKey
+                                                      Correlation = request.Correlation
+                                                      Owner = toolContext.SessionKey
+                                                      TurnId = toolContext.TurnId
+                                                      ToolName = tool.Name
+                                                      ReplaySafety = tool.ReplaySafety
+                                                      Input = effectiveToolInput
+                                                      Output = ""
+                                                      Failure = Some failure
+                                                      ExecutedAt = DateTimeOffset.UtcNow
+                                                      Reverted = false
+                                                      Metadata =
+                                                        Map.ofList [ "duration.ms", string started.ElapsedMilliseconds ] }
+                                        | None -> ()
+
+                                        return Error(failure.ToPlatformFailure correlationId)
+                                with error ->
+                                    do! saveSideEffect ToolSideEffectPhase.Interrupted (Some error.Message)
+                                    return raise error
                 }
 
             let publishCapturedArtifact artifact : Task =
@@ -577,10 +706,12 @@ module EtclovgHarness =
                         // as a child span (tool name, parameters, round) under agent.execute.
                         let previousMetrics = RuntimeMetrics.get ()
                         let previousJournal = RuntimeExecutionJournal.get ()
+                        let previousReplayFixtures = RuntimeReplayFixtures.get ()
                         let previousDispatcher = ExecutionRuntime.get ()
                         let previousBudget = RuntimeExecutionBudget.get ()
                         RuntimeMetrics.set config.Metrics
                         RuntimeExecutionJournal.set config.ExecutionJournal
+                        RuntimeReplayFixtures.set config.ReplayFixtures
                         ExecutionRuntime.set (Some dispatcher)
                         RuntimeExecutionBudget.set (Some execCtx)
                         let env = ExecutionEnvironment.local ()
@@ -611,6 +742,7 @@ module EtclovgHarness =
                                 finally
                                     RuntimeMetrics.set previousMetrics
                                     RuntimeExecutionJournal.set previousJournal
+                                    RuntimeReplayFixtures.set previousReplayFixtures
                                     ExecutionRuntime.set previousDispatcher
                                     RuntimeExecutionBudget.set previousBudget
                             }

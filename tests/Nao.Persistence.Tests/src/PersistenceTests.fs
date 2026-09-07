@@ -380,12 +380,10 @@ type MemoryToolTests() =
 let private execRecord (tool: string) (at: DateTimeOffset) : ExecutionRecord =
     let correlation = CorrelationContext.root ()
 
-    let idempotencyKey =
+    { Id = Guid.NewGuid()
+      IdempotencyKey =
         IdempotencyKey.forExecution correlation.ExecutionId
         |> IdempotencyKey.operation "tool" 1
-
-    { Id = Guid.NewGuid()
-      IdempotencyKey = idempotencyKey
       Correlation = correlation
       Owner = "session:test"
       TurnId = "turn:test"
@@ -393,6 +391,7 @@ let private execRecord (tool: string) (at: DateTimeOffset) : ExecutionRecord =
       ReplaySafety = ToolReplaySafety.ExternallySideEffecting
       Input = "in"
       Output = "out"
+      Failure = None
       ExecutedAt = at
       Reverted = false
       Metadata = Map.ofList [ "m", "1" ] }
@@ -412,15 +411,28 @@ let private runJournalRoundTrip (journal: ExecutionJournal) =
         let t0 = DateTimeOffset.UtcNow
         let r1 = execRecord "tool-a" (t0.AddSeconds 1.0)
         let r2 = execRecord "tool-b" (t0.AddSeconds 2.0)
+
+        let failure =
+            { Kind = ToolFailureKind.Execution
+              Message = "failed outcome"
+              Retryable = false }
+
+        let failed =
+            { execRecord "tool-failed" (t0.AddSeconds 3.0) with
+                Output = ""
+                Failure = Some failure }
+
         do! journal.RecordAsync r1
         do! journal.RecordAsync r2
+        do! journal.RecordAsync failed
 
         let! history = journal.GetHistoryAsync()
-        Assert.AreEqual(2, history.Length)
+        Assert.AreEqual(3, history.Length)
         // Most recent first
-        Assert.AreEqual("tool-b", history.Head.ToolName)
+        Assert.AreEqual("tool-failed", history.Head.ToolName)
         Assert.AreEqual("1", history.Head.Metadata.["m"])
-        Assert.AreEqual(r2.Correlation, history.Head.Correlation)
+        Assert.AreEqual(failed.Correlation, history.Head.Correlation)
+        Assert.AreEqual(Some failure, history.Head.Failure)
 
         let! forExecution = journal.GetByExecutionAsync r2.Correlation.ExecutionId
         Assert.AreEqual([ r2 ], forExecution)
@@ -467,7 +479,7 @@ let private runJournalRoundTrip (journal: ExecutionJournal) =
 
         match! journal.DeleteOwnerAsync r2.Owner with
         | Error failure -> Assert.Fail(failure.Message)
-        | Ok deleted -> Assert.AreEqual(4, deleted)
+        | Ok deleted -> Assert.AreEqual(5, deleted)
 
         let! deletedTransitions = journal.SideEffects.GetByIdempotencyKey transition.IdempotencyKey
         Assert.IsTrue(deletedTransitions.IsEmpty)
