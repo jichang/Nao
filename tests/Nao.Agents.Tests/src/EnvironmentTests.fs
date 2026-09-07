@@ -5,6 +5,7 @@ open System.Threading
 open System.Threading.Tasks
 open Microsoft.VisualStudio.TestTools.UnitTesting
 open Nao.Agents
+open Nao.Agents.Worker
 
 [<TestClass>]
 type ResourceLimitsTests() =
@@ -173,6 +174,31 @@ type ExecutionEnvironmentTests() =
         Agent.create "test" "test" "test agent" 0 [] AgentContract.Text (fun _context _input ->
             Task.FromResult response)
 
+    let workerExecutable =
+        let assemblyDirectory =
+            typeof<WorkerAssemblyMarker>.Assembly.Location
+            |> IO.Path.GetDirectoryName
+            |> Option.ofObj
+            |> Option.defaultWith (fun () -> invalidOp "Worker assembly directory is unavailable.")
+
+        IO.Path.Combine(assemblyDirectory, "Nao.Agents.Worker")
+
+    let workerAgent =
+        Agent.createWorker
+            "worker-test"
+            "worker-test"
+            "process worker test agent"
+            0
+            []
+            AgentContract.Text
+            (WorkerAgentReference.create "process-diagnostic")
+
+    let processEnvironment (protocolVersion: int) (arguments: string list) =
+        ExecutionEnvironment.processWorker
+            { FileName = workerExecutable
+              Arguments = arguments
+              ProtocolVersion = protocolVersion }
+
     [<TestMethod>]
     member _.LocalEnvironmentExecutesAgent() =
         let agent = makeAgent "hello"
@@ -185,6 +211,56 @@ type ExecutionEnvironmentTests() =
         match result with
         | Ok response -> Assert.AreEqual("hello", response)
         | Error _ -> Assert.Fail("Expected Ok")
+
+    [<TestMethod>]
+    member _.ProcessEnvironmentExecutesWorkerAgentInChildProcess() =
+        let correlation = CorrelationContext.root ()
+        let ctx = ExecutionContext.CreateWithCorrelation SandboxConfig.Default correlation
+        let environment = processEnvironment WorkerProtocol.CurrentVersion []
+
+        let result =
+            environment.ExecuteAsync ctx (AgentContext.unrestrictedForTests ()) workerAgent "payload"
+            |> _.Result
+
+        match result with
+        | Error limit -> Assert.Fail(sprintf "Expected worker result, got limit %A." limit)
+        | Ok output ->
+            let fields = output.Split('|')
+            Assert.AreEqual(5, fields.Length)
+            Assert.AreNotEqual(Environment.ProcessId, Int32.Parse fields.[0])
+            Assert.AreEqual("payload", fields.[1])
+            Assert.AreEqual(ExecutionId.serialize correlation.ExecutionId, fields.[2])
+            Assert.AreEqual(string (CorrelationId.value correlation.CorrelationId), fields.[3])
+            Assert.AreEqual(string correlation.Attempt, fields.[4])
+
+    [<TestMethod>]
+    member _.ProcessEnvironmentRejectsProtocolMismatchBeforeExecution() =
+        let environment =
+            processEnvironment
+                WorkerProtocol.CurrentVersion
+                [ "--protocol-version"; string (WorkerProtocol.CurrentVersion + 1) ]
+
+        let ctx = ExecutionContext.Create SandboxConfig.Default
+
+        let error =
+            Assert.ThrowsExactlyAsync<GovernedExecutionException>(fun () ->
+                environment.ExecuteAsync ctx (AgentContext.unrestrictedForTests ()) workerAgent "payload" :> Task)
+            |> _.Result
+
+        StringAssert.Contains(error.Message, "protocol mismatch")
+
+    [<TestMethod>]
+    member _.ProcessEnvironmentRejectsLocalOnlyAgentBeforeSpawn() =
+        let environment = processEnvironment WorkerProtocol.CurrentVersion []
+        let ctx = ExecutionContext.Create SandboxConfig.Default
+
+        let error =
+            Assert.ThrowsExactlyAsync<GovernedExecutionException>(fun () ->
+                environment.ExecuteAsync ctx (AgentContext.unrestrictedForTests ()) (makeAgent "local") "payload"
+                :> Task)
+            |> _.Result
+
+        StringAssert.Contains(error.Message, "no process-worker reference")
 
     [<TestMethod>]
     member _.LocalEnvironmentEnforcesCancellationToken() =

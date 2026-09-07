@@ -24,7 +24,7 @@ A capability can have more than one status when, for example, a core primitive i
 | Organizational group directory | **Planned** | No `GroupDirectoryGrain` or `IGroupDirectoryGrain` exists; `GroupId` fields are metadata | Membership, roles, quotas, lifecycle, and authorization require runtime/control-plane implementation. | RUN-01 |
 | ETCLOVG harness | **Partial** | Immutable `ExecutionRequest`, grouped `ExecutionResult`, `ExecutionTerminalStatus`, caller-cancellable `EtclovgHarness.runAsync`, typed durable boundary checkpoints, stable operation identities, side-effect, compensation, and quarantine transitions, and recorded provider/tool replay fixtures; harness unit, production/evaluation parity, persistence parity, and end-to-end tests | Supported execution records governed boundaries, resumes only safe incomplete attempts, and deterministically replays exact provider/tool results without live invocation. Failed executions compensate reversible calls newest-first; ambiguous external outcomes are durably quarantined, force an indeterminate result, and cannot be replayed or compensated automatically. Durable terminal-result recovery remains future work. | HAR-01, HAR-02 |
 | Resource limit accounting | **Partial** | Shared `ExecutionContext` budget accounting for nested LLM and tool calls, tokens, elapsed time, and cancellation; environment and harness tests | Provider cost data is not available uniformly, and in-process checks do not provide operating-system resource isolation or terminate underlying uncooperative work. | HAR-01, HAR-03 |
-| Process and container execution | **Planned** | `SandboxIsolation.Process` and `SandboxIsolation.Container` are configuration cases only | The harness currently creates local in-process execution; filesystem, environment, network, CPU, and memory isolation are not enforced. | HAR-03, HAR-04 |
+| Process and container execution | **Partial** | `ExecutionEnvironment.processWorker`, `WorkerProtocol`, `Nao.Agents.Worker`, explicit `WorkerAgentReference`, and process-boundary tests | `SandboxIsolation.Process` executes registered worker agents in a fresh child process after a version handshake. Arbitrary local closures and unconfigured process/container requests fail closed. Restricted OS identity, host capability RPC, allowlists, resource enforcement, output capture, and verified tree cleanup remain incomplete; process separation alone is not a security sandbox. | HAR-03, HAR-04 |
 
 ## Tools, security, and governance
 
@@ -104,7 +104,7 @@ A capability can have more than one status when, for example, a core primitive i
 
 The following are current gaps, not merely future enhancements:
 
-1. `EtclovgHarness` uses local in-process execution regardless of process/container isolation intent.
+1. Process workers are not yet restricted by OS identity, filesystem/environment/network policy, CPU or memory controls; container execution is unavailable.
 2. Graph relation deletion is incomplete and node deletion can leave dangling relations.
 3. MCP non-stdio transports are placeholders and stdio discovery/framing are incomplete.
 4. Tenant identifiers exist as data, but security-principal validation is not enforced at grain and storage boundaries.

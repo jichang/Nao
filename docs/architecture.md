@@ -147,9 +147,11 @@ Execution contracts model resource bounds and isolation intent:
 - `ResourceLimits` defines duration, call, token, cost, and tool limits.
 - `ExecutionContext` tracks usage and correlation.
 - `SandboxConfig` selects unrestricted or restricted execution intent.
-- `IExecutionEnvironment` runs work inside an execution environment.
+- `ExecutionEnvironment` runs work inside an execution environment.
 
-The current harness uses local in-process execution. Process and container isolation are planned in the [harness and security roadmap](roadmap/01-harness-security-governance.md). Until those tasks are complete, sandbox configuration must not be described as an operating-system security boundary.
+The harness runs `SandboxIsolation.None` locally and routes `SandboxIsolation.Process` to a host-configured process environment. Worker-capable agents carry a stable `WorkerAgentReference`; arbitrary F# closures cannot cross the process boundary. Each execution starts a fresh worker, completes a versioned JSON-line handshake, sends explicit execution/correlation fields, and accepts one structured result. Missing configuration, local-only agents, protocol mismatches, and container requests fail closed.
+
+The current worker protocol does not transport `AgentContext` callbacks, tools, permissions, artifacts, or shared resource accounting. Process separation is implemented, but restricted OS identity, allowlists, resource enforcement, output capture, and verified child-tree cleanup remain [HAR-03](roadmap/01-harness-security-governance.md) work. It must not yet be described as an untrusted-code security sandbox.
 
 ## T — Tool protocol
 
@@ -250,7 +252,7 @@ This boundary improves restart behavior and horizontal execution, but durable ch
 
 The roadmap intentionally tracks gaps rather than hiding them:
 
-- Process and container execution are not yet enforced.
+- Process execution exists but is not yet an OS-restricted security boundary; container execution is unavailable.
 - Policy modifications and confirmation flows require complete host-to-harness semantics.
 - Semantic retrieval lacks a production indexed vector backend.
 - Knowledge ingestion, hybrid RAG, citations, and provenance are incomplete.

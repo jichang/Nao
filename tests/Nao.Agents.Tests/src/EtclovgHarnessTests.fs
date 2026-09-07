@@ -5,6 +5,7 @@ open System.Threading.Tasks
 open Microsoft.VisualStudio.TestTools.UnitTesting
 open Nao.Persistence
 open Nao.Agents
+open Nao.Agents.Worker
 
 module private EtclovgHarness =
     let runAsync config context agent request =
@@ -56,6 +57,69 @@ type EtclovgHarnessTests() =
             Assert.AreEqual(expectedRetryable, failure.Retryable)
             Assert.AreEqual(error.Message, failure.Message)
             Assert.AreEqual(Some "execution-1", failure.CorrelationId)
+
+    [<TestMethod>]
+    member _.HarnessRoutesProcessIsolationToConfiguredWorker() =
+        let workerAgent =
+            Agent.createWorker
+                "worker-test"
+                "worker-test"
+                "process worker test agent"
+                0
+                []
+                AgentContract.Text
+                (WorkerAgentReference.create "process-diagnostic")
+
+        let workerDirectory =
+            typeof<WorkerAssemblyMarker>.Assembly.Location
+            |> IO.Path.GetDirectoryName
+            |> Option.ofObj
+            |> Option.defaultWith (fun () -> invalidOp "Worker assembly directory is unavailable.")
+
+        let processEnvironment =
+            ExecutionEnvironment.processWorker
+                { FileName = IO.Path.Combine(workerDirectory, "Nao.Agents.Worker")
+                  Arguments = []
+                  ProtocolVersion = WorkerProtocol.CurrentVersion }
+
+        let context = AgentContext.unrestrictedForTests ()
+
+        let executionRequest =
+            { request context workerAgent "payload" with
+                Sandbox =
+                    { SandboxConfig.Default with
+                        Isolation = SandboxIsolation.Process } }
+
+        let config =
+            { EtclovgConfig.Default with
+                ProcessEnvironment = Some processEnvironment }
+
+        let result =
+            (EtclovgHarness.runAsync config context workerAgent executionRequest).Result
+
+        Assert.AreEqual(ExecutionTerminalStatus.Succeeded, result.Status)
+        let fields = result.Outputs.Response |> Option.get |> _.Split('|')
+        Assert.AreNotEqual(Environment.ProcessId, Int32.Parse(fields.[0]))
+        Assert.AreEqual("payload", fields.[1])
+
+    [<TestMethod>]
+    member _.HarnessRejectsUnconfiguredProcessIsolation() =
+        let agent = makeAgent "must not execute locally"
+        let context = AgentContext.unrestrictedForTests ()
+
+        let executionRequest =
+            { request context agent "payload" with
+                Sandbox =
+                    { SandboxConfig.Default with
+                        Isolation = SandboxIsolation.Process } }
+
+        let result =
+            (EtclovgHarness.runAsync EtclovgConfig.Default context agent executionRequest).Result
+
+        match result.Status with
+        | ExecutionTerminalStatus.Failed(HarnessError.ExecutionFailed message) ->
+            StringAssert.Contains(message, "requires a configured process execution environment")
+        | status -> Assert.Fail(sprintf "Expected process configuration failure, got %A." status)
 
     [<TestMethod>]
     member _.TerminalStatusesExposePlatformFailure() =

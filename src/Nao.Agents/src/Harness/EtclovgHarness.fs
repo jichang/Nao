@@ -41,6 +41,7 @@ module HarnessServices =
 /// Complete ETCLOVG harness configuration wiring all seven layers together
 type EtclovgConfig =
     { ToolProtocol: ToolProtocol option
+      ProcessEnvironment: ExecutionEnvironment option
       ExecutionJournal: ExecutionJournal option
       ReplayFixtures: ReplayFixtures option
       Lifecycle: LifecycleHook list
@@ -57,6 +58,7 @@ type EtclovgConfig =
 
     static member Default =
         { ToolProtocol = None
+          ProcessEnvironment = None
           ExecutionJournal = None
           ReplayFixtures = None
           Lifecycle = []
@@ -840,12 +842,27 @@ module EtclovgHarness =
                         RuntimeReplayFixtures.set config.ReplayFixtures
                         ExecutionRuntime.set (Some dispatcher)
                         RuntimeExecutionBudget.set (Some execCtx)
-                        let env = ExecutionEnvironment.local ()
 
                         let! executionOutcome =
                             task {
                                 try
                                     try
+                                        let env =
+                                            match request.Sandbox.Isolation with
+                                            | SandboxIsolation.None -> ExecutionEnvironment.local ()
+                                            | SandboxIsolation.Process ->
+                                                config.ProcessEnvironment
+                                                |> Option.defaultWith (fun () ->
+                                                    raise (
+                                                        GovernedExecutionException
+                                                            "Process isolation requires a configured process execution environment."
+                                                    ))
+                                            | SandboxIsolation.Container ->
+                                                raise (
+                                                    GovernedExecutionException
+                                                        "Container isolation requires a configured container execution environment."
+                                                )
+
                                         let! result = env.ExecuteAsync execCtx governedContext agent effectiveInput
                                         return Ok result
                                     with

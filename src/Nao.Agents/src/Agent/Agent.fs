@@ -33,9 +33,23 @@ type AgentMetadata =
       Responsibilities: string list
       Contract: AgentContract }
 
+/// Stable identity of an agent implementation hosted by an execution worker.
+type WorkerAgentReference = private WorkerAgentReference of string
+
+[<RequireQualifiedAccess>]
+module WorkerAgentReference =
+    let create value =
+        if System.String.IsNullOrWhiteSpace value || value <> value.Trim() then
+            invalidArg (nameof value) "Worker agent identity must be non-blank with no surrounding whitespace."
+
+        WorkerAgentReference value
+
+    let value (WorkerAgentReference value) = value
+
 /// Immutable executable agent capability represented entirely by data and functions.
 type Agent =
     { Metadata: AgentMetadata
+      WorkerReference: WorkerAgentReference option
       Execute: AgentContext -> string -> Task<string> }
 
 /// Fail-closed violation raised by a governed execution boundary.
@@ -100,7 +114,18 @@ module Agent =
               Contract = contract }
 
         { Metadata = metadata
+          WorkerReference = None
           Execute = execute }
+
+    /// Construct an agent capability resolved by stable identity inside a process worker.
+    let createWorker id name description priority responsibilities contract workerReference =
+        let localExecutionNotSupported _ _ =
+            Task.FromException<string>(
+                GovernedExecutionException "Worker agents must execute through a configured process environment."
+            )
+
+        { create id name description priority responsibilities contract localExecutionNotSupported with
+            WorkerReference = Some workerReference }
 
     /// Execute an agent through the active governed runtime.
     let runAsync context input agent =

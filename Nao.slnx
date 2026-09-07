@@ -1,6 +1,7 @@
 <Solution>
   <Folder Name="/src/Framework/">
     <Project Path="src/Nao.Agents/Nao.Agents.fsproj" />
+    <Project Path="src/Nao.Agents.Worker/Nao.Agents.Worker.fsproj" />
     <Project Path="src/Nao.Eval/Nao.Eval.fsproj" />
     <Project Path="src/Nao.Persistence/Nao.Persistence.fsproj" />
     <Project Path="src/Nao.Persistence.Feedback/Nao.Persistence.Feedback.fsproj" />

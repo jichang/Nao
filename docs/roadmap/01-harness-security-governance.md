@@ -53,8 +53,8 @@ Executable replay is introduced and governed as part of HAR-02; persistence even
 
 ## HAR-03 — Process isolation
 
-- [ ] Implement a process-backed `IExecutionEnvironment`.
-- [ ] Define the worker protocol and version handshake.
+- [x] Implement a process-backed `IExecutionEnvironment`.
+- [x] Define the worker protocol and version handshake.
 - [ ] Run workers under a restricted operating-system identity where supported.
 - [ ] Enforce working-directory and filesystem allowlists.
 - [ ] Enforce environment-variable allowlists and secret handles.

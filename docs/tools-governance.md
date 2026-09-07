@@ -136,7 +136,7 @@ A revert hook is not automatically a transaction. Durable execution must record 
 
 ## Isolation status
 
-Nao currently defines `SandboxConfig`, `ResourceLimits`, and `IExecutionEnvironment`, but current local execution is not a process or container security boundary. Untrusted tools require planned process/container environments with:
+Nao defines `SandboxConfig`, `ResourceLimits`, and functional `ExecutionEnvironment` values. Worker-resolvable agents can run in a separate process through a versioned protocol, but this is not yet an operating-system security boundary. Untrusted tools still require:
 
 - Restricted identities
 - Filesystem and environment allowlists

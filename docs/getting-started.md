@@ -113,7 +113,7 @@ The result groups response and published artifacts under `Outputs`, trace and me
 object expression, or cast. The harness starts all configured readiness checks together and
 retains their configured order when aggregating not-ready reasons.
 
-Current sandbox records and checks resource limits, but real process and container isolation remain roadmap work. Do not treat the default local execution environment as an untrusted-code security boundary.
+Worker-resolvable agents can run in a separate process through a host-configured process environment. Restricted identities, allowlists, complete resource enforcement, and container isolation remain roadmap work, so neither the default local environment nor the current process worker is an untrusted-code security boundary.
 
 ## Register a workspace
 
