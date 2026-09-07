@@ -4,15 +4,7 @@ open System
 
 /// Immutable input to one governed harness execution.
 type ExecutionRequest =
-    { Authorization: AuthorizationScope
-      TurnId: TurnId
-      ConversationId: string
-      AgentId: string
-      Input: string
-      Sandbox: SandboxConfig
-      PolicyVersions: Map<string, string>
-      DependencyVersions: Map<string, string>
-      Correlation: CorrelationContext }
+    { Authorization: AuthorizationScope; TurnId: TurnId; IdempotencyKey: IdempotencyKey; ConversationId: string; AgentId: string; Input: string; Sandbox: SandboxConfig; PolicyVersions: Map<string, string>; DependencyVersions: Map<string, string>; Correlation: CorrelationContext }
 
 [<RequireQualifiedAccess>]
 module ExecutionRequest =
@@ -31,13 +23,6 @@ module ExecutionRequest =
         requireText (nameof agentId) agentId
         validateVersions (nameof policyVersions) policyVersions
         validateVersions (nameof dependencyVersions) dependencyVersions
-
-        { Authorization = authorization
-          TurnId = turnId
-          ConversationId = conversationId
-          AgentId = agentId
-          Input = input
-          Sandbox = sandbox
-          PolicyVersions = policyVersions
-          DependencyVersions = dependencyVersions
-          Correlation = correlation }
+        let idempotencyKey = IdempotencyKey.turn authorization conversationId turnId
+        let request: ExecutionRequest = { Authorization = authorization; TurnId = turnId; IdempotencyKey = idempotencyKey; ConversationId = conversationId; AgentId = agentId; Input = input; Sandbox = sandbox; PolicyVersions = policyVersions; DependencyVersions = dependencyVersions; Correlation = correlation }
+        request

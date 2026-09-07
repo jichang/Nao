@@ -1,6 +1,8 @@
 namespace Nao.Agents
 
 open System
+open System.Security.Cryptography
+open System.Text
 
 module private TextIdentity =
     let tryParse constructor value =
@@ -37,6 +39,9 @@ type TurnId = private TurnId of string
 
 [<Struct>]
 type ArtifactId = private ArtifactId of Guid
+
+[<Struct>]
+type IdempotencyKey = private IdempotencyKey of string
 
 [<Struct>]
 type SourceId = private SourceId of string
@@ -228,3 +233,48 @@ module AuthorizationScope =
 
     /// Fail closed unless every authorization-bearing scope component is identical.
     let contains granted requested = granted = requested
+
+module IdempotencyKey =
+    let private hash scope value =
+        let bytes = Encoding.UTF8.GetBytes(sprintf "%s\n%s" scope value)
+        let digest = SHA256.HashData bytes |> Convert.ToHexString |> _.ToLowerInvariant()
+        IdempotencyKey(sprintf "%s:%s" scope digest)
+
+    let forExecution executionId = ExecutionId.serialize executionId |> hash "execution"
+
+    let turn authorization conversationId turnId =
+        let groupId = AuthorizationScope.groupId authorization |> Option.map GroupId.value |> Option.defaultValue ""
+
+        let sessionId =
+            AuthorizationScope.sessionId authorization |> Option.map SessionId.value |> Option.defaultValue ""
+
+        [ AuthorizationScope.tenantId authorization |> TenantId.value
+          AuthorizationScope.userId authorization |> UserId.value
+          AuthorizationScope.workspaceId authorization |> WorkspaceId.value
+          groupId
+          sessionId
+          conversationId
+          TurnId.value turnId ]
+        |> String.concat "\n"
+        |> hash "turn"
+
+    let operation kind ordinal (IdempotencyKey turnKey) =
+        if ordinal < 1 then
+            invalidArg (nameof ordinal) "Operation ordinal must be positive."
+
+        if String.IsNullOrWhiteSpace kind || kind <> kind.Trim() then
+            invalidArg (nameof kind) "Operation kind must be non-blank and have no surrounding whitespace."
+
+        hash kind (sprintf "%s\n%d" turnKey ordinal)
+
+    let value (IdempotencyKey value) = value
+
+    let tryParse (value: string) =
+        match value.Split(':') with
+        | [| scope; digest |] when not (String.IsNullOrWhiteSpace scope) && digest.Length = 64 && digest |> Seq.forall Uri.IsHexDigit ->
+            Some(IdempotencyKey value)
+        | _ -> None
+
+    let parse value =
+        tryParse value
+        |> Option.defaultWith (fun () -> invalidArg (nameof value) "Invalid idempotency key.")

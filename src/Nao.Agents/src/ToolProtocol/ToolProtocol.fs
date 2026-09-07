@@ -5,6 +5,8 @@ open System.Threading.Tasks
 /// Result of a tool invocation with metadata
 type ToolInvocationResult =
     {
+        /// Stable identity for this logical invocation across retries.
+        IdempotencyKey: IdempotencyKey
         /// Whether the invocation succeeded
         Success: bool
         /// The output content
@@ -36,7 +38,7 @@ type ToolProtocol =
         /// Get a specific tool by name.
         GetTool: string -> Task<Tool option>
         /// Invoke a tool by name with input.
-        InvokeAsync: AgentContext -> string -> string -> Task<ToolInvocationResult>
+        InvokeAsync: AgentContext -> IdempotencyKey -> string -> string -> Task<ToolInvocationResult>
         /// Check if a tool is available and ready.
         IsAvailable: string -> Task<bool>
     }
@@ -45,8 +47,9 @@ type ToolProtocol =
 module ToolProtocol =
     open System.Diagnostics
 
-    let private failed duration failure =
-        { Success = false
+    let private failed idempotencyKey duration failure =
+        { IdempotencyKey = idempotencyKey
+          Success = false
           Output = ""
           Error = Some failure.Message
           Failure = Some failure
@@ -60,7 +63,7 @@ module ToolProtocol =
           GetTool = fun name -> tools |> List.tryFind (fun tool -> tool.Name = name) |> Task.FromResult
 
           InvokeAsync =
-            fun (context: AgentContext) (name: string) (input: string) ->
+            fun (context: AgentContext) (idempotencyKey: IdempotencyKey) (name: string) (input: string) ->
                 task {
                     let sw = Stopwatch.StartNew()
 
@@ -72,15 +75,10 @@ module ToolProtocol =
 
                             match result with
                             | Ok output ->
-                                return
-                                    { Success = true
-                                      Output = output
-                                      Error = None
-                                      Failure = None
-                                      DurationMs = sw.ElapsedMilliseconds
-                                      HadSideEffects = false }
+                                let invocationResult: ToolInvocationResult = { IdempotencyKey = idempotencyKey; Success = true; Output = output; Error = None; Failure = None; DurationMs = sw.ElapsedMilliseconds; HadSideEffects = false }
+                                return invocationResult
                             | Error failure ->
-                                return failed sw.ElapsedMilliseconds (ToolFailure.ofPlatformFailure failure)
+                                return failed idempotencyKey sw.ElapsedMilliseconds (ToolFailure.ofPlatformFailure failure)
                         with
                         | ExecutionLimitExceededException limit -> return raise (ExecutionLimitExceededException limit)
                         | :? System.OperationCanceledException as error -> return raise error
@@ -91,12 +89,13 @@ module ToolProtocol =
                                 PlatformFailure.fromException PlatformFailureBoundary.Tool None ex
                                 |> ToolFailure.ofPlatformFailure
 
-                            return failed sw.ElapsedMilliseconds failure
+                            return failed idempotencyKey sw.ElapsedMilliseconds failure
                     | None ->
                         sw.Stop()
 
                         return
                             failed
+                                idempotencyKey
                                 sw.ElapsedMilliseconds
                                 ({ Kind = ToolFailureKind.InputContract
                                    Message = sprintf "Tool '%s' not found" name
@@ -108,18 +107,16 @@ module ToolProtocol =
 
     /// Wrap a protocol with middleware
     let withMiddleware (middleware: ToolMiddleware) (protocol: ToolProtocol) : ToolProtocol =
-        { ListTools = protocol.ListTools
-          GetTool = protocol.GetTool
-          IsAvailable = protocol.IsAvailable
-          InvokeAsync =
-            fun (context: AgentContext) (name: string) (input: string) ->
-                task {
-                    match! middleware.BeforeExecute name input with
-                    | Error failure -> return failed 0L failure
-                    | Ok modifiedInput ->
-                        let! result = protocol.InvokeAsync context name modifiedInput
-                        return! middleware.AfterExecute name result
-                } }
+        let invoke (context: AgentContext) (idempotencyKey: IdempotencyKey) (name: string) (input: string) =
+            task {
+                match! middleware.BeforeExecute name input with
+                | Error failure -> return failed idempotencyKey 0L failure
+                | Ok modifiedInput ->
+                    let! result = protocol.InvokeAsync context idempotencyKey name modifiedInput
+                    return! middleware.AfterExecute name result
+            }
+
+        { ListTools = protocol.ListTools; GetTool = protocol.GetTool; IsAvailable = protocol.IsAvailable; InvokeAsync = invoke }
 
     /// Create a rate-limiting middleware
     let rateLimitMiddleware (maxCallsPerMinute: int) : ToolMiddleware =

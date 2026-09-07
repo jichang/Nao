@@ -7,6 +7,10 @@ open Nao.Agents
 
 [<TestClass>]
 type ToolProtocolTests() =
+    let invocationKey () =
+        IdempotencyKey.forExecution (ExecutionId.generate ())
+        |> IdempotencyKey.operation "tool" 1
+
     let textTool name description execute =
         Tool.create
             name
@@ -77,7 +81,7 @@ type ToolProtocolTests() =
         let protocol = ToolProtocol.fromTools tools
 
         let result =
-            (protocol.InvokeAsync (AgentContext.unrestrictedForTests ()) "add" "5").Result
+            (protocol.InvokeAsync (AgentContext.unrestrictedForTests ()) (invocationKey ()) "add" "5").Result
 
         Assert.IsTrue(result.Success)
         Assert.AreEqual("result:5", result.Output)
@@ -88,7 +92,7 @@ type ToolProtocolTests() =
         let protocol = ToolProtocol.fromTools tools
 
         let result =
-            (protocol.InvokeAsync (AgentContext.unrestrictedForTests ()) "unknown" "x").Result
+            (protocol.InvokeAsync (AgentContext.unrestrictedForTests ()) (invocationKey ()) "unknown" "x").Result
 
         Assert.IsFalse(result.Success)
         Assert.IsTrue(result.Error.IsSome)
@@ -101,7 +105,7 @@ type ToolProtocolTests() =
         let protocol = ToolProtocol.fromTools failTools
 
         let result =
-            (protocol.InvokeAsync (AgentContext.unrestrictedForTests ()) "fail" "x").Result
+            (protocol.InvokeAsync (AgentContext.unrestrictedForTests ()) (invocationKey ()) "fail" "x").Result
 
         Assert.IsFalse(result.Success)
         Assert.IsTrue(result.Error.Value.Contains("boom"))
@@ -130,7 +134,7 @@ type ToolProtocolTests() =
             ToolProtocol.fromTools tools |> ToolProtocol.withMiddleware blockMiddleware
 
         let result =
-            (protocol.InvokeAsync (AgentContext.unrestrictedForTests ()) "add" "5").Result
+            (protocol.InvokeAsync (AgentContext.unrestrictedForTests ()) (invocationKey ()) "add" "5").Result
 
         Assert.IsFalse(result.Success)
         Assert.AreEqual(Some "blocked", result.Error)
@@ -184,7 +188,7 @@ type ToolProtocolTests() =
 
         let protocol = ToolProtocol.fromTools [ permissionedTool ]
 
-        let result = (protocol.InvokeAsync context "writer" "content").Result
+        let result = (protocol.InvokeAsync context (invocationKey ()) "writer" "content").Result
 
         Assert.IsFalse(result.Success)
         Assert.IsFalse(ran.Value)
@@ -195,9 +199,18 @@ type ToolProtocolTests() =
     member _.CompositionPassesContextAndChainsOutputs() =
         let protocol = ToolProtocol.fromTools tools
         let composition = ToolComposition.Chain [ ToolStep.Of "add"; ToolStep.Of "sub" ]
+        let rootKey = IdempotencyKey.forExecution (ExecutionId.generate ())
+        let mutable ordinal = 0
+
+        let context =
+            { (AgentContext.unrestrictedForTests ()) with
+                NextToolCallKey =
+                    fun () ->
+                        ordinal <- ordinal + 1
+                        IdempotencyKey.operation "tool" ordinal rootKey }
 
         let result =
-            ToolComposer.executeAsync (AgentContext.unrestrictedForTests ()) protocol composition "5"
+            ToolComposer.executeAsync context protocol composition "5"
             |> fun task -> task.Result
 
         Assert.AreEqual("subtracted", result.FinalOutput)

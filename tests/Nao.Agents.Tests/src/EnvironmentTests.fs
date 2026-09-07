@@ -111,6 +111,29 @@ type SandboxTests() =
         Assert.AreEqual(1, child.Usage.ToolCalls)
 
     [<TestMethod>]
+    member _.OperationKeysAreRetryStableAndKindSeparated() =
+        let turnKey = IdempotencyKey.forExecution (ExecutionId.generate ())
+
+        let create correlation =
+            ExecutionContext.CreateForRequest SandboxConfig.Default correlation turnKey Threading.CancellationToken.None
+
+        let first = create (CorrelationContext.root ())
+        let retry = create (CorrelationContext.retry first.Correlation)
+
+        Assert.AreEqual(first.NextProviderCallKey(), retry.NextProviderCallKey())
+        Assert.AreNotEqual(first.NextToolCallKey(), first.NextArtifactKey())
+
+    [<TestMethod>]
+    member _.NestedWorkSharesOperationSequence() =
+        let parent = ExecutionContext.Create SandboxConfig.Default
+        let child = parent.CreateChild()
+
+        let first = parent.NextToolCallKey()
+        let second = child.NextToolCallKey()
+
+        Assert.AreNotEqual(first, second)
+
+    [<TestMethod>]
     member _.CheckLimitsDetectsExceeded() =
         let limits = ResourceLimits.Constrained 60 1 5000
 

@@ -101,9 +101,10 @@ type OrchestratorObservabilityTests() =
             TestOrchestrator.create (config provider [] EventBus.none) (fun response -> [ Respond response ])
 
         let context = AgentContext.unrestrictedForTests ()
-        let result = Agent.runAsync context "start" agent |> _.Result
+        let result = EtclovgHarness.runAsync EtclovgConfig.Default context agent (request context agent "start") |> _.Result
 
-        Assert.AreEqual(Ok "done", result)
+        Assert.AreEqual(ExecutionTerminalStatus.Succeeded, result.Status)
+        Assert.AreEqual(Some "done", result.Outputs.Response)
         CollectionAssert.AreEqual([| context.Correlation |], observed.ToArray())
 
     [<TestMethod>]
@@ -162,6 +163,7 @@ type OrchestratorObservabilityTests() =
         Assert.AreEqual("hello", history.Head.Output)
         Assert.AreEqual("user/session", history.Head.Owner)
         Assert.AreEqual(context.Correlation, history.Head.Correlation)
+        StringAssert.StartsWith(IdempotencyKey.value history.Head.IdempotencyKey, "tool:")
 
     [<TestMethod>]
     member _.``orchestrator executes tools through injected protocol middleware``() =
@@ -250,7 +252,9 @@ type OrchestratorObservabilityTests() =
             events
             |> Seq.exists (function
                 | LlmExchangeRecorded(eventScope, exchange) ->
-                    eventScope.ActionId = scope.ActionId && exchange.Response = "child done"
+                    eventScope.ActionId = scope.ActionId
+                    && exchange.Response = "child done"
+                    && IdempotencyKey.value exchange.IdempotencyKey |> _.StartsWith("provider:")
                 | _ -> false)
         )
 

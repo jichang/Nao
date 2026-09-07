@@ -36,7 +36,7 @@ Executable replay is introduced and governed as part of HAR-02; persistence even
 ## HAR-02 — Durable execution and replay
 
 - [x] Persist state transitions and checkpoints at defined harness boundaries.
-- [ ] Assign idempotency keys to turns, tool calls, provider calls, and committed artifacts.
+- [x] Assign idempotency keys to turns, tool calls, provider calls, and committed artifacts.
 - [ ] Distinguish retry-safe operations from externally side-effecting operations.
 - [ ] Persist side-effect intent before execution and outcome after execution.
 - [ ] Resume interrupted execution from the last safe checkpoint.

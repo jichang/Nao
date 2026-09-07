@@ -41,6 +41,9 @@ type ArtifactRecord() =
     [<Id(3u)>]
     member val Id: string = "" with get, set
 
+    [<Id(4u)>]
+    member val IdempotencyKey: string = "" with get, set
+
 /// A single persisted message in a conversation
 type PersistedMessage =
     {

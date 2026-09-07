@@ -55,6 +55,44 @@ type ExecutionRequestTests() =
         Assert.AreEqual(UserId.parse "user-a", AuthorizationScope.userId request.Authorization)
 
     [<TestMethod>]
+    member _.SameLogicalTurnHasStableKeyAcrossRetries() =
+        let create correlation =
+            ExecutionRequest.create
+                (authorization ())
+                (TurnId.parse "turn-a")
+                "conversation-a"
+                "agent-a"
+                "input"
+                SandboxConfig.Default
+                Map.empty
+                Map.empty
+                correlation
+
+        let first = create (CorrelationContext.root ())
+        let retry = create (CorrelationContext.retry first.Correlation)
+
+        Assert.AreEqual(first.IdempotencyKey, retry.IdempotencyKey)
+
+    [<TestMethod>]
+    member _.TurnKeysSeparateAuthorizationAndConversationScopes() =
+        let key authorization conversationId =
+            IdempotencyKey.turn authorization conversationId (TurnId.parse "turn-a")
+
+        let alternatePrincipal =
+            SecurityPrincipal.create (TenantId.parse "tenant-a") (UserId.parse "user-b") []
+
+        let alternateAuthorization =
+            AuthorizationScope.tryCreate
+                alternatePrincipal
+                None
+                (WorkspaceId.parse "workspace-a")
+                (Some(SessionId.parse "session-a"))
+            |> Option.get
+
+        Assert.AreNotEqual(key (authorization ()) "conversation-a", key alternateAuthorization "conversation-a")
+        Assert.AreNotEqual(key (authorization ()) "conversation-a", key (authorization ()) "conversation-b")
+
+    [<TestMethod>]
     member _.CreateRejectsAmbiguousAgentAndVersionIdentity() =
         let create conversationId agentId policies dependencies =
             ExecutionRequest.create

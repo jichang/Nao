@@ -118,7 +118,7 @@ module AdoExecutionJournal =
                         factory
                         "execution-journal"
                         "nao_execution_journal"
-                        "CREATE TABLE IF NOT EXISTS nao_execution_journal (record_id TEXT NOT NULL PRIMARY KEY, execution_id TEXT NOT NULL, correlation_id TEXT NOT NULL, causation_id TEXT NULL, attempt INTEGER NOT NULL, owner TEXT NOT NULL, turn_id TEXT NOT NULL, tool_name TEXT NOT NULL, tool_input TEXT NOT NULL, tool_output TEXT NOT NULL, executed_at TEXT NOT NULL, reverted INTEGER NOT NULL, metadata TEXT NOT NULL)"
+                        "CREATE TABLE IF NOT EXISTS nao_execution_journal (record_id TEXT NOT NULL PRIMARY KEY, idempotency_key TEXT NOT NULL, execution_id TEXT NOT NULL, correlation_id TEXT NOT NULL, causation_id TEXT NULL, attempt INTEGER NOT NULL, owner TEXT NOT NULL, turn_id TEXT NOT NULL, tool_name TEXT NOT NULL, tool_input TEXT NOT NULL, tool_output TEXT NOT NULL, executed_at TEXT NOT NULL, reverted INTEGER NOT NULL, metadata TEXT NOT NULL)"
 
                 do!
                     AdoSchema.ensureVersionedTable
@@ -158,16 +158,8 @@ module AdoExecutionJournal =
                       CausationId = Ado.getStringOpt reader "causation_id" |> Option.map ExecutionId.parse
                       Attempt = attempt }
 
-                { Id = Guid.Parse id
-                  Correlation = correlation
-                  Owner = Ado.getString reader "owner"
-                  TurnId = Ado.getString reader "turn_id"
-                  ToolName = Ado.getString reader "tool_name"
-                  Input = Ado.getString reader "tool_input"
-                  Output = Ado.getString reader "tool_output"
-                  ExecutedAt = Time.fromIso (Ado.getString reader "executed_at")
-                  Reverted = Ado.getBool reader "reverted"
-                  Metadata = Json.mapFromJson (Ado.getString reader "metadata") }
+                let idempotencyKey = IdempotencyKey.parse (Ado.getString reader "idempotency_key")
+                { Id = Guid.Parse id; IdempotencyKey = idempotencyKey; Correlation = correlation; Owner = Ado.getString reader "owner"; TurnId = Ado.getString reader "turn_id"; ToolName = Ado.getString reader "tool_name"; Input = Ado.getString reader "tool_input"; Output = Ado.getString reader "tool_output"; ExecutedAt = Time.fromIso (Ado.getString reader "executed_at"); Reverted = Ado.getBool reader "reverted"; Metadata = Json.mapFromJson (Ado.getString reader "metadata") }
             with ex ->
                 raise (
                     InvalidDataException(
@@ -183,7 +175,7 @@ module AdoExecutionJournal =
                 let! _ =
                     Ado.query
                         factory
-                        "SELECT record_id, execution_id, correlation_id, causation_id, attempt, owner, turn_id, tool_name, tool_input, tool_output, executed_at, reverted, metadata FROM nao_execution_journal"
+                        "SELECT record_id, idempotency_key, execution_id, correlation_id, causation_id, attempt, owner, turn_id, tool_name, tool_input, tool_output, executed_at, reverted, metadata FROM nao_execution_journal"
                         []
                         mapRecord
 
@@ -263,23 +255,28 @@ module AdoExecutionJournal =
                     |> Option.map (ExecutionId.serialize >> box)
                     |> Option.defaultValue null
 
+                let idempotencyParameter = "@ik", box (IdempotencyKey.value record.IdempotencyKey)
+                let parameters =
+                    idempotencyParameter
+                    :: [ "@id", box (record.Id.ToString("D"))
+                         "@ex", box (ExecutionId.serialize record.Correlation.ExecutionId)
+                         "@co", box (CorrelationId.serialize record.Correlation.CorrelationId)
+                         "@ca", causationId
+                         "@at", box record.Correlation.Attempt
+                         "@ow", box record.Owner
+                         "@tr", box record.TurnId
+                         "@tn", box record.ToolName
+                         "@ti", box record.Input
+                         "@to", box record.Output
+                         "@ea", box (Time.toIso record.ExecutedAt)
+                         "@rv", Ado.boolValue record.Reverted
+                         "@md", box (Json.mapToJson record.Metadata) ]
+
                 let! _ =
                     Ado.executeNonQuery
                         factory
-                        "INSERT INTO nao_execution_journal (record_id, execution_id, correlation_id, causation_id, attempt, owner, turn_id, tool_name, tool_input, tool_output, executed_at, reverted, metadata) VALUES (@id, @ex, @co, @ca, @at, @ow, @tr, @tn, @ti, @to, @ea, @rv, @md)"
-                        [ "@id", box (record.Id.ToString("D"))
-                          "@ex", box (ExecutionId.serialize record.Correlation.ExecutionId)
-                          "@co", box (CorrelationId.serialize record.Correlation.CorrelationId)
-                          "@ca", causationId
-                          "@at", box record.Correlation.Attempt
-                          "@ow", box record.Owner
-                          "@tr", box record.TurnId
-                          "@tn", box record.ToolName
-                          "@ti", box record.Input
-                          "@to", box record.Output
-                          "@ea", box (Time.toIso record.ExecutedAt)
-                          "@rv", Ado.boolValue record.Reverted
-                          "@md", box (Json.mapToJson record.Metadata) ]
+                        "INSERT INTO nao_execution_journal (record_id, idempotency_key, execution_id, correlation_id, causation_id, attempt, owner, turn_id, tool_name, tool_input, tool_output, executed_at, reverted, metadata) VALUES (@id, @ik, @ex, @co, @ca, @at, @ow, @tr, @tn, @ti, @to, @ea, @rv, @md)"
+                        parameters
 
                 return ()
             }
@@ -292,7 +289,7 @@ module AdoExecutionJournal =
                 return!
                     Ado.query
                         factory
-                        "SELECT record_id, execution_id, correlation_id, causation_id, attempt, owner, turn_id, tool_name, tool_input, tool_output, executed_at, reverted, metadata FROM nao_execution_journal ORDER BY executed_at DESC"
+                        "SELECT record_id, idempotency_key, execution_id, correlation_id, causation_id, attempt, owner, turn_id, tool_name, tool_input, tool_output, executed_at, reverted, metadata FROM nao_execution_journal ORDER BY executed_at DESC"
                         []
                         mapRecord
             }
@@ -304,7 +301,7 @@ module AdoExecutionJournal =
                 return!
                     Ado.query
                         factory
-                        "SELECT record_id, execution_id, correlation_id, causation_id, attempt, owner, turn_id, tool_name, tool_input, tool_output, executed_at, reverted, metadata FROM nao_execution_journal WHERE execution_id = @ex ORDER BY executed_at DESC"
+                        "SELECT record_id, idempotency_key, execution_id, correlation_id, causation_id, attempt, owner, turn_id, tool_name, tool_input, tool_output, executed_at, reverted, metadata FROM nao_execution_journal WHERE execution_id = @ex ORDER BY executed_at DESC"
                         [ "@ex", box (ExecutionId.serialize executionId) ]
                         mapRecord
             }
@@ -316,7 +313,7 @@ module AdoExecutionJournal =
                 return!
                     Ado.query
                         factory
-                        "SELECT record_id, execution_id, correlation_id, causation_id, attempt, owner, turn_id, tool_name, tool_input, tool_output, executed_at, reverted, metadata FROM nao_execution_journal WHERE reverted = 0 ORDER BY executed_at DESC"
+                        "SELECT record_id, idempotency_key, execution_id, correlation_id, causation_id, attempt, owner, turn_id, tool_name, tool_input, tool_output, executed_at, reverted, metadata FROM nao_execution_journal WHERE reverted = 0 ORDER BY executed_at DESC"
                         []
                         mapRecord
             }

@@ -378,16 +378,9 @@ type MemoryToolTests() =
 // ---------------- ExecutionJournal ----------------
 
 let private execRecord (tool: string) (at: DateTimeOffset) : ExecutionRecord =
-    { Id = Guid.NewGuid()
-      Correlation = CorrelationContext.root ()
-      Owner = "session:test"
-      TurnId = "turn:test"
-      ToolName = tool
-      Input = "in"
-      Output = "out"
-      ExecutedAt = at
-      Reverted = false
-      Metadata = Map.ofList [ "m", "1" ] }
+    let correlation = CorrelationContext.root ()
+    let idempotencyKey = IdempotencyKey.forExecution correlation.ExecutionId |> IdempotencyKey.operation "tool" 1
+    { Id = Guid.NewGuid(); IdempotencyKey = idempotencyKey; Correlation = correlation; Owner = "session:test"; TurnId = "turn:test"; ToolName = tool; Input = "in"; Output = "out"; ExecutedAt = at; Reverted = false; Metadata = Map.ofList [ "m", "1" ] }
 
 let private checkpointRecord correlation owner turnId recordedAt : HarnessCheckpoint =
     { Id = Guid.NewGuid()

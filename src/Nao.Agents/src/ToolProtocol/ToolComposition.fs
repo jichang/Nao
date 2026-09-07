@@ -49,8 +49,9 @@ type CompositionResult =
 /// Executes tool compositions against a tool protocol.
 module ToolComposer =
 
-    let private failed message retryable =
-        { Success = false
+    let private failed idempotencyKey message retryable =
+        { IdempotencyKey = idempotencyKey
+          Success = false
           Output = ""
           Error = Some message
           Failure =
@@ -77,14 +78,16 @@ module ToolComposer =
 
             let! result =
                 task {
+                    let idempotencyKey = context.NextToolCallKey()
+
                     try
-                        let invocation = protocol.InvokeAsync context step.ToolName transformedInput
+                        let invocation = protocol.InvokeAsync context idempotencyKey step.ToolName transformedInput
 
                         match step.Timeout with
                         | Some timeout -> return! invocation.WaitAsync(timeout)
                         | None -> return! invocation
                     with :? TimeoutException ->
-                        return failed (sprintf "Tool '%s' timed out." step.ToolName) true
+                        return failed idempotencyKey (sprintf "Tool '%s' timed out." step.ToolName) true
                 }
 
             return

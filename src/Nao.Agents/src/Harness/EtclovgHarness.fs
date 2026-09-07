@@ -243,9 +243,10 @@ module EtclovgHarness =
                 match parentExecutionContext with
                 | Some parent -> parent.CreateChild(request.Correlation)
                 | None ->
-                    ExecutionContext.CreateWithCorrelationAndCancellation
+                    ExecutionContext.CreateForRequest
                         request.Sandbox
                         request.Correlation
+                        request.IdempotencyKey
                         executionCancellation
 
             let publishArtifact = agentContext.PublishArtifact
@@ -357,6 +358,8 @@ module EtclovgHarness =
                     TurnId = request.TurnId |> TurnId.value
                     ExecutionBoundary = ExecutionBoundary.HarnessRequired
                     CancellationToken = execCtx.CancellationToken
+                    NextToolCallKey = execCtx.NextToolCallKey
+                    NextArtifactKey = execCtx.NextArtifactKey
                     PublishArtifact = publishCapturedArtifact }
 
             let dispatcher =

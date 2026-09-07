@@ -436,6 +436,7 @@ type SessionGrain
                 |> List.map (fun value ->
                     ArtifactRecord(
                         Id = ArtifactId.serialize value.Id,
+                        IdempotencyKey = IdempotencyKey.value value.IdempotencyKey,
                         Kind = value.Kind,
                         ContentType = value.ContentType,
                         Payload = value.Payload
@@ -712,6 +713,8 @@ type SessionGrain
                           TurnId = turnId
                           ExecutionBoundary = ExecutionBoundary.HarnessRequired
                           CancellationToken = cancellationToken
+                          NextToolCallKey = (fun () -> invalidOp "Tool keys are allocated by the execution harness.")
+                          NextArtifactKey = (fun () -> invalidOp "Artifact keys are allocated by the execution harness.")
                           GetArtifacts = (fun () -> lock artifacts (fun () -> List.ofSeq artifacts))
                           GetGrantedResources =
                             (fun () -> lock grantedResources (fun () -> List.ofSeq grantedResources))

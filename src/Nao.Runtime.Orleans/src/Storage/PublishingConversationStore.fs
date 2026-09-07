@@ -27,7 +27,12 @@ module PublishingConversationStore =
         let artifacts =
             m.Artifacts
             |> Array.map (fun value ->
-                Artifact.restore (ArtifactId.parse value.Id) value.Kind value.ContentType value.Payload)
+                Artifact.restore
+                    (ArtifactId.parse value.Id)
+                    (IdempotencyKey.parse value.IdempotencyKey)
+                    value.Kind
+                    value.ContentType
+                    value.Payload)
             |> Array.toList
 
         { Role = m.Role

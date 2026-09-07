@@ -221,6 +221,8 @@ module Orchestrator =
                             | Some limit -> raise (ExecutionLimitExceededException limit)
                             | None -> ()
 
+                            let idempotencyKey = RuntimeExecutionBudget.nextProviderCallKey ()
+
                             let invocation: Task<CompletionResult> =
                                 if streaming then
                                     LlmProvider.streamAsync config.Provider correlation prompt config.Options (fun _ ->
@@ -237,7 +239,7 @@ module Orchestrator =
                             started.Stop()
                             endLlmSpan span SpanStatus.Ok result.Content.Length started.ElapsedMilliseconds
                             recordMetrics result.Usage started.ElapsedMilliseconds
-                            return result
+                            return idempotencyKey, result
                         with ex ->
                             started.Stop()
                             endLlmSpan span (SpanStatus.Error ex.Message) 0 started.ElapsedMilliseconds
@@ -245,25 +247,21 @@ module Orchestrator =
                             return raise ex
                     }
 
-                let recordExchange (attempt: int) (isRepair: bool) (prompt: Conversation) (result: string) =
+                let recordExchange idempotencyKey (attempt: int) (isRepair: bool) (prompt: Conversation) (result: string) =
                     let messagesForStorage =
                         prompt |> List.map (fun message -> (sprintf "%A" message.Role, message.Content))
 
                     EventBus.publishAsync
                         (NaoEvent.LlmExchangeRecorded(
                             eventScope,
-                            { Round = round
-                              Attempt = attempt
-                              IsRepair = isRepair
-                              Messages = messagesForStorage
-                              Response = result }
+                            { IdempotencyKey = idempotencyKey; Round = round; Attempt = attempt; IsRepair = isRepair; Messages = messagesForStorage; Response = result }
                         ))
                         eventBus
                     |> ignore
 
                 try
-                    let! result = invokeProvider 1 true messages
-                    recordExchange 1 false messages result.Content
+                    let! idempotencyKey, result = invokeProvider 1 true messages
+                    recordExchange idempotencyKey 1 false messages result.Content
                     let mutable working = result.Content
                     // Validate-and-repair: ask the model to correct an invalid response (bounded)
                     // before it is parsed. A response protocol owns structured diagnostics and
@@ -306,8 +304,8 @@ module Orchestrator =
                               Content = repairMessage + completedToolGuidance }
 
                         convo <- convo @ [ { Role = Assistant; Content = working }; fixMsg ]
-                        let! fixResult = invokeProvider (repairAttempts + 1) false convo
-                        recordExchange (repairAttempts + 1) true convo fixResult.Content
+                        let! repairIdempotencyKey, fixResult = invokeProvider (repairAttempts + 1) false convo
+                        recordExchange repairIdempotencyKey (repairAttempts + 1) true convo fixResult.Content
                         working <- fixResult.Content
                         let nextProtocolError, nextValidationError = validate working
                         protocolError <- nextProtocolError
@@ -395,7 +393,8 @@ module Orchestrator =
                                         report (ToolInvoked(toolName, toolInput))
                                         // O: record the prepared invocation (name + normalized parameters + context) as a span.
                                         let toolSpan = startToolSpan toolName toolInput (rounds + 1)
-                                        let! toolExecution = toolProtocol.InvokeAsync agentContext toolName toolInput
+                                        let toolIdempotencyKey = agentContext.NextToolCallKey()
+                                        let! toolExecution = toolProtocol.InvokeAsync agentContext toolIdempotencyKey toolName toolInput
 
                                         match RuntimeMetrics.get () with
                                         | Some metrics ->
@@ -431,16 +430,7 @@ module Orchestrator =
                                                     invalidOp "Execution journaling requires a nonblank turn ID."
 
                                                 let record: ExecutionRecord =
-                                                    { Id = Guid.NewGuid()
-                                                      Correlation = agentContext.Correlation
-                                                      Owner = agentContext.SessionKey
-                                                      TurnId = agentContext.TurnId
-                                                      ToolName = toolName
-                                                      Input = toolInput
-                                                      Output = toolResult
-                                                      ExecutedAt = DateTimeOffset.UtcNow
-                                                      Reverted = false
-                                                      Metadata = Map.ofList [ "duration.ms", durationMs ] }
+                                                    { Id = Guid.NewGuid(); IdempotencyKey = toolExecution.IdempotencyKey; Correlation = agentContext.Correlation; Owner = agentContext.SessionKey; TurnId = agentContext.TurnId; ToolName = toolName; Input = toolInput; Output = toolResult; ExecutedAt = DateTimeOffset.UtcNow; Reverted = false; Metadata = Map.ofList [ "duration.ms", durationMs ] }
 
                                                 do! journal.RecordAsync record
                                             | None -> ()

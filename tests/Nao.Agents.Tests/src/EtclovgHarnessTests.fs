@@ -209,7 +209,7 @@ type EtclovgHarnessTests() =
         let agent =
             Agent.create "artifact-agent" "artifact-agent" "test" 0 [] AgentContract.Text (fun context _ ->
                 task {
-                    let artifact = Artifact.create "report" "application/json" "{\"value\":42}"
+                    let artifact = Artifact.create (context.NextArtifactKey()) "report" "application/json" "{\"value\":42}"
                     produced <- Some artifact
                     do! context.PublishArtifact artifact
 
@@ -230,6 +230,7 @@ type EtclovgHarnessTests() =
         Assert.AreEqual(1, result.Outputs.Artifacts.Length)
         Assert.AreEqual(produced, published)
         Assert.AreEqual(produced, Some result.Outputs.Artifacts.Head)
+        StringAssert.StartsWith(IdempotencyKey.value result.Outputs.Artifacts.Head.IdempotencyKey, "artifact:")
 
     [<TestMethod>]
     member _.PolicyViolationBlocksExecution() =
@@ -320,7 +321,7 @@ type EtclovgHarnessTests() =
         let agent =
             Agent.create "tool-policy-agent" "tool-policy-agent" "test" 0 [] AgentContract.Text (fun context input ->
                 task {
-                    let! result = protocol.InvokeAsync context tool.Name input
+                    let! result = protocol.InvokeAsync context (context.NextToolCallKey()) tool.Name input
                     return result.Output
                 })
 
@@ -462,7 +463,7 @@ type EtclovgHarnessTests() =
                 AgentContract.Text
                 (fun context input ->
                     task {
-                        let! result = protocol.InvokeAsync context tool.Name input
+                        let! result = protocol.InvokeAsync context (context.NextToolCallKey()) tool.Name input
 
                         match result.Failure with
                         | Some failure -> return PlatformFailure.raiseException (failure.ToPlatformFailure None)
@@ -518,7 +519,7 @@ type EtclovgHarnessTests() =
         let agent =
             Agent.create "tool-timeout" "tool-timeout" "tool-timeout" 0 [] AgentContract.Text (fun context input ->
                 task {
-                    let! result = protocol.InvokeAsync context tool.Name input
+                    let! result = protocol.InvokeAsync context (context.NextToolCallKey()) tool.Name input
                     return result.Output
                 })
 
@@ -558,7 +559,7 @@ type EtclovgHarnessTests() =
 
         let invokeTool context input =
             task {
-                let! result = protocol.InvokeAsync context tool.Name input
+                let! result = protocol.InvokeAsync context (context.NextToolCallKey()) tool.Name input
 
                 match result.Failure with
                 | Some failure -> return PlatformFailure.raiseException (failure.ToPlatformFailure None)

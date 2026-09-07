@@ -221,6 +221,9 @@ type EtclovgExecutionTests() =
 
 [<TestClass>]
 type EtclovgToolProtocolTests() =
+    let invocationKey ordinal =
+        IdempotencyKey.forExecution (ExecutionId.generate ())
+        |> IdempotencyKey.operation "tool" ordinal
 
     [<TestMethod>]
     member _.ToolProtocolDiscoveryAndInvocation() =
@@ -240,7 +243,7 @@ type EtclovgToolProtocolTests() =
 
         // Invoke tool through protocol
         let result =
-            (protocol.InvokeAsync (AgentContext.unrestrictedForTests ()) "get_stock_price" "MSFT").Result
+            (protocol.InvokeAsync (AgentContext.unrestrictedForTests ()) (invocationKey 1) "get_stock_price" "MSFT").Result
 
         Assert.IsTrue(result.Success)
         Assert.IsTrue(result.Output.Contains("420.12"))
@@ -255,15 +258,14 @@ type EtclovgToolProtocolTests() =
             |> ToolProtocol.withMiddleware middleware
 
         // Should work within the rate limit
-        for _ in 1..5 do
-            let result =
-                (protocol.InvokeAsync (AgentContext.unrestrictedForTests ()) "get_stock_price" "AAPL").Result
+        for ordinal in 1..5 do
+            let result = (protocol.InvokeAsync (AgentContext.unrestrictedForTests ()) (invocationKey ordinal) "get_stock_price" "AAPL").Result
 
             Assert.IsTrue(result.Success)
 
         // 6th call should be blocked
         let blocked =
-            (protocol.InvokeAsync (AgentContext.unrestrictedForTests ()) "get_stock_price" "AAPL").Result
+            (protocol.InvokeAsync (AgentContext.unrestrictedForTests ()) (invocationKey 6) "get_stock_price" "AAPL").Result
 
         Assert.IsFalse(blocked.Success)
         Assert.IsTrue(blocked.Error.Value.Contains("Rate limit"))
@@ -392,14 +394,22 @@ type EtclovgLifecycleTests() =
 
         // Create orchestrator with these tools
         let orchestrator = EtclovgMockProvider.createOrchestrator tools
+        let context = AgentContext.unrestrictedForTests ()
+
+        let principal = SecurityPrincipal.create (TenantId.parse "e2e") (UserId.parse "user") []
+        let authorization =
+            AuthorizationScope.tryCreate principal None (WorkspaceId.parse "workspace") None
+            |> Option.get
+
+        let request =
+            ExecutionRequest.create authorization (TurnId.parse "tool-integration") "conversation" orchestrator.Metadata.Id "What is the stock price of AAPL?" SandboxConfig.Default Map.empty Map.empty context.Correlation
 
         let result =
-            (Agent.runAsync (AgentContext.unrestrictedForTests ()) "What is the stock price of AAPL?" orchestrator)
-                .Result
+            EtclovgHarness.runAsync EtclovgConfig.Default context orchestrator request
+            |> _.Result
 
-        match result with
-        | Ok output -> Assert.IsTrue(output.Contains("189.45") || output.Contains("AAPL"))
-        | Error failure -> Assert.Fail(failure.Message)
+        Assert.AreEqual(ExecutionTerminalStatus.Succeeded, result.Status)
+        Assert.IsTrue(result.Outputs.Response.Value.Contains("189.45") || result.Outputs.Response.Value.Contains("AAPL"))
 
 
 // =============================================================================
