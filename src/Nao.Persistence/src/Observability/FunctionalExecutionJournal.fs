@@ -164,6 +164,14 @@ module InMemoryExecutionJournal =
                 |> Seq.toList)
             |> Task.FromResult
 
+        let getSideEffectsByExecution executionId =
+            lock sideEffects (fun () ->
+                sideEffects
+                |> Seq.filter (fun transition -> transition.Correlation.ExecutionId = executionId)
+                |> Seq.sortBy _.RecordedAt
+                |> Seq.toList)
+            |> Task.FromResult
+
         let saveCheckpoint (checkpoint: HarnessCheckpoint) =
             JournalOperations.requireOwner checkpoint.Owner
             lock checkpoints (fun () -> checkpoints.Add checkpoint)
@@ -173,6 +181,14 @@ module InMemoryExecutionJournal =
             lock checkpoints (fun () ->
                 checkpoints
                 |> Seq.filter (fun checkpoint -> checkpoint.Correlation.ExecutionId = executionId)
+                |> Seq.sortBy _.RecordedAt
+                |> Seq.toList)
+            |> Task.FromResult
+
+        let getCheckpointsByIdempotencyKey idempotencyKey =
+            lock checkpoints (fun () ->
+                checkpoints
+                |> Seq.filter (fun checkpoint -> checkpoint.IdempotencyKey = idempotencyKey)
                 |> Seq.sortBy _.RecordedAt
                 |> Seq.toList)
             |> Task.FromResult
@@ -221,11 +237,13 @@ module InMemoryExecutionJournal =
 
         let checkpointJournal: HarnessCheckpointJournal =
             { Save = saveCheckpoint
-              GetByExecution = getCheckpoints }
+              GetByExecution = getCheckpoints
+              GetByIdempotencyKey = getCheckpointsByIdempotencyKey }
 
         let sideEffectJournal: ToolSideEffectJournal =
             { Save = saveSideEffect
-              GetByIdempotencyKey = getSideEffects }
+              GetByIdempotencyKey = getSideEffects
+              GetByExecution = getSideEffectsByExecution }
 
         { RecordAsync = recordAsync
           GetHistoryAsync = getHistoryAsync
@@ -253,7 +271,7 @@ module AdoExecutionJournal =
                         factory
                         "harness-checkpoints"
                         "nao_harness_checkpoints"
-                        "CREATE TABLE IF NOT EXISTS nao_harness_checkpoints (checkpoint_id TEXT NOT NULL PRIMARY KEY, execution_id TEXT NOT NULL, correlation_id TEXT NOT NULL, causation_id TEXT NULL, attempt INTEGER NOT NULL, owner TEXT NOT NULL, turn_id TEXT NOT NULL, agent_id TEXT NOT NULL, phase TEXT NOT NULL, recorded_at TEXT NOT NULL)"
+                        "CREATE TABLE IF NOT EXISTS nao_harness_checkpoints (checkpoint_id TEXT NOT NULL PRIMARY KEY, idempotency_key TEXT NOT NULL, execution_id TEXT NOT NULL, correlation_id TEXT NOT NULL, causation_id TEXT NULL, attempt INTEGER NOT NULL, owner TEXT NOT NULL, turn_id TEXT NOT NULL, agent_id TEXT NOT NULL, phase TEXT NOT NULL, recorded_at TEXT NOT NULL)"
 
                 do!
                     AdoSchema.ensureVersionedTable
@@ -272,6 +290,12 @@ module AdoExecutionJournal =
                     Ado.executeNonQuery
                         factory
                         "CREATE INDEX IF NOT EXISTS nao_harness_checkpoints_owner_time ON nao_harness_checkpoints (owner, recorded_at)"
+                        []
+
+                let! _ =
+                    Ado.executeNonQuery
+                        factory
+                        "CREATE INDEX IF NOT EXISTS nao_harness_checkpoints_key_time ON nao_harness_checkpoints (idempotency_key, recorded_at)"
                         []
 
                 let! _ =
@@ -341,6 +365,7 @@ module AdoExecutionJournal =
             try
                 HarnessCheckpointSerialization.ofDto
                     { Id = Guid.Parse id
+                      IdempotencyKey = Ado.getString reader "idempotency_key"
                       ExecutionId = Ado.getString reader "execution_id"
                       CorrelationId = Ado.getString reader "correlation_id"
                       CausationId = Ado.getStringOpt reader "causation_id" |> Option.defaultValue null
@@ -358,10 +383,23 @@ module AdoExecutionJournal =
                     )
                 )
 
+        let validateCheckpointsAsync () =
+            task {
+                let! _ =
+                    Ado.query
+                        factory
+                        "SELECT checkpoint_id, idempotency_key, execution_id, correlation_id, causation_id, attempt, owner, turn_id, agent_id, phase, recorded_at FROM nao_harness_checkpoints"
+                        []
+                        mapCheckpoint
+
+                return ()
+            }
+
         let saveCheckpoint (checkpoint: HarnessCheckpoint) =
             task {
                 JournalOperations.requireOwner checkpoint.Owner
                 do! ensureAsync ()
+                do! validateCheckpointsAsync ()
                 let dto = HarnessCheckpointSerialization.toDto checkpoint
 
                 let causationId =
@@ -370,8 +408,9 @@ module AdoExecutionJournal =
                 let! _ =
                     Ado.executeNonQuery
                         factory
-                        "INSERT INTO nao_harness_checkpoints (checkpoint_id, execution_id, correlation_id, causation_id, attempt, owner, turn_id, agent_id, phase, recorded_at) VALUES (@id, @ex, @co, @ca, @at, @ow, @tr, @ag, @ph, @ra)"
+                        "INSERT INTO nao_harness_checkpoints (checkpoint_id, idempotency_key, execution_id, correlation_id, causation_id, attempt, owner, turn_id, agent_id, phase, recorded_at) VALUES (@id, @ik, @ex, @co, @ca, @at, @ow, @tr, @ag, @ph, @ra)"
                         [ "@id", box (dto.Id.ToString("D"))
+                          "@ik", box dto.IdempotencyKey
                           "@ex", box dto.ExecutionId
                           "@co", box dto.CorrelationId
                           "@ca", causationId
@@ -393,8 +432,20 @@ module AdoExecutionJournal =
                 return!
                     Ado.query
                         factory
-                        "SELECT checkpoint_id, execution_id, correlation_id, causation_id, attempt, owner, turn_id, agent_id, phase, recorded_at FROM nao_harness_checkpoints WHERE execution_id = @ex ORDER BY recorded_at ASC"
+                        "SELECT checkpoint_id, idempotency_key, execution_id, correlation_id, causation_id, attempt, owner, turn_id, agent_id, phase, recorded_at FROM nao_harness_checkpoints WHERE execution_id = @ex ORDER BY recorded_at ASC"
                         [ "@ex", box (ExecutionId.serialize executionId) ]
+                        mapCheckpoint
+            }
+
+        let getCheckpointsByIdempotencyKey idempotencyKey =
+            task {
+                do! ensureAsync ()
+
+                return!
+                    Ado.query
+                        factory
+                        "SELECT checkpoint_id, idempotency_key, execution_id, correlation_id, causation_id, attempt, owner, turn_id, agent_id, phase, recorded_at FROM nao_harness_checkpoints WHERE idempotency_key = @ik ORDER BY recorded_at ASC"
+                        [ "@ik", box (IdempotencyKey.value idempotencyKey) ]
                         mapCheckpoint
             }
 
@@ -414,10 +465,23 @@ module AdoExecutionJournal =
                   Detail = Ado.getStringOpt reader "detail" |> Option.defaultValue null
                   RecordedAt = Time.fromIso (Ado.getString reader "recorded_at") }
 
+        let validateSideEffectsAsync () =
+            task {
+                let! _ =
+                    Ado.query
+                        factory
+                        "SELECT transition_id, idempotency_key, execution_id, correlation_id, causation_id, attempt, owner, turn_id, tool_name, tool_input, phase, detail, recorded_at FROM nao_tool_side_effects"
+                        []
+                        mapSideEffect
+
+                return ()
+            }
+
         let saveSideEffect (transition: ToolSideEffectTransition) =
             task {
                 JournalOperations.requireOwner transition.Owner
                 do! ensureAsync ()
+                do! validateSideEffectsAsync ()
                 let dto = ToolSideEffectSerialization.toDto transition
 
                 let causationId =
@@ -456,6 +520,18 @@ module AdoExecutionJournal =
                         factory
                         "SELECT transition_id, idempotency_key, execution_id, correlation_id, causation_id, attempt, owner, turn_id, tool_name, tool_input, phase, detail, recorded_at FROM nao_tool_side_effects WHERE idempotency_key = @ik ORDER BY recorded_at ASC"
                         [ "@ik", box (IdempotencyKey.value idempotencyKey) ]
+                        mapSideEffect
+            }
+
+        let getSideEffectsByExecution executionId =
+            task {
+                do! ensureAsync ()
+
+                return!
+                    Ado.query
+                        factory
+                        "SELECT transition_id, idempotency_key, execution_id, correlation_id, causation_id, attempt, owner, turn_id, tool_name, tool_input, phase, detail, recorded_at FROM nao_tool_side_effects WHERE execution_id = @ex ORDER BY recorded_at ASC"
+                        [ "@ex", box (ExecutionId.serialize executionId) ]
                         mapSideEffect
             }
 
@@ -602,11 +678,13 @@ module AdoExecutionJournal =
 
         let checkpointJournal: HarnessCheckpointJournal =
             { Save = saveCheckpoint
-              GetByExecution = getCheckpoints }
+              GetByExecution = getCheckpoints
+              GetByIdempotencyKey = getCheckpointsByIdempotencyKey }
 
         let sideEffectJournal: ToolSideEffectJournal =
             { Save = saveSideEffect
-              GetByIdempotencyKey = getSideEffects }
+              GetByIdempotencyKey = getSideEffects
+              GetByExecution = getSideEffectsByExecution }
 
         { RecordAsync = recordAsync
           GetHistoryAsync = getHistoryAsync
@@ -670,6 +748,9 @@ module FileExecutionJournal =
                         raise (InvalidDataException "Expected harness checkpoint schema version 1.")
 
                     document.Checkpoints
+                    |> List.iter (HarnessCheckpointSerialization.ofDto >> ignore)
+
+                    document.Checkpoints
                 with ex ->
                     raise (
                         InvalidDataException(
@@ -690,15 +771,27 @@ module FileExecutionJournal =
             if not (File.Exists sideEffectFile) then
                 []
             else
-                let document =
-                    FileJson.read<ToolSideEffectSerialization.Document>
-                        sideEffectFile
-                        Unchecked.defaultof<ToolSideEffectSerialization.Document>
+                try
+                    let document =
+                        FileJson.read<ToolSideEffectSerialization.Document>
+                            sideEffectFile
+                            Unchecked.defaultof<ToolSideEffectSerialization.Document>
 
-                if isNull (box document) || document.SchemaVersion <> 1 then
-                    raise (InvalidDataException "Expected tool side-effect schema version 1.")
+                    if isNull (box document) || document.SchemaVersion <> 1 then
+                        raise (InvalidDataException "Expected tool side-effect schema version 1.")
 
-                document.Transitions
+                    document.Transitions |> List.iter (ToolSideEffectSerialization.ofDto >> ignore)
+
+                    document.Transitions
+                with ex ->
+                    raise (
+                        InvalidDataException(
+                            sprintf
+                                "Tool side effects '%s' are invalid. Follow docs/migrations before writing."
+                                sideEffectFile,
+                            ex
+                        )
+                    )
 
         let saveSideEffects transitions =
             let document: ToolSideEffectSerialization.Document =
@@ -723,6 +816,16 @@ module FileExecutionJournal =
                         loadSideEffects ()
                         |> List.map ToolSideEffectSerialization.ofDto
                         |> List.filter (fun transition -> transition.IdempotencyKey = idempotencyKey)
+                        |> List.sortBy _.RecordedAt)
+            }
+
+        let getSideEffectsByExecution executionId =
+            task {
+                return
+                    lock sync (fun () ->
+                        loadSideEffects ()
+                        |> List.map ToolSideEffectSerialization.ofDto
+                        |> List.filter (fun transition -> transition.Correlation.ExecutionId = executionId)
                         |> List.sortBy _.RecordedAt)
             }
 
@@ -761,6 +864,16 @@ module FileExecutionJournal =
                         loadCheckpoints ()
                         |> List.map HarnessCheckpointSerialization.ofDto
                         |> List.filter (fun checkpoint -> checkpoint.Correlation.ExecutionId = executionId)
+                        |> List.sortBy _.RecordedAt)
+            }
+
+        let getCheckpointsByIdempotencyKey idempotencyKey =
+            task {
+                return
+                    lock sync (fun () ->
+                        loadCheckpoints ()
+                        |> List.map HarnessCheckpointSerialization.ofDto
+                        |> List.filter (fun checkpoint -> checkpoint.IdempotencyKey = idempotencyKey)
                         |> List.sortBy _.RecordedAt)
             }
 
@@ -840,11 +953,13 @@ module FileExecutionJournal =
 
         let checkpointJournal: HarnessCheckpointJournal =
             { Save = saveCheckpoint
-              GetByExecution = getCheckpoints }
+              GetByExecution = getCheckpoints
+              GetByIdempotencyKey = getCheckpointsByIdempotencyKey }
 
         let sideEffectJournal: ToolSideEffectJournal =
             { Save = saveSideEffect
-              GetByIdempotencyKey = getSideEffects }
+              GetByIdempotencyKey = getSideEffects
+              GetByExecution = getSideEffectsByExecution }
 
         JournalOperations.create
             recordAsync

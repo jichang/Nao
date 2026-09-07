@@ -4,11 +4,11 @@
 
 - First incompatible version: next unreleased Nao package version.
 - Affected packages and APIs: `Nao.Agents.ExecutionJournal` and Nao persistence observability adapters.
-- Affected files, streams, tables, or Orleans state: new `harness-checkpoints.json` files and the new `nao_harness_checkpoints` table.
+- Affected files, streams, tables, or Orleans state: `harness-checkpoints.json`, `tool-side-effects.json`, `nao_harness_checkpoints`, and `nao_tool_side_effects`.
 
 ## Breaking changes
 
-`ExecutionJournal` now includes a `HarnessCheckpointJournal` capability. Existing execution-journal records and schemas are unchanged. Harness execution writes accepted, execution-started, and terminal checkpoint facts when a journal is configured.
+`ExecutionJournal` now includes checkpoint and side-effect transition journals. Checkpoints carry stable turn idempotency keys for cross-attempt lookup. Harness execution writes accepted, execution-started, and terminal facts, while externally side-effecting tools write intent before invocation and outcome afterward.
 
 ## Before upgrade
 
@@ -18,13 +18,13 @@
 
 ## Migration
 
-1. Deploy the new version; file storage creates `harness-checkpoints.json` on first write and ADO.NET creates the version-1 checkpoint table and index.
+1. Deploy the new version; file storage creates the checkpoint and side-effect documents on first write, and ADO.NET creates their version-1 tables and indexes.
 2. Do not synthesize checkpoints for executions created by earlier versions.
 3. Validate that new executions have one accepted phase, at most one execution-started phase, and one terminal phase.
 
 ## Validation
 
-Run execution-journal backend parity tests, harness checkpoint tests, documentation validation, and compare checkpoint counts by owner and execution identifier.
+Run execution-journal backend parity tests, harness resume tests, documentation validation, and compare checkpoints by owner, execution identifier, and idempotency key. Confirm every external intent has a durable outcome before retrying interrupted work.
 
 ## Rollback
 

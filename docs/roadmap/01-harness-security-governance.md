@@ -39,7 +39,7 @@ Executable replay is introduced and governed as part of HAR-02; persistence even
 - [x] Assign idempotency keys to turns, tool calls, provider calls, and committed artifacts.
 - [x] Distinguish retry-safe operations from externally side-effecting operations.
 - [x] Persist side-effect intent before execution and outcome after execution.
-- [ ] Resume interrupted execution from the last safe checkpoint.
+- [x] Resume interrupted execution from the last safe checkpoint.
 - [ ] Support deterministic replay with recorded provider/tool fixtures.
 - [ ] Represent non-replayable dependencies explicitly.
 - [ ] Add compensation orchestration for reversible tool operations.

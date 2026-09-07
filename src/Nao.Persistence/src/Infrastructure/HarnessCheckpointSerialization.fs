@@ -9,6 +9,7 @@ module HarnessCheckpointSerialization =
     [<CLIMutable>]
     type Dto =
         { Id: Guid
+          IdempotencyKey: string
           ExecutionId: string
           CorrelationId: string
           CausationId: string
@@ -46,6 +47,7 @@ module HarnessCheckpointSerialization =
 
     let toDto (checkpoint: HarnessCheckpoint) : Dto =
         { Id = checkpoint.Id
+          IdempotencyKey = IdempotencyKey.value checkpoint.IdempotencyKey
           ExecutionId = ExecutionId.serialize checkpoint.Correlation.ExecutionId
           CorrelationId = CorrelationId.serialize checkpoint.Correlation.CorrelationId
           CausationId =
@@ -64,6 +66,7 @@ module HarnessCheckpointSerialization =
             invalidArg (nameof checkpoint.Attempt) "Correlation attempt must be positive."
 
         { Id = checkpoint.Id
+          IdempotencyKey = IdempotencyKey.parse checkpoint.IdempotencyKey
           Correlation =
             { ExecutionId = ExecutionId.parse checkpoint.ExecutionId
               CorrelationId = CorrelationId.parse checkpoint.CorrelationId

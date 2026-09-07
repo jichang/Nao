@@ -133,6 +133,179 @@ type EtclovgHarnessTests() =
         Assert.IsTrue(checkpoints |> List.forall (fun checkpoint -> checkpoint.TurnId = "turn"))
 
     [<TestMethod>]
+    member _.RetryDiscoversPriorAttemptCheckpointsByLogicalExecution() =
+        let agent = makeAgent "checkpointed"
+        let journal = InMemoryExecutionJournal.create ()
+
+        let config =
+            { EtclovgConfig.Default with
+                ExecutionJournal = Some journal }
+
+        let context = AgentContext.unrestrictedForTests ()
+        let firstRequest = request context agent "input"
+
+        let _ = (EtclovgHarness.runAsync config context agent firstRequest).Result
+
+        let retryRequest =
+            request
+                { context with
+                    Correlation = CorrelationContext.retry context.Correlation }
+                agent
+                "input"
+
+        let checkpoints =
+            journal.Checkpoints.GetByIdempotencyKey retryRequest.IdempotencyKey |> _.Result
+
+        Assert.AreNotEqual(firstRequest.Correlation.ExecutionId, retryRequest.Correlation.ExecutionId)
+        Assert.AreEqual(firstRequest.IdempotencyKey, retryRequest.IdempotencyKey)
+        Assert.AreEqual(3, checkpoints.Length)
+
+        Assert.IsTrue(
+            checkpoints
+            |> List.forall (fun checkpoint -> checkpoint.Correlation.ExecutionId = firstRequest.Correlation.ExecutionId)
+        )
+
+    [<TestMethod>]
+    member _.RetryResumesIncompleteExecutionFromSafeCheckpoint() =
+        let mutable executions = 0
+
+        let agent =
+            Agent.create "resumed" "resumed" "test" 0 [] AgentContract.Text (fun _ _ ->
+                executions <- executions + 1
+                Task.FromResult "resumed")
+
+        let journal = InMemoryExecutionJournal.create ()
+
+        let config =
+            { EtclovgConfig.Default with
+                ExecutionJournal = Some journal }
+
+        let context = AgentContext.unrestrictedForTests ()
+        let firstRequest = request context agent "input"
+
+        journal.Checkpoints.Save
+            { Id = Guid.NewGuid()
+              IdempotencyKey = firstRequest.IdempotencyKey
+              Correlation = firstRequest.Correlation
+              Owner = "owner"
+              TurnId = "turn"
+              AgentId = agent.Metadata.Id
+              Phase = HarnessCheckpointPhase.ExecutionStarted
+              RecordedAt = DateTimeOffset.UtcNow }
+        |> _.Wait()
+
+        let retryContext =
+            { context with
+                Correlation = CorrelationContext.retry context.Correlation }
+
+        let retryRequest = request retryContext agent "input"
+        let result = (EtclovgHarness.runAsync config retryContext agent retryRequest).Result
+
+        Assert.AreEqual(ExecutionTerminalStatus.Succeeded, result.Status)
+        Assert.AreEqual(Some "resumed", result.Outputs.Response)
+        Assert.AreEqual(1, executions)
+        Assert.AreEqual(retryRequest.Correlation, result.Correlation)
+
+    [<TestMethod>]
+    member _.RetryDoesNotRerunTerminalLogicalExecution() =
+        let mutable executions = 0
+
+        let agent =
+            Agent.create "terminal" "terminal" "test" 0 [] AgentContract.Text (fun _ _ ->
+                executions <- executions + 1
+                Task.FromResult "done")
+
+        let journal = InMemoryExecutionJournal.create ()
+
+        let config =
+            { EtclovgConfig.Default with
+                ExecutionJournal = Some journal }
+
+        let context = AgentContext.unrestrictedForTests ()
+        let firstRequest = request context agent "input"
+        let first = (EtclovgHarness.runAsync config context agent firstRequest).Result
+
+        let retryContext =
+            { context with
+                Correlation = CorrelationContext.retry context.Correlation }
+
+        let retry =
+            EtclovgHarness.runAsync config retryContext agent (request retryContext agent "input")
+            |> _.Result
+
+        Assert.AreEqual(ExecutionTerminalStatus.Succeeded, first.Status)
+        Assert.AreEqual(1, executions)
+
+        match retry.Status with
+        | ExecutionTerminalStatus.Indeterminate message -> StringAssert.Contains(message, "terminal checkpoint")
+        | status -> Assert.Fail(sprintf "Expected indeterminate retry, got %A." status)
+
+    [<DataTestMethod>]
+    [<DataRow("intent")>]
+    [<DataRow("interrupted")>]
+    member _.RetryFailsClosedForAmbiguousExternalSideEffect(phaseName: string) =
+        let mutable executed = false
+
+        let agent =
+            Agent.create "unsafe-resume" "unsafe-resume" "test" 0 [] AgentContract.Text (fun _ _ ->
+                executed <- true
+                Task.FromResult "unsafe")
+
+        let journal = InMemoryExecutionJournal.create ()
+
+        let config =
+            { EtclovgConfig.Default with
+                ExecutionJournal = Some journal }
+
+        let context = AgentContext.unrestrictedForTests ()
+        let firstRequest = request context agent "input"
+
+        let phase =
+            match phaseName with
+            | "intent" -> ToolSideEffectPhase.IntentRecorded
+            | "interrupted" -> ToolSideEffectPhase.Interrupted
+            | value -> invalidArg (nameof value) "Unknown side-effect phase."
+
+        journal.Checkpoints.Save
+            { Id = Guid.NewGuid()
+              IdempotencyKey = firstRequest.IdempotencyKey
+              Correlation = firstRequest.Correlation
+              Owner = "owner"
+              TurnId = "turn"
+              AgentId = agent.Metadata.Id
+              Phase = HarnessCheckpointPhase.ExecutionStarted
+              RecordedAt = DateTimeOffset.UtcNow }
+        |> _.Wait()
+
+        journal.SideEffects.Save
+            { Id = Guid.NewGuid()
+              IdempotencyKey = IdempotencyKey.operation "tool" 1 firstRequest.IdempotencyKey
+              Correlation = firstRequest.Correlation
+              Owner = "owner"
+              TurnId = "turn"
+              ToolName = "external"
+              Input = "input"
+              Phase = phase
+              Detail = None
+              RecordedAt = DateTimeOffset.UtcNow }
+        |> _.Wait()
+
+        let retryContext =
+            { context with
+                Correlation = CorrelationContext.retry context.Correlation }
+
+        let result =
+            EtclovgHarness.runAsync config retryContext agent (request retryContext agent "input")
+            |> _.Result
+
+        Assert.IsFalse(executed)
+
+        match result.Status with
+        | ExecutionTerminalStatus.Indeterminate message ->
+            StringAssert.Contains(message, "without a confirmed durable outcome")
+        | status -> Assert.Fail(sprintf "Expected indeterminate retry, got %A." status)
+
+    [<TestMethod>]
     member _.DirectAgentExecutionFailsClosedWhenHarnessIsRequired() =
         let mutable executed = false
 

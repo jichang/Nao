@@ -149,6 +149,7 @@ module EtclovgHarness =
 
             journal.Checkpoints.Save
                 { Id = Guid.NewGuid()
+                  IdempotencyKey = request.IdempotencyKey
                   Correlation = request.Correlation
                   Owner = owner
                   TurnId = request.TurnId |> TurnId.value
@@ -224,6 +225,75 @@ module EtclovgHarness =
                 0
 
         { result with Status = status }
+
+    [<RequireQualifiedAccess>]
+    type private ResumeDecision =
+        | Execute
+        | Stop of message: string
+
+    let private isTerminalCheckpoint =
+        function
+        | HarnessCheckpointPhase.Accepted
+        | HarnessCheckpointPhase.ExecutionStarted -> false
+        | HarnessCheckpointPhase.Succeeded
+        | HarnessCheckpointPhase.Failed
+        | HarnessCheckpointPhase.Denied
+        | HarnessCheckpointPhase.Cancelled
+        | HarnessCheckpointPhase.TimedOut
+        | HarnessCheckpointPhase.LimitExceeded
+        | HarnessCheckpointPhase.Indeterminate -> true
+
+    let private resumeDecision (config: EtclovgConfig) (request: ExecutionRequest) =
+        task {
+            match config.ExecutionJournal with
+            | None -> return ResumeDecision.Execute
+            | Some journal ->
+                let! checkpoints = journal.Checkpoints.GetByIdempotencyKey request.IdempotencyKey
+
+                if checkpoints |> List.exists (_.Phase >> isTerminalCheckpoint) then
+                    return
+                        ResumeDecision.Stop
+                            "Logical execution already reached a terminal checkpoint; its durable result must be recovered instead of executing again."
+                else
+                    let executionIds =
+                        checkpoints |> List.map _.Correlation.ExecutionId |> List.distinct
+
+                    let! sideEffectGroups = executionIds |> List.map journal.SideEffects.GetByExecution |> Task.WhenAll
+
+                    let hasAmbiguousSideEffect =
+                        sideEffectGroups
+                        |> Seq.collect id
+                        |> Seq.groupBy _.IdempotencyKey
+                        |> Seq.exists (fun (_, transitions) ->
+                            match transitions |> Seq.maxBy _.RecordedAt |> _.Phase with
+                            | ToolSideEffectPhase.IntentRecorded
+                            | ToolSideEffectPhase.Interrupted -> true
+                            | ToolSideEffectPhase.Succeeded
+                            | ToolSideEffectPhase.Failed -> false)
+
+                    if hasAmbiguousSideEffect then
+                        return
+                            ResumeDecision.Stop
+                                "Interrupted execution has an external side effect without a confirmed durable outcome; automatic replay is unsafe."
+                    else
+                        return ResumeDecision.Execute
+        }
+
+    let private indeterminateResult (config: EtclovgConfig) (agent: Agent) (request: ExecutionRequest) message =
+        let scope = eventScope request
+
+        let trace =
+            Verification.startTrace request.Correlation agent.Metadata.Id request.Input
+
+        stoppedResult
+            (ExecutionTerminalStatus.Indeterminate message)
+            request.Correlation
+            []
+            ResourceUsage.Zero
+            trace
+            []
+            scope.SessionKey
+            config.Metrics
 
     let rec private runAgentAsync
         (config: EtclovgConfig)
@@ -766,17 +836,31 @@ module EtclovgHarness =
         }
 
     /// Run an agent through the full ETCLOVG harness with caller cancellation.
-    let runAsync config agentContext agent request cancellationToken =
+    let runAsync
+        (config: EtclovgConfig)
+        (agentContext: AgentContext)
+        (agent: Agent)
+        (request: ExecutionRequest)
+        cancellationToken
+        =
         task {
-            do! saveCheckpoint config request HarnessCheckpointPhase.Accepted
+            let! decision = resumeDecision config request
 
-            use deadline =
-                new System.Threading.CancellationTokenSource(request.Sandbox.Limits.MaxDuration)
+            match decision with
+            | ResumeDecision.Stop message ->
+                let result = indeterminateResult config agent request message
+                do! saveCheckpoint config request HarnessCheckpointPhase.Indeterminate
+                return result
+            | ResumeDecision.Execute ->
+                do! saveCheckpoint config request HarnessCheckpointPhase.Accepted
 
-            use execution =
-                System.Threading.CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline.Token)
+                use deadline =
+                    new System.Threading.CancellationTokenSource(request.Sandbox.Limits.MaxDuration)
 
-            let! result = runAgentAsync config agentContext agent request None execution.Token cancellationToken
-            do! saveCheckpoint config request (checkpointPhase result.Status)
-            return result
+                use execution =
+                    System.Threading.CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline.Token)
+
+                let! result = runAgentAsync config agentContext agent request None execution.Token cancellationToken
+                do! saveCheckpoint config request (checkpointPhase result.Status)
+                return result
         }

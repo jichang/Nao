@@ -399,6 +399,7 @@ let private execRecord (tool: string) (at: DateTimeOffset) : ExecutionRecord =
 
 let private checkpointRecord correlation owner turnId recordedAt : HarnessCheckpoint =
     { Id = Guid.NewGuid()
+      IdempotencyKey = IdempotencyKey.forExecution correlation.ExecutionId
       Correlation = correlation
       Owner = owner
       TurnId = turnId
@@ -434,6 +435,9 @@ let private runJournalRoundTrip (journal: ExecutionJournal) =
         let! checkpoints = journal.Checkpoints.GetByExecution checkpoint.Correlation.ExecutionId
         Assert.AreEqual([ checkpoint ], checkpoints)
 
+        let! logicalCheckpoints = journal.Checkpoints.GetByIdempotencyKey checkpoint.IdempotencyKey
+        Assert.AreEqual([ checkpoint ], logicalCheckpoints)
+
         let transition: ToolSideEffectTransition =
             { Id = Guid.NewGuid()
               IdempotencyKey = r2.IdempotencyKey
@@ -449,6 +453,9 @@ let private runJournalRoundTrip (journal: ExecutionJournal) =
         do! journal.SideEffects.Save transition
         let! transitions = journal.SideEffects.GetByIdempotencyKey transition.IdempotencyKey
         Assert.AreEqual([ transition ], transitions)
+
+        let! executionTransitions = journal.SideEffects.GetByExecution transition.Correlation.ExecutionId
+        Assert.AreEqual([ transition ], executionTransitions)
 
         let! revertible = journal.GetRevertibleAsync()
         Assert.AreEqual(2, revertible.Length)
@@ -591,6 +598,79 @@ type ExecutionJournalTests() =
 
             StringAssert.Contains(error.Message, path)
             StringAssert.Contains(error.Message, "docs/migrations")
+            CollectionAssert.AreEqual(before, File.ReadAllBytes path)
+        finally
+            Directory.Delete(dir, true)
+
+    [<TestMethod>]
+    member _.FileExecutionJournal_RejectsInvalidCheckpointBeforeMutation() =
+        let dir = tempDir ()
+
+        try
+            let checkpoint =
+                checkpointRecord (CorrelationContext.root ()) "owner" "turn" DateTimeOffset.UtcNow
+
+            let invalid =
+                { HarnessCheckpointSerialization.toDto checkpoint with
+                    Phase = "unknown" }
+
+            let path = Path.Combine(dir, "harness-checkpoints.json")
+
+            let document: FileExecutionJournal.CheckpointDocument =
+                { SchemaVersion = 1
+                  Checkpoints = [ invalid ] }
+
+            File.WriteAllText(path, JsonSerializer.Serialize document)
+
+            let before = File.ReadAllBytes path
+            let journal = ExecutionJournals.file dir
+
+            let error =
+                Assert.ThrowsExactly<InvalidDataException>(fun () ->
+                    journal.Checkpoints.Save checkpoint |> _.GetAwaiter().GetResult())
+
+            StringAssert.Contains(error.Message, path)
+            CollectionAssert.AreEqual(before, File.ReadAllBytes path)
+        finally
+            Directory.Delete(dir, true)
+
+    [<TestMethod>]
+    member _.FileExecutionJournal_RejectsInvalidSideEffectBeforeMutation() =
+        let dir = tempDir ()
+
+        try
+            let record = execRecord "external" DateTimeOffset.UtcNow
+
+            let transition: ToolSideEffectTransition =
+                { Id = Guid.NewGuid()
+                  IdempotencyKey = record.IdempotencyKey
+                  Correlation = record.Correlation
+                  Owner = record.Owner
+                  TurnId = record.TurnId
+                  ToolName = record.ToolName
+                  Input = record.Input
+                  Phase = ToolSideEffectPhase.IntentRecorded
+                  Detail = None
+                  RecordedAt = DateTimeOffset.UtcNow }
+
+            let invalid =
+                { ToolSideEffectSerialization.toDto transition with
+                    Phase = "unknown" }
+
+            let document: ToolSideEffectSerialization.Document =
+                { SchemaVersion = 1
+                  Transitions = [ invalid ] }
+
+            let path = Path.Combine(dir, "tool-side-effects.json")
+            File.WriteAllText(path, JsonSerializer.Serialize document)
+            let before = File.ReadAllBytes path
+            let journal = ExecutionJournals.file dir
+
+            let error =
+                Assert.ThrowsExactly<InvalidDataException>(fun () ->
+                    journal.SideEffects.Save transition |> _.GetAwaiter().GetResult())
+
+            StringAssert.Contains(error.Message, path)
             CollectionAssert.AreEqual(before, File.ReadAllBytes path)
         finally
             Directory.Delete(dir, true)

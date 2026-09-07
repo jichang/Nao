@@ -41,7 +41,8 @@ type ToolSideEffectTransition =
 
 type ToolSideEffectJournal =
     { Save: ToolSideEffectTransition -> Task
-      GetByIdempotencyKey: IdempotencyKey -> Task<ToolSideEffectTransition list> }
+      GetByIdempotencyKey: IdempotencyKey -> Task<ToolSideEffectTransition list>
+      GetByExecution: ExecutionId -> Task<ToolSideEffectTransition list> }
 
 /// Stable harness boundary represented by a durable checkpoint.
 [<RequireQualifiedAccess>]
@@ -59,6 +60,7 @@ type HarnessCheckpointPhase =
 /// Minimal durable fact about one harness transition.
 type HarnessCheckpoint =
     { Id: Guid
+      IdempotencyKey: IdempotencyKey
       Correlation: CorrelationContext
       Owner: string
       TurnId: string
@@ -69,7 +71,8 @@ type HarnessCheckpoint =
 /// Persistence operations for harness checkpoints.
 type HarnessCheckpointJournal =
     { Save: HarnessCheckpoint -> Task
-      GetByExecution: ExecutionId -> Task<HarnessCheckpoint list> }
+      GetByExecution: ExecutionId -> Task<HarnessCheckpoint list>
+      GetByIdempotencyKey: IdempotencyKey -> Task<HarnessCheckpoint list> }
 
 /// Functional journal operations for tool execution revert/audit support.
 type ExecutionJournal =
