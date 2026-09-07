@@ -43,11 +43,11 @@ Executable replay is introduced and governed as part of HAR-02; persistence even
 - [x] Support deterministic replay with recorded provider/tool fixtures.
 - [x] Represent non-replayable dependencies explicitly.
 - [x] Add compensation orchestration for reversible tool operations.
-- [ ] Detect and quarantine ambiguous outcomes after process or network failure.
+- [x] Detect and quarantine ambiguous outcomes after process or network failure.
 
 **Acceptance criteria**
 
-- [ ] Restarting after every checkpoint does not duplicate committed side effects.
+- [x] Restarting after every checkpoint does not duplicate committed side effects.
 - [x] A recorded execution can be replayed without live provider access.
 - [x] Compensation results are durable, correlated, and auditable.
 

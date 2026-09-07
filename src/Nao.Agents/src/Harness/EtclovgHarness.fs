@@ -262,20 +262,39 @@ module EtclovgHarness =
 
                     let! sideEffectGroups = executionIds |> List.map journal.SideEffects.GetByExecution |> Task.WhenAll
 
-                    let hasAmbiguousSideEffect =
+                    let latestSideEffects =
                         sideEffectGroups
                         |> Seq.collect id
                         |> Seq.groupBy _.IdempotencyKey
-                        |> Seq.exists (fun (_, transitions) ->
-                            match transitions |> Seq.maxBy _.RecordedAt |> _.Phase with
+                        |> Seq.map (fun (_, transitions) -> transitions |> Seq.maxBy _.RecordedAt)
+                        |> Seq.toList
+
+                    let ambiguousSideEffects =
+                        latestSideEffects
+                        |> Seq.filter (fun transition ->
+                            match transition.Phase with
                             | ToolSideEffectPhase.IntentRecorded
                             | ToolSideEffectPhase.Interrupted
-                            | ToolSideEffectPhase.CompensationFailed -> true
+                            | ToolSideEffectPhase.CompensationFailed
                             | ToolSideEffectPhase.Succeeded
+                            | ToolSideEffectPhase.Quarantined -> true
                             | ToolSideEffectPhase.Failed
                             | ToolSideEffectPhase.CompensationSucceeded -> false)
+                        |> Seq.toList
 
-                    if hasAmbiguousSideEffect then
+                    if not ambiguousSideEffects.IsEmpty then
+                        for transition in
+                            ambiguousSideEffects
+                            |> List.filter (fun transition -> transition.Phase <> ToolSideEffectPhase.Quarantined) do
+                            do!
+                                journal.SideEffects.Save
+                                    { transition with
+                                        Id = Guid.NewGuid()
+                                        Phase = ToolSideEffectPhase.Quarantined
+                                        Detail =
+                                            Some "Execution ended before a terminal checkpoint confirmed safe recovery."
+                                        RecordedAt = DateTimeOffset.UtcNow }
+
                         return
                             ResumeDecision.Stop
                                 "Interrupted execution has an external side effect without a confirmed durable outcome; automatic replay is unsafe."
@@ -377,6 +396,7 @@ module EtclovgHarness =
                 }
 
             let reversibleExecutions = ResizeArray<ExecutionRecord * Tool>()
+            let mutable ambiguousOutcome = None
 
             let successfulToolRecord
                 (toolContext: AgentContext)
@@ -598,6 +618,20 @@ module EtclovgHarness =
                                     | Error failure ->
                                         do! saveSideEffect ToolSideEffectPhase.Failed (Some failure.Message)
 
+                                        if
+                                            tool.ReplaySafety = ToolReplaySafety.ExternallySideEffecting
+                                            && failure.Category = PlatformErrorCategory.TransientDependency
+                                        then
+                                            ambiguousOutcome <-
+                                                Some
+                                                    "An external dependency failure left the side-effect outcome ambiguous; the operation was quarantined."
+
+                                            do!
+                                                saveSideEffect
+                                                    ToolSideEffectPhase.Quarantined
+                                                    (Some
+                                                        "The dependency failure did not confirm whether the side effect committed.")
+
                                         match journal with
                                         | Some value ->
                                             do!
@@ -621,6 +655,17 @@ module EtclovgHarness =
                                         return Error(failure.ToPlatformFailure correlationId)
                                 with error ->
                                     do! saveSideEffect ToolSideEffectPhase.Interrupted (Some error.Message)
+
+                                    if tool.ReplaySafety = ToolReplaySafety.ExternallySideEffecting then
+                                        ambiguousOutcome <-
+                                            Some
+                                                "An interrupted external operation left the side-effect outcome ambiguous; the operation was quarantined."
+
+                                        do!
+                                            saveSideEffect
+                                                ToolSideEffectPhase.Quarantined
+                                                (Some "Execution was interrupted after side-effect intent was recorded.")
+
                                     return raise error
                 }
 
@@ -830,12 +875,17 @@ module EtclovgHarness =
 
                         sw.Stop()
 
-                        let executionOutcome =
+                        let normalizedExecutionOutcome =
                             match executionOutcome with
                             | Ok(Error LimitExceeded.Duration) -> Error ExecutionTerminalStatus.TimedOut
                             | Error(ExecutionTerminalStatus.LimitExceeded LimitExceeded.Duration) ->
                                 Error ExecutionTerminalStatus.TimedOut
                             | outcome -> outcome
+
+                        let executionOutcome =
+                            match ambiguousOutcome with
+                            | Some message -> Error(ExecutionTerminalStatus.Indeterminate message)
+                            | None -> normalizedExecutionOutcome
 
                         // === O: End execution span ===
                         match execSpan, config.Tracer with

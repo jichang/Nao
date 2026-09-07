@@ -244,6 +244,8 @@ type EtclovgHarnessTests() =
     [<DataRow("intent")>]
     [<DataRow("interrupted")>]
     [<DataRow("compensation-failed")>]
+    [<DataRow("succeeded")>]
+    [<DataRow("quarantined")>]
     member _.RetryFailsClosedForAmbiguousExternalSideEffect(phaseName: string) =
         let mutable executed = false
 
@@ -266,6 +268,8 @@ type EtclovgHarnessTests() =
             | "intent" -> ToolSideEffectPhase.IntentRecorded
             | "interrupted" -> ToolSideEffectPhase.Interrupted
             | "compensation-failed" -> ToolSideEffectPhase.CompensationFailed
+            | "succeeded" -> ToolSideEffectPhase.Succeeded
+            | "quarantined" -> ToolSideEffectPhase.Quarantined
             | value -> invalidArg (nameof value) "Unknown side-effect phase."
 
         journal.Checkpoints.Save
@@ -306,6 +310,16 @@ type EtclovgHarnessTests() =
         | ExecutionTerminalStatus.Indeterminate message ->
             StringAssert.Contains(message, "without a confirmed durable outcome")
         | status -> Assert.Fail(sprintf "Expected indeterminate retry, got %A." status)
+
+        let transitions =
+            journal.SideEffects.GetByExecution firstRequest.Correlation.ExecutionId
+            |> _.Result
+
+        Assert.AreEqual(ToolSideEffectPhase.Quarantined, transitions |> List.last |> _.Phase)
+
+        let expectedCount = if phase = ToolSideEffectPhase.Quarantined then 1 else 2
+
+        Assert.AreEqual(expectedCount, transitions.Length)
 
     [<TestMethod>]
     member _.DirectAgentExecutionFailsClosedWhenHarnessIsRequired() =
@@ -1468,6 +1482,70 @@ type EtclovgHarnessTests() =
         Assert.AreEqual([ history.Head ], journal.GetRevertibleAsync() |> _.Result)
         Assert.AreEqual(ToolSideEffectPhase.CompensationFailed, transitions |> List.last |> _.Phase)
         Assert.AreEqual(Some "cannot undo", transitions |> List.last |> _.Detail)
+
+    [<TestMethod>]
+    member _.NetworkFailureQuarantinesAmbiguousExternalOutcome() =
+        let mutable toolCalls = 0
+
+        let tool =
+            Tool.create
+                "remote-write"
+                "Writes to a remote dependency"
+                0
+                []
+                ToolCodec.text
+                ToolCodec.text
+                (ToolOperation.create ToolReplaySafety.ExternallySideEffecting (fun _ _ ->
+                    toolCalls <- toolCalls + 1
+                    raise (Net.Http.HttpRequestException "connection lost after send")))
+
+        let protocol = ToolProtocol.fromTools [ tool ]
+
+        let agent =
+            Agent.create
+                "ambiguous-network-agent"
+                "Ambiguous network agent"
+                "Propagates an ambiguous remote write failure"
+                0
+                []
+                AgentContract.Text
+                (fun context input ->
+                    task {
+                        let! invocation = protocol.InvokeAsync context (context.NextToolCallKey()) tool.Name input
+
+                        if invocation.Success then
+                            return invocation.Output
+                        else
+                            return "agent attempted recovery"
+                    })
+
+        let journal = InMemoryExecutionJournal.create ()
+        let context = AgentContext.unrestrictedForTests ()
+        let executionRequest = request context agent "value"
+
+        let config =
+            { EtclovgConfig.Default with
+                ExecutionJournal = Some journal }
+
+        let result = (EtclovgHarness.runAsync config context agent executionRequest).Result
+
+        let transitions =
+            journal.SideEffects.GetByExecution result.Correlation.ExecutionId |> _.Result
+
+        Assert.AreEqual(1, toolCalls)
+
+        match result.Status with
+        | ExecutionTerminalStatus.Indeterminate message -> StringAssert.Contains(message, "quarantined")
+        | status -> Assert.Fail(sprintf "Expected indeterminate execution, got %A." status)
+
+        CollectionAssert.AreEqual(
+            [| ToolSideEffectPhase.IntentRecorded
+               ToolSideEffectPhase.Failed
+               ToolSideEffectPhase.Quarantined |],
+            transitions |> List.map _.Phase |> List.toArray
+        )
+
+        Assert.IsTrue((journal.GetRevertibleAsync() |> _.Result).IsEmpty)
 
     [<TestMethod>]
     member _.HarnessDeadlineBoundsProviderCall() =

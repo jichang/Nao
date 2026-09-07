@@ -85,6 +85,7 @@ module ToolSideEffectSerialization =
         | ToolSideEffectPhase.Interrupted -> "interrupted"
         | ToolSideEffectPhase.CompensationSucceeded -> "compensation-succeeded"
         | ToolSideEffectPhase.CompensationFailed -> "compensation-failed"
+        | ToolSideEffectPhase.Quarantined -> "quarantined"
 
     let private phaseFromString =
         function
@@ -94,6 +95,7 @@ module ToolSideEffectSerialization =
         | "interrupted" -> ToolSideEffectPhase.Interrupted
         | "compensation-succeeded" -> ToolSideEffectPhase.CompensationSucceeded
         | "compensation-failed" -> ToolSideEffectPhase.CompensationFailed
+        | "quarantined" -> ToolSideEffectPhase.Quarantined
         | value -> invalidArg (nameof value) "Invalid tool side-effect phase."
 
     let toDto (transition: ToolSideEffectTransition) : Dto =
@@ -200,7 +202,15 @@ module InMemoryExecutionJournal =
         let getRevertibleAsync () =
             lock entries (fun () ->
                 entries
-                |> Seq.filter (fun entry -> not entry.Reverted && entry.Failure.IsNone)
+                |> Seq.filter (fun entry ->
+                    let quarantined =
+                        lock sideEffects (fun () ->
+                            sideEffects
+                            |> Seq.exists (fun transition ->
+                                transition.IdempotencyKey = entry.IdempotencyKey
+                                && transition.Phase = ToolSideEffectPhase.Quarantined))
+
+                    not entry.Reverted && entry.Failure.IsNone && not quarantined)
                 |> Seq.toList)
             |> Task.FromResult
 
@@ -638,7 +648,7 @@ module AdoExecutionJournal =
                 return!
                     Ado.query
                         factory
-                        "SELECT record_id, idempotency_key, execution_id, correlation_id, causation_id, attempt, owner, turn_id, tool_name, replay_safety, tool_input, tool_output, failure_kind, failure_message, failure_retryable, executed_at, reverted, metadata FROM nao_execution_journal WHERE reverted = 0 AND failure_kind IS NULL ORDER BY executed_at DESC"
+                        "SELECT record_id, idempotency_key, execution_id, correlation_id, causation_id, attempt, owner, turn_id, tool_name, replay_safety, tool_input, tool_output, failure_kind, failure_message, failure_retryable, executed_at, reverted, metadata FROM nao_execution_journal WHERE reverted = 0 AND failure_kind IS NULL AND NOT EXISTS (SELECT 1 FROM nao_tool_side_effects WHERE nao_tool_side_effects.idempotency_key = nao_execution_journal.idempotency_key AND nao_tool_side_effects.phase = 'quarantined') ORDER BY executed_at DESC"
                         []
                         mapRecord
             }
@@ -914,9 +924,19 @@ module FileExecutionJournal =
             task {
                 return
                     lock sync (fun () ->
+                        let quarantinedKeys =
+                            loadSideEffects ()
+                            |> List.map ToolSideEffectSerialization.ofDto
+                            |> List.filter (fun transition -> transition.Phase = ToolSideEffectPhase.Quarantined)
+                            |> List.map _.IdempotencyKey
+                            |> Set.ofList
+
                         load ()
                         |> List.map Dto.ofExecutionDto
-                        |> List.filter (fun record -> not record.Reverted && record.Failure.IsNone))
+                        |> List.filter (fun record ->
+                            not record.Reverted
+                            && record.Failure.IsNone
+                            && not (quarantinedKeys |> Set.contains record.IdempotencyKey)))
             }
 
         let markRevertedAsync (recordId: Guid) =
