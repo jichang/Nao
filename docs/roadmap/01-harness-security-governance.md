@@ -55,24 +55,26 @@ Executable replay is introduced and governed as part of HAR-02; persistence even
 
 - [x] Implement a process-backed `IExecutionEnvironment`.
 - [x] Define the worker protocol and version handshake.
-- [ ] Run workers under a restricted operating-system identity where supported.
+- [x] Run workers under a restricted operating-system identity where supported.
 - [x] Validate and apply the process working directory.
-- [ ] Enforce filesystem allowlists.
+- [x] Enforce filesystem allowlists.
 - [x] Enforce environment-variable allowlists.
-- [ ] Resolve secret handles only inside authorized worker boundaries.
+- [x] Resolve secret handles only inside authorized worker boundaries.
 - [x] Enforce wall-clock timeout and propagate cancellation.
-- [ ] Enforce output, tool-call, token, and cost budgets.
-- [ ] Enforce memory and CPU limits on supported operating systems.
+- [x] Enforce a combined process stdout/stderr byte budget.
+- [x] Enforce worker tool-call, token, and cost budgets.
+- [x] Enforce a sampled process working-set memory limit.
+- [x] Enforce CPU limits on supported operating systems.
 - [x] Kill complete child-process trees after timeout, cancellation, or host shutdown.
-- [ ] Capture bounded stdout/stderr as redacted artifacts.
-- [ ] Document platform-specific enforcement differences.
+- [x] Capture bounded stdout/stderr as redacted artifacts.
+- [x] Document platform-specific enforcement differences.
 
 **Acceptance criteria**
 
-- [ ] A worker cannot read undeclared test files.
+- [x] A worker cannot read undeclared test files.
 - [x] A worker cannot read undeclared environment variables.
 - [x] A worker cannot retain child processes after cancellation.
-- [ ] Every configured limit has a deterministic test and structured result.
+- [x] Every configured limit has a deterministic test and structured result.
 
 ## HAR-04 — Container isolation
 

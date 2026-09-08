@@ -197,7 +197,11 @@ type ExecutionEnvironmentTests() =
         ExecutionEnvironment.processWorker
             { FileName = workerExecutable
               Arguments = arguments
-              ProtocolVersion = protocolVersion }
+              ProtocolVersion = protocolVersion
+              IdentityIsolation = ProcessIdentityIsolation.Disabled
+              FileSystemIsolation = ProcessFileSystemIsolation.Disabled
+              SecretResolver = None
+              OutputCapture = None }
 
     [<TestMethod>]
     member _.LocalEnvironmentExecutesAgent() =
@@ -232,6 +236,196 @@ type ExecutionEnvironmentTests() =
             Assert.AreEqual(ExecutionId.serialize correlation.ExecutionId, fields.[2])
             Assert.AreEqual(string (CorrelationId.value correlation.CorrelationId), fields.[3])
             Assert.AreEqual(string correlation.Attempt, fields.[4])
+
+    [<TestMethod>]
+    member _.LinuxUserNamespaceMapsWorkerIdentity() =
+        if OperatingSystem.IsLinux() then
+            let unshareExecutable =
+                [ "/usr/bin/unshare"; "/bin/unshare" ] |> List.tryFind IO.File.Exists
+
+            match unshareExecutable with
+            | None -> ()
+            | Some unshareExecutable ->
+                let userId = uint32 (Random.Shared.Next(60000, 65000))
+                let groupId = uint32 (Random.Shared.Next(60000, 65000))
+
+                let agent =
+                    Agent.createWorker
+                        "worker-identity"
+                        "worker-identity"
+                        "process identity test agent"
+                        0
+                        []
+                        AgentContract.Text
+                        (WorkerAgentReference.create "process-identity")
+
+                let environment =
+                    ExecutionEnvironment.processWorker
+                        { FileName = workerExecutable
+                          Arguments = []
+                          ProtocolVersion = WorkerProtocol.CurrentVersion
+                          IdentityIsolation =
+                            ProcessIdentityIsolation.LinuxUserNamespace(unshareExecutable, userId, groupId)
+                          FileSystemIsolation = ProcessFileSystemIsolation.Disabled
+                          SecretResolver = None
+                          OutputCapture = None }
+
+                let result =
+                    environment.ExecuteAsync
+                        (ExecutionContext.Create SandboxConfig.Default)
+                        (AgentContext.unrestrictedForTests ())
+                        agent
+                        ""
+                    |> _.Result
+
+                Assert.AreEqual(Ok(sprintf "%d|%d" userId groupId), result)
+
+    [<TestMethod>]
+    member _.LinuxUserNamespaceRejectsMissingLauncherBeforeSpawn() =
+        if OperatingSystem.IsLinux() then
+            let missingLauncher =
+                IO.Path.Combine(IO.Path.GetTempPath(), "nao-missing-unshare-" + Guid.NewGuid().ToString("N"))
+
+            let environment =
+                ExecutionEnvironment.processWorker
+                    { FileName = workerExecutable
+                      Arguments = []
+                      ProtocolVersion = WorkerProtocol.CurrentVersion
+                      IdentityIsolation = ProcessIdentityIsolation.LinuxUserNamespace(missingLauncher, 65534u, 65534u)
+                      FileSystemIsolation = ProcessFileSystemIsolation.Disabled
+                      SecretResolver = None
+                      OutputCapture = None }
+
+            let error =
+                Assert.ThrowsExactlyAsync<GovernedExecutionException>(fun () ->
+                    environment.ExecuteAsync
+                        (ExecutionContext.Create SandboxConfig.Default)
+                        (AgentContext.unrestrictedForTests ())
+                        workerAgent
+                        "payload"
+                    :> Task)
+                |> _.Result
+
+            StringAssert.Contains(error.Message, "existing fully qualified unshare")
+
+    [<TestMethod>]
+    member _.ProcessEnvironmentResolvesDeclaredSecretInsideWorker() =
+        let handle = "secret-" + Guid.NewGuid().ToString("N")
+        let secret = Guid.NewGuid().ToString("N")
+        let resolvedHandles = ResizeArray<string>()
+
+        let agent =
+            Agent.createWorker
+                "worker-secret"
+                "worker-secret"
+                "process secret test agent"
+                0
+                []
+                AgentContract.Text
+                (WorkerAgentReference.create "process-secret-hash")
+
+        let environment =
+            ExecutionEnvironment.processWorker
+                { FileName = workerExecutable
+                  Arguments = []
+                  ProtocolVersion = WorkerProtocol.CurrentVersion
+                  IdentityIsolation = ProcessIdentityIsolation.Disabled
+                  FileSystemIsolation = ProcessFileSystemIsolation.Disabled
+                  SecretResolver =
+                    Some
+                        { Handles = [ handle ]
+                          ResolveAsync =
+                            fun _ _ requestedHandle ->
+                                resolvedHandles.Add requestedHandle
+                                Task.FromResult(if requestedHandle = handle then Some secret else None) }
+                  OutputCapture = None }
+
+        let result =
+            environment.ExecuteAsync
+                (ExecutionContext.Create SandboxConfig.Default)
+                (AgentContext.unrestrictedForTests ())
+                agent
+                handle
+            |> _.Result
+
+        let expectedHash =
+            secret
+            |> Text.Encoding.UTF8.GetBytes
+            |> Security.Cryptography.SHA256.HashData
+            |> Convert.ToHexString
+
+        Assert.AreEqual(Ok expectedHash, result)
+        CollectionAssert.AreEqual([| handle |], resolvedHandles.ToArray())
+
+    [<TestMethod>]
+    member _.ProcessEnvironmentRejectsUndeclaredSecretWithoutResolvingIt() =
+        let mutable resolverCalled = false
+
+        let agent =
+            Agent.createWorker
+                "worker-secret"
+                "worker-secret"
+                "process secret test agent"
+                0
+                []
+                AgentContract.Text
+                (WorkerAgentReference.create "process-secret-hash")
+
+        let environment =
+            ExecutionEnvironment.processWorker
+                { FileName = workerExecutable
+                  Arguments = []
+                  ProtocolVersion = WorkerProtocol.CurrentVersion
+                  IdentityIsolation = ProcessIdentityIsolation.Disabled
+                  FileSystemIsolation = ProcessFileSystemIsolation.Disabled
+                  SecretResolver =
+                    Some
+                        { Handles = []
+                          ResolveAsync =
+                            fun _ _ _ ->
+                                resolverCalled <- true
+                                Task.FromResult None }
+                  OutputCapture = None }
+
+        Assert.ThrowsExactlyAsync<GovernedExecutionException>(fun () ->
+            environment.ExecuteAsync
+                (ExecutionContext.Create SandboxConfig.Default)
+                (AgentContext.unrestrictedForTests ())
+                agent
+                ("undeclared-" + Guid.NewGuid().ToString("N"))
+            :> Task)
+        |> _.Wait()
+
+        Assert.IsFalse resolverCalled
+
+    [<TestMethod>]
+    member _.ProcessEnvironmentRejectsUnresolvedDeclaredSecret() =
+        let handle = "secret-" + Guid.NewGuid().ToString("N")
+
+        let environment =
+            ExecutionEnvironment.processWorker
+                { FileName = workerExecutable
+                  Arguments = []
+                  ProtocolVersion = WorkerProtocol.CurrentVersion
+                  IdentityIsolation = ProcessIdentityIsolation.Disabled
+                  FileSystemIsolation = ProcessFileSystemIsolation.Disabled
+                  SecretResolver =
+                    Some
+                        { Handles = [ handle ]
+                          ResolveAsync = fun _ _ _ -> Task.FromResult None }
+                  OutputCapture = None }
+
+        let error =
+            Assert.ThrowsExactlyAsync<GovernedExecutionException>(fun () ->
+                environment.ExecuteAsync
+                    (ExecutionContext.Create SandboxConfig.Default)
+                    (AgentContext.unrestrictedForTests ())
+                    workerAgent
+                    "payload"
+                :> Task)
+            |> _.Result
+
+        StringAssert.Contains(error.Message, "could not be resolved")
 
     [<TestMethod>]
     member _.ProcessEnvironmentRejectsProtocolMismatchBeforeExecution() =
@@ -306,6 +500,88 @@ type ExecutionEnvironmentTests() =
             Environment.SetEnvironmentVariable(variableName, previousValue)
 
     [<TestMethod>]
+    [<DoNotParallelize>]
+    member _.LinuxLandlockAllowsDeclaredFileAndDeniesUndeclaredFile() =
+        if OperatingSystem.IsLinux() then
+            let directory =
+                IO.Path.Combine(IO.Path.GetTempPath(), "nao-landlock-" + Guid.NewGuid().ToString("N"))
+
+            IO.Directory.CreateDirectory directory |> ignore
+            let declaredPath = IO.Path.Combine(directory, "declared.txt")
+            let undeclaredPath = IO.Path.Combine(directory, "undeclared.txt")
+            let declaredContent = Guid.NewGuid().ToString("N")
+            IO.File.WriteAllText(declaredPath, declaredContent)
+            IO.File.WriteAllText(undeclaredPath, Guid.NewGuid().ToString("N"))
+
+            try
+                let agent =
+                    Agent.createWorker
+                        "worker-read-file"
+                        "worker-read-file"
+                        "process filesystem allowlist test agent"
+                        0
+                        []
+                        AgentContract.Text
+                        (WorkerAgentReference.create "process-filesystem-probe")
+
+                let sandbox =
+                    { SandboxConfig.Default with
+                        AllowFileSystem = true
+                        AllowedPaths = [ declaredPath ] }
+
+                let environment =
+                    ExecutionEnvironment.processWorker
+                        { FileName = workerExecutable
+                          Arguments = []
+                          ProtocolVersion = WorkerProtocol.CurrentVersion
+                          IdentityIsolation = ProcessIdentityIsolation.Disabled
+                          FileSystemIsolation = ProcessFileSystemIsolation.LinuxLandlock
+                          SecretResolver = None
+                          OutputCapture = None }
+
+                let result =
+                    environment.ExecuteAsync
+                        (ExecutionContext.Create sandbox)
+                        (AgentContext.unrestrictedForTests ())
+                        agent
+                        (declaredPath + "\n" + undeclaredPath)
+                    |> _.Result
+
+                Assert.AreEqual(Ok(declaredContent + "|<denied>"), result)
+            finally
+                IO.Directory.Delete(directory, true)
+
+    [<TestMethod>]
+    member _.LinuxLandlockRejectsRelativeAllowedPathBeforeSpawn() =
+        if OperatingSystem.IsLinux() then
+            let environment =
+                ExecutionEnvironment.processWorker
+                    { FileName = workerExecutable
+                      Arguments = []
+                      ProtocolVersion = WorkerProtocol.CurrentVersion
+                      IdentityIsolation = ProcessIdentityIsolation.Disabled
+                      FileSystemIsolation = ProcessFileSystemIsolation.LinuxLandlock
+                      SecretResolver = None
+                      OutputCapture = None }
+
+            let sandbox =
+                { SandboxConfig.Default with
+                    AllowFileSystem = true
+                    AllowedPaths = [ "relative-" + Guid.NewGuid().ToString("N") ] }
+
+            let error =
+                Assert.ThrowsExactlyAsync<GovernedExecutionException>(fun () ->
+                    environment.ExecuteAsync
+                        (ExecutionContext.Create sandbox)
+                        (AgentContext.unrestrictedForTests ())
+                        workerAgent
+                        "payload"
+                    :> Task)
+                |> _.Result
+
+            StringAssert.Contains(error.Message, "allowlist paths must be fully qualified")
+
+    [<TestMethod>]
     member _.ProcessEnvironmentUsesDeclaredWorkingDirectory() =
         let workingDirectory =
             IO.Path.Combine(IO.Path.GetTempPath(), "nao-worker-" + Guid.NewGuid().ToString("N"))
@@ -373,6 +649,286 @@ type ExecutionEnvironmentTests() =
             |> _.Result
 
         StringAssert.Contains(error.Message, "working directory must be fully qualified")
+
+    [<TestMethod>]
+    member _.ProcessEnvironmentReturnsStructuredMemoryLimit() =
+        let agent =
+            Agent.createWorker
+                "worker-memory"
+                "worker-memory"
+                "process memory limit test agent"
+                0
+                []
+                AgentContract.Text
+                (WorkerAgentReference.create "process-delay")
+
+        let sandbox =
+            { SandboxConfig.Default with
+                Limits =
+                    { ResourceLimits.Unlimited with
+                        MaxMemoryBytes = Some 1L } }
+
+        let execution = ExecutionContext.Create sandbox
+        let environment = processEnvironment WorkerProtocol.CurrentVersion []
+
+        let result =
+            environment.ExecuteAsync execution (AgentContext.unrestrictedForTests ()) agent "30000"
+            |> _.Result
+
+        Assert.AreEqual(Error LimitExceeded.Memory, result)
+
+    [<TestMethod>]
+    member _.ProcessEnvironmentReturnsEveryStructuredWorkerBudgetLimit() =
+        let amount = Random.Shared.Next(2, 20)
+
+        let cases =
+            [ LimitExceeded.LlmCalls,
+              { ResourceLimits.Unlimited with
+                  MaxLlmCalls = 0 },
+              "llm-call"
+              LimitExceeded.ToolCalls,
+              { ResourceLimits.Unlimited with
+                  MaxToolCalls = 0 },
+              "tool-call"
+              LimitExceeded.TotalTokens,
+              { ResourceLimits.Unlimited with
+                  MaxTotalTokens = amount - 1 },
+              sprintf "llm-usage|%d|0" amount
+              LimitExceeded.Cost,
+              { ResourceLimits.Unlimited with
+                  MaxCostUsd = decimal (amount - 1) },
+              sprintf "llm-usage|0|%d" amount ]
+
+        let agent =
+            Agent.createWorker
+                "worker-budget"
+                "worker-budget"
+                "process worker budget test agent"
+                0
+                []
+                AgentContract.Text
+                (WorkerAgentReference.create "process-budget")
+
+        for expected, limits, input in cases do
+            let execution =
+                ExecutionContext.Create
+                    { SandboxConfig.Default with
+                        Limits = limits }
+
+            let result =
+                (processEnvironment WorkerProtocol.CurrentVersion []).ExecuteAsync
+                    execution
+                    (AgentContext.unrestrictedForTests ())
+                    agent
+                    input
+                |> _.Result
+
+            Assert.AreEqual(Error expected, result, sprintf "Expected worker limit %A." expected)
+
+    [<TestMethod>]
+    member _.ProcessEnvironmentMergesWorkerUsageIntoHostBudget() =
+        let tokens = Random.Shared.Next(2, 20)
+        let cost = decimal (Random.Shared.Next(2, 20))
+
+        let agent =
+            Agent.createWorker
+                "worker-budget"
+                "worker-budget"
+                "process worker usage test agent"
+                0
+                []
+                AgentContract.Text
+                (WorkerAgentReference.create "process-budget")
+
+        let execution = ExecutionContext.Create SandboxConfig.Default
+
+        let result =
+            (processEnvironment WorkerProtocol.CurrentVersion []).ExecuteAsync
+                execution
+                (AgentContext.unrestrictedForTests ())
+                agent
+                (sprintf "llm|%d|%M" tokens cost)
+            |> _.Result
+
+        Assert.AreEqual(Ok "completed", result)
+        Assert.AreEqual(1, execution.Usage.LlmCalls)
+        Assert.AreEqual(tokens, execution.Usage.TotalTokens)
+        Assert.AreEqual(cost, execution.Usage.EstimatedCostUsd)
+
+    [<TestMethod>]
+    member _.ProcessEnvironmentEnforcesRemainingHostBudget() =
+        let agent =
+            Agent.createWorker
+                "worker-budget"
+                "worker-budget"
+                "process worker remaining budget test agent"
+                0
+                []
+                AgentContract.Text
+                (WorkerAgentReference.create "process-budget")
+
+        let execution =
+            ExecutionContext.Create
+                { SandboxConfig.Default with
+                    Limits =
+                        { ResourceLimits.Unlimited with
+                            MaxToolCalls = 1 } }
+
+        execution.RecordToolCall()
+
+        let result =
+            (processEnvironment WorkerProtocol.CurrentVersion []).ExecuteAsync
+                execution
+                (AgentContext.unrestrictedForTests ())
+                agent
+                "tool-call"
+            |> _.Result
+
+        Assert.AreEqual(Error LimitExceeded.ToolCalls, result)
+        Assert.AreEqual(1, execution.Usage.ToolCalls)
+
+    [<TestMethod>]
+    [<DoNotParallelize>]
+    member _.ProcessEnvironmentReturnsStructuredCpuLimit() =
+        let agent =
+            Agent.createWorker
+                "worker-cpu"
+                "worker-cpu"
+                "process CPU limit test agent"
+                0
+                []
+                AgentContract.Text
+                (WorkerAgentReference.create "process-cpu")
+
+        let sandbox =
+            { SandboxConfig.Default with
+                Limits =
+                    { ResourceLimits.Unlimited with
+                        MaxCpuTime = Some(TimeSpan.FromMilliseconds 50.0) } }
+
+        let execution = ExecutionContext.Create sandbox
+        let environment = processEnvironment WorkerProtocol.CurrentVersion []
+
+        let result =
+            environment.ExecuteAsync execution (AgentContext.unrestrictedForTests ()) agent "30000"
+            |> _.Result
+
+        Assert.AreEqual(Error LimitExceeded.Cpu, result)
+
+    [<TestMethod>]
+    member _.ProcessEnvironmentDoesNotCountIdleTimeAsCpuTime() =
+        let agent =
+            Agent.createWorker
+                "worker-delay"
+                "worker-delay"
+                "process CPU allowance test agent"
+                0
+                []
+                AgentContract.Text
+                (WorkerAgentReference.create "process-delay")
+
+        let sandbox =
+            { SandboxConfig.Default with
+                Limits =
+                    { ResourceLimits.Unlimited with
+                        MaxCpuTime = Some(TimeSpan.FromSeconds 2.0) } }
+
+        let execution = ExecutionContext.Create sandbox
+        let environment = processEnvironment WorkerProtocol.CurrentVersion []
+
+        let result =
+            environment.ExecuteAsync execution (AgentContext.unrestrictedForTests ()) agent "500"
+            |> _.Result
+
+        Assert.AreEqual(Ok "completed", result)
+
+    [<TestMethod>]
+    member _.ProcessEnvironmentReturnsOutputWithinByteLimit() =
+        let outputLength = Random.Shared.Next(64, 257)
+
+        let agent =
+            Agent.createWorker
+                "worker-output"
+                "worker-output"
+                "process output test agent"
+                0
+                []
+                AgentContract.Text
+                (WorkerAgentReference.create "process-output")
+
+        let sandbox =
+            { SandboxConfig.Default with
+                Limits =
+                    { ResourceLimits.Unlimited with
+                        MaxOutputBytes = Some 4096L } }
+
+        let execution = ExecutionContext.Create sandbox
+        let environment = processEnvironment WorkerProtocol.CurrentVersion []
+
+        match
+            environment.ExecuteAsync execution (AgentContext.unrestrictedForTests ()) agent (string outputLength)
+            |> _.Result
+        with
+        | Error limit -> Assert.Fail(sprintf "Expected worker result, got limit %A." limit)
+        | Ok output ->
+            Assert.AreEqual(outputLength, output.Length)
+            Assert.IsTrue(output |> Seq.forall ((=) 'x'))
+
+    [<TestMethod>]
+    [<DoNotParallelize>]
+    member _.ProcessEnvironmentReturnsStructuredStdoutLimit() =
+        let agent =
+            Agent.createWorker
+                "worker-output"
+                "worker-output"
+                "process output limit test agent"
+                0
+                []
+                AgentContract.Text
+                (WorkerAgentReference.create "process-output")
+
+        let sandbox =
+            { SandboxConfig.Default with
+                Limits =
+                    { ResourceLimits.Unlimited with
+                        MaxOutputBytes = Some 1024L } }
+
+        let execution = ExecutionContext.Create sandbox
+        let environment = processEnvironment WorkerProtocol.CurrentVersion []
+
+        let result =
+            environment.ExecuteAsync execution (AgentContext.unrestrictedForTests ()) agent "8192"
+            |> _.Result
+
+        Assert.AreEqual(Error LimitExceeded.Output, result)
+
+    [<TestMethod>]
+    [<DoNotParallelize>]
+    member _.ProcessEnvironmentReturnsStructuredStderrLimit() =
+        let agent =
+            Agent.createWorker
+                "worker-stderr"
+                "worker-stderr"
+                "process standard error limit test agent"
+                0
+                []
+                AgentContract.Text
+                (WorkerAgentReference.create "process-stderr")
+
+        let sandbox =
+            { SandboxConfig.Default with
+                Limits =
+                    { ResourceLimits.Unlimited with
+                        MaxOutputBytes = Some 1024L } }
+
+        let execution = ExecutionContext.Create sandbox
+        let environment = processEnvironment WorkerProtocol.CurrentVersion []
+
+        let result =
+            environment.ExecuteAsync execution (AgentContext.unrestrictedForTests ()) agent "8192"
+            |> _.Result
+
+        Assert.AreEqual(Error LimitExceeded.Output, result)
 
     [<TestMethod>]
     [<DoNotParallelize>]

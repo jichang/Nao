@@ -80,7 +80,11 @@ type EtclovgHarnessTests() =
             ExecutionEnvironment.processWorker
                 { FileName = IO.Path.Combine(workerDirectory, "Nao.Agents.Worker")
                   Arguments = []
-                  ProtocolVersion = WorkerProtocol.CurrentVersion }
+                  ProtocolVersion = WorkerProtocol.CurrentVersion
+                  IdentityIsolation = ProcessIdentityIsolation.Disabled
+                  FileSystemIsolation = ProcessFileSystemIsolation.Disabled
+                  SecretResolver = None
+                  OutputCapture = None }
 
         let context = AgentContext.unrestrictedForTests ()
 
@@ -124,7 +128,11 @@ type EtclovgHarnessTests() =
             ExecutionEnvironment.processWorker
                 { FileName = IO.Path.Combine(workerDirectory, "Nao.Agents.Worker")
                   Arguments = []
-                  ProtocolVersion = WorkerProtocol.CurrentVersion }
+                  ProtocolVersion = WorkerProtocol.CurrentVersion
+                  IdentityIsolation = ProcessIdentityIsolation.Disabled
+                  FileSystemIsolation = ProcessFileSystemIsolation.Disabled
+                  SecretResolver = None
+                  OutputCapture = None }
 
         let context = AgentContext.unrestrictedForTests ()
 
@@ -145,6 +153,272 @@ type EtclovgHarnessTests() =
             (EtclovgHarness.runAsync config context workerAgent executionRequest).Result
 
         Assert.AreEqual(ExecutionTerminalStatus.TimedOut, result.Status)
+
+    [<TestMethod>]
+    member _.HarnessReportsProcessWorkerMemoryLimit() =
+        let workerAgent =
+            Agent.createWorker
+                "worker-memory"
+                "worker-memory"
+                "process memory limit test agent"
+                0
+                []
+                AgentContract.Text
+                (WorkerAgentReference.create "process-delay")
+
+        let workerDirectory =
+            typeof<WorkerAssemblyMarker>.Assembly.Location
+            |> IO.Path.GetDirectoryName
+            |> Option.ofObj
+            |> Option.defaultWith (fun () -> invalidOp "Worker assembly directory is unavailable.")
+
+        let processEnvironment =
+            ExecutionEnvironment.processWorker
+                { FileName = IO.Path.Combine(workerDirectory, "Nao.Agents.Worker")
+                  Arguments = []
+                  ProtocolVersion = WorkerProtocol.CurrentVersion
+                  IdentityIsolation = ProcessIdentityIsolation.Disabled
+                  FileSystemIsolation = ProcessFileSystemIsolation.Disabled
+                  SecretResolver = None
+                  OutputCapture = None }
+
+        let context = AgentContext.unrestrictedForTests ()
+
+        let executionRequest =
+            { request context workerAgent "30000" with
+                Sandbox =
+                    { SandboxConfig.Default with
+                        Isolation = SandboxIsolation.Process
+                        Limits =
+                            { ResourceLimits.Unlimited with
+                                MaxMemoryBytes = Some 1L } } }
+
+        let config =
+            { EtclovgConfig.Default with
+                ProcessEnvironment = Some processEnvironment }
+
+        let result =
+            (EtclovgHarness.runAsync config context workerAgent executionRequest).Result
+
+        Assert.AreEqual(ExecutionTerminalStatus.LimitExceeded LimitExceeded.Memory, result.Status)
+
+    [<TestMethod>]
+    [<DoNotParallelize>]
+    member _.HarnessReportsProcessWorkerCpuLimit() =
+        let workerAgent =
+            Agent.createWorker
+                "worker-cpu"
+                "worker-cpu"
+                "process CPU limit test agent"
+                0
+                []
+                AgentContract.Text
+                (WorkerAgentReference.create "process-cpu")
+
+        let workerDirectory =
+            typeof<WorkerAssemblyMarker>.Assembly.Location
+            |> IO.Path.GetDirectoryName
+            |> Option.ofObj
+            |> Option.defaultWith (fun () -> invalidOp "Worker assembly directory is unavailable.")
+
+        let processEnvironment =
+            ExecutionEnvironment.processWorker
+                { FileName = IO.Path.Combine(workerDirectory, "Nao.Agents.Worker")
+                  Arguments = []
+                  ProtocolVersion = WorkerProtocol.CurrentVersion
+                  IdentityIsolation = ProcessIdentityIsolation.Disabled
+                  FileSystemIsolation = ProcessFileSystemIsolation.Disabled
+                  SecretResolver = None
+                  OutputCapture = None }
+
+        let context = AgentContext.unrestrictedForTests ()
+
+        let executionRequest =
+            { request context workerAgent "30000" with
+                Sandbox =
+                    { SandboxConfig.Default with
+                        Isolation = SandboxIsolation.Process
+                        Limits =
+                            { ResourceLimits.Unlimited with
+                                MaxCpuTime = Some(TimeSpan.FromMilliseconds 50.0) } } }
+
+        let config =
+            { EtclovgConfig.Default with
+                ProcessEnvironment = Some processEnvironment }
+
+        let result =
+            (EtclovgHarness.runAsync config context workerAgent executionRequest).Result
+
+        Assert.AreEqual(ExecutionTerminalStatus.LimitExceeded LimitExceeded.Cpu, result.Status)
+
+    [<TestMethod>]
+    member _.HarnessReportsProcessWorkerCostLimit() =
+        let workerAgent =
+            Agent.createWorker
+                "worker-budget"
+                "worker-budget"
+                "process worker cost limit test agent"
+                0
+                []
+                AgentContract.Text
+                (WorkerAgentReference.create "process-budget")
+
+        let workerDirectory =
+            typeof<WorkerAssemblyMarker>.Assembly.Location
+            |> IO.Path.GetDirectoryName
+            |> Option.ofObj
+            |> Option.defaultWith (fun () -> invalidOp "Worker assembly directory is unavailable.")
+
+        let processEnvironment =
+            ExecutionEnvironment.processWorker
+                { FileName = IO.Path.Combine(workerDirectory, "Nao.Agents.Worker")
+                  Arguments = []
+                  ProtocolVersion = WorkerProtocol.CurrentVersion
+                  IdentityIsolation = ProcessIdentityIsolation.Disabled
+                  FileSystemIsolation = ProcessFileSystemIsolation.Disabled
+                  SecretResolver = None
+                  OutputCapture = None }
+
+        let context = AgentContext.unrestrictedForTests ()
+
+        let executionRequest =
+            { request context workerAgent "llm-usage|0|2" with
+                Sandbox =
+                    { SandboxConfig.Default with
+                        Isolation = SandboxIsolation.Process
+                        Limits =
+                            { ResourceLimits.Unlimited with
+                                MaxCostUsd = 1m } } }
+
+        let config =
+            { EtclovgConfig.Default with
+                ProcessEnvironment = Some processEnvironment }
+
+        let result =
+            (EtclovgHarness.runAsync config context workerAgent executionRequest).Result
+
+        Assert.AreEqual(ExecutionTerminalStatus.LimitExceeded LimitExceeded.Cost, result.Status)
+
+    [<TestMethod>]
+    [<DoNotParallelize>]
+    member _.HarnessReportsProcessWorkerOutputLimit() =
+        let workerAgent =
+            Agent.createWorker
+                "worker-output"
+                "worker-output"
+                "process output limit test agent"
+                0
+                []
+                AgentContract.Text
+                (WorkerAgentReference.create "process-output")
+
+        let workerDirectory =
+            typeof<WorkerAssemblyMarker>.Assembly.Location
+            |> IO.Path.GetDirectoryName
+            |> Option.ofObj
+            |> Option.defaultWith (fun () -> invalidOp "Worker assembly directory is unavailable.")
+
+        let processEnvironment =
+            ExecutionEnvironment.processWorker
+                { FileName = IO.Path.Combine(workerDirectory, "Nao.Agents.Worker")
+                  Arguments = []
+                  ProtocolVersion = WorkerProtocol.CurrentVersion
+                  IdentityIsolation = ProcessIdentityIsolation.Disabled
+                  FileSystemIsolation = ProcessFileSystemIsolation.Disabled
+                  SecretResolver = None
+                  OutputCapture = None }
+
+        let context = AgentContext.unrestrictedForTests ()
+
+        let executionRequest =
+            { request context workerAgent "8192" with
+                Sandbox =
+                    { SandboxConfig.Default with
+                        Isolation = SandboxIsolation.Process
+                        Limits =
+                            { ResourceLimits.Unlimited with
+                                MaxOutputBytes = Some 1024L } } }
+
+        let config =
+            { EtclovgConfig.Default with
+                ProcessEnvironment = Some processEnvironment }
+
+        let result =
+            (EtclovgHarness.runAsync config context workerAgent executionRequest).Result
+
+        Assert.AreEqual(ExecutionTerminalStatus.LimitExceeded LimitExceeded.Output, result.Status)
+
+    [<TestMethod>]
+    [<DoNotParallelize>]
+    member _.HarnessCapturesBoundedRedactedProcessOutputArtifacts() =
+        let secret = "secret-" + Guid.NewGuid().ToString("N")
+        let maximumBytesPerStream = Random.Shared.Next(64, 129)
+
+        let workerAgent =
+            Agent.createWorker
+                "worker-stderr-text"
+                "worker-stderr-text"
+                "process output artifact test agent"
+                0
+                []
+                AgentContract.Text
+                (WorkerAgentReference.create "process-stderr-text")
+
+        let workerDirectory =
+            typeof<WorkerAssemblyMarker>.Assembly.Location
+            |> IO.Path.GetDirectoryName
+            |> Option.ofObj
+            |> Option.defaultWith (fun () -> invalidOp "Worker assembly directory is unavailable.")
+
+        let processEnvironment =
+            ExecutionEnvironment.processWorker
+                { FileName = IO.Path.Combine(workerDirectory, "Nao.Agents.Worker")
+                  Arguments = []
+                  ProtocolVersion = WorkerProtocol.CurrentVersion
+                  IdentityIsolation = ProcessIdentityIsolation.Disabled
+                  FileSystemIsolation = ProcessFileSystemIsolation.Disabled
+                  SecretResolver = None
+                  OutputCapture =
+                    Some
+                        { MaxBytesPerStream = maximumBytesPerStream
+                          Redact = fun value -> value.Replace(secret, "[redacted]") } }
+
+        let context = AgentContext.unrestrictedForTests ()
+
+        let executionRequest =
+            { request context workerAgent secret with
+                Sandbox =
+                    { SandboxConfig.Default with
+                        Isolation = SandboxIsolation.Process } }
+
+        let config =
+            { EtclovgConfig.Default with
+                ProcessEnvironment = Some processEnvironment }
+
+        let result =
+            (EtclovgHarness.runAsync config context workerAgent executionRequest).Result
+
+        Assert.AreEqual(ExecutionTerminalStatus.Succeeded, result.Status)
+
+        let processArtifacts =
+            result.Outputs.Artifacts
+            |> List.filter (fun artifact -> artifact.Kind.StartsWith("process."))
+
+        CollectionAssert.AreEquivalent(
+            [| "process.stdout"; "process.stderr" |],
+            processArtifacts |> List.map _.Kind |> List.toArray
+        )
+
+        processArtifacts
+        |> List.iter (fun artifact ->
+            Assert.AreEqual("text/plain; charset=utf-8", artifact.ContentType)
+            Assert.IsFalse(artifact.Payload.Contains secret)
+            Assert.IsTrue(Text.Encoding.UTF8.GetByteCount artifact.Payload <= maximumBytesPerStream))
+
+        let standardError =
+            processArtifacts |> List.find (fun artifact -> artifact.Kind = "process.stderr")
+
+        Assert.AreEqual("[redacted]", standardError.Payload)
 
     [<TestMethod>]
     member _.HarnessPropagatesCallerCancellationToBlockedProcessWorker() =
@@ -168,7 +442,11 @@ type EtclovgHarnessTests() =
             ExecutionEnvironment.processWorker
                 { FileName = IO.Path.Combine(workerDirectory, "Nao.Agents.Worker")
                   Arguments = []
-                  ProtocolVersion = WorkerProtocol.CurrentVersion }
+                  ProtocolVersion = WorkerProtocol.CurrentVersion
+                  IdentityIsolation = ProcessIdentityIsolation.Disabled
+                  FileSystemIsolation = ProcessFileSystemIsolation.Disabled
+                  SecretResolver = None
+                  OutputCapture = None }
 
         let context = AgentContext.unrestrictedForTests ()
 

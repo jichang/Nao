@@ -164,6 +164,24 @@ type ExecutionContext =
                     ToolCalls = this.Budget.Usage.ToolCalls + 1
                     ElapsedTime = DateTimeOffset.UtcNow - this.StartedAt })
 
+    member this.RecordWorkerUsage(usage: ResourceUsage) =
+        if
+            usage.LlmCalls < 0
+            || usage.TotalTokens < 0
+            || usage.ToolCalls < 0
+            || usage.EstimatedCostUsd < 0m
+        then
+            invalidArg (nameof usage) "Worker resource usage cannot be negative."
+
+        lock this.Budget.SyncRoot (fun () ->
+            this.Budget.Usage <-
+                { this.Budget.Usage with
+                    LlmCalls = this.Budget.Usage.LlmCalls + usage.LlmCalls
+                    TotalTokens = this.Budget.Usage.TotalTokens + usage.TotalTokens
+                    ToolCalls = this.Budget.Usage.ToolCalls + usage.ToolCalls
+                    EstimatedCostUsd = this.Budget.Usage.EstimatedCostUsd + usage.EstimatedCostUsd
+                    ElapsedTime = DateTimeOffset.UtcNow - this.StartedAt })
+
     member this.BeginToolCall() =
         lock this.Budget.SyncRoot (fun () ->
             let previous = this.Budget.Usage

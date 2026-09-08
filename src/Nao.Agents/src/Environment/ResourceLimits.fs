@@ -17,6 +17,10 @@ type ResourceLimits =
         MaxToolCalls: int
         /// Maximum memory (bytes) the sandbox may consume
         MaxMemoryBytes: int64 option
+        /// Maximum processor time consumed by a process worker
+        MaxCpuTime: TimeSpan option
+        /// Maximum combined stdout and stderr bytes emitted by a process worker
+        MaxOutputBytes: int64 option
     }
 
     static member Unlimited =
@@ -25,7 +29,9 @@ type ResourceLimits =
           MaxTotalTokens = Int32.MaxValue
           MaxCostUsd = Decimal.MaxValue
           MaxToolCalls = Int32.MaxValue
-          MaxMemoryBytes = None }
+          MaxMemoryBytes = None
+          MaxCpuTime = None
+          MaxOutputBytes = None }
 
     static member Constrained (durationSeconds: int) (llmCalls: int) (tokens: int) =
         { ResourceLimits.Unlimited with
@@ -64,6 +70,8 @@ type LimitExceeded =
     | Cost
     | ToolCalls
     | Memory
+    | Cpu
+    | Output
 
 exception ExecutionLimitExceededException of LimitExceeded
 

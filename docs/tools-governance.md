@@ -138,13 +138,13 @@ A revert hook is not automatically a transaction. Durable execution must record 
 
 Nao defines `SandboxConfig`, `ResourceLimits`, and functional `ExecutionEnvironment` values. Worker-resolvable agents can run in a separate process through a versioned protocol, but this is not yet an operating-system security boundary. Untrusted tools still require:
 
-- Restricted identities
-- Filesystem allowlists
+- Non-Linux identity isolation and separate host-account execution
+- Filesystem allowlists outside explicit Linux Landlock mode
 - Denied-by-default network access
-- CPU, memory, time, output, call, token, and cost limits
-- Secret references resolved only inside authorized boundaries
+- Hard aggregate CPU limits
+- Typed secret references and full secret lifecycle controls
 
-Process workers inherit no host environment variables and receive only the explicit `SandboxConfig.EnvironmentVariables` map. A configured working directory is validated and applied before launch, but does not prevent access to paths outside it. Process execution kills the complete worker process tree when its cancellation token is signalled. Hosts must propagate graceful shutdown through that token.
+Process workers inherit no host environment variables and receive only the explicit `SandboxConfig.EnvironmentVariables` map. A configured working directory is validated and applied before launch, but does not prevent access to paths outside it. Explicit Linux user-namespace identity mode maps only the host caller to a configured worker-visible UID/GID and fails closed when setup is unavailable; it does not change the caller's host filesystem DAC permissions. Explicit `ProcessFileSystemIsolation.LinuxLandlock` mode validates and enforces `SandboxConfig.AllowedPaths` before handler execution; trusted worker/runtime directories receive read-only baseline access, and setup fails closed. Disabled mode and non-Linux platforms do not enforce these controls. Protocol v4 gives worker handlers the remaining call, token, and cost allowances through `WorkerExecutionBudget`; usage reported through this capability is merged into the host budget, while bypass calls are not observable. A host may declare opaque handles through `ProcessSecretResolver`; values resolve after handshake and are available only through `WorkerSecrets`, while undeclared handles fail without resolver invocation. Process execution kills the complete worker process tree when its cancellation token is signalled. Configured memory and CPU limits sample direct-worker working-set and processor-time usage and kill the tree on excess. These reactive checks can overshoot, are not hard operating-system quotas, and CPU accounting excludes descendants. A configured output limit bounds combined stdout/stderr bytes and drains stderr. Optional `ProcessOutputCapture` applies a mandatory host redactor and publishes separately bounded stream artifacts through the governed execution context; capture does not replace the execution output limit. Hosts must propagate graceful shutdown through the cancellation token.
 
 ## Production checklist
 
