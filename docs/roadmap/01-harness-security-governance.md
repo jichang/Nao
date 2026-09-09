@@ -78,21 +78,22 @@ Executable replay is introduced and governed as part of HAR-02; persistence even
 
 ## HAR-04 — Container isolation
 
-- [ ] Implement a container-backed `IExecutionEnvironment`.
-- [ ] Pin images by digest and record supply-chain metadata.
-- [ ] Use non-root users, read-only roots, dropped capabilities, and no privilege escalation by default.
-- [ ] Define explicit mounts, working directories, devices, and temporary storage.
-- [ ] Deny network access by default and support destination allowlists.
-- [ ] Apply CPU, memory, process-count, time, and output limits.
-- [ ] Scan or attest supported worker images.
-- [ ] Clean up containers, volumes, and networks after all terminal states.
-- [ ] Add host capability detection and a clear unsupported result.
+- [x] Implement a container-backed `IExecutionEnvironment`.
+- [x] Pin images by digest and record supply-chain metadata.
+- [x] Use non-root users, read-only roots, dropped capabilities, and no privilege escalation by default.
+- [x] Define explicit mounts, working directories, devices, and temporary storage.
+- [x] Deny network access by default.
+- [x] Support destination allowlists through an enforced egress broker.
+- [x] Apply CPU, memory, process-count, time, and output limits.
+- [x] Scan or attest supported worker images.
+- [x] Clean up containers, volumes, and networks after all terminal states.
+- [x] Add host capability detection and a clear unsupported result.
 
 **Acceptance criteria**
 
-- [ ] Container escape-oriented regression tests run in the appropriate secured CI environment.
-- [ ] No undeclared mount or network destination is reachable.
-- [ ] Image and policy identity appear in execution evidence.
+- [x] Container escape-oriented regression tests run in the appropriate secured CI environment.
+- [x] No undeclared mount or network destination is reachable.
+- [x] Image and policy identity appear in execution evidence.
 
 ## SEC-01 — Identity and security principal
 

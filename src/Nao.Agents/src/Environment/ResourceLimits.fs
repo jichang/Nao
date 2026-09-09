@@ -19,6 +19,8 @@ type ResourceLimits =
         MaxMemoryBytes: int64 option
         /// Maximum processor time consumed by a process worker
         MaxCpuTime: TimeSpan option
+        /// Maximum number of processes in a container
+        MaxProcessCount: int option
         /// Maximum combined stdout and stderr bytes emitted by a process worker
         MaxOutputBytes: int64 option
     }
@@ -31,6 +33,7 @@ type ResourceLimits =
           MaxToolCalls = Int32.MaxValue
           MaxMemoryBytes = None
           MaxCpuTime = None
+          MaxProcessCount = None
           MaxOutputBytes = None }
 
     static member Constrained (durationSeconds: int) (llmCalls: int) (tokens: int) =

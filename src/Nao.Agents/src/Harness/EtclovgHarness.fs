@@ -42,6 +42,7 @@ module HarnessServices =
 type EtclovgConfig =
     { ToolProtocol: ToolProtocol option
       ProcessEnvironment: ExecutionEnvironment option
+      ContainerEnvironment: ExecutionEnvironment option
       ExecutionJournal: ExecutionJournal option
       ReplayFixtures: ReplayFixtures option
       Lifecycle: LifecycleHook list
@@ -59,6 +60,7 @@ type EtclovgConfig =
     static member Default =
         { ToolProtocol = None
           ProcessEnvironment = None
+          ContainerEnvironment = None
           ExecutionJournal = None
           ReplayFixtures = None
           Lifecycle = []
@@ -858,10 +860,12 @@ module EtclovgHarness =
                                                             "Process isolation requires a configured process execution environment."
                                                     ))
                                             | SandboxIsolation.Container ->
-                                                raise (
-                                                    GovernedExecutionException
-                                                        "Container isolation requires a configured container execution environment."
-                                                )
+                                                config.ContainerEnvironment
+                                                |> Option.defaultWith (fun () ->
+                                                    raise (
+                                                        GovernedExecutionException
+                                                            "Container isolation requires a configured container execution environment."
+                                                    ))
 
                                         let! result = env.ExecuteAsync execCtx governedContext agent effectiveInput
                                         return Ok result

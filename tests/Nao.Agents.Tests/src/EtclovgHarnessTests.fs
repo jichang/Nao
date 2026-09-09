@@ -491,6 +491,53 @@ type EtclovgHarnessTests() =
         | status -> Assert.Fail(sprintf "Expected process configuration failure, got %A." status)
 
     [<TestMethod>]
+    member _.HarnessRoutesContainerIsolationToConfiguredEnvironment() =
+        let agent = makeAgent "must not execute locally"
+        let context = AgentContext.unrestrictedForTests ()
+        let mutable receivedInput = None
+
+        let containerEnvironment =
+            { ExecuteAsync =
+                fun _ _ _ input ->
+                    receivedInput <- Some input
+                    Task.FromResult(Ok("container:" + input)) }
+
+        let executionRequest =
+            { request context agent "payload" with
+                Sandbox =
+                    { SandboxConfig.Default with
+                        Isolation = SandboxIsolation.Container } }
+
+        let config =
+            { EtclovgConfig.Default with
+                ContainerEnvironment = Some containerEnvironment }
+
+        let result = (EtclovgHarness.runAsync config context agent executionRequest).Result
+
+        Assert.AreEqual(ExecutionTerminalStatus.Succeeded, result.Status)
+        Assert.AreEqual(Some "payload", receivedInput)
+        Assert.AreEqual(Some "container:payload", result.Outputs.Response)
+
+    [<TestMethod>]
+    member _.HarnessRejectsUnconfiguredContainerIsolation() =
+        let agent = makeAgent "must not execute locally"
+        let context = AgentContext.unrestrictedForTests ()
+
+        let executionRequest =
+            { request context agent "payload" with
+                Sandbox =
+                    { SandboxConfig.Default with
+                        Isolation = SandboxIsolation.Container } }
+
+        let result =
+            (EtclovgHarness.runAsync EtclovgConfig.Default context agent executionRequest).Result
+
+        match result.Status with
+        | ExecutionTerminalStatus.Failed(HarnessError.ExecutionFailed message) ->
+            StringAssert.Contains(message, "requires a configured container execution environment")
+        | status -> Assert.Fail(sprintf "Expected container configuration failure, got %A." status)
+
+    [<TestMethod>]
     member _.TerminalStatusesExposePlatformFailure() =
         let cases =
             [ (ExecutionTerminalStatus.Failed(HarnessError.ExecutionFailed "failed"),

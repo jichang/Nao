@@ -21,7 +21,7 @@ type SandboxConfig =
         WorkingDirectory: string option
         /// Environment variables available to the agent
         EnvironmentVariables: Map<string, string>
-        /// Whether the agent can access the network
+        /// Whether the agent may request network access; the execution environment can further restrict it
         AllowNetwork: bool
         /// Whether the agent can access the filesystem
         AllowFileSystem: bool

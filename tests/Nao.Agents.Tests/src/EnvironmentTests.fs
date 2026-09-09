@@ -203,6 +203,37 @@ type ExecutionEnvironmentTests() =
               SecretResolver = None
               OutputCapture = None }
 
+    let createContainerRuntime capabilityJson =
+        let directory =
+            IO.Path.Combine(IO.Path.GetTempPath(), "nao-container-capability-" + Guid.NewGuid().ToString("N"))
+
+        IO.Directory.CreateDirectory directory |> ignore
+        let runtime = IO.Path.Combine(directory, "runtime")
+
+        IO.File.WriteAllText(
+            runtime,
+            "#!/bin/sh\nif [ \"$1\" = \"info\" ]; then printf '%s\\n' '"
+            + capabilityJson
+            + "'; exit 0; fi\nexit 99\n"
+        )
+
+        IO.File.SetUnixFileMode(
+            runtime,
+            IO.UnixFileMode.UserRead
+            ||| IO.UnixFileMode.UserWrite
+            ||| IO.UnixFileMode.UserExecute
+        )
+
+        directory, runtime
+
+    let supportedContainerCapabilities =
+        "{\"ServerVersion\":\"test\",\"OSType\":\"linux\",\"MemoryLimit\":true,\"PidsLimit\":true,\"CgroupVersion\":\"2\"}"
+
+    let testImageVerifier =
+        { VerifierId = "test-verifier"
+          PolicyVersion = "test-policy-v1"
+          VerifyAsync = fun _ _ _ -> Task.FromResult(Ok(Map.ofList [ "subject", "nao-worker"; "verified", "true" ])) }
+
     [<TestMethod>]
     member _.LocalEnvironmentExecutesAgent() =
         let agent = makeAgent "hello"
@@ -215,6 +246,587 @@ type ExecutionEnvironmentTests() =
         match result with
         | Ok response -> Assert.AreEqual("hello", response)
         | Error _ -> Assert.Fail("Expected Ok")
+
+    [<TestMethod>]
+    member _.ContainerEnvironmentRejectsMissingRuntime() =
+        let missingRuntime =
+            IO.Path.Combine(IO.Path.GetTempPath(), "nao-missing-container-runtime-" + Guid.NewGuid().ToString("N"))
+
+        let result =
+            ExecutionEnvironment.tryContainerWorker
+                { RuntimeFileName = missingRuntime
+                  RuntimeArguments = []
+                  ImageReference = "example@sha256:" + String('0', 64)
+                  SupplyChainMetadata = Map.empty
+                  ImageVerifier = testImageVerifier
+                  Mounts = []
+                  Devices = []
+                  TemporaryStorage = []
+                  NetworkPolicy = ContainerNetworkPolicy.Denied
+                  WorkerCommand = []
+                  ProtocolVersion = WorkerProtocol.CurrentVersion
+                  SecretResolver = None
+                  OutputCapture = None }
+
+        match result with
+        | Ok _ -> Assert.Fail("Expected an unsupported container host result.")
+        | Error reasons -> Assert.IsTrue(reasons |> List.contains "Container runtime executable is unavailable.")
+
+    [<TestMethod>]
+    member _.ContainerEnvironmentReportsUnsupportedHostCapabilities() =
+        let directory, runtime =
+            createContainerRuntime
+                "{\"ServerVersion\":\"test\",\"OSType\":\"windows\",\"MemoryLimit\":false,\"PidsLimit\":false}"
+
+        try
+            let result =
+                ExecutionEnvironment.tryContainerWorker
+                    { RuntimeFileName = runtime
+                      RuntimeArguments = []
+                      ImageReference = "nao-worker@sha256:" + String('a', 64)
+                      SupplyChainMetadata = Map.empty
+                      ImageVerifier = testImageVerifier
+                      Mounts = []
+                      Devices = []
+                      TemporaryStorage = []
+                      NetworkPolicy = ContainerNetworkPolicy.Denied
+                      WorkerCommand = []
+                      ProtocolVersion = WorkerProtocol.CurrentVersion
+                      SecretResolver = None
+                      OutputCapture = None }
+
+            match result with
+            | Ok _ -> Assert.Fail("Expected an unsupported container host result.")
+            | Error reasons ->
+                Assert.AreEqual(3, reasons.Length)
+                Assert.IsTrue(reasons |> List.contains "Container runtime must provide Linux containers.")
+
+                Assert.IsTrue(
+                    reasons
+                    |> List.contains "Container runtime does not report memory-limit support."
+                )
+
+                Assert.IsTrue(
+                    reasons
+                    |> List.contains "Container runtime does not report process-count limit support."
+                )
+        finally
+            IO.Directory.Delete(directory, true)
+
+    [<TestMethod>]
+    member _.ContainerEnvironmentReportsSupportedHostCapabilities() =
+        let directory, runtime = createContainerRuntime supportedContainerCapabilities
+
+        try
+            let config =
+                { RuntimeFileName = runtime
+                  RuntimeArguments = []
+                  ImageReference = "nao-worker@sha256:" + String('a', 64)
+                  SupplyChainMetadata = Map.empty
+                  ImageVerifier = testImageVerifier
+                  Mounts = []
+                  Devices = []
+                  TemporaryStorage = []
+                  NetworkPolicy = ContainerNetworkPolicy.Denied
+                  WorkerCommand = []
+                  ProtocolVersion = WorkerProtocol.CurrentVersion
+                  SecretResolver = None
+                  OutputCapture = None }
+
+            match ExecutionEnvironment.detectContainerHost config with
+            | ContainerHostSupport.Unsupported reasons ->
+                Assert.Fail(sprintf "Expected supported container host, got %A." reasons)
+            | ContainerHostSupport.Supported capabilities ->
+                Assert.AreEqual("test", capabilities.RuntimeVersion)
+                Assert.AreEqual("linux", capabilities.OperatingSystem)
+                Assert.AreEqual(Some "2", capabilities.CgroupVersion)
+        finally
+            IO.Directory.Delete(directory, true)
+
+    [<TestMethod>]
+    member _.ContainerEnvironmentRejectsUnpinnedImage() =
+        let error =
+            Assert.ThrowsExactly<ArgumentException>(fun () ->
+                ExecutionEnvironment.containerWorker
+                    { RuntimeFileName = workerExecutable
+                      RuntimeArguments = []
+                      ImageReference = "nao-worker:latest"
+                      SupplyChainMetadata = Map.empty
+                      ImageVerifier = testImageVerifier
+                      Mounts = []
+                      Devices = []
+                      TemporaryStorage = []
+                      NetworkPolicy = ContainerNetworkPolicy.Denied
+                      WorkerCommand = []
+                      ProtocolVersion = WorkerProtocol.CurrentVersion
+                      SecretResolver = None
+                      OutputCapture = None }
+                |> ignore)
+
+        StringAssert.Contains(error.Message, "pinned by a SHA-256 digest")
+
+    [<TestMethod>]
+    member _.ContainerEnvironmentRejectsRelativeWorkingDirectoryBeforeSideEffects() =
+        let directory, runtime = createContainerRuntime supportedContainerCapabilities
+
+        try
+            let mutable artifactPublished = false
+
+            let environment =
+                ExecutionEnvironment.containerWorker
+                    { RuntimeFileName = runtime
+                      RuntimeArguments = []
+                      ImageReference = "nao-worker@sha256:" + String('a', 64)
+                      SupplyChainMetadata = Map.empty
+                      ImageVerifier = testImageVerifier
+                      Mounts = []
+                      Devices = []
+                      TemporaryStorage = []
+                      NetworkPolicy = ContainerNetworkPolicy.Denied
+                      WorkerCommand = []
+                      ProtocolVersion = WorkerProtocol.CurrentVersion
+                      SecretResolver = None
+                      OutputCapture = None }
+
+            let sandbox =
+                { SandboxConfig.Default with
+                    WorkingDirectory = Some("relative-" + Guid.NewGuid().ToString("N")) }
+
+            let agentContext =
+                { AgentContext.unrestrictedForTests () with
+                    PublishArtifact =
+                        fun _ ->
+                            artifactPublished <- true
+                            Task.CompletedTask }
+
+            let error =
+                Assert.ThrowsExactlyAsync<GovernedExecutionException>(fun () ->
+                    environment.ExecuteAsync (ExecutionContext.Create sandbox) agentContext workerAgent "payload"
+                    :> Task)
+                |> _.Result
+
+            StringAssert.Contains(error.Message, "working directory must be absolute")
+            Assert.IsFalse artifactPublished
+        finally
+            IO.Directory.Delete(directory, true)
+
+    [<TestMethod>]
+    member _.ContainerEnvironmentRejectsDestinationAllowlistWhenBrokerFails() =
+        let directory, runtime = createContainerRuntime supportedContainerCapabilities
+
+        try
+            let mutable artifactPublished = false
+            let destinations = [ Uri("https://api.example.invalid/v1") ]
+
+            let broker =
+                { BrokerId = "test-broker"
+                  PolicyVersion = "egress-v1"
+                  AcquireAsync =
+                    fun _ _ requested ->
+                        Assert.AreEqual<Uri list>(destinations, requested)
+                        Task.FromResult(Error "policy network unavailable") }
+
+            let environment =
+                ExecutionEnvironment.containerWorker
+                    { RuntimeFileName = runtime
+                      RuntimeArguments = []
+                      ImageReference = "nao-worker@sha256:" + String('a', 64)
+                      SupplyChainMetadata = Map.empty
+                      ImageVerifier = testImageVerifier
+                      Mounts = []
+                      Devices = []
+                      TemporaryStorage = []
+                      NetworkPolicy = ContainerNetworkPolicy.DestinationAllowlist(destinations, broker)
+                      WorkerCommand = []
+                      ProtocolVersion = WorkerProtocol.CurrentVersion
+                      SecretResolver = None
+                      OutputCapture = None }
+
+            let agentContext =
+                { AgentContext.unrestrictedForTests () with
+                    PublishArtifact =
+                        fun _ ->
+                            artifactPublished <- true
+                            Task.CompletedTask }
+
+            let error =
+                Assert.ThrowsExactlyAsync<GovernedExecutionException>(fun () ->
+                    environment.ExecuteAsync
+                        (ExecutionContext.Create SandboxConfig.Default)
+                        agentContext
+                        workerAgent
+                        "payload"
+                    :> Task)
+                |> _.Result
+
+            StringAssert.Contains(error.Message, "policy network unavailable")
+            Assert.IsFalse artifactPublished
+        finally
+            IO.Directory.Delete(directory, true)
+
+    [<TestMethod>]
+    member _.ContainerEnvironmentRejectsUnverifiedImageBeforeSideEffects() =
+        let directory, runtime = createContainerRuntime supportedContainerCapabilities
+        let launchMarker = IO.Path.Combine(directory, "launched")
+        let mutable artifactPublished = false
+        let mutable verifiedReference = None
+
+        IO.File.WriteAllText(
+            runtime,
+            "#!/bin/sh\nif [ \"$1\" = \"info\" ]; then printf '%s\\n' '"
+            + supportedContainerCapabilities
+            + "'; exit 0; fi\ntouch '"
+            + launchMarker
+            + "'\nexit 99\n"
+        )
+
+        try
+            let verifier =
+                { VerifierId = "rejecting-verifier"
+                  PolicyVersion = "deny-v1"
+                  VerifyAsync =
+                    fun _ _ imageReference ->
+                        verifiedReference <- Some imageReference
+                        Task.FromResult(Error "attestation subject did not match") }
+
+            let environment =
+                ExecutionEnvironment.containerWorker
+                    { RuntimeFileName = runtime
+                      RuntimeArguments = []
+                      ImageReference = "nao-worker@sha256:" + String('c', 64)
+                      SupplyChainMetadata = Map.empty
+                      ImageVerifier = verifier
+                      Mounts = []
+                      Devices = []
+                      TemporaryStorage = []
+                      NetworkPolicy = ContainerNetworkPolicy.Denied
+                      WorkerCommand = []
+                      ProtocolVersion = WorkerProtocol.CurrentVersion
+                      SecretResolver = None
+                      OutputCapture = None }
+
+            let agentContext =
+                { AgentContext.unrestrictedForTests () with
+                    PublishArtifact =
+                        fun _ ->
+                            artifactPublished <- true
+                            Task.CompletedTask }
+
+            let error =
+                Assert.ThrowsExactlyAsync<GovernedExecutionException>(fun () ->
+                    environment.ExecuteAsync
+                        (ExecutionContext.Create SandboxConfig.Default)
+                        agentContext
+                        workerAgent
+                        "payload"
+                    :> Task)
+                |> _.Result
+
+            StringAssert.Contains(error.Message, "attestation subject did not match")
+            Assert.AreEqual(Some("nao-worker@sha256:" + String('c', 64)), verifiedReference)
+            Assert.IsFalse artifactPublished
+            Assert.IsFalse(IO.File.Exists launchMarker)
+        finally
+            IO.Directory.Delete(directory, true)
+
+    [<TestMethod>]
+    [<DoNotParallelize>]
+    member _.ContainerEnvironmentRunsWorkerWithRestrictedLaunchArguments() =
+        if OperatingSystem.IsLinux() then
+            let directory =
+                IO.Path.Combine(IO.Path.GetTempPath(), "nao-container-runtime-" + Guid.NewGuid().ToString("N"))
+
+            IO.Directory.CreateDirectory directory |> ignore
+            let runtime = IO.Path.Combine(directory, "runtime")
+            let argumentsPath = IO.Path.Combine(directory, "arguments")
+            let cleanupArgumentsPath = runtime + ".cleanup"
+            let artifacts = ResizeArray<Artifact>()
+            let maximumMemoryBytes = int64 (Random.Shared.Next(512, 769)) * 1024L * 1024L
+            let maximumProcesses = Random.Shared.Next(8, 33)
+            let mutable releasedEgressLeases = 0
+
+            let availableDestinations =
+                [ Uri("https://api.example.invalid/v1")
+                  Uri("https://objects.example.invalid:8443/artifacts")
+                  Uri("http://metadata.example.invalid/status") ]
+
+            let destinations =
+                availableDestinations
+                |> List.take (Random.Shared.Next(1, availableDestinations.Length + 1))
+
+            let acquireEgressLease _ _ requested =
+                Assert.AreEqual<Uri list>(destinations, requested)
+
+                let claims =
+                    Map.ofList [ "enforcement", "proxy"; "destinationCount", string requested.Length ]
+
+                let lease =
+                    { NetworkName = "nao-egress-test"
+                      Claims = claims
+                      Release = fun () -> releasedEgressLeases <- releasedEgressLeases + 1 }
+
+                Task.FromResult(Ok lease)
+
+            let egressBroker =
+                { BrokerId = "test-egress-broker"
+                  PolicyVersion = "test-egress-v1"
+                  AcquireAsync = acquireEgressLease }
+
+            let maximumCpuTime =
+                TimeSpan.FromMilliseconds(float (Random.Shared.Next(1100, 1900)))
+
+            IO.File.WriteAllText(
+                runtime,
+                "#!/bin/sh\nif [ \"$1\" = \"info\" ]; then printf '%s\\n' '"
+                + supportedContainerCapabilities
+                + "'; exit 0; fi\nif [ \"$1\" = \"rm\" ]; then printf '%s\\n' \"$@\" > \"$0.cleanup\"; exit 0; fi\nprintf '%s\\n' \"$@\" > \"$NAO_TEST_ARGUMENTS\"\ncidfile=''\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = \"--cidfile\" ]; then shift; cidfile=\"$1\"; fi\n  shift\ndone\nprintf 'test-container' > \"$cidfile\"\nif [ \"$NAO_TEST_RUNTIME_MODE\" = \"fail\" ]; then exit 17; fi\nif [ \"$NAO_TEST_RUNTIME_MODE\" = \"wait\" ]; then while :; do sleep 1; done; fi\nexec \"$NAO_TEST_WORKER\"\n"
+            )
+
+            IO.File.SetUnixFileMode(
+                runtime,
+                IO.UnixFileMode.UserRead
+                ||| IO.UnixFileMode.UserWrite
+                ||| IO.UnixFileMode.UserExecute
+            )
+
+            try
+                let containerConfig =
+                    { RuntimeFileName = runtime
+                      RuntimeArguments = []
+                      ImageReference = "nao-worker@sha256:" + String('a', 64)
+                      SupplyChainMetadata = Map.ofList [ "provenance", "https://example.invalid/nao-worker" ]
+                      ImageVerifier = testImageVerifier
+                      Mounts =
+                        [ { SourcePath = directory
+                            TargetPath = "/input"
+                            ReadOnly = true } ]
+                      Devices =
+                        [ { HostPath = "/dev/null"
+                            ContainerPath = "/dev/test-null"
+                            Permissions = "r" } ]
+                      TemporaryStorage = [ { Path = "/tmp"; MaxBytes = 4096L } ]
+                      NetworkPolicy = ContainerNetworkPolicy.Denied
+                      WorkerCommand = [ "/app/Nao.Agents.Worker" ]
+                      ProtocolVersion = WorkerProtocol.CurrentVersion
+                      SecretResolver = None
+                      OutputCapture = None }
+
+                let sandbox =
+                    { SandboxConfig.Default with
+                        WorkingDirectory = Some "/container/work"
+                        Limits =
+                            { ResourceLimits.Unlimited with
+                                MaxMemoryBytes = Some maximumMemoryBytes
+                                MaxCpuTime = Some maximumCpuTime
+                                MaxProcessCount = Some maximumProcesses
+                                MaxOutputBytes = Some 16384L }
+                        EnvironmentVariables =
+                            Map.ofList [ "NAO_TEST_ARGUMENTS", argumentsPath; "NAO_TEST_WORKER", workerExecutable ] }
+
+                let agentContext =
+                    { AgentContext.unrestrictedForTests () with
+                        NextArtifactKey = fun () -> IdempotencyKey.parse ("container:" + String('b', 64))
+                        PublishArtifact =
+                            fun artifact ->
+                                artifacts.Add artifact
+                                Task.CompletedTask }
+
+                let execute networkPolicy allowNetwork =
+                    let environment =
+                        ExecutionEnvironment.containerWorker
+                            { containerConfig with
+                                NetworkPolicy = networkPolicy }
+
+                    let result =
+                        environment.ExecuteAsync
+                            (ExecutionContext.Create
+                                { sandbox with
+                                    AllowNetwork = allowNetwork })
+                            agentContext
+                            workerAgent
+                            "payload"
+                        |> _.Result
+
+                    match result with
+                    | Error limit -> Assert.Fail(sprintf "Expected container worker result, got limit %A." limit)
+                    | Ok output -> StringAssert.Contains(output, "|payload|")
+
+                    IO.File.ReadAllLines argumentsPath
+
+                let arguments = execute ContainerNetworkPolicy.Denied true
+                CollectionAssert.Contains(arguments, "--rm")
+                CollectionAssert.Contains(arguments, "--interactive")
+                CollectionAssert.Contains(arguments, "--name")
+                CollectionAssert.Contains(arguments, "--user")
+                CollectionAssert.Contains(arguments, "65532:65532")
+                CollectionAssert.Contains(arguments, "--read-only")
+                CollectionAssert.Contains(arguments, "--cap-drop=ALL")
+                CollectionAssert.Contains(arguments, "--security-opt=no-new-privileges")
+                CollectionAssert.Contains(arguments, "--network=none")
+                CollectionAssert.Contains(arguments, sprintf "--memory=%d" maximumMemoryBytes)
+                CollectionAssert.Contains(arguments, sprintf "--memory-swap=%d" maximumMemoryBytes)
+                CollectionAssert.Contains(arguments, "--ulimit=cpu=2:2")
+                CollectionAssert.Contains(arguments, sprintf "--pids-limit=%d" maximumProcesses)
+                CollectionAssert.DoesNotContain(arguments, "16384")
+                CollectionAssert.Contains(arguments, "--workdir")
+                CollectionAssert.Contains(arguments, "/container/work")
+                CollectionAssert.Contains(arguments, "--mount")
+                CollectionAssert.Contains(arguments, sprintf "type=bind,src=%s,dst=/input,readonly" directory)
+                CollectionAssert.Contains(arguments, "--device")
+                CollectionAssert.Contains(arguments, "/dev/null:/dev/test-null:r")
+                CollectionAssert.Contains(arguments, "--tmpfs")
+
+                CollectionAssert.Contains(
+                    arguments,
+                    "/tmp:rw,noexec,nosuid,nodev,size=4096,uid=65532,gid=65532,mode=0700"
+                )
+
+                CollectionAssert.Contains(arguments, "NAO_TEST_ARGUMENTS")
+                CollectionAssert.Contains(arguments, "NAO_TEST_WORKER")
+                CollectionAssert.DoesNotContain(arguments, argumentsPath)
+                CollectionAssert.DoesNotContain(arguments, workerExecutable)
+                Assert.AreEqual(1, artifacts.Count)
+                Assert.AreEqual("container.image", artifacts.[0].Kind)
+                StringAssert.Contains(artifacts.[0].Payload, "nao-worker@sha256:")
+                StringAssert.Contains(artifacts.[0].Payload, "provenance")
+                StringAssert.Contains(artifacts.[0].Payload, "test-verifier")
+                StringAssert.Contains(artifacts.[0].Payload, "test-policy-v1")
+                StringAssert.Contains(artifacts.[0].Payload, "verified")
+
+                let nameIndex = arguments |> Array.findIndex ((=) "--name")
+                let containerName = arguments.[nameIndex + 1]
+                StringAssert.StartsWith(containerName, "nao-")
+
+                CollectionAssert.AreEqual(
+                    [| "rm"; "--force"; "--volumes"; containerName |],
+                    IO.File.ReadAllLines cleanupArgumentsPath
+                )
+
+                let failingEnvironment =
+                    ExecutionEnvironment.containerWorker
+                        { containerConfig with
+                            NetworkPolicy = ContainerNetworkPolicy.Denied }
+
+                let failingSandbox =
+                    { sandbox with
+                        EnvironmentVariables = sandbox.EnvironmentVariables |> Map.add "NAO_TEST_RUNTIME_MODE" "fail" }
+
+                Assert.ThrowsExactly<GovernedExecutionException>(fun () ->
+                    failingEnvironment.ExecuteAsync
+                        (ExecutionContext.Create failingSandbox)
+                        agentContext
+                        workerAgent
+                        "payload"
+                    |> _.GetAwaiter().GetResult()
+                    |> ignore)
+                |> ignore
+
+                let failedArguments = IO.File.ReadAllLines argumentsPath
+                let failedNameIndex = failedArguments |> Array.findIndex ((=) "--name")
+                let failedContainerName = failedArguments.[failedNameIndex + 1]
+
+                CollectionAssert.AreEqual(
+                    [| "rm"; "--force"; "--volumes"; failedContainerName |],
+                    IO.File.ReadAllLines cleanupArgumentsPath
+                )
+
+                IO.File.Delete argumentsPath
+                IO.File.Delete cleanupArgumentsPath
+                use cancellation = new CancellationTokenSource()
+
+                let waitingSandbox =
+                    { sandbox with
+                        EnvironmentVariables = sandbox.EnvironmentVariables |> Map.add "NAO_TEST_RUNTIME_MODE" "wait" }
+
+                let waiting =
+                    failingEnvironment.ExecuteAsync
+                        (ExecutionContext.CreateWithCancellation waitingSandbox cancellation.Token)
+                        agentContext
+                        workerAgent
+                        "payload"
+
+                let rendezvousDeadline = DateTime.UtcNow + TimeSpan.FromSeconds 5.0
+
+                while not (IO.File.Exists argumentsPath) && DateTime.UtcNow < rendezvousDeadline do
+                    Task.Delay(TimeSpan.FromMilliseconds 10.0).Wait()
+
+                Assert.IsTrue(IO.File.Exists argumentsPath, "Container runtime did not record its launch arguments.")
+                let waitingArguments = IO.File.ReadAllLines argumentsPath
+                let waitingNameIndex = waitingArguments |> Array.findIndex ((=) "--name")
+                let waitingContainerName = waitingArguments.[waitingNameIndex + 1]
+                cancellation.Cancel()
+
+                Assert.ThrowsExactlyAsync<OperationCanceledException>(fun () -> waiting :> Task)
+                |> _.Wait()
+
+                CollectionAssert.AreEqual(
+                    [| "rm"; "--force"; "--volumes"; waitingContainerName |],
+                    IO.File.ReadAllLines cleanupArgumentsPath
+                )
+
+                let sandboxDeniedArguments = execute ContainerNetworkPolicy.Unrestricted false
+                CollectionAssert.Contains(sandboxDeniedArguments, "--network=none")
+
+                let unrestrictedArguments = execute ContainerNetworkPolicy.Unrestricted true
+                CollectionAssert.DoesNotContain(unrestrictedArguments, "--network=none")
+
+                let artifactsBeforeAllowlist = artifacts.Count
+
+                let allowlistArguments =
+                    execute (ContainerNetworkPolicy.DestinationAllowlist(destinations, egressBroker)) true
+
+                let networkIndex = allowlistArguments |> Array.findIndex ((=) "--network")
+                Assert.AreEqual("nao-egress-test", allowlistArguments.[networkIndex + 1])
+                CollectionAssert.DoesNotContain(allowlistArguments, "--network=none")
+                Assert.AreEqual(1, releasedEgressLeases)
+                Assert.AreEqual(artifactsBeforeAllowlist + 2, artifacts.Count)
+                Assert.AreEqual("container.network", artifacts.[artifacts.Count - 1].Kind)
+                StringAssert.Contains(artifacts.[artifacts.Count - 1].Payload, "test-egress-broker")
+                StringAssert.Contains(artifacts.[artifacts.Count - 1].Payload, "test-egress-v1")
+                StringAssert.Contains(artifacts.[artifacts.Count - 1].Payload, string destinations.Length)
+
+                for destination in destinations do
+                    StringAssert.Contains(artifacts.[artifacts.Count - 1].Payload, destination.AbsoluteUri)
+
+                let sandboxDeniedAllowlistArguments =
+                    execute (ContainerNetworkPolicy.DestinationAllowlist(destinations, egressBroker)) false
+
+                CollectionAssert.Contains(sandboxDeniedAllowlistArguments, "--network=none")
+                Assert.AreEqual(1, releasedEgressLeases)
+
+                let failingAllowlistEnvironment =
+                    ExecutionEnvironment.containerWorker
+                        { containerConfig with
+                            NetworkPolicy = ContainerNetworkPolicy.DestinationAllowlist(destinations, egressBroker) }
+
+                Assert.ThrowsExactly<GovernedExecutionException>(fun () ->
+                    failingAllowlistEnvironment.ExecuteAsync
+                        (ExecutionContext.Create failingSandbox)
+                        agentContext
+                        workerAgent
+                        "payload"
+                    |> _.GetAwaiter().GetResult()
+                    |> ignore)
+                |> ignore
+
+                Assert.AreEqual(2, releasedEgressLeases)
+
+                let publicationFailureContext =
+                    { agentContext with
+                        PublishArtifact = fun _ -> Task.FromException(InvalidOperationException("artifact unavailable")) }
+
+                Assert.ThrowsExactlyAsync<InvalidOperationException>(fun () ->
+                    failingAllowlistEnvironment.ExecuteAsync
+                        (ExecutionContext.Create sandbox)
+                        publicationFailureContext
+                        workerAgent
+                        "payload"
+                    :> Task)
+                |> _.Wait()
+
+                Assert.AreEqual(3, releasedEgressLeases)
+            finally
+                IO.Directory.Delete(directory, true)
 
     [<TestMethod>]
     member _.ProcessEnvironmentExecutesWorkerAgentInChildProcess() =

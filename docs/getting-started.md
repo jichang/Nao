@@ -113,7 +113,55 @@ The result groups response and published artifacts under `Outputs`, trace and me
 object expression, or cast. The harness starts all configured readiness checks together and
 retains their configured order when aggregating not-ready reasons.
 
-Worker-resolvable agents can run in a separate process through a host-configured process environment. Process workers inherit no host environment variables and receive only the explicit `SandboxConfig.EnvironmentVariables` map. A configured fully qualified working directory is applied before launch, but it does not confine filesystem access by itself. On Linux, hosts can select `ProcessIdentityIsolation.LinuxUserNamespace` with a fully qualified `unshare` path and target UID/GID. The worker sees only that mapped identity; the mapping still has the caller's host filesystem DAC permissions, so use Landlock separately for path confinement. Hosts can select `ProcessFileSystemIsolation.LinuxLandlock` to enforce canonical existing `SandboxConfig.AllowedPaths` before handler execution; trusted worker/runtime paths retain read-only baseline access. Disabled mode and non-Linux platforms do not enforce these controls. Protocol v4 transports remaining logical allowances and host-authorized secret handles. Worker handlers consume `WorkerExecutionBudget` and `WorkerSecrets`; structured overages cross the protocol, reported usage merges into the host context, and undeclared secrets fail closed without provider access. `MaxMemoryBytes` and `MaxCpuTime` reactively monitor direct-worker working-set and processor-time usage and kill the process tree on excess. They are not hard operating-system quotas, and CPU accounting excludes descendants. `MaxOutputBytes` bounds combined worker stdout/stderr bytes and returns a structured output-limit result. Optional `ProcessOutputCapture` independently bounds both streams, applies its required host redactor, and publishes text artifacts through the governed context. Complete secret lifecycle and resource enforcement plus container isolation remain roadmap work, so neither the default local environment nor the current process worker is a general untrusted-code security boundary.
+Worker-resolvable agents can run through host-configured process or Docker-compatible
+container environments. Process workers inherit no host environment variables and receive
+only the explicit `SandboxConfig.EnvironmentVariables` map. A configured fully qualified
+process working directory is applied before launch, but it does not confine filesystem access
+by itself. On Linux, hosts can select `ProcessIdentityIsolation.LinuxUserNamespace` with a
+fully qualified `unshare` path and target UID/GID. The worker sees only that mapped identity;
+the mapping still has the caller's host filesystem DAC permissions, so use Landlock separately
+for path confinement. Hosts can select `ProcessFileSystemIsolation.LinuxLandlock` to enforce
+canonical existing `SandboxConfig.AllowedPaths` before handler execution; trusted
+worker/runtime paths retain read-only baseline access. Disabled mode and non-Linux platforms
+do not enforce these controls.
+
+Container runs require SHA-256-pinned image references, publish structured image and
+host-supplied supply-chain metadata, enforce numeric UID/GID 65532, read-only root, all
+capabilities dropped, and no privilege escalation. Construction probes the runtime daemon and
+requires Linux containers plus memory and process-count limit support; `tryContainerWorker`
+returns explicit unsupported reasons instead of an execution-time protocol failure. Runs use
+`--rm`, a predeclared unique name,
+and unconditional forced container and anonymous-volume cleanup; removal also detaches the
+runtime-managed network attachment. Declared environment variable names are forwarded without
+values in argv, working directories must be absolute container-internal paths, and default
+network policy selects `--network=none`. Host paths and devices are exposed only through
+explicit validated lists; bounded writable storage uses hardened UID-owned `tmpfs`
+declarations. Configured memory, CPU-time, and process-count limits become hard Docker controls,
+while the shared worker boundary enforces duration and output limits.
+
+Destination allowlists carry a host-owned `ContainerEgressBroker`. After image verification, the
+broker receives the validated absolute HTTP(S) destinations and returns a dedicated runtime
+network attachment plus enforcement claims. Nao rejects built-in or option-like network names,
+publishes broker and policy identity in `container.network`, and releases the attachment after
+success, failure, cancellation, or pre-launch publication failure. Hosts own the proxy, routing,
+DNS, certificate, and policy implementation behind that attachment. The secured container CI
+probe uses isolated worker and upstream networks with a fixed-forward broker to prove that its
+declared endpoint is reachable while a live undeclared sibling and public destinations are not.
+
+Every container configuration supplies a `ContainerImageVerifier`. Before artifact publication
+or runtime launch, it must accept the exact digest-pinned reference and return non-empty verified
+claims. The `container.image` artifact records those claims with verifier and policy identity.
+Hosts own scanner or attestation tooling, trust roots, policy content, and key lifecycle.
+
+Protocol v4 transports remaining logical allowances and host-authorized secret handles. Worker
+handlers consume `WorkerExecutionBudget` and `WorkerSecrets`; structured overages cross the
+protocol, reported usage merges into the host context, and undeclared secrets fail closed
+without provider access. Process memory and CPU checks remain reactive rather than hard
+operating-system quotas. Optional `ProcessOutputCapture` independently bounds both streams,
+applies its required host redactor, and publishes text artifacts through the governed context.
+Complete secret lifecycle and production operation of host egress-broker implementations remain
+host responsibilities, so these environments are not by themselves general untrusted-code
+security boundaries.
 
 ## Register a workspace
 

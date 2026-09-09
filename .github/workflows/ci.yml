@@ -10,6 +10,15 @@ permissions:
   contents: read
 
 jobs:
+  container-security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Run container escape regressions
+        run: bash scripts/validate-container-isolation.sh
+
   build-and-test:
     runs-on: ubuntu-latest
     steps:
