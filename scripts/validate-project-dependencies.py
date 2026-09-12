@@ -14,6 +14,9 @@ ALLOWED_PROJECT_REFERENCES = {
     Path("src/Nao.Agents/Nao.Agents.fsproj"): {
         Path("src/Nao.Protocols/Nao.Protocols.fsproj"),
     },
+    Path("src/Nao.Agents.Worker/Nao.Agents.Worker.fsproj"): {
+        Path("src/Nao.Agents/Nao.Agents.fsproj"),
+    },
     Path("src/Nao.Eval/Nao.Eval.fsproj"): {
         Path("src/Nao.Agents/Nao.Agents.fsproj"),
     },
