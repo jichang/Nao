@@ -61,6 +61,7 @@ See [Getting started](docs/getting-started.md) for the first typed agent and har
 | Project | Responsibility |
 |---|---|
 | `Nao.Agents` | Core agent/tool contracts and ETCLOVG harness |
+| `Nao.Identity.Oidc` | Strict, provider-neutral OIDC/OAuth claims-to-principal adapter |
 | `Nao.Protocols` | Typed response protocols and repair |
 | `Nao.Persistence.*` | Persistence capability packages and opt-in composition |
 | `Nao.Providers.*` | Hosted and local model-provider adapter packages and opt-in composition |

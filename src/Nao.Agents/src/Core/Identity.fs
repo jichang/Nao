@@ -296,6 +296,23 @@ module SecurityPrincipal =
     let createAuthenticated tenantId subjectId serviceId groupIds roles claims authenticationStrength =
         createCore tenantId subjectId None serviceId [] groupIds roles claims authenticationStrength
 
+    let createServiceAuthenticated tenantId subjectId serviceLineage groupIds roles claims authenticationStrength =
+        match serviceLineage with
+        | [] -> invalidArg (nameof serviceLineage) "Service authentication requires a root service identity."
+        | _ when serviceLineage |> List.distinct |> List.length <> serviceLineage.Length ->
+            invalidArg (nameof serviceLineage) "Service authority lineage cannot repeat a service identity."
+        | serviceId :: serviceDelegations ->
+            createCore
+                tenantId
+                subjectId
+                None
+                (Some serviceId)
+                serviceDelegations
+                groupIds
+                roles
+                claims
+                authenticationStrength
+
     /// Hosts may mint impersonation only after independently authorizing the original user.
     let createImpersonated tenantId subjectId effectiveUserId reason groupIds roles claims authenticationStrength =
         if subjectId = effectiveUserId then

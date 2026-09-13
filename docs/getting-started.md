@@ -60,6 +60,40 @@ let! result = Agent.runAsync agentContext encodedInput eligibilityAgent
 
 The result is `Result<string, PlatformFailure>`. `AgentContext.unrestrictedForTests ()` creates a fresh correlated context for isolated tests. Production hosts must execute through the harness, which installs the governed runtime dispatcher.
 
+## Map an authenticated OIDC principal
+
+`Nao.Identity.Oidc` maps claims only after host middleware has validated the token signature,
+issuer, audience, lifetime, and revocation state. Claim names and authentication semantics remain
+host configuration rather than core framework assumptions.
+
+```fsharp
+open Nao.Agents
+open Nao.Identity.Oidc
+
+let mapping =
+    { TenantClaim = "tid"
+      SubjectClaim = "sub"
+      ServiceClaim = Some "client_id"
+      ServiceDelegationClaim = Some "delegated_service"
+      ImpersonatedUserClaim = Some "effective_user"
+      ImpersonationReasonClaim = Some "impersonation_reason"
+      GroupClaims = [ "groups" ]
+      RoleClaims = [ "roles" ]
+      AdditionalClaims = [ "region" ]
+      ResolveAuthenticationStrength =
+        OidcAuthenticationStrength.fromClaim
+            "acr"
+            (Map.ofList [ "urn:mfa", AuthenticationStrength.MultiFactor ]) }
+
+let principal =
+    match OidcPrincipalAdapter.fromPrincipal mapping validatedClaimsPrincipal with
+    | Ok principal -> principal
+    | Error failure -> failwith failure.Message
+```
+
+The adapter requires exactly one authenticated identity and unique scalar authority claims.
+Only explicitly allowlisted additional claims enter `SecurityPrincipal`; raw tokens never do.
+
 ## Use the ETCLOVG harness
 
 The harness provides the common execution path for governance, readiness, lifecycle, observability, execution, output validation, verification, and audit.
