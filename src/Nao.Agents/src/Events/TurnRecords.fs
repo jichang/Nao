@@ -59,6 +59,8 @@ type TurnRecord =
         SubAgentCalls: SubAgentCallRecord list
         /// Artifacts published by agents or tools during the turn.
         Artifacts: Artifact list
+        /// Exact permission policy and grant versions used by access decisions during this turn.
+        PermissionDecisions: PermissionDecisionEvidence list
         /// When the turn completed.
         CreatedAt: DateTimeOffset
     }
@@ -73,4 +75,5 @@ module TurnRecord =
           ToolCalls = []
           SubAgentCalls = []
           Artifacts = []
+          PermissionDecisions = []
           CreatedAt = DateTimeOffset.MinValue }

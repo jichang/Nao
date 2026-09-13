@@ -243,7 +243,7 @@ module private MemoryTool =
             "memory_search"
             "Deliberately search durable session memory when the request depends on prior preferences, decisions, people, projects, or earlier work not present in the conversation."
             1000
-            []
+            [ ResourceAccess.memory "durable" MemoryAction.Read ]
             input
             output
             operation
@@ -280,7 +280,7 @@ module private MemoryTool =
             "memory_remember"
             "Save a durable session fact, preference, or decision when the user explicitly asks to remember it or it will clearly matter in later work; do not store transient task details."
             1000
-            []
+            [ ResourceAccess.memory "durable" MemoryAction.Write ]
             input
             output
             operation
@@ -314,7 +314,7 @@ module private MemoryTool =
             "memory_forget"
             "Delete one durable memory by exact key only when the user explicitly requested forgetting it."
             1000
-            []
+            [ ResourceAccess.memory "durable" MemoryAction.Delete ]
             input
             output
             operation

@@ -555,26 +555,45 @@ module Orchestrator =
                                     else
                                         match config.SubAgents |> List.tryFind (fun a -> a.Metadata.Id = agentId) with
                                         | Some agent ->
-                                            report (SubAgentInvoked(agent.Metadata.Name, effectiveAgentInput))
+                                            let agentAccess = ResourceAccess.agent agent.Metadata.Id
 
-                                            let! agentResult =
-                                                ExecutionRuntime.runAgent agentContext agent effectiveAgentInput
+                                            let! allowed =
+                                                agentContext.RequestPermission
+                                                    agentAccess
+                                                    (sprintf
+                                                        "Agent '%s' requires delegation authority."
+                                                        agent.Metadata.Id)
+                                                    false
 
-                                            match agentResult with
-                                            | Ok response ->
-                                                report (SubAgentCompleted(agent.Metadata.Name, response))
-                                                finalAnswer <- response
-                                                finished <- true
-                                            | Error failure ->
+                                            if not allowed then
                                                 conversation <-
                                                     conversation
                                                     @ [ { Role = User
                                                           Content =
-                                                            sprintf
-                                                                "[Sub-agent %A Failed for %s]: %s"
-                                                                failure.Category
-                                                                agent.Metadata.Name
-                                                                failure.Message } ]
+                                                            PermissionDenied.format
+                                                                agentAccess
+                                                                (Some "Agent delegation requires host approval.") } ]
+                                            else
+                                                report (SubAgentInvoked(agent.Metadata.Name, effectiveAgentInput))
+
+                                                let! agentResult =
+                                                    ExecutionRuntime.runAgent agentContext agent effectiveAgentInput
+
+                                                match agentResult with
+                                                | Ok response ->
+                                                    report (SubAgentCompleted(agent.Metadata.Name, response))
+                                                    finalAnswer <- response
+                                                    finished <- true
+                                                | Error failure ->
+                                                    conversation <-
+                                                        conversation
+                                                        @ [ { Role = User
+                                                              Content =
+                                                                sprintf
+                                                                    "[Sub-agent %A Failed for %s]: %s"
+                                                                    failure.Category
+                                                                    agent.Metadata.Name
+                                                                    failure.Message } ]
                                         | None ->
                                             let err =
                                                 sprintf

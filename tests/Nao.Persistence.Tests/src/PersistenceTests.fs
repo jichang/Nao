@@ -747,6 +747,7 @@ let private auditEntry permitted execId : AuditEntry =
       Output = Some "result"
       Permitted = permitted
       Decision = PermissionDecision.Allow
+      PermissionEvidence = None
       ConstitutionViolations = [ "none" ]
       ExecutionId = execId
       Metadata = Map.ofList [ "src", "test" ] }

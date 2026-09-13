@@ -149,6 +149,7 @@ module ResourcePermission =
             | "web", "connect" when canonicalOriginPattern pattern |> Option.isSome ->
                 Some(PermissionTarget.Web(pattern, PermissionActions.only [ WebAction.Connect ]))
             | "tool", "invoke" -> Some(PermissionTarget.Tool pattern)
+            | "agent", "delegate" -> Some(PermissionTarget.Agent pattern)
             | "memory", "read" -> Some(PermissionTarget.Memory(pattern, PermissionActions.only [ MemoryAction.Read ]))
             | "memory", "write" -> Some(PermissionTarget.Memory(pattern, PermissionActions.only [ MemoryAction.Write ]))
             | "memory", "delete" ->
@@ -177,6 +178,7 @@ module ResourcePermission =
         | PermissionTarget.File _ -> "file"
         | PermissionTarget.Web _ -> "web"
         | PermissionTarget.Tool _ -> "tool"
+        | PermissionTarget.Agent _ -> "agent"
         | PermissionTarget.Memory _ -> "memory"
         | PermissionTarget.Knowledge _ -> "knowledge"
         | PermissionTarget.Model _ -> "model"
@@ -192,6 +194,7 @@ module ResourcePermission =
         | PermissionTarget.Artifact(pattern, _)
         | PermissionTarget.Administration(pattern, _)
         | PermissionTarget.Tool pattern
+        | PermissionTarget.Agent pattern
         | PermissionTarget.Model pattern -> pattern
 
     /// Returns whether one rule target covers another target of the same resource class.
@@ -207,6 +210,7 @@ module ResourcePermission =
                else
                    originMatches broaderHost narrowerHost
         | PermissionTarget.Tool broaderName, PermissionTarget.Tool narrowerName -> nameMatches broaderName narrowerName
+        | PermissionTarget.Agent broaderId, PermissionTarget.Agent narrowerId -> nameMatches broaderId narrowerId
         | PermissionTarget.Memory(broaderName, broaderActions), PermissionTarget.Memory(narrowerName, narrowerActions) ->
             actionsCover broaderActions narrowerActions
             && nameMatches broaderName narrowerName
@@ -236,6 +240,7 @@ module ResourcePermission =
 
             PermissionTarget.Web(origin, PermissionActions.only [ action ])
         | ResourceAccess.Tool name -> PermissionTarget.Tool name
+        | ResourceAccess.Agent agentId -> PermissionTarget.Agent agentId
         | ResourceAccess.Memory(action, name) -> PermissionTarget.Memory(name, PermissionActions.only [ action ])
         | ResourceAccess.Knowledge(action, name) -> PermissionTarget.Knowledge(name, PermissionActions.only [ action ])
         | ResourceAccess.Model name -> PermissionTarget.Model name
@@ -251,6 +256,7 @@ module ResourcePermission =
            | PermissionTarget.Web(pattern, actions), ResourceAccess.Web(action, url) ->
                PermissionActions.contains action actions && originMatches pattern url
            | PermissionTarget.Tool pattern, ResourceAccess.Tool name -> nameMatches pattern name
+           | PermissionTarget.Agent pattern, ResourceAccess.Agent agentId -> nameMatches pattern agentId
            | PermissionTarget.Memory(pattern, actions), ResourceAccess.Memory(action, name) ->
                PermissionActions.contains action actions && nameMatches pattern name
            | PermissionTarget.Knowledge(pattern, actions), ResourceAccess.Knowledge(action, name) ->

@@ -21,4 +21,4 @@ module AgentTool =
                             | _ -> ToolExecError.Failed failure.Message)
                 })
 
-        Tool.create name description priority [] input output operation
+        Tool.create name description priority [ ResourceAccess.agent agent.Metadata.Id ] input output operation

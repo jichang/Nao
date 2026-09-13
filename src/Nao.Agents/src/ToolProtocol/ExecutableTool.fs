@@ -51,6 +51,8 @@ module Tool =
         (output: ToolCodec<'Output>)
         (operation: ToolOperation<'Input, 'Output>)
         : Tool =
+        let permissions = ResourceAccess.tool name :: permissions |> List.distinct
+
         let runAsync context rawInput =
             task {
                 try

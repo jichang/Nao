@@ -19,6 +19,7 @@ type ResourcePermissionTests() =
             [ ResourceAccess.file FileAction.Read "/tmp/../tmp/a", ("file", "read", "/tmp/a")
               ResourceAccess.web WebAction.Post "https://EXAMPLE.com/path", ("web", "post", "https://example.com/path")
               ResourceAccess.tool "search", ("tool", "invoke", "search")
+              ResourceAccess.agent "researcher", ("agent", "delegate", "researcher")
               ResourceAccess.memory "working" MemoryAction.Write, ("memory", "write", "working")
               ResourceAccess.knowledge "handbook" KnowledgeAction.Retrieve, ("knowledge", "retrieve", "handbook")
               ResourceAccess.model "reasoner", ("model", "invoke", "reasoner")
@@ -186,6 +187,7 @@ type ResourcePermissionTests() =
             [ PermissionTarget.File("*", PermissionActions.all), ResourceAccess.file FileAction.List "/tmp"
               PermissionTarget.Web("*", PermissionActions.all), ResourceAccess.web WebAction.Head "https://example.com"
               PermissionTarget.Tool "*", ResourceAccess.tool "search"
+              PermissionTarget.Agent "*", ResourceAccess.agent "researcher"
               PermissionTarget.Memory("*", PermissionActions.all), ResourceAccess.memory "working" MemoryAction.Read
               PermissionTarget.Knowledge("*", PermissionActions.all),
               ResourceAccess.knowledge "handbook" KnowledgeAction.Index

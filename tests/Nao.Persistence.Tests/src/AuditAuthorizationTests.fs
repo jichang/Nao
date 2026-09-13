@@ -61,6 +61,7 @@ type AuditAuthorizationTests() =
                 PermissionDecision.Allow
             else
                 PermissionDecision.Deny
+          PermissionEvidence = None
           ConstitutionViolations = []
           ExecutionId = Some executionId
           Metadata = Map.empty }
@@ -80,6 +81,34 @@ type AuditAuthorizationTests() =
             action root factory
         finally
             Directory.Delete(root, true)
+
+    [<TestMethod>]
+    member _.PermissionDecisionEvidenceSurvivesReload() =
+        withStorage (fun root _ ->
+            let evidence =
+                { Id = Guid.NewGuid()
+                  Access = ResourceAccess.memory "durable" MemoryAction.Read
+                  Decision = PermissionDecision.Allow
+                  Basis = PermissionDecisionBasis.ReusableGrant
+                  PolicyVersions = Map.ofList [ "nao.permission", "1"; "tenant.policy", "42" ]
+                  Grants = [ { Id = Guid.NewGuid(); Version = 3 } ]
+                  EvaluatedAt = timestamp }
+
+            let executionId = ExecutionId.generate ()
+
+            AuditLogs.file root
+            |> fun audit ->
+                audit.RecordAsync owner (AuditLog.permissionDecision "memory-agent" evidence (Some executionId))
+            |> _.Wait()
+
+            let reloaded =
+                AuditLogs.file root
+                |> fun audit -> audit.QueryByExecutionAsync owner executionId
+                |> _.Result
+                |> List.exactlyOne
+
+            Assert.AreEqual(Some evidence, reloaded.PermissionEvidence)
+            Assert.AreEqual(PermissionDecision.Allow, reloaded.Decision))
 
     [<TestMethod>]
     member _.CompleteAuthorizationIdentityPartitionsEveryOperation() =

@@ -167,6 +167,15 @@ type MemoryToolAuthorizationTests() =
 
         let tools = MemoryTools.create config store
 
+        let expectedPermissions =
+            Map.ofList
+                [ "memory_search", ResourceAccess.memory "durable" MemoryAction.Read
+                  "memory_remember", ResourceAccess.memory "durable" MemoryAction.Write
+                  "memory_forget", ResourceAccess.memory "durable" MemoryAction.Delete ]
+
+        for tool in tools do
+            Assert.AreEqual([ ResourceAccess.tool tool.Name; expectedPermissions.[tool.Name] ], tool.Permissions)
+
         for name, input in
             [ "memory_search", searchInput
               "memory_remember", rememberInput

@@ -186,7 +186,8 @@ type ToolProtocolTests() =
                 RequestPermission =
                     fun access _ _ ->
                         asked.Add access
-                        Task.FromResult false }
+                        let allowed = access = ResourceAccess.tool "writer"
+                        Task.FromResult allowed }
 
         let protocol = ToolProtocol.fromTools [ permissionedTool ]
 
@@ -195,7 +196,7 @@ type ToolProtocolTests() =
 
         Assert.IsFalse(result.Success)
         Assert.IsFalse(ran.Value)
-        Assert.AreEqual<ResourceAccess>(permission, asked[0])
+        Assert.AreEqual([ ResourceAccess.tool "writer"; permission ], List.ofSeq asked)
         Assert.AreEqual(Some ToolFailureKind.PermissionDenied, result.Failure |> Option.map _.Kind)
         Assert.AreEqual(ToolReplaySafety.ExternallySideEffecting, result.ReplaySafety)
 
@@ -243,6 +244,19 @@ type ToolProtocolTests() =
               Annotations = Map.empty }
 
         let tool = McpTool.create "docs.search" client definition
+        let requested = ResizeArray<ResourceAccess>()
+
+        let deniedContext =
+            { AgentContext.unrestrictedForTests () with
+                RequestPermission =
+                    fun access _ _ ->
+                        requested.Add access
+                        Task.FromResult false }
+
+        let denied = tool.RunAsync deniedContext "{\"query\":\"Nao\"}" |> _.Result
+        Assert.IsTrue(Result.isError denied)
+        Assert.AreEqual(None, invoked)
+        Assert.AreEqual([ ResourceAccess.tool "docs.search" ], List.ofSeq requested)
 
         let result =
             tool.RunAsync (AgentContext.unrestrictedForTests ()) "{\"query\":\"Nao\"}"

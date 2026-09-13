@@ -22,6 +22,8 @@ type AuditEntry =
         Permitted: bool
         /// Permission decision that was applied
         Decision: PermissionDecision
+        /// Exact policy and grant versions used for a permission check, when this entry records one.
+        PermissionEvidence: PermissionDecisionEvidence option
         /// Any constitution violations
         ConstitutionViolations: string list
         /// Execution context identifier
@@ -79,6 +81,7 @@ module AuditLog =
           Output = Some output
           Permitted = permitted
           Decision = decision
+          PermissionEvidence = None
           ConstitutionViolations = []
           ExecutionId = execId
           Metadata = Map.empty }
@@ -93,6 +96,7 @@ module AuditLog =
           Output = None
           Permitted = true
           Decision = PermissionDecision.Allow
+          PermissionEvidence = None
           ConstitutionViolations = []
           ExecutionId = execId
           Metadata = Map.empty }
@@ -111,6 +115,22 @@ module AuditLog =
                 PermissionDecision.Allow
             else
                 PermissionDecision.Deny
+          PermissionEvidence = None
           ConstitutionViolations = violations
+          ExecutionId = execId
+          Metadata = Map.empty }
+
+    let permissionDecision agentId evidence execId =
+        { Id = Guid.NewGuid()
+          Timestamp = evidence.EvaluatedAt
+          AgentId = agentId
+          Action =
+            AuditAction.ResourceAccess(ResourceAccess.kind evidence.Access, ResourceAccess.resource evidence.Access)
+          Input = None
+          Output = None
+          Permitted = evidence.Decision = PermissionDecision.Allow
+          Decision = evidence.Decision
+          PermissionEvidence = Some evidence
+          ConstitutionViolations = []
           ExecutionId = execId
           Metadata = Map.empty }

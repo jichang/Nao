@@ -37,6 +37,11 @@ module Persistence =
         | PersistenceMode.File dir -> AuditLogs.file dir
         | PersistenceMode.Database factory -> AuditLogs.ado factory
 
+    let permissionGrants (mode: PersistenceMode) : PermissionGrantStore =
+        match mode with
+        | PersistenceMode.File dir -> PermissionGrantStores.file dir
+        | PersistenceMode.Database factory -> PermissionGrantStores.db factory
+
     /// Build a full `HarnessServices` bundle for the mode — the value a host injects
     /// into the Orleans silo / ASP.NET container so the `SessionGrain` (and any harness)
     /// gets observability + governance wired to the chosen backend.

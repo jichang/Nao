@@ -50,6 +50,7 @@ type ResourceAccess =
     | File of action: FileAction * path: string
     | Web of action: WebAction * url: string
     | Tool of toolName: string
+    | Agent of agentId: string
     | Memory of action: MemoryAction * memoryName: string
     | Knowledge of action: KnowledgeAction * sourceName: string
     | Model of modelName: string
@@ -82,6 +83,9 @@ module ResourceAccess =
     let tool name =
         ResourceAccess.Tool(canonicalName (nameof name) name)
 
+    let agent agentId =
+        ResourceAccess.Agent(canonicalName (nameof agentId) agentId)
+
     let memory name action =
         ResourceAccess.Memory(action, canonicalName (nameof name) name)
 
@@ -102,6 +106,7 @@ module ResourceAccess =
         | ResourceAccess.File _ -> "file"
         | ResourceAccess.Web _ -> "web"
         | ResourceAccess.Tool _ -> "tool"
+        | ResourceAccess.Agent _ -> "agent"
         | ResourceAccess.Memory _ -> "memory"
         | ResourceAccess.Knowledge _ -> "knowledge"
         | ResourceAccess.Model _ -> "model"
@@ -123,6 +128,7 @@ module ResourceAccess =
         | ResourceAccess.Web(WebAction.Options, _) -> "options"
         | ResourceAccess.Web(WebAction.Connect, _) -> "connect"
         | ResourceAccess.Tool _ -> "invoke"
+        | ResourceAccess.Agent _ -> "delegate"
         | ResourceAccess.Memory(MemoryAction.Read, _) -> "read"
         | ResourceAccess.Memory(MemoryAction.Write, _) -> "write"
         | ResourceAccess.Memory(MemoryAction.Delete, _) -> "delete"
@@ -145,6 +151,7 @@ module ResourceAccess =
         | ResourceAccess.Artifact(_, value)
         | ResourceAccess.Administration(_, value)
         | ResourceAccess.Tool value
+        | ResourceAccess.Agent value
         | ResourceAccess.Model value -> value
 
     let tryCreate kind action resource =
@@ -163,6 +170,7 @@ module ResourceAccess =
             | "web", "options" -> Some(web WebAction.Options resource)
             | "web", "connect" -> Some(web WebAction.Connect resource)
             | "tool", "invoke" -> Some(tool resource)
+            | "agent", "delegate" -> Some(agent resource)
             | "memory", "read" -> Some(memory resource MemoryAction.Read)
             | "memory", "write" -> Some(memory resource MemoryAction.Write)
             | "memory", "delete" -> Some(memory resource MemoryAction.Delete)
@@ -207,6 +215,35 @@ type PermissionDecision =
     | Deny
     | Ask
 
+[<RequireQualifiedAccess>]
+type PermissionGrantScope =
+    | Operation
+    | Session
+    | Workspace
+    | Durable
+
+type PermissionGrantReference = { Id: Guid; Version: int }
+
+[<RequireQualifiedAccess>]
+type PermissionDecisionBasis =
+    | ReusableGrant
+    | HostApproval of PermissionGrantScope
+    | HostDenial
+
+type PermissionDecisionEvidence =
+    { Id: Guid
+      Access: ResourceAccess
+      Decision: PermissionDecision
+      Basis: PermissionDecisionBasis
+      PolicyVersions: Map<string, string>
+      Grants: PermissionGrantReference list
+      EvaluatedAt: DateTimeOffset }
+
+[<RequireQualifiedAccess>]
+module PermissionPolicy =
+    let identity = "nao.permission"
+    let currentVersion = "1"
+
 /// How broadly a granted rule applies.
 [<RequireQualifiedAccess>]
 type RuleScope =
@@ -248,6 +285,7 @@ type PermissionTarget =
     | File of pathPattern: string * actions: PermissionActions<FileAction>
     | Web of hostPattern: string * actions: PermissionActions<WebAction>
     | Tool of namePattern: string
+    | Agent of idPattern: string
     | Memory of namePattern: string * actions: PermissionActions<MemoryAction>
     | Knowledge of namePattern: string * actions: PermissionActions<KnowledgeAction>
     | Model of namePattern: string

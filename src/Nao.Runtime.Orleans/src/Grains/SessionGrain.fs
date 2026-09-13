@@ -77,23 +77,6 @@ type ConversationContext() =
     [<Id(3u)>]
     member val AgentName: string = "" with get, set
 
-/// A resource-access grant the user approved for the lifetime of this session. Stored in the
-/// session grain's own state (Orleans-persisted) so each session tracks its own permissions
-/// and never re-prompts for something it already approved.
-[<GenerateSerializer>]
-type PermissionGrantRecord() =
-    /// Canonical resource kind.
-    [<Id(0u)>]
-    member val Kind: string = "" with get, set
-
-    /// Canonical action for the resource kind.
-    [<Id(1u)>]
-    member val Action: string = "" with get, set
-
-    /// Match pattern: a path, host, or named resource.
-    [<Id(2u)>]
-    member val Pattern: string = "" with get, set
-
 /// Persistent state for a session grain
 [<GenerateSerializer>]
 type SessionGrainState() =
@@ -102,10 +85,6 @@ type SessionGrainState() =
 
     [<Id(1u)>]
     member val Conversations: ResizeArray<ConversationContext> = ResizeArray() with get, set
-
-    /// Resource-access grants the user approved for this session ("remember for session").
-    [<Id(4u)>]
-    member val GrantedPermissions: ResizeArray<PermissionGrantRecord> = ResizeArray() with get, set
 
     [<Id(5u)>]
     member val SchemaVersion: int = 0 with get, set
@@ -253,6 +232,8 @@ type SessionGrain
         orchestratorFactory: OrchestratorFactory,
         conversationStore: ConversationStore,
         principalAccessor: Func<SecurityPrincipal>,
+        permissionBroker: PermissionApprovalBroker,
+        permissionGrants: PermissionGrantStore,
         harnessServicesFactory: Func<string, string, CorrelationContext, HarnessServices>,
         feedbackFactory: Func<string, FeedbackService>,
         eventBus: EventBus,
@@ -550,7 +531,7 @@ type SessionGrain
         (cancellationToken: CancellationToken)
         : Task<string> =
         task {
-            requireCurrentScope () |> ignore
+            let authorization = requireCurrentScope ()
             let agentName = persistentState.State.Info.AgentName
 
             if String.IsNullOrEmpty(agentName) then
@@ -589,85 +570,131 @@ type SessionGrain
                     // Flow the session/turn identity into tools so file operations and permission
                     // requests can attribute their output to this session.
                     let sessionKey = sprintf "%s/%s" info.UserId info.SessionId
-                    // Build this session's permission context: tools request resource access through
-                    // it. We answer from the session's OWN granted permissions (held in this grain's
-                    // state) first, then fall back to the server-registered interactive prompt. A
-                    // grant the user chose to remember for the session is recorded into this grain's
-                    // state so the session never re-prompts for it.
-                    let grants = persistentState.State.GrantedPermissions
 
-                    let targetOf kind action pattern =
-                        ResourcePermission.tryTarget kind action pattern
-                        |> Option.defaultWith (fun () ->
-                            invalidOp "Persisted permission grant has an invalid canonical resource or action.")
+                    let policyVersions =
+                        Map.ofList [ PermissionPolicy.identity, PermissionPolicy.currentVersion ]
 
-                    let grantRules () : PermissionRule list =
+                    let permissionDecisions = ResizeArray<PermissionDecisionEvidence>()
+                    let harnessServices = harnessServicesFactory.Invoke(sessionKey, turnId, correlation)
+
+                    let grantRules (grants: PermissionGrant list) : PermissionRule list =
                         grants
-                        |> Seq.map (fun g ->
-                            { Id = ""
-                              AppliesTo = targetOf g.Kind g.Action g.Pattern
+                        |> List.map (fun grant ->
+                            { Id = grant.Id.ToString("N")
+                              AppliesTo = grant.Target
                               Decision = PermissionDecision.Allow
                               Scope = RuleScope.Session sessionKey
-                              CreatedAt = DateTimeOffset.UtcNow })
-                        |> List.ofSeq
-                    // Does a stored grant pattern of this kind cover a resource pattern? Uses the
-                    // same matching the evaluator does, so redundant or overlapping grants (e.g.
-                    // granting "/a" then "/a/b") collapse instead of letting the list grow unbounded.
-                    let covers kind action broader narrower =
-                        ResourcePermission.targetCovers (targetOf kind action broader) (targetOf kind action narrower)
-
-                    let recordGrant (access: ResourceAccess) =
-                        let target = ResourcePermission.targetForAccess access
-                        let kind = ResourceAccess.kind access
-                        let action = ResourceAccess.action access
-                        let pattern = ResourcePermission.targetResource target
-
-                        // Skip when a broader (or equal) existing grant already covers this resource.
-                        if
-                            not (
-                                grants
-                                |> Seq.exists (fun grant ->
-                                    grant.Kind = kind
-                                    && grant.Action = action
-                                    && covers kind action grant.Pattern pattern)
-                            )
-                        then
-                            // Drop any narrower existing grants this broader one subsumes, then add it.
-                            let subsumed =
-                                grants
-                                |> Seq.filter (fun grant ->
-                                    grant.Kind = kind
-                                    && grant.Action = action
-                                    && covers kind action pattern grant.Pattern)
-                                |> Seq.toList
-
-                            for grant in subsumed do
-                                grants.Remove grant |> ignore
-
-                            grants.Add(PermissionGrantRecord(Kind = kind, Action = action, Pattern = pattern))
+                              CreatedAt = grant.GrantedAt })
 
                     let resolvePermission (access: ResourceAccess) (reason: string) (forceConfirm: bool) : Task<bool> =
                         task {
-                            // grantRules are all session-scoped for this key; filter through `applicable`
-                            // so the scope-agnostic evaluator only ever sees rules that apply here.
-                            let applicable = ResourcePermission.applicable sessionKey (grantRules ())
+                            let requestedAt = DateTimeOffset.UtcNow
+                            let! activeGrants = permissionGrants.GetActiveAsync authorization requestedAt
+                            let applicable = ResourcePermission.applicable sessionKey (grantRules activeGrants)
+                            let target = ResourcePermission.targetForAccess access
+
+                            let matchingGrants =
+                                activeGrants
+                                |> List.filter (fun grant -> ResourcePermission.targetCovers grant.Target target)
+
+                            let evidence decision basis grants =
+                                { Id = Guid.NewGuid()
+                                  Access = access
+                                  Decision = decision
+                                  Basis = basis
+                                  PolicyVersions = policyVersions
+                                  Grants =
+                                    grants
+                                    |> List.map (fun (grant: PermissionGrant) ->
+                                        { Id = grant.Id
+                                          Version = grant.Version })
+                                  EvaluatedAt = requestedAt }
+
+                            let recordEvidence evidence =
+                                task {
+                                    match harnessServices.AuditLog with
+                                    | Some audit ->
+                                        do!
+                                            audit.RecordAsync
+                                                authorization
+                                                (AuditLog.permissionDecision
+                                                    agentName
+                                                    evidence
+                                                    (Some correlation.ExecutionId))
+
+                                        permissionDecisions.Add evidence
+                                    | None ->
+                                        return
+                                            raise (
+                                                GovernedExecutionException
+                                                    "Permission decisions require a durable authenticated audit log."
+                                            )
+                                }
 
                             if
-                                ResourcePermission.evaluateWith PermissionDecision.Deny applicable access = PermissionDecision.Allow
+                                not forceConfirm
+                                && ResourcePermission.evaluateWith PermissionDecision.Deny applicable access = PermissionDecision.Allow
                             then
+                                do!
+                                    recordEvidence (
+                                        evidence
+                                            PermissionDecision.Allow
+                                            PermissionDecisionBasis.ReusableGrant
+                                            matchingGrants
+                                    )
+
                                 return true
                             else
-                                let! outcome = PermissionGate.resolve sessionKey access reason forceConfirm
+                                let permissionRequest =
+                                    { Authorization = authorization
+                                      Correlation = correlation
+                                      Access = access
+                                      Reason = reason
+                                      ForceConfirmation = forceConfirm
+                                      RequestedAt = requestedAt
+                                      AllowedGrantScopes =
+                                        Set.ofList
+                                            [ PermissionGrantScope.Operation
+                                              PermissionGrantScope.Session
+                                              PermissionGrantScope.Workspace
+                                              PermissionGrantScope.Durable ] }
 
-                                if outcome.Decision = PermissionDecision.Allow && outcome.RememberForSession then
-                                    recordGrant access
+                                let! approval =
+                                    PermissionGate.resolve permissionBroker permissionRequest cancellationToken
 
-                                    try
-                                        do! persistentState.WriteStateAsync()
-                                    with _ ->
-                                        ()
+                                match approval with
+                                | PermissionApproval.Approved grant when grant.Scope <> PermissionGrantScope.Operation ->
+                                    let permissionGrant =
+                                        PermissionGrant.create grant.Scope target requestedAt grant.ExpiresAt
 
-                                return outcome.Decision = PermissionDecision.Allow
+                                    do! permissionGrants.SaveAsync authorization permissionGrant
+
+                                    do!
+                                        recordEvidence (
+                                            evidence
+                                                PermissionDecision.Allow
+                                                (PermissionDecisionBasis.HostApproval grant.Scope)
+                                                [ permissionGrant ]
+                                        )
+
+                                    return true
+                                | PermissionApproval.Approved grant ->
+                                    do!
+                                        recordEvidence (
+                                            evidence
+                                                PermissionDecision.Allow
+                                                (PermissionDecisionBasis.HostApproval grant.Scope)
+                                                []
+                                        )
+
+                                    return true
+                                | PermissionApproval.Denied ->
+                                    do!
+                                        recordEvidence (
+                                            evidence PermissionDecision.Deny PermissionDecisionBasis.HostDenial []
+                                        )
+
+                                    return false
                         }
 
                     let artifacts = ResizeArray<Artifact>()
@@ -679,20 +706,12 @@ type SessionGrain
                             do! permissionLock.WaitAsync()
 
                             try
-                                let alreadyGranted =
-                                    lock grantedResources (fun () ->
-                                        grantedResources
-                                        |> Seq.exists (fun approved -> ResourceAccess.isCoveredBy approved access))
+                                let! allowed = resolvePermission access reason forceConfirm
 
-                                if alreadyGranted then
-                                    return true
-                                else
-                                    let! allowed = resolvePermission access reason forceConfirm
+                                if allowed then
+                                    lock grantedResources (fun () -> grantedResources.Add access)
 
-                                    if allowed then
-                                        lock grantedResources (fun () -> grantedResources.Add access)
-
-                                    return allowed
+                                return allowed
                             finally
                                 permissionLock.Release() |> ignore
                         }
@@ -733,19 +752,17 @@ type SessionGrain
                                     agentName
                                     persistentState.State.Info.WorkspaceKey
                         | Some agent ->
-                            let harnessServices = harnessServicesFactory.Invoke(sessionKey, turnId, correlation)
-
                             let harnessConfig = buildHarnessConfig workspace tools harnessServices
 
                             let request =
                                 ExecutionRequest.create
-                                    (requireCurrentScope ())
+                                    authorization
                                     (TurnId.parse turnId)
                                     info.ActiveConversation
                                     agent.Metadata.Id
                                     contextualInput
                                     SandboxConfig.Default
-                                    Map.empty
+                                    policyVersions
                                     Map.empty
                                     correlation
 
@@ -758,7 +775,8 @@ type SessionGrain
                                 // so feedback can later be analysed against it.
                                 let turnRecord =
                                     { TurnRecorder.snapshot recorder with
-                                        Output = response }
+                                        Output = response
+                                        PermissionDecisions = List.ofSeq permissionDecisions }
 
                                 do!
                                     EventBus.publishAsync
@@ -1060,6 +1078,8 @@ type SessionGrain
                 let grainKey = this.GetPrimaryKeyString()
 
                 try
+                    do! permissionGrants.DeleteScopeAsync authorization PermissionGrantScope.Session :> Task
+
                     let deletionServices =
                         harnessServicesFactory.Invoke(grainKey, "", CorrelationContext.root ())
 

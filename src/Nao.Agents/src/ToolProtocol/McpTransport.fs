@@ -132,7 +132,7 @@ module McpTool =
             exposedName
             (definition.Description |> Option.defaultValue "MCP tool")
             0
-            [ ResourceAccess.tool exposedName ]
+            []
             input
             ToolCodec.text
             operation

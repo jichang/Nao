@@ -254,7 +254,7 @@ Production and evaluation should ultimately share exactly the same execution con
 Governance contracts include:
 
 - Resource permissions and deny/allow/ask decisions
-- Host-owned interactive approval through `PermissionGate`
+- Host-owned, timeout-bounded interactive approval through an injected `PermissionApprovalBroker`
 - Runtime policies that block, warn, or modify
 - Output constitutions
 - Audit records

@@ -1,6 +1,7 @@
 namespace Nao.Agents.Tests
 
 open System
+open System.Threading
 open System.Threading.Tasks
 open Microsoft.VisualStudio.TestTools.UnitTesting
 open Nao.Agents
@@ -8,29 +9,162 @@ open Nao.Persistence
 
 [<TestClass>]
 type PermissionGateTests() =
+    let authorization =
+        SecurityPrincipal.create (TenantId.parse "tenant") (UserId.parse "user") []
+        |> fun principal ->
+            AuthorizationScope.tryCreate
+                principal
+                None
+                (WorkspaceId.parse "workspace")
+                (Some(SessionId.parse "session"))
+            |> Option.get
+
+    let request allowedScopes =
+        { Authorization = authorization
+          Correlation = CorrelationContext.root ()
+          Access = ResourceAccess.tool "dangerous"
+          Reason = "Required for the requested operation."
+          ForceConfirmation = false
+          RequestedAt = DateTimeOffset.UtcNow
+          AllowedGrantScopes = Set.ofList allowedScopes }
+
+    let approved scope =
+        PermissionApproval.Approved { Scope = scope; ExpiresAt = None }
 
     [<TestMethod>]
-    member _.MissingPromptDeniesAccess() =
+    member _.UnavailableBrokerDeniesAccess() =
         let outcome =
-            PermissionGate.resolveWith None "session" (ResourceAccess.tool "dangerous") "required" false
+            PermissionGate.resolve
+                PermissionApprovalBroker.unavailable
+                (request [ PermissionGrantScope.Operation ])
+                CancellationToken.None
             |> _.Result
 
-        Assert.AreEqual(PermissionDecision.Deny, outcome.Decision)
-        Assert.IsFalse(outcome.RememberForSession)
+        Assert.AreEqual(PermissionApproval.Denied, outcome)
 
     [<TestMethod>]
-    member _.ConfiguredPromptOutcomeIsPreserved() =
-        let prompt _ _ _ _ =
-            Task.FromResult
-                { Decision = PermissionDecision.Allow
-                  RememberForSession = true }
+    member _.BrokerReceivesAuthenticatedRequestAndApprovedScope() =
+        let mutable observed = None
+
+        let broker =
+            PermissionApprovalBroker.create (TimeSpan.FromSeconds 1.0) (fun permission _ ->
+                observed <- Some permission
+                Task.FromResult(approved PermissionGrantScope.Session))
+
+        let expected =
+            { request [ PermissionGrantScope.Operation; PermissionGrantScope.Session ] with
+                ForceConfirmation = true }
 
         let outcome =
-            PermissionGate.resolveWith (Some prompt) "session" (ResourceAccess.tool "approved") "required" true
+            PermissionGate.resolve broker expected CancellationToken.None |> _.Result
+
+        Assert.AreEqual(approved PermissionGrantScope.Session, outcome)
+        Assert.AreEqual(Some expected, observed)
+
+    [<TestMethod>]
+    member _.UnsupportedGrantScopeDeniesAccess() =
+        let broker =
+            PermissionApprovalBroker.create (TimeSpan.FromSeconds 1.0) (fun _ _ ->
+                Task.FromResult(approved PermissionGrantScope.Durable))
+
+        let outcome =
+            PermissionGate.resolve
+                broker
+                (request [ PermissionGrantScope.Operation; PermissionGrantScope.Session ])
+                CancellationToken.None
             |> _.Result
 
-        Assert.AreEqual(PermissionDecision.Allow, outcome.Decision)
-        Assert.IsTrue(outcome.RememberForSession)
+        Assert.AreEqual(PermissionApproval.Denied, outcome)
+
+    [<TestMethod>]
+    member _.BrokerTimeoutDeniesButCallerCancellationPropagates() =
+        let broker =
+            PermissionApprovalBroker.create (TimeSpan.FromMilliseconds 20.0) (fun _ cancellation ->
+                task {
+                    do! Task.Delay(TimeSpan.FromSeconds 5.0, cancellation)
+                    return approved PermissionGrantScope.Operation
+                })
+
+        let permission = request [ PermissionGrantScope.Operation ]
+
+        Assert.AreEqual(
+            PermissionApproval.Denied,
+            PermissionGate.resolve broker permission CancellationToken.None |> _.Result
+        )
+
+        use cancellation = new CancellationTokenSource()
+        cancellation.Cancel()
+
+        Assert.ThrowsExactly<TaskCanceledException>(fun () ->
+            PermissionGate.resolve broker permission cancellation.Token
+            |> _.GetAwaiter().GetResult()
+            |> ignore)
+        |> ignore
+
+[<TestClass>]
+type PermissionGrantStoreTests() =
+    let principal =
+        SecurityPrincipal.create (TenantId.parse "tenant") (UserId.parse "user") []
+
+    let scope workspace session =
+        AuthorizationScope.tryCreate
+            principal
+            None
+            (WorkspaceId.parse workspace)
+            (session |> Option.map SessionId.parse)
+        |> Option.get
+
+    [<TestMethod>]
+    member _.GrantScopesExpireAndRevokeWithoutCaching() =
+        let store = InMemoryPermissionGrantStore.create ()
+        let now = DateTimeOffset.UtcNow
+        let current = scope "workspace" (Some "session")
+        let otherSession = scope "workspace" (Some "other-session")
+        let otherWorkspace = scope "other-workspace" (Some "session")
+
+        let sessionGrant =
+            PermissionGrant.create
+                PermissionGrantScope.Session
+                (ResourcePermission.targetForAccess (ResourceAccess.file FileAction.Read "/data"))
+                now
+                None
+
+        let workspaceGrant =
+            PermissionGrant.create
+                PermissionGrantScope.Workspace
+                (ResourcePermission.targetForAccess (ResourceAccess.tool "workspace-tool"))
+                now
+                None
+
+        let durableGrant =
+            PermissionGrant.create
+                PermissionGrantScope.Durable
+                (ResourcePermission.targetForAccess (ResourceAccess.model "durable-model"))
+                now
+                (Some(now.AddMinutes 1.0))
+
+        store.SaveAsync current sessionGrant |> _.Wait()
+        store.SaveAsync current workspaceGrant |> _.Wait()
+        store.SaveAsync current durableGrant |> _.Wait()
+
+        Assert.AreEqual(3, store.GetActiveAsync current now |> _.Result.Length)
+        Assert.AreEqual(2, store.GetActiveAsync otherSession now |> _.Result.Length)
+        Assert.AreEqual(1, store.GetActiveAsync otherWorkspace now |> _.Result.Length)
+        Assert.AreEqual(2, store.GetActiveAsync current (now.AddMinutes 1.0) |> _.Result.Length)
+
+        Assert.IsTrue(store.RevokeAsync current workspaceGrant.Id (now.AddSeconds 1.0) |> _.Result)
+        Assert.AreEqual(2, store.GetActiveAsync current (now.AddSeconds 2.0) |> _.Result.Length)
+        Assert.IsFalse(store.RevokeAsync current workspaceGrant.Id (now.AddSeconds 3.0) |> _.Result)
+        Assert.AreEqual(1, store.DeleteScopeAsync current PermissionGrantScope.Session |> _.Result)
+        Assert.AreEqual(0, store.GetActiveAsync current (now.AddMinutes 2.0) |> _.Result.Length)
+
+        Assert.ThrowsExactly<ArgumentException>(fun () ->
+            store.SaveAsync
+                current
+                { sessionGrant with
+                    Version = PermissionGrant.currentVersion + 1 }
+            |> _.GetAwaiter().GetResult())
+        |> ignore
 
 [<TestClass>]
 type ConstitutionTests() =

@@ -16,3 +16,4 @@ module InMemory =
     let traceStore () : TraceStore = InMemoryTraceStore.create ()
     let executionJournal () : ExecutionJournal = InMemoryExecutionJournal.create ()
     let eventBus () : EventBus = InMemoryEventBus.create ()
+    let permissionGrants () : PermissionGrantStore = InMemoryPermissionGrantStore.create ()

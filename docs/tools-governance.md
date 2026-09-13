@@ -90,9 +90,9 @@ Prompts cannot grant permissions. The host constructs `AgentContext` and owns th
 - `Ask`
 
 Resources and actions are closed, typed sets rather than free-form strings. Current resource
-classes are file, web, tool, memory, knowledge, model, artifact, and administration. Each class
+classes are file, web, tool, agent, memory, knowledge, model, artifact, and administration. Each class
 has only its applicable actions; for example, file access uses `Read`, `Write`, `Delete`, or
-`List`, while model and tool access are invocation-only. File requests canonicalize absolute
+`List`, while model and tool access are invocation-only and agent access represents delegation. File requests canonicalize absolute
 paths, web requests require absolute HTTP(S) URLs, and named resources reject blank or
 whitespace-padded identifiers.
 
@@ -102,12 +102,39 @@ Web rules use exact scheme/host/port origins; subdomains require an explicit
 `https://*.example.com` pattern, and `*` is the only all-origin wildcard. Deny always wins over
 allow and ask. Malformed requests fail closed even if a caller supplies an allow default.
 
-`PermissionGate` is the host integration point for interactive decisions. A production host should fail closed when no client, broker, or timely answer is available.
+Tool invocation permission is intrinsic to `Tool.create`; tool authors cannot accidentally publish
+an ungoverned local tool by supplying an empty resource list. Declared file, web, memory, or other
+resource permissions are enforced in addition to invocation itself. MCP tools use the same
+executable boundary. Agent tools and direct orchestrator delegation require canonical agent
+delegation access, and built-in memory search, remember, and forget tools separately require
+read, write, and delete access to durable memory. All these decisions call the host-owned
+`RequestPermission` capability. Model responses and prompt text can request an operation but
+cannot construct, replace, or bypass that capability.
 
-Remembered session grants persist the canonical resource kind, action, and pattern. Approving a
-read therefore cannot authorize a later write to the same resource. Workspace and durable grant
-scopes, expiry, revocation, tenant ownership, and audit semantics remain tracked in the
-[governance roadmap](roadmap/01-harness-security-governance.md).
+`PermissionApprovalBroker` is the host-owned integration point for interactive decisions. The
+runtime injects it into the session grain; there is no process-global mutable prompt callback.
+Each `PermissionApprovalRequest` carries the authenticated scope, correlation, canonical access,
+reason, request time, force-confirmation flag, and the grant scopes that caller can implement. The gate rejects
+an approved scope outside that set, denies when the broker is unavailable or exceeds its
+configured timeout, and propagates caller cancellation.
+
+Approved operation grants apply only to the current request. Session, workspace, and durable grants
+persist the canonical typed permission target and can carry an expiry. The runtime reloads active
+grants before every decision, so expiry or revocation cannot be hidden by an in-process cache.
+Session grants are isolated to one session, workspace grants cross sessions in one workspace, and
+durable grants cross workspaces. Every reusable grant remains bound to the tenant, selected group,
+original and effective user, and service authority lineage that approved it. Agent lineage and
+mutable roles or claims do not widen or fragment reusable grants, and raw authentication evidence
+is never stored in grant events. Approving a read therefore cannot authorize a later write, and
+impersonated or delegated service authority cannot mint a grant reusable by broader direct authority.
+
+Every runtime permission check produces immutable `PermissionDecisionEvidence`. It records the
+canonical access, final decision and basis, the exact `nao.permission` policy version, and the ID
+and version of every reusable grant that authorized the request. The evidence is written to the
+authenticated audit stream before the decision returns, including denial paths, and successful
+turn records retain the same evidence for replay and feedback. Grant version validation fails
+closed during writes and event replay; unsupported versions cannot authorize access. A runtime
+without an authenticated audit capability cannot complete a protected permission decision.
 
 ## Policy engine
 

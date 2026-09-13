@@ -23,6 +23,7 @@
     <Compile Include="src/EpisodicAuthorizationTests.fs" />
     <Compile Include="src/TieredAuthorizationTests.fs" />
     <Compile Include="src/WorkingAuthorizationTests.fs" />
+    <Compile Include="src/PermissionGrantStoreTests.fs" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\Nao.Agents\Nao.Agents.fsproj" />
