@@ -42,11 +42,20 @@ type EventBusTests() =
     let sampleTurn () =
         { TurnRecord.empty (CorrelationContext.root ()) with
             TurnId = "turn-1"
-            SessionId = "s1"
-            UserId = "dev"
             Input = "hello"
             Output = "hi"
             CreatedAt = DateTimeOffset.UtcNow }
+
+    let authorizationFor (eventScope: EventScope) =
+        let principal =
+            SecurityPrincipal.create (TenantId.parse "tenant") (UserId.parse eventScope.UserId) []
+
+        AuthorizationScope.tryCreate
+            principal
+            None
+            (WorkspaceId.parse eventScope.WorkspaceKey)
+            (Some(SessionId.parse eventScope.SessionId))
+        |> Option.get
 
     let tempDir () =
         let dir =
@@ -164,25 +173,28 @@ type EventBusTests() =
         CollectionAssert.AreEqual([| "first-start"; "first-end"; "second" |], order.ToArray())
 
     [<TestMethod>]
-    member _.RoutesTurnToPerSessionFolder() =
+    member _.RoutesTurnToAuthenticatedIdentityStream() =
         let root = tempDir ()
 
-        let consumer =
-            FeedbackEventConsumer.create (fun key -> Path.Combine(root, key.Replace("/", "_"), "feedback"))
+        let consumer = FeedbackEventConsumer.create authorizationFor (fun _ -> root)
 
         let evt = TurnCompleted(scope (), sampleTurn ())
 
         EventConsumer.handleAsync evt consumer.Consumer |> _.Wait()
 
-        let expected = Path.Combine(root, "dev_s1", "feedback", "turns.jsonl")
+        let authorization = authorizationFor (scope ())
+
+        let storageKey =
+            AuthorizationScope.identity authorization |> AuthorizationIdentity.storageKey
+
+        let expected = Path.Combine(root, "turn-store", storageKey + ".jsonl")
         Assert.IsTrue(File.Exists expected, sprintf "expected turns file at %s" expected)
 
     [<TestMethod>]
     member _.SeparatesDistinctSessions() =
         let root = tempDir ()
 
-        let consumer =
-            FeedbackEventConsumer.create (fun key -> Path.Combine(root, key.Replace("/", "_"), "feedback"))
+        let consumer = FeedbackEventConsumer.create authorizationFor (fun _ -> root)
 
         let scopeA =
             EventScope.Create("dev", "s1", "c1", "ws", "turn-a", "dev/s1", CorrelationContext.root ())
@@ -196,16 +208,20 @@ type EventBusTests() =
         EventConsumer.handleAsync (TurnCompleted(scopeB, sampleTurn ())) consumer.Consumer
         |> _.Wait()
 
-        Assert.IsTrue(File.Exists(Path.Combine(root, "dev_s1", "feedback", "turns.jsonl")))
-        Assert.IsTrue(File.Exists(Path.Combine(root, "dev_s2", "feedback", "turns.jsonl")))
+        let key eventScope =
+            authorizationFor eventScope
+            |> AuthorizationScope.identity
+            |> AuthorizationIdentity.storageKey
+
+        Assert.IsTrue(File.Exists(Path.Combine(root, "turn-store", key scopeA + ".jsonl")))
+        Assert.IsTrue(File.Exists(Path.Combine(root, "turn-store", key scopeB + ".jsonl")))
 
     [<TestMethod>]
     member _.FeedbackFor_ReturnsServiceForReads() =
         let root = tempDir ()
 
-        let consumer =
-            FeedbackEventConsumer.create (fun key -> Path.Combine(root, key.Replace("/", "_"), "feedback"))
+        let consumer = FeedbackEventConsumer.create authorizationFor (fun _ -> root)
 
-        let svc = FeedbackEventConsumer.feedbackFor "dev/s1" consumer
+        let svc = FeedbackEventConsumer.feedbackFor (authorizationFor (scope ())) consumer
 
         Assert.IsNotNull(box svc)

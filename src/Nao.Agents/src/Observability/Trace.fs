@@ -86,17 +86,17 @@ and SpanEvent =
 type Tracer =
     {
         /// Start a new root trace
-        StartTrace: CorrelationContext -> string -> Span
+        StartTrace: AuthorizationScope -> CorrelationContext -> string -> Span
         /// Start a child span under an existing span
-        StartSpan: Span -> string -> Span
+        StartSpan: AuthorizationScope -> Span -> string -> Span
         /// End a span
-        EndSpan: Span -> SpanStatus -> unit
+        EndSpan: AuthorizationScope -> Span -> SpanStatus -> unit
         /// Add an event to the current span
-        AddEvent: Span -> string -> Map<string, string> -> unit
+        AddEvent: AuthorizationScope -> Span -> string -> Map<string, string> -> unit
         /// Set attributes on a span
-        SetAttributes: Span -> Map<string, string> -> unit
+        SetAttributes: AuthorizationScope -> Span -> Map<string, string> -> unit
         /// Get all completed spans for a trace
-        GetTrace: TraceId -> Span list
+        GetTrace: AuthorizationScope -> TraceId -> Span list
         /// Get all spans produced by one execution
-        GetByExecution: ExecutionId -> Span list
+        GetByExecution: AuthorizationScope -> ExecutionId -> Span list
     }

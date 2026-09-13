@@ -88,8 +88,7 @@ type MemoryTierTests() =
     [<TestMethod>]
     member _.TieredMemoryEntryHasCorrectTier() =
         let entry: TieredMemoryEntry =
-            { Owner = "memory-tier-tests"
-              Key = "fact"
+            { Key = "fact"
               Value = "Earth is round"
               Tier = MemoryTier.LongTerm
               Timestamp = DateTimeOffset.UtcNow

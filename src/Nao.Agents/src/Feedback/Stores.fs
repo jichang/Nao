@@ -25,18 +25,17 @@ module FeedbackJson =
 
 /// Persists completed turn records so feedback can be analysed against them later.
 type TurnStore =
-    { SaveAsync: TurnRecord -> Task
-      GetAsync: string -> Task<TurnRecord option>
-      GetForSessionAsync: string -> Task<TurnRecord list>
-      GetForExecutionAsync: ExecutionId -> Task<TurnRecord list>
-      DeleteSessionAsync: string -> Task<Result<int, PlatformFailure>>
-      DeleteExpiredAsync: string -> DateTimeOffset -> Task<Result<int, PlatformFailure>> }
+    { SaveAsync: AuthorizationScope -> TurnRecord -> Task
+      GetAsync: AuthorizationScope -> string -> Task<TurnRecord option>
+      GetAllAsync: AuthorizationScope -> Task<TurnRecord list>
+      GetForExecutionAsync: AuthorizationScope -> ExecutionId -> Task<TurnRecord list>
+      DeleteScopeAsync: AuthorizationScope -> Task<Result<int, PlatformFailure>>
+      DeleteExpiredAsync: AuthorizationScope -> DateTimeOffset -> Task<Result<int, PlatformFailure>> }
 
 /// Persists user feedback entries.
 type FeedbackStore =
-    { SaveAsync: Feedback -> Task
-      GetForTurnAsync: string -> Task<Feedback list>
-      GetForSessionAsync: string -> Task<Feedback list>
-      GetAllAsync: unit -> Task<Feedback list>
-      DeleteOwnerAsync: string -> Task<Result<int, PlatformFailure>>
-      DeleteExpiredAsync: string -> DateTimeOffset -> Task<Result<int, PlatformFailure>> }
+    { SaveAsync: AuthorizationScope -> Feedback -> Task
+      GetForTurnAsync: AuthorizationScope -> string -> Task<Feedback list>
+      GetAllAsync: AuthorizationScope -> Task<Feedback list>
+      DeleteScopeAsync: AuthorizationScope -> Task<Result<int, PlatformFailure>>
+      DeleteExpiredAsync: AuthorizationScope -> DateTimeOffset -> Task<Result<int, PlatformFailure>> }

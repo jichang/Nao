@@ -168,6 +168,13 @@ type RegressionTests() =
 
     let agentId = "test"
 
+    let scope =
+        let principal =
+            SecurityPrincipal.create (TenantId.parse "tenant") (UserId.parse "user") []
+
+        AuthorizationScope.tryCreate principal None (WorkspaceId.parse "workspace") None
+        |> Option.get
+
     let makeTrace success steps duration : ExecutionTrace =
         let startedAt = DateTimeOffset.UtcNow.AddMilliseconds(-duration)
 
@@ -232,8 +239,8 @@ type RegressionTests() =
     member _.InMemoryTraceStoreSavesAndRetrieves() =
         let store = InMemoryTraceStore.create ()
         let trace = makeTrace true 2 500.0
-        store.SaveAsync(trace).Wait()
-        let retrieved = (store.GetTracesAsync agentId 10).Result
+        store.SaveAsync scope trace |> _.Wait()
+        let retrieved = store.GetTracesAsync scope agentId 10 |> _.Result
         Assert.AreEqual(1, retrieved.Length)
         Assert.AreEqual(trace.Id, retrieved.[0].Id)
 
@@ -253,9 +260,9 @@ type RegressionTests() =
             { makeTrace false 1 500.0 with
                 StartedAt = DateTimeOffset.UtcNow }
 
-        store.SaveAsync(old).Wait()
-        store.SaveAsync(recent).Wait()
-        store.SaveAsync(failed).Wait()
-        let baseline = (store.GetBaselineAsync agentId "test").Result
+        store.SaveAsync scope old |> _.Wait()
+        store.SaveAsync scope recent |> _.Wait()
+        store.SaveAsync scope failed |> _.Wait()
+        let baseline = store.GetBaselineAsync scope agentId "test" |> _.Result
         Assert.IsTrue(baseline.IsSome)
         Assert.AreEqual(recent.Id, baseline.Value.Id)

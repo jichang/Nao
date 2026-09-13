@@ -2,462 +2,307 @@ module FeedbackTests
 
 open System
 open System.IO
-open System.Text.Json
-open System.Threading.Tasks
-open Microsoft.VisualStudio.TestTools.UnitTesting
 open Microsoft.Data.Sqlite
-open Nao.Agents
+open Microsoft.VisualStudio.TestTools.UnitTesting
 open Nao.Agents
 open Nao.Persistence
-open Nao.Agents
-open Nao.Feedback.Tests
 
-let private tempDir () =
-    let d =
-        Path.Combine(Path.GetTempPath(), "nao-feedback-tests", Guid.NewGuid().ToString("N"))
+let private scope tenant user group workspace session =
+    let principal =
+        SecurityPrincipal.createAuthenticated
+            (TenantId.parse tenant)
+            (UserId.parse user)
+            (Some(ServiceId.parse "private-service"))
+            [ GroupId.parse "group"; GroupId.parse "other" ]
+            [ "private-role" ]
+            (Map.ofList [ "private-claim", "private-value" ])
+            AuthenticationStrength.MultiFactor
 
-    Directory.CreateDirectory d |> ignore
-    d
+    AuthorizationScope.tryCreate
+        principal
+        (group |> Option.map GroupId.parse)
+        (WorkspaceId.parse workspace)
+        (session |> Option.map SessionId.parse)
+    |> Option.get
 
-let private emptyTurn () =
-    TurnRecord.empty (CorrelationContext.root ())
+let private owner =
+    scope "tenant" "user" (Some "group") "workspace" (Some "session")
 
-let private sqliteFactory () : DbConnectionFactory =
-    let path =
-        Path.Combine(Path.GetTempPath(), sprintf "nao-feedback-%s.db" (Guid.NewGuid().ToString("N")))
+let private owners =
+    [ owner
+      scope "other" "user" (Some "group") "workspace" (Some "session")
+      scope "tenant" "other" (Some "group") "workspace" (Some "session")
+      scope "tenant" "user" (Some "other") "workspace" (Some "session")
+      scope "tenant" "user" None "workspace" (Some "session")
+      scope "tenant" "user" (Some "group") "other" (Some "session")
+      scope "tenant" "user" (Some "group") "workspace" (Some "other")
+      scope "tenant" "user" (Some "group") "workspace" None ]
 
-    let cs = sprintf "Data Source=%s" path
-    DbConnectionFactory.ofFunc (fun () -> new SqliteConnection(cs) :> System.Data.Common.DbConnection)
+let private other = owners.[1]
+
+let private key authorization =
+    AuthorizationScope.identity authorization |> AuthorizationIdentity.storageKey
+
+let private timestamp = DateTimeOffset(2026, 9, 13, 0, 0, 0, TimeSpan.Zero)
+
+let private turn id correlation createdAt =
+    { TurnRecord.empty correlation with
+        TurnId = id
+        AgentName = "agent"
+        Input = "input"
+        Output = "output"
+        CreatedAt = createdAt }
+
+let private feedback id turnId createdAt =
+    { Id = id
+      TurnId = turnId
+      Sentiment = FeedbackSentiment.Negative
+      Comment = Some "comment"
+      CreatedAt = createdAt
+      Metadata = Map.empty }
+
+let private withStorage action =
+    let root =
+        Path.Combine(Path.GetTempPath(), "nao-feedback-scope-" + Guid.NewGuid().ToString("N"))
+
+    Directory.CreateDirectory root |> ignore
+
+    let factory =
+        DbConnectionFactory.ofFunc (fun () ->
+            new SqliteConnection(sprintf "Data Source=%s;Pooling=False" (Path.Combine(root, "feedback.db")))
+            :> Data.Common.DbConnection)
+
+    try
+        action root factory
+    finally
+        Directory.Delete(root, true)
 
 [<TestClass>]
 type TurnRecorderTests() =
-
     [<TestMethod>]
-    member _.``Pairs tool invocations with their results in order``() =
+    member _.CapturesTurnWithoutAuthorizationIdentity() =
         let correlation = CorrelationContext.root ()
+        let recorder = TurnRecorder.create ("turn", correlation, "agent", "hello")
 
-        let recorder =
-            TurnRecorder.create ("t1", correlation, "s1", "u1", "ws", "agent", "hello")
+        let eventScope =
+            EventScope.Create("user", "session", "", "workspace", "turn", "user/session", correlation)
 
-        let consumer = recorder.Consumer
-
-        let scope = EventScope.Create("u1", "s1", "", "ws", "t1", "u1/s1", correlation)
-
-        let send signal =
-            EventConsumer.handleAsync (NaoEvent.TurnProgress(scope, signal)) consumer
-            |> _.Wait()
-
-        send (ToolInvoked("search", "query"))
-        send (ToolCompleted("search", "results"))
-        send (SubAgentInvoked("helper", "subtask"))
-        send (SubAgentCompleted("helper", "done"))
-        send (AnswerProduced("final answer"))
-
-        let snap = TurnRecorder.snapshot recorder
-        Assert.AreEqual(1, snap.ToolCalls.Length)
-        Assert.AreEqual("search", snap.ToolCalls.[0].Name)
-        Assert.AreEqual("query", snap.ToolCalls.[0].Input)
-        Assert.AreEqual("results", snap.ToolCalls.[0].Output)
-        Assert.AreEqual(1, snap.SubAgentCalls.Length)
-        Assert.AreEqual("helper", snap.SubAgentCalls.[0].Name)
-        Assert.AreEqual("subtask", snap.SubAgentCalls.[0].Input)
-        Assert.AreEqual("final answer", snap.Output)
-        Assert.AreEqual(correlation, snap.Correlation)
-
-    [<TestMethod>]
-    member _.``Records tool calls from progress events``() =
-        let correlation = CorrelationContext.root ()
-
-        let recorder =
-            TurnRecorder.create ("t1", correlation, "s1", "u1", "ws", "agent", "hi")
-
-        let consumer = recorder.Consumer
-
-        let scope = EventScope.Create("u1", "s1", "", "ws", "t1", "u1/s1", correlation)
-
-        let send signal =
-            EventConsumer.handleAsync (NaoEvent.TurnProgress(scope, signal)) consumer
-            |> _.Wait()
-
-        send (ToolInvoked("search", "q"))
-        send (ToolCompleted("search", "r"))
-        let snap = TurnRecorder.snapshot recorder
-        Assert.AreEqual("search", snap.ToolCalls.[0].Name)
-
-[<TestClass>]
-type FileStoreTests() =
-
-    [<TestMethod>]
-    member _.``Turn store round-trips via JSONL``() =
-        (task {
-            let dir = tempDir ()
-            let store = FileTurnStore.create dir
-
-            let turn =
-                { emptyTurn () with
-                    TurnId = "t1"
-                    SessionId = "s1"
-                    ToolCalls =
-                        [ { Name = "search"
-                            Input = "q"
-                            Output = "r" } ] }
-
-            do! store.SaveAsync turn
-            do! store.SaveAsync { turn with Output = "latest" }
-
-            use envelope =
-                JsonDocument.Parse(File.ReadLines(Path.Combine(dir, "turns.jsonl")) |> Seq.head)
-
-            Assert.AreEqual(1, envelope.RootElement.GetProperty("schemaVersion").GetInt32())
-            Assert.AreEqual("turn.upsert", envelope.RootElement.GetProperty("kind").GetString())
-            let! loaded = store.GetAsync "t1"
-            Assert.IsTrue(loaded.IsSome)
-            Assert.AreEqual("latest", loaded.Value.Output)
-            Assert.AreEqual(1, loaded.Value.ToolCalls.Length)
-            Assert.AreEqual("search", loaded.Value.ToolCalls.[0].Name)
-            let! forSession = store.GetForSessionAsync "s1"
-            Assert.AreEqual(1, forSession.Length, "The latest TurnId is the authoritative logical record")
-            let! forExecution = store.GetForExecutionAsync turn.Correlation.ExecutionId
-            Assert.AreEqual([ turn.Correlation ], forExecution |> List.map _.Correlation)
-        })
-            .GetAwaiter()
-            .GetResult()
-
-    [<TestMethod>]
-    member _.``Turn store rejects unsupported schema versions``() =
-        let dir = tempDir ()
-
-        let invalid: TurnStoreEnvelope =
-            { SchemaVersion = 2
-              Kind = "turn.upsert"
-              Record = Some(emptyTurn ())
-              SessionId = None
-              Before = None }
-
-        File.WriteAllText(Path.Combine(dir, "turns.jsonl"), FeedbackJson.serialize invalid + Environment.NewLine)
-
-        try
-            FileTurnStore.create(dir).GetAsync("turn").Wait()
-            Assert.Fail("Unsupported turn-store schema unexpectedly accepted.")
-        with
-        | :? InvalidDataException -> ()
-        | :? AggregateException as error -> Assert.IsTrue(error.InnerException :? InvalidDataException)
-
-    [<TestMethod>]
-    member _.``Turn store rejects corrupt history before save``() =
-        let dir = tempDir ()
-        let path = Path.Combine(dir, "turns.jsonl")
-        File.WriteAllText(path, "{invalid" + Environment.NewLine)
-        let before = File.ReadAllBytes path
-        let store = FileTurnStore.create dir
-
-        let error =
-            Assert.ThrowsExactly<InvalidDataException>(fun () ->
-                store.SaveAsync(emptyTurn ()) |> _.GetAwaiter().GetResult())
-
-        StringAssert.Contains(error.Message, path)
-        StringAssert.Contains(error.Message, "line 1")
-        StringAssert.Contains(error.Message, "docs/migrations")
-        CollectionAssert.AreEqual(before, File.ReadAllBytes path)
-
-[<TestClass>]
-type TurnStoreLifecycleTests() =
-
-    [<TestMethod>]
-    member _.``Purges turns by session across backends``() =
-        let dir = tempDir ()
-        let factory = sqliteFactory ()
-        let inMemory = InMemoryTurnStore.create ()
-
-        let stores =
-            [ (fun () -> inMemory)
-              (fun () -> FileTurnStore.create dir)
-              (fun () -> AdoTurnStore.create factory) ]
-
-        for make in stores do
-            let sessionA = "session-a"
-            let sessionB = "session-b"
-            let cutoff = DateTimeOffset.UtcNow
-            let expiredCount = Random.Shared.Next(1, 5)
-            let retainedCount = Random.Shared.Next(1, 5)
-            let otherCount = Random.Shared.Next(1, 5)
-
-            let turn sessionId timestamp =
-                { emptyTurn () with
-                    TurnId = Guid.NewGuid().ToString("N")
-                    SessionId = sessionId
-                    CreatedAt = timestamp }
-
-            let store = make ()
-
-            for _ in 1..expiredCount do
-                store.SaveAsync(turn sessionA (cutoff.AddMinutes(-1.0))) |> _.Wait()
-
-            for _ in 1..retainedCount do
-                store.SaveAsync(turn sessionA cutoff) |> _.Wait()
-
-            for _ in 1..otherCount do
-                store.SaveAsync(turn sessionB (cutoff.AddMinutes(-1.0))) |> _.Wait()
-
-            match store.DeleteExpiredAsync sessionA cutoff |> _.Result with
-            | Error failure -> Assert.Fail(failure.Message)
-            | Ok deleted -> Assert.AreEqual(expiredCount, deleted)
-
-            let reloaded = make ()
-            Assert.AreEqual(retainedCount, reloaded.GetForSessionAsync sessionA |> _.Result |> List.length)
-            Assert.AreEqual(otherCount, reloaded.GetForSessionAsync sessionB |> _.Result |> List.length)
-
-            match reloaded.DeleteSessionAsync sessionA |> _.Result with
-            | Error failure -> Assert.Fail(failure.Message)
-            | Ok deleted -> Assert.AreEqual(retainedCount, deleted)
-
-            let reloadedAgain = make ()
-            Assert.AreEqual(0, reloadedAgain.GetForSessionAsync sessionA |> _.Result |> List.length)
-            Assert.AreEqual(otherCount, reloadedAgain.GetForSessionAsync sessionB |> _.Result |> List.length)
-
-            match reloadedAgain.DeleteSessionAsync " " |> _.Result with
-            | Ok _ -> Assert.Fail("Blank turn session unexpectedly accepted.")
-            | Error failure -> Assert.AreEqual(PlatformErrorCategory.InvalidInput, failure.Category)
-
-/// Same coverage as FileStoreTests but against the ADO.NET (SQLite) backend, proving
-/// the feedback stores have full parity across InMemory / File / Database modes.
-[<TestClass>]
-type DatabaseStoreTests() =
-
-    [<TestMethod>]
-    member _.``Turn store round-trips via ADO.NET``() =
-        (task {
-            let factory = sqliteFactory ()
-            let store = AdoTurnStore.create factory
-
-            let turn =
-                { emptyTurn () with
-                    TurnId = "t1"
-                    SessionId = "s1"
-                    ToolCalls =
-                        [ { Name = "search"
-                            Input = "q"
-                            Output = "r" } ] }
-
-            do! store.SaveAsync turn
-            do! store.SaveAsync { turn with Output = "latest" }
-            let! loaded = store.GetAsync "t1"
-            Assert.IsTrue(loaded.IsSome)
-            Assert.AreEqual("latest", loaded.Value.Output)
-            Assert.AreEqual(1, loaded.Value.ToolCalls.Length)
-            Assert.AreEqual("search", loaded.Value.ToolCalls.[0].Name)
-            let! forSession = store.GetForSessionAsync "s1"
-            Assert.AreEqual(1, forSession.Length)
-            let! forExecution = store.GetForExecutionAsync turn.Correlation.ExecutionId
-            Assert.AreEqual([ turn.Correlation ], forExecution |> List.map _.Correlation)
-        })
-            .GetAwaiter()
-            .GetResult()
-
-[<TestClass>]
-type FeedbackStoreLifecycleTests() =
-
-    [<TestMethod>]
-    member _.``Feedback store rejects corrupt history before save``() =
-        let dir = tempDir ()
-        let path = Path.Combine(dir, "feedback.jsonl")
-        File.WriteAllText(path, "{invalid" + Environment.NewLine)
-        let before = File.ReadAllBytes path
-        let store = FileFeedbackStore.create dir
-
-        let feedback =
-            { Id = Guid.NewGuid()
-              TurnId = "turn"
-              SessionId = "session"
-              UserId = "user"
-              Sentiment = FeedbackSentiment.Neutral
-              Comment = None
-              CreatedAt = DateTimeOffset.UtcNow
-              Metadata = Map.empty }
-
-        let error =
-            Assert.ThrowsExactly<InvalidDataException>(fun () -> store.SaveAsync feedback |> _.GetAwaiter().GetResult())
-
-        StringAssert.Contains(error.Message, path)
-        StringAssert.Contains(error.Message, "line 1")
-        CollectionAssert.AreEqual(before, File.ReadAllBytes path)
-
-    [<TestMethod>]
-    member _.``ADO feedback store rejects corrupt row before save``() =
-        let factory = sqliteFactory ()
-        let store = AdoFeedbackStore.create factory
-        store.GetAllAsync().Wait()
-
-        Ado.executeNonQuery
-            factory
-            "INSERT INTO nao_feedback_entries (item_id, payload) VALUES ('corrupt-feedback', '{invalid')"
-            []
+        EventConsumer.handleAsync (TurnProgress(eventScope, ToolInvoked("search", "query"))) recorder.Consumer
         |> _.Wait()
 
-        let feedback =
-            { Id = Guid.NewGuid()
-              TurnId = "turn"
-              SessionId = "session"
-              UserId = "user"
-              Sentiment = FeedbackSentiment.Neutral
-              Comment = None
-              CreatedAt = DateTimeOffset.UtcNow
-              Metadata = Map.empty }
+        EventConsumer.handleAsync (TurnProgress(eventScope, ToolCompleted("search", "result"))) recorder.Consumer
+        |> _.Wait()
 
-        let error =
-            Assert.ThrowsExactly<InvalidDataException>(fun () -> store.SaveAsync feedback |> _.GetAwaiter().GetResult())
+        EventConsumer.handleAsync (TurnProgress(eventScope, AnswerProduced "answer")) recorder.Consumer
+        |> _.Wait()
 
-        StringAssert.Contains(error.Message, "corrupt-feedback")
-        StringAssert.Contains(error.Message, "docs/migrations")
+        let snapshot = TurnRecorder.snapshot recorder
+        Assert.AreEqual("answer", snapshot.Output)
+        Assert.AreEqual([ "search" ], snapshot.ToolCalls |> List.map _.Name)
 
-        let rows =
-            Ado.query factory "SELECT item_id FROM nao_feedback_entries" [] (fun reader ->
-                Ado.getString reader "item_id")
-            |> _.GetAwaiter().GetResult()
+[<TestClass>]
+type FeedbackAuthorizationTests() =
+    [<TestMethod>]
+    member _.CompleteIdentityPartitionsTurnsAndFeedbackAcrossBackends() =
+        withStorage (fun root factory ->
+            let correlation = CorrelationContext.root ()
+            let turnId = "shared-turn"
+            let feedbackId = Guid.NewGuid()
+            let memoryTurns = TurnStores.inMemory ()
+            let memoryFeedback = FeedbackStores.inMemory ()
 
-        CollectionAssert.AreEqual([| "corrupt-feedback" |], rows |> List.toArray)
+            for makeTurns, makeFeedback in
+                [ (fun () -> memoryTurns), (fun () -> memoryFeedback)
+                  (fun () -> TurnStores.file root), (fun () -> FeedbackStores.file root)
+                  (fun () -> TurnStores.ado factory), (fun () -> FeedbackStores.ado factory) ] do
+                let turns = makeTurns ()
+                let feedbacks = makeFeedback ()
+
+                for authorization in owners do
+                    turns.SaveAsync authorization (turn turnId correlation timestamp) |> _.Wait()
+
+                    feedbacks.SaveAsync authorization (feedback feedbackId turnId timestamp)
+                    |> _.Wait()
+
+                for authorization in owners do
+                    Assert.AreEqual(1, (makeTurns ()).GetAllAsync authorization |> _.Result |> List.length)
+                    Assert.AreEqual(1, (makeFeedback ()).GetAllAsync authorization |> _.Result |> List.length)
+
+                Assert.AreEqual(
+                    1,
+                    (makeTurns ()).GetForExecutionAsync owner correlation.ExecutionId
+                    |> _.Result
+                    |> List.length
+                )
+
+                Assert.AreEqual(1, (makeFeedback ()).GetForTurnAsync owner turnId |> _.Result |> List.length)
+
+                Assert.AreEqual(Ok 1, (makeTurns ()).DeleteScopeAsync owner |> _.Result)
+                Assert.AreEqual(Ok 1, (makeFeedback ()).DeleteScopeAsync owner |> _.Result)
+
+                for authorization in owners |> List.tail do
+                    Assert.AreEqual(1, (makeTurns ()).GetAllAsync authorization |> _.Result |> List.length)
+                    Assert.AreEqual(1, (makeFeedback ()).GetAllAsync authorization |> _.Result |> List.length))
 
     [<TestMethod>]
-    member _.``Purges feedback by user across backends``() =
-        let dir = tempDir ()
-        let factory = sqliteFactory ()
-        let inMemory = InMemoryFeedbackStore.create ()
+    member _.RetentionIsStrictAndScopeLocal() =
+        let turns = TurnStores.inMemory ()
+        let feedbacks = FeedbackStores.inMemory ()
+        let correlation = CorrelationContext.root ()
 
-        let stores =
-            [ (fun () -> inMemory)
-              (fun () -> FileFeedbackStore.create dir)
-              (fun () -> AdoFeedbackStore.create factory) ]
+        turns.SaveAsync owner (turn "old" correlation (timestamp.AddTicks(-1L)))
+        |> _.Wait()
 
-        for make in stores do
-            let ownerA = "user-a"
-            let ownerB = "user-b"
-            let cutoff = DateTimeOffset.UtcNow
-            let expiredCount = Random.Shared.Next(1, 5)
-            let retainedCount = Random.Shared.Next(1, 5)
-            let otherCount = Random.Shared.Next(1, 5)
+        turns.SaveAsync owner (turn "current" correlation timestamp) |> _.Wait()
 
-            let feedback owner sessionId timestamp =
-                { Id = Guid.NewGuid()
-                  TurnId = Guid.NewGuid().ToString("N")
-                  SessionId = sessionId
-                  UserId = owner
-                  Sentiment = FeedbackSentiment.Neutral
-                  Comment = None
-                  CreatedAt = timestamp
-                  Metadata = Map.empty }
+        turns.SaveAsync other (turn "foreign" correlation (timestamp.AddTicks(-1L)))
+        |> _.Wait()
 
-            let store = make ()
+        feedbacks.SaveAsync owner (feedback (Guid.NewGuid()) "old" (timestamp.AddTicks(-1L)))
+        |> _.Wait()
 
-            let retained =
-                [ for index in 1..retainedCount -> feedback ownerA (sprintf "session-%d" index) cutoff ]
+        feedbacks.SaveAsync owner (feedback (Guid.NewGuid()) "current" timestamp)
+        |> _.Wait()
 
-            for _ in 1..expiredCount do
-                store.SaveAsync(feedback ownerA "earlier-session" (cutoff.AddMinutes(-1.0)))
+        feedbacks.SaveAsync other (feedback (Guid.NewGuid()) "foreign" (timestamp.AddTicks(-1L)))
+        |> _.Wait()
+
+        Assert.AreEqual(Ok 1, turns.DeleteExpiredAsync owner timestamp |> _.Result)
+        Assert.AreEqual(Ok 1, feedbacks.DeleteExpiredAsync owner timestamp |> _.Result)
+        Assert.AreEqual([ "current" ], turns.GetAllAsync owner |> _.Result |> List.map _.TurnId)
+        Assert.AreEqual(1, feedbacks.GetAllAsync owner |> _.Result |> List.length)
+        Assert.AreEqual(1, turns.GetAllAsync other |> _.Result |> List.length)
+        Assert.AreEqual(1, feedbacks.GetAllAsync other |> _.Result |> List.length)
+
+    [<TestMethod>]
+    member _.PersistentStreamsUseClaimFreeKeysAndIdentityFreeV1Payloads() =
+        withStorage (fun root factory ->
+            let correlation = CorrelationContext.root ()
+
+            for turns, feedbacks in
+                [ TurnStores.file root, FeedbackStores.file root
+                  TurnStores.ado factory, FeedbackStores.ado factory ] do
+                turns.SaveAsync owner (turn "turn" correlation timestamp) |> _.Wait()
+
+                feedbacks.SaveAsync owner (feedback (Guid.NewGuid()) "turn" timestamp)
                 |> _.Wait()
 
-            for entry in retained do
-                store.SaveAsync entry |> _.Wait()
+            let payloads =
+                [ Path.Combine(root, "turn-store", key owner + ".jsonl")
+                  Path.Combine(root, "feedback-store", key owner + ".jsonl") ]
+                |> List.collect (File.ReadAllLines >> Array.toList)
 
-            store.SaveAsync
-                { retained.Head with
-                    Comment = Some "latest" }
-            |> _.Wait()
+            let rows =
+                Ado.query factory "SELECT stream, payload FROM nao_events" [] (fun row ->
+                    Ado.getString row "stream", Ado.getString row "payload")
+                |> _.Result
 
-            for _ in 1..otherCount do
-                store.SaveAsync(feedback ownerB "other-session" (cutoff.AddMinutes(-1.0)))
-                |> _.Wait()
-
-            Assert.AreEqual(expiredCount + retainedCount + otherCount, store.GetAllAsync() |> _.Result |> List.length)
-
-            match store.DeleteExpiredAsync ownerA cutoff |> _.Result with
-            | Error failure -> Assert.Fail(failure.Message)
-            | Ok deleted -> Assert.AreEqual(expiredCount, deleted)
-
-            let reloaded = make ()
-            let afterExpiry = reloaded.GetAllAsync() |> _.Result
-
-            Assert.AreEqual(
-                retainedCount,
-                afterExpiry |> List.filter (fun entry -> entry.UserId = ownerA) |> List.length
+            CollectionAssert.AreEquivalent(
+                [| "turn-store/" + key owner; "feedback-store/" + key owner |],
+                rows |> List.map fst |> List.toArray
             )
 
-            Assert.AreEqual(otherCount, afterExpiry |> List.filter (fun entry -> entry.UserId = ownerB) |> List.length)
+            for payload in payloads @ (rows |> List.map snd) do
+                StringAssert.Contains(payload, "\"Version\":1")
 
-            match reloaded.DeleteOwnerAsync ownerA |> _.Result with
-            | Error failure -> Assert.Fail(failure.Message)
-            | Ok deleted -> Assert.AreEqual(retainedCount, deleted)
+                for secret in
+                    [ "tenant"
+                      "user"
+                      "group"
+                      "workspace"
+                      "session"
+                      "private-service"
+                      "private-role"
+                      "private-claim"
+                      "private-value"
+                      "MultiFactor"
+                      "Authorization"
+                      "Owner"
+                      "UserId"
+                      "SessionId"
+                      "WorkspaceKey" ] do
+                    Assert.IsFalse(payload.Contains secret))
 
-            let reloadedAgain = make ()
-            let afterOwnerDeletion = reloadedAgain.GetAllAsync() |> _.Result
+    [<TestMethod>]
+    member _.CorruptionAndFailedAppendsAreScopeLocal() =
+        withStorage (fun root _ ->
+            let correlation = CorrelationContext.root ()
+            let foreign = TurnStores.file root
+            foreign.SaveAsync other (turn "foreign" correlation timestamp) |> _.Wait()
+            File.AppendAllText(Path.Combine(root, "turn-store", key other + ".jsonl"), "{invalid\n")
 
-            Assert.AreEqual(
-                0,
-                afterOwnerDeletion
-                |> List.filter (fun entry -> entry.UserId = ownerA)
-                |> List.length
-            )
+            let own = TurnStores.file root
+            own.SaveAsync owner (turn "own" correlation timestamp) |> _.Wait()
+            Assert.AreEqual(1, own.GetAllAsync owner |> _.Result |> List.length)
 
-            Assert.AreEqual(
-                otherCount,
-                afterOwnerDeletion
-                |> List.filter (fun entry -> entry.UserId = ownerB)
-                |> List.length
-            )
+            Assert.ThrowsExactly<InvalidDataException>(fun () ->
+                own.GetAllAsync other |> _.GetAwaiter().GetResult() |> ignore)
+            |> ignore
 
-            match reloadedAgain.DeleteOwnerAsync " " |> _.Result with
-            | Ok _ -> Assert.Fail("Blank feedback owner unexpectedly accepted.")
-            | Error failure -> Assert.AreEqual(PlatformErrorCategory.InvalidInput, failure.Category)
+            let lines = ResizeArray<string>()
+            let mutable fail = false
+
+            let store =
+                { Append =
+                    fun line ->
+                        if fail then
+                            raise (IOException "failed")
+                        else
+                            lines.Add line
+                  LoadAll = fun () -> List.ofSeq lines }
+
+            let persistent = PersistentFeedbackStore.create (fun _ -> store)
+            let original = feedback (Guid.NewGuid()) "turn" timestamp
+            persistent.SaveAsync owner original |> _.Wait()
+            fail <- true
+
+            Assert.ThrowsExactly<IOException>(fun () ->
+                persistent.SaveAsync owner (feedback (Guid.NewGuid()) "other" timestamp)
+                |> _.GetAwaiter().GetResult())
+            |> ignore
+
+            Assert.AreEqual([ original ], persistent.GetAllAsync owner |> _.Result))
+
+    [<TestMethod>]
+    member _.UnsupportedVersionsAreRejected() =
+        let unsupportedTurn: TurnStoreDocument =
+            { Version = 99
+              Event = TurnStoreEvent.DeleteScope }
+
+        let unsupportedFeedback: FeedbackStoreDocument =
+            { Version = 99
+              Event = FeedbackStoreEvent.DeleteScope }
+
+        let turnStore =
+            PersistentTurnStore.create (fun _ ->
+                { Append = fun _ -> Assert.Fail("Unsupported stream must not append.")
+                  LoadAll = fun () -> [ FeedbackJson.serialize unsupportedTurn ] })
+
+        let feedbackStore =
+            PersistentFeedbackStore.create (fun _ ->
+                { Append = fun _ -> Assert.Fail("Unsupported stream must not append.")
+                  LoadAll = fun () -> [ FeedbackJson.serialize unsupportedFeedback ] })
+
+        Assert.ThrowsExactly<InvalidDataException>(fun () ->
+            turnStore.GetAllAsync owner |> _.GetAwaiter().GetResult() |> ignore)
+        |> ignore
+
+        Assert.ThrowsExactly<InvalidDataException>(fun () ->
+            feedbackStore.GetAllAsync owner |> _.GetAwaiter().GetResult() |> ignore)
+        |> ignore
 
 [<TestClass>]
 type FeedbackServiceTests() =
-
     [<TestMethod>]
-    member _.``Submitting feedback stores it for the turn``() =
-        (task {
-            let svc = inMemory ()
+    member _.ServiceForwardsAuthenticatedScope() =
+        let turns = TurnStores.inMemory ()
+        let feedbacks = FeedbackStores.inMemory ()
+        let service = FeedbackService.create turns feedbacks
+        let correlation = CorrelationContext.root ()
+        let entry = feedback (Guid.NewGuid()) "turn" timestamp
 
-            let turn =
-                { emptyTurn () with
-                    TurnId = "t1"
-                    SessionId = "s1"
-                    ToolCalls =
-                        [ { Name = "search"
-                            Input = "q"
-                            Output = "r" } ] }
+        service.RecordTurnAsync owner (turn "turn" correlation timestamp) |> _.Wait()
+        service.SubmitFeedbackAsync owner entry |> _.Wait()
 
-            do! svc.RecordTurnAsync turn
-
-            let feedback =
-                { Id = Guid.NewGuid()
-                  TurnId = "t1"
-                  SessionId = "s1"
-                  UserId = "u1"
-                  Sentiment = FeedbackSentiment.Negative
-                  Comment = Some "be concise"
-                  CreatedAt = DateTimeOffset.UtcNow
-                  Metadata = Map.empty }
-
-            do! svc.SubmitFeedbackAsync feedback
-        })
-            .GetAwaiter()
-            .GetResult()
-
-    [<TestMethod>]
-    member _.``SubmitFeedback records feedback even for an unknown turn``() =
-        (task {
-            let svc = inMemory ()
-
-            let feedback =
-                { Id = Guid.NewGuid()
-                  TurnId = "missing"
-                  SessionId = "s1"
-                  UserId = "u1"
-                  Sentiment = FeedbackSentiment.Negative
-                  Comment = None
-                  CreatedAt = DateTimeOffset.UtcNow
-                  Metadata = Map.empty }
-
-            do! svc.SubmitFeedbackAsync feedback
-        })
-            .GetAwaiter()
-            .GetResult()
+        Assert.AreEqual(1, turns.GetAllAsync owner |> _.Result |> List.length)
+        Assert.AreEqual([ entry ], feedbacks.GetAllAsync owner |> _.Result)

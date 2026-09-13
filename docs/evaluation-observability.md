@@ -7,9 +7,13 @@ Quality, safety, latency, reliability, and cost are runtime properties. Nao's ev
 `Nao.Eval` provides evaluation cases, datasets, functional `Evaluator` records, runners, and reports. Built-in modules construct and compose evaluators without implementation classes.
 
 ```fsharp
+// The host supplies an authenticated authorization scope and scoped agent services.
+let execution = EvalExecutionConfig.create authorization createAgentContext
+let config = EvalRunnerConfig.create execution
+
 let dataset =
   EvalDataset.create
-    "team/evaluation"
+    (AuthorizationScope.identity authorization)
     "math"
     [ EvalCase.create "1" "2+2" "4" ]
 
@@ -17,13 +21,18 @@ let evaluator = ExactMatch.evaluator
 
 let! report =
     EvalRunner.runDatasetAsync
-    EvalRunnerConfig.Default
+        config
         evaluator
         agent
         dataset
+        cancellationToken
 ```
 
 Built-in evaluation approaches include exact match, containment, regular expressions, composites, verification, and LLM judges. Verification uses immutable `Judge` records; `VerificationJudge.fromJudge` adapts one to an `Evaluator`, while `Nao.Agents.LlmJudge.create` constructs the execution-trace judge without a class or interface implementation.
+
+Every evaluator receives a mandatory `EvaluationContext` containing the host-authenticated `AuthorizationScope`, the producing execution's correlation, and the caller cancellation token. Composite evaluators forward the same context to every child. Runners reject dataset or run ownership that differs from the authenticated scope before creating agent services or executing work, including empty, parallel, multi-evaluator, and comparison runs. The harness replaces any caller-supplied agent principal with the host's scope principal.
+
+Identity is not evaluation input. LLM and verification adapters use correlation and cancellation without appending principal roles, claims, service identity, or authentication strength to prompts or traces. Custom evaluators receive the full context for authorization and must keep it separate from model-visible case data and output.
 
 ## Evaluator selection
 
@@ -82,9 +91,13 @@ Production traces and feedback
   → permanent regression coverage
 ```
 
-Production-derived data requires consent, tenant isolation, redaction, retention, and review before becoming a dataset. `TurnStore` supports session-owned deletion and strict retention cutoff for its execution evidence. `FeedbackStore` independently supports user-owned deletion across sessions and cutoff retention, but neither operation erases already-derived datasets governed by their own policy.
+Production-derived data requires consent, tenant isolation, redaction, retention, and review before becoming a dataset. `TurnStore` and `FeedbackStore` require the complete authenticated scope for access, deletion, and strict retention cutoff. Their durable payloads contain no authorization identity or authentication evidence, and deleting either source does not erase already-derived datasets governed by their own policy.
 
-`EvalDataset`, `EvalRun`, `EvalResult`, and `EvalReport` carry stable identity and explicit ownership. `EvalArchives.inMemory` and `EvalArchives.file` persist datasets and reports behind owner-scoped lookup plus counted owner and strict timestamp-cutoff deletion. The versioned JSONL archive records deletion tombstones, so deleted derived data remains absent after replay and later writes remain valid. ADO.NET evaluation persistence remains planned and should use a dedicated evaluation persistence package rather than expand the core evaluation dependency surface.
+`EvalDataset`, `EvalRun`, `EvalResult`, and `EvalReport` carry stable identity and an `AuthorizationIdentity` owner: tenant, user, selected group, workspace, and optional session. This is persistable ownership metadata, not an authorization capability; it contains no principal claims, roles, service identity, or authentication-strength evidence. Ownership uses exact lineage matching: a session-owned dataset is not implicitly shared with another session or a workspace-wide scope.
+
+Every operation on `EvalArchives.inMemory` and `EvalArchives.file` requires an authenticated `AuthorizationScope`, not an owner string. Reads and counted owner/strict timestamp-cutoff deletions derive their owner from that scope; writes reject mismatched dataset/report ownership and reports reject child results from another owner, dataset, or run. Tenant, user, group, workspace, and session substitutions cannot access another scope's data even when dataset, run, and execution IDs match.
+
+The JSONL archive persists ownership metadata and deletion tombstones without serializing authentication evidence. Each archive instance serializes mutation and persistence before updating its live state, so failed writes or deletions do not change visible data. Reopening the archive replays the committed events, including deletions. The file adapter is a single-writer store; hosts must not open independent concurrent writers to the same path. Tombstones do not physically erase earlier payloads. This unreleased contract replaces the owner-string format directly; no legacy reader or compatibility API is provided. ADO.NET evaluation persistence remains planned and should use a dedicated evaluation persistence package rather than expand the core evaluation dependency surface.
 
 ## Current observability model
 

@@ -6,7 +6,6 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="src/Workspace/WorkspaceRegistry.fs" />
-    <Compile Include="src/Storage/SessionPaths.fs" />
     <Compile Include="src/Storage/ConversationStore.fs" />
     <Compile Include="src/Storage/FileConversationStore.fs" />
     <Compile Include="src/Storage/PublishingConversationStore.fs" />

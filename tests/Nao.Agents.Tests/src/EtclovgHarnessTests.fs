@@ -38,6 +38,68 @@ type EtclovgHarnessTests() =
             context.Correlation
 
     [<TestMethod>]
+    member _.HarnessPropagatesAuthenticatedPrincipalToAgentContext() =
+        let expectedPrincipal =
+            SecurityPrincipal.createAuthenticated
+                (TenantId.parse "tenant")
+                (UserId.parse "user")
+                (Some(ServiceId.parse "assistant-api"))
+                [ GroupId.parse "engineering" ]
+                [ "operator" ]
+                (Map.ofList [ "region", "eu-west" ])
+                AuthenticationStrength.MultiFactor
+
+        let authenticatedAuthorization =
+            AuthorizationScope.tryCreate
+                expectedPrincipal
+                (Some(GroupId.parse "engineering"))
+                (WorkspaceId.parse "workspace")
+                (Some(SessionId.parse "session"))
+            |> Option.get
+
+        let substitutedPrincipal =
+            SecurityPrincipal.create (TenantId.parse "other-tenant") (UserId.parse "other-user") []
+
+        let context =
+            { AgentContext.unrestrictedForTests () with
+                Authorization =
+                    AuthorizationScope.tryCreate
+                        substitutedPrincipal
+                        None
+                        (WorkspaceId.parse "workspace")
+                        (Some(SessionId.parse "session")) }
+
+        let agent =
+            Agent.create "principal-agent" "principal-agent" "test" 0 [] AgentContract.Text (fun context _ ->
+                let authorization = AgentContext.requireAuthorization context
+
+                Assert.AreEqual(
+                    AuthorizationScope.identity authenticatedAuthorization,
+                    AuthorizationScope.identity authorization
+                )
+
+                Assert.AreEqual(expectedPrincipal, AuthorizationScope.principal authorization)
+                AuthorizationScope.requireAgent "principal-agent" context.Correlation.ExecutionId authorization
+                Task.FromResult "ok")
+
+        let executionRequest =
+            ExecutionRequest.create
+                authenticatedAuthorization
+                (TurnId.parse "turn")
+                "conversation"
+                agent.Metadata.Id
+                "input"
+                SandboxConfig.Default
+                Map.empty
+                Map.empty
+                context.Correlation
+
+        let result =
+            (EtclovgHarness.runAsync EtclovgConfig.Default context agent executionRequest).Result
+
+        Assert.AreEqual(ExecutionTerminalStatus.Succeeded, result.Status)
+
+    [<TestMethod>]
     member _.HarnessErrorsExposePlatformCategoryAndRetryability() =
         let cases =
             [ (HarnessError.PermissionDenied, PlatformErrorCategory.PermissionDenied, false)
@@ -105,6 +167,115 @@ type EtclovgHarnessTests() =
         let fields = result.Outputs.Response |> Option.get |> _.Split('|')
         Assert.AreNotEqual(Environment.ProcessId, Int32.Parse(fields.[0]))
         Assert.AreEqual("payload", fields.[1])
+
+    [<TestMethod>]
+    member _.HarnessPropagatesScopePrincipalToProcessWorkerInsteadOfCallerIdentity() =
+        let workerDirectory =
+            typeof<WorkerAssemblyMarker>.Assembly.Location
+            |> IO.Path.GetDirectoryName
+            |> Option.ofObj
+            |> Option.defaultWith (fun () -> invalidOp "Worker assembly directory is unavailable.")
+
+        let processEnvironment =
+            ExecutionEnvironment.processWorker
+                { FileName = IO.Path.Combine(workerDirectory, "Nao.Agents.Worker")
+                  Arguments = []
+                  ProtocolVersion = WorkerProtocol.CurrentVersion
+                  IdentityIsolation = ProcessIdentityIsolation.Disabled
+                  FileSystemIsolation = ProcessFileSystemIsolation.Disabled
+                  SecretResolver = None
+                  OutputCapture = None }
+
+        let workerAgent =
+            Agent.createWorker
+                "principal"
+                "principal"
+                "principal propagation probe"
+                0
+                []
+                AgentContract.Text
+                (WorkerAgentReference.create "process-principal-hash")
+
+        let context =
+            { AgentContext.unrestrictedForTests () with
+                Authorization =
+                    AuthorizationScope.tryCreate
+                        (SecurityPrincipal.create (TenantId.parse "other-tenant") (UserId.parse "other-user") [])
+                        None
+                        (WorkspaceId.parse "workspace")
+                        (Some(SessionId.parse "session")) }
+
+        let runScope scope =
+            let executionRequest =
+                { request context workerAgent "unchanged model input" with
+                    Authorization = scope
+                    Sandbox =
+                        { SandboxConfig.Default with
+                            Isolation = SandboxIsolation.Process } }
+
+            let result =
+                EtclovgHarness.runAsync
+                    { EtclovgConfig.Default with
+                        ProcessEnvironment = Some processEnvironment }
+                    context
+                    workerAgent
+                    executionRequest
+                |> _.GetAwaiter().GetResult()
+
+            let expectedHash =
+                scope
+                |> AuthorizationScope.principal
+                |> Some
+                |> sprintf "%A"
+                |> Text.Encoding.UTF8.GetBytes
+                |> Security.Cryptography.SHA256.HashData
+                |> Convert.ToHexString
+
+            Assert.AreEqual(ExecutionTerminalStatus.Succeeded, result.Status)
+            Assert.AreEqual(Some expectedHash, result.Outputs.Response)
+
+        for strength in
+            [ AuthenticationStrength.Unspecified
+              AuthenticationStrength.SingleFactor
+              AuthenticationStrength.MultiFactor
+              AuthenticationStrength.PhishingResistant ] do
+            let principal =
+                SecurityPrincipal.createAuthenticated
+                    (TenantId.parse "tenant")
+                    (UserId.parse "user")
+                    (Some(ServiceId.parse "assistant-api"))
+                    [ GroupId.parse "engineering"; GroupId.parse "operations" ]
+                    [ "operator"; "reader" ]
+                    (Map.ofList [ "region", "private-region"; "scope", "read:tools" ])
+                    strength
+
+            let scope =
+                AuthorizationScope.tryCreate
+                    principal
+                    None
+                    (WorkspaceId.parse "workspace")
+                    (Some(SessionId.parse "session"))
+                |> Option.get
+                |> AuthorizationScope.delegateService
+                    (ServiceId.parse "assistant-api")
+                    (ServiceId.parse "execution-worker")
+
+            runScope scope
+
+        let impersonated =
+            SecurityPrincipal.createImpersonated
+                (TenantId.parse "tenant")
+                (UserId.parse "support-operator")
+                (UserId.parse "user")
+                "support-case-123"
+                [ GroupId.parse "engineering" ]
+                [ "support" ]
+                Map.empty
+                AuthenticationStrength.MultiFactor
+
+        AuthorizationScope.tryCreate impersonated None (WorkspaceId.parse "workspace") (Some(SessionId.parse "session"))
+        |> Option.get
+        |> runScope
 
     [<TestMethod>]
     member _.HarnessDeadlineStopsBlockedProcessWorker() =
@@ -569,9 +740,9 @@ type EtclovgHarnessTests() =
         let config = EtclovgConfig.Default
 
         let context = AgentContext.unrestrictedForTests ()
+        let executionRequest = request context agent "test"
 
-        let result =
-            (EtclovgHarness.runAsync config context agent (request context agent "test")).Result
+        let result = (EtclovgHarness.runAsync config context agent executionRequest).Result
 
         Assert.AreEqual(ExecutionTerminalStatus.Succeeded, result.Status)
         Assert.AreEqual(Some "hello world", result.Outputs.Response)
@@ -591,7 +762,8 @@ type EtclovgHarnessTests() =
         let result = (EtclovgHarness.runAsync config context agent executionRequest).Result
 
         let checkpoints =
-            journal.Checkpoints.GetByExecution result.Correlation.ExecutionId |> _.Result
+            journal.Checkpoints.GetByExecution executionRequest.Authorization result.Correlation.ExecutionId
+            |> _.Result
 
         CollectionAssert.AreEqual(
             [| HarnessCheckpointPhase.Accepted
@@ -634,7 +806,8 @@ type EtclovgHarnessTests() =
                 "input"
 
         let checkpoints =
-            journal.Checkpoints.GetByIdempotencyKey retryRequest.IdempotencyKey |> _.Result
+            journal.Checkpoints.GetByIdempotencyKey retryRequest.Authorization retryRequest.IdempotencyKey
+            |> _.Result
 
         Assert.AreNotEqual(firstRequest.Correlation.ExecutionId, retryRequest.Correlation.ExecutionId)
         Assert.AreEqual(firstRequest.IdempotencyKey, retryRequest.IdempotencyKey)
@@ -664,10 +837,10 @@ type EtclovgHarnessTests() =
         let firstRequest = request context agent "input"
 
         journal.Checkpoints.Save
+            firstRequest.Authorization
             { Id = Guid.NewGuid()
               IdempotencyKey = firstRequest.IdempotencyKey
               Correlation = firstRequest.Correlation
-              Owner = "owner"
               TurnId = "turn"
               AgentId = agent.Metadata.Id
               Phase = HarnessCheckpointPhase.ExecutionStarted
@@ -753,10 +926,10 @@ type EtclovgHarnessTests() =
             | value -> invalidArg (nameof value) "Unknown side-effect phase."
 
         journal.Checkpoints.Save
+            firstRequest.Authorization
             { Id = Guid.NewGuid()
               IdempotencyKey = firstRequest.IdempotencyKey
               Correlation = firstRequest.Correlation
-              Owner = "owner"
               TurnId = "turn"
               AgentId = agent.Metadata.Id
               Phase = HarnessCheckpointPhase.ExecutionStarted
@@ -764,10 +937,10 @@ type EtclovgHarnessTests() =
         |> _.Wait()
 
         journal.SideEffects.Save
+            firstRequest.Authorization
             { Id = Guid.NewGuid()
               IdempotencyKey = IdempotencyKey.operation "tool" 1 firstRequest.IdempotencyKey
               Correlation = firstRequest.Correlation
-              Owner = "owner"
               TurnId = "turn"
               ToolName = "external"
               Input = "input"
@@ -792,7 +965,7 @@ type EtclovgHarnessTests() =
         | status -> Assert.Fail(sprintf "Expected indeterminate retry, got %A." status)
 
         let transitions =
-            journal.SideEffects.GetByExecution firstRequest.Correlation.ExecutionId
+            journal.SideEffects.GetByExecution firstRequest.Authorization firstRequest.Correlation.ExecutionId
             |> _.Result
 
         Assert.AreEqual(ToolSideEffectPhase.Quarantined, transitions |> List.last |> _.Phase)
@@ -1431,11 +1604,12 @@ type EtclovgHarnessTests() =
                 ExecutionJournal = Some journal }
 
         let context = AgentContext.unrestrictedForTests ()
+        let liveRequest = request context liveAgent "start"
 
         let liveResult =
-            (EtclovgHarness.runAsync liveConfig context liveAgent (request context liveAgent "start")).Result
+            (EtclovgHarness.runAsync liveConfig context liveAgent liveRequest).Result
 
-        let records = journal.GetHistoryAsync() |> _.Result
+        let records = journal.GetHistoryAsync liveRequest.Authorization |> _.Result
         let fixtures = RecordedReplayFixtures.create (List.ofSeq exchanges) records
 
         let mutable replayProviderCalled = false
@@ -1471,8 +1645,10 @@ type EtclovgHarnessTests() =
                 ReplayFixtures = Some fixtures
                 ExecutionJournal = Some replayJournal }
 
+        let replayRequest = request replayContext replayAgent "start"
+
         let replayResult =
-            EtclovgHarness.runAsync replayConfig replayContext replayAgent (request replayContext replayAgent "start")
+            EtclovgHarness.runAsync replayConfig replayContext replayAgent replayRequest
             |> _.Result
 
         Assert.AreEqual(ExecutionTerminalStatus.Succeeded, liveResult.Status)
@@ -1486,10 +1662,10 @@ type EtclovgHarnessTests() =
         Assert.AreEqual(1, liveToolCalls)
         Assert.IsFalse(replayProviderCalled)
         Assert.IsFalse(replayToolCalled)
-        Assert.IsTrue((replayJournal.GetHistoryAsync() |> _.Result).IsEmpty)
+        Assert.IsTrue((replayJournal.GetHistoryAsync replayRequest.Authorization |> _.Result).IsEmpty)
 
         let replaySideEffects =
-            replayJournal.SideEffects.GetByExecution replayResult.Correlation.ExecutionId
+            replayJournal.SideEffects.GetByExecution replayRequest.Authorization replayResult.Correlation.ExecutionId
             |> _.Result
 
         Assert.IsTrue(replaySideEffects.IsEmpty)
@@ -1792,11 +1968,12 @@ type EtclovgHarnessTests() =
                 ExecutionJournal = Some journal }
 
         let context = AgentContext.unrestrictedForTests ()
+        let liveRequest = request context liveAgent "start"
 
         let liveResult =
-            (EtclovgHarness.runAsync liveConfig context liveAgent (request context liveAgent "start")).Result
+            (EtclovgHarness.runAsync liveConfig context liveAgent liveRequest).Result
 
-        let records = journal.GetHistoryAsync() |> _.Result
+        let records = journal.GetHistoryAsync liveRequest.Authorization |> _.Result
         let fixtures = RecordedReplayFixtures.create (List.ofSeq exchanges) records
 
         let replayProvider =
@@ -1832,7 +2009,7 @@ type EtclovgHarnessTests() =
         Assert.AreEqual(liveResult.Outputs, replayResult.Outputs)
         Assert.AreEqual(1, records.Length)
         Assert.AreEqual(Some "recorded failure", records.Head.Failure |> Option.map _.Message)
-        Assert.IsTrue((journal.GetRevertibleAsync() |> _.Result).IsEmpty)
+        Assert.IsTrue((journal.GetRevertibleAsync liveRequest.Authorization |> _.Result).IsEmpty)
         Assert.AreEqual(2, providerCalls)
         Assert.AreEqual(1, toolCalls)
 
@@ -1876,10 +2053,11 @@ type EtclovgHarnessTests() =
                 ExecutionJournal = Some journal }
 
         let result = (EtclovgHarness.runAsync config context agent executionRequest).Result
-        let history = journal.GetHistoryAsync() |> _.Result
+        let history = journal.GetHistoryAsync executionRequest.Authorization |> _.Result
 
         let transitions =
-            journal.SideEffects.GetByExecution result.Correlation.ExecutionId |> _.Result
+            journal.SideEffects.GetByExecution executionRequest.Authorization result.Correlation.ExecutionId
+            |> _.Result
 
         match result.Status with
         | ExecutionTerminalStatus.Failed _ -> ()
@@ -1892,7 +2070,7 @@ type EtclovgHarnessTests() =
         Assert.AreEqual("created:value", reverted.[1].Output)
         Assert.AreEqual(2, history.Length)
         Assert.IsTrue(history |> List.forall _.Reverted)
-        Assert.IsTrue((journal.GetRevertibleAsync() |> _.Result).IsEmpty)
+        Assert.IsTrue((journal.GetRevertibleAsync executionRequest.Authorization |> _.Result).IsEmpty)
 
         CollectionAssert.AreEqual(
             [| ToolSideEffectPhase.IntentRecorded
@@ -1952,14 +2130,15 @@ type EtclovgHarnessTests() =
                 ExecutionJournal = Some journal }
 
         let result = (EtclovgHarness.runAsync config context agent executionRequest).Result
-        let history = journal.GetHistoryAsync() |> _.Result
+        let history = journal.GetHistoryAsync executionRequest.Authorization |> _.Result
 
         let transitions =
-            journal.SideEffects.GetByExecution result.Correlation.ExecutionId |> _.Result
+            journal.SideEffects.GetByExecution executionRequest.Authorization result.Correlation.ExecutionId
+            |> _.Result
 
         Assert.AreEqual(1, history.Length)
         Assert.IsFalse(history.Head.Reverted)
-        Assert.AreEqual([ history.Head ], journal.GetRevertibleAsync() |> _.Result)
+        Assert.AreEqual([ history.Head ], journal.GetRevertibleAsync executionRequest.Authorization |> _.Result)
         Assert.AreEqual(ToolSideEffectPhase.CompensationFailed, transitions |> List.last |> _.Phase)
         Assert.AreEqual(Some "cannot undo", transitions |> List.last |> _.Detail)
 
@@ -2010,7 +2189,8 @@ type EtclovgHarnessTests() =
         let result = (EtclovgHarness.runAsync config context agent executionRequest).Result
 
         let transitions =
-            journal.SideEffects.GetByExecution result.Correlation.ExecutionId |> _.Result
+            journal.SideEffects.GetByExecution executionRequest.Authorization result.Correlation.ExecutionId
+            |> _.Result
 
         Assert.AreEqual(1, toolCalls)
 
@@ -2025,7 +2205,7 @@ type EtclovgHarnessTests() =
             transitions |> List.map _.Phase |> List.toArray
         )
 
-        Assert.IsTrue((journal.GetRevertibleAsync() |> _.Result).IsEmpty)
+        Assert.IsTrue((journal.GetRevertibleAsync executionRequest.Authorization |> _.Result).IsEmpty)
 
     [<TestMethod>]
     member _.HarnessDeadlineBoundsProviderCall() =
@@ -2135,9 +2315,9 @@ type EtclovgHarnessTests() =
                 ReadinessChecks = [ failCheck ] }
 
         let context = AgentContext.unrestrictedForTests ()
+        let auditRequest = request context agent "test"
 
-        let result =
-            (EtclovgHarness.runAsync config context agent (request context agent "test")).Result
+        let result = (EtclovgHarness.runAsync config context agent auditRequest).Result
 
         Assert.AreEqual(ExecutionTerminalStatus.Failed(HarnessError.NotReady [ "missing dependency" ]), result.Status)
 
@@ -2214,12 +2394,16 @@ type EtclovgHarnessTests() =
 
         let context = AgentContext.unrestrictedForTests ()
 
-        let result =
-            (EtclovgHarness.runAsync config context agent (request context agent "question")).Result
+        let executionRequest = request context agent "question"
+
+        let result = (EtclovgHarness.runAsync config context agent executionRequest).Result
 
         Assert.AreEqual(ExecutionTerminalStatus.Succeeded, result.Status)
         let agentId = "test-agent"
-        let traces = (store.GetTracesAsync agentId 10).Result
+
+        let traces =
+            store.GetTracesAsync executionRequest.Authorization agentId 10 |> _.Result
+
         Assert.AreEqual(1, traces.Length)
         Assert.IsTrue(traces.[0].Success)
 
@@ -2233,16 +2417,17 @@ type EtclovgHarnessTests() =
                 AuditLog = Some audit }
 
         let context = AgentContext.unrestrictedForTests ()
+        let auditRequest = request context agent "test"
 
-        let result =
-            (EtclovgHarness.runAsync config context agent (request context agent "test")).Result
+        let result = (EtclovgHarness.runAsync config context agent auditRequest).Result
 
         Assert.AreEqual(ExecutionTerminalStatus.Succeeded, result.Status)
         Assert.AreEqual(1, result.Evidence.AuditEntries)
         let agentId = "test-agent"
 
         let entries =
-            (audit.QueryAsync agentId (DateTimeOffset.UtcNow.AddMinutes(-1.0))).Result
+            audit.QueryAsync auditRequest.Authorization agentId (DateTimeOffset.UtcNow.AddMinutes(-1.0))
+            |> _.Result
 
         Assert.IsTrue(entries.Length > 0)
 

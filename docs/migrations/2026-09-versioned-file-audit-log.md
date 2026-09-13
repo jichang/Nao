@@ -1,25 +1,25 @@
-# Versioned file audit log
+# Identity-partitioned audit events
 
 ## Scope
 
-- First incompatible version: `0.2.0` development schema after FND-05 audit versioning.
+- Current unreleased format: version 1.
 - Affected API: `AuditLogs.file` persisted representation.
-- Affected file: `audit-log.json` beneath the configured audit directory.
+- Affected files: `audit/<identity-sha256>.jsonl` beneath the configured directory.
 
 ## Breaking changes
 
-The file audit log is a version-1 document containing `schemaVersion` and `value`. Earlier raw JSON arrays and empty files are rejected before recording or deletion. Nao does not include a legacy reader or in-process converter.
+Every audit operation now requires an authenticated `AuthorizationScope`. Each claim-free authorization identity selects its own JSONL stream, whose version-1 events record accepted entries, scope deletion, or retention deletion. `AuditEntry.AgentId` remains actor metadata and does not select ownership. Event payloads contain no authorization identity or authentication evidence. The former whole-file document is not read through compatibility logic.
 
 ## Before upgrade
 
 1. Stop all writers using the audit directory.
-2. Export required audit evidence and back up `audit-log.json`.
-3. Verify the backup before deploying the new version.
+2. Delete the unreleased `audit-log.json` development file.
+3. Deploy the identity-partitioned implementation and begin new version-1 streams.
 
 ## Migration
 
-Delete the old development audit log when retention is unnecessary. For retained data, externally wrap the old JSON array as `{ "schemaVersion": 1, "value": <old-array> }` without changing action kinds, identities, timestamps, or metadata. Deploy and validate recording, queries, denied counts, and owner deletion.
+Nao is unreleased, so there is no compatibility reader or retained-data migration. Development audit data from the former abstraction must be discarded.
 
 ## Rollback
 
-Older implementations cannot read the version-1 document. Restore the backup before rollback; do not unwrap or transform the active audit log while a Nao process is running.
+Rollback is unsupported for this unreleased breaking redesign. Never copy unpartitioned audit entries into an authenticated identity stream.

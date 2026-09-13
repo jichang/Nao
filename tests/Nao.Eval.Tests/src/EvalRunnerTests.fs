@@ -23,11 +23,16 @@ module private TestAgents =
 
 [<TestClass>]
 type EvalRunnerTests() =
-    let owner = "eval-tests"
-
     let authorization =
         let principal =
-            SecurityPrincipal.create (TenantId.parse "eval-tenant") (UserId.parse "eval-user") []
+            SecurityPrincipal.createAuthenticated
+                (TenantId.parse "eval-tenant")
+                (UserId.parse "eval-user")
+                (Some(ServiceId.parse "eval-service"))
+                []
+                [ "eval-reader" ]
+                (Map.ofList [ "private-claim", "private-claim-value" ])
+                AuthenticationStrength.MultiFactor
 
         AuthorizationScope.tryCreate
             principal
@@ -36,10 +41,172 @@ type EvalRunnerTests() =
             (Some(SessionId.parse "eval-session"))
         |> Option.get
 
+    let owner = AuthorizationScope.identity authorization
+
     let execution =
         EvalExecutionConfig.create authorization AgentContext.unrestrictedForTests
 
     let defaultConfig = EvalRunnerConfig.create execution
+
+    [<TestMethod>]
+    member _.``Every evaluation mode binds agent and evaluator to host authority``() =
+        use cancellation = new CancellationTokenSource()
+
+        let observed =
+            System.Collections.Concurrent.ConcurrentDictionary<ExecutionId, CorrelationContext>()
+
+        let principal = AuthorizationScope.principal authorization
+
+        let agent =
+            Agent.create
+                "identity"
+                "Identity"
+                "Checks identity propagation"
+                0
+                []
+                AgentContract.Text
+                (fun context input ->
+                    let executionAuthorization = AgentContext.requireAuthorization context
+
+                    Assert.AreEqual(
+                        AuthorizationScope.identity authorization,
+                        AuthorizationScope.identity executionAuthorization
+                    )
+
+                    Assert.AreEqual(principal, AuthorizationScope.principal executionAuthorization)
+
+                    AuthorizationScope.requireAgent "identity" context.Correlation.ExecutionId executionAuthorization
+
+                    Assert.AreEqual("input", input)
+                    observed.[context.Correlation.ExecutionId] <- context.Correlation
+                    Task.FromResult "answer")
+
+        let evaluator =
+            Evaluator.create "identity" (fun context case actual ->
+                Assert.AreEqual(authorization, context.Authorization)
+                Assert.AreEqual(principal, AuthorizationScope.principal context.Authorization)
+                Assert.AreEqual(observed.[context.Correlation.ExecutionId], context.Correlation)
+                Assert.AreEqual(cancellation.Token, context.CancellationToken)
+                Assert.AreEqual("input", case.Input)
+                Assert.AreEqual("answer", actual)
+                Task.FromResult(EvalVerdict.Pass, "ok"))
+
+        let substituted =
+            SecurityPrincipal.create (TenantId.parse "other-tenant") (UserId.parse "eval-user") []
+
+        let execution =
+            { execution with
+                CreateAgentContext =
+                    fun () ->
+                        { AgentContext.unrestrictedForTests () with
+                            Authorization =
+                                AuthorizationScope.tryCreate
+                                    substituted
+                                    None
+                                    (WorkspaceId.parse "eval-workspace")
+                                    (Some(SessionId.parse "eval-session")) } }
+
+        let config = EvalRunnerConfig.create execution
+
+        let dataset =
+            EvalDataset.create owner "identity" [ for index in 1..3 -> EvalCase.create (string index) "input" "answer" ]
+
+        let run = EvalRun.create owner dataset.Id
+
+        let single =
+            EvalRunner.runCaseAsync execution run evaluator agent dataset.Cases.Head cancellation.Token
+            |> _.Result
+
+        let light =
+            EvalRunner.runCaseLightAsync execution run evaluator agent dataset.Cases.Head cancellation.Token
+            |> _.Result
+
+        let sequential =
+            EvalRunner.runDatasetAsync config evaluator agent dataset cancellation.Token
+            |> _.Result
+
+        let parallelReport =
+            EvalRunner.runDatasetAsync
+                { config with MaxParallelism = 3 }
+                (Composite.all [ evaluator; evaluator ])
+                agent
+                dataset
+                cancellation.Token
+            |> _.Result
+
+        let multiple =
+            EvalRunner.runWithMultipleEvaluatorsAsync config [ evaluator; evaluator ] agent dataset cancellation.Token
+            |> _.Result
+
+        let comparison =
+            EvalRunner.compareAgentsAsync
+                config
+                evaluator
+                [ "first", agent; "second", agent ]
+                dataset
+                cancellation.Token
+            |> _.Result
+
+        let results =
+            [ single; light ]
+            @ sequential.Results
+            @ parallelReport.Results
+            @ multiple.Results
+            @ (comparison |> List.collect (snd >> _.Results))
+
+        Assert.AreEqual(20, results.Length)
+        Assert.AreEqual(20, observed.Count)
+
+        for result in results do
+            Assert.AreEqual(owner, result.Owner)
+            Assert.AreEqual(EvalVerdict.Pass, result.Verdict)
+
+    [<TestMethod>]
+    member _.``Every evaluation entry point rejects cross-tenant ownership before host callbacks``() =
+        let otherPrincipal =
+            SecurityPrincipal.create (TenantId.parse "other-tenant") (UserId.parse "eval-user") []
+
+        let otherScope =
+            AuthorizationScope.tryCreate
+                otherPrincipal
+                None
+                (WorkspaceId.parse "eval-workspace")
+                (Some(SessionId.parse "eval-session"))
+            |> Option.get
+
+        let otherOwner = AuthorizationScope.identity otherScope
+
+        let execution =
+            { execution with
+                CreateAgentContext =
+                    fun () ->
+                        Assert.Fail "Unauthorized work reached the host context factory."
+                        AgentContext.unrestrictedForTests () }
+
+        let config = EvalRunnerConfig.create execution
+        let agent = TestAgents.fixedResponse "answer"
+        let evaluator = ExactMatch.evaluator
+        let case = EvalCase.create "case" "input" "answer"
+        let dataset = EvalDataset.create otherOwner "foreign" [ case ]
+        let run = EvalRun.create otherOwner dataset.Id
+        let token = CancellationToken.None
+
+        let calls: (unit -> Task) list =
+            [ (fun () -> EvalRunner.runCaseAsync execution run evaluator agent case token :> Task)
+              (fun () -> EvalRunner.runCaseLightAsync execution run evaluator agent case token :> Task)
+              (fun () -> EvalRunner.runDatasetAsync config evaluator agent dataset token :> Task)
+              (fun () ->
+                  EvalRunner.runDatasetAsync { config with MaxParallelism = 3 } evaluator agent dataset token :> Task)
+              (fun () -> EvalRunner.runDatasetAsync config evaluator agent { dataset with Cases = [] } token :> Task)
+              (fun () -> EvalRunner.runWithMultipleEvaluatorsAsync config [ evaluator ] agent dataset token :> Task)
+              (fun () ->
+                  EvalRunner.runWithMultipleEvaluatorsAsync config [] agent { dataset with Cases = [] } token :> Task)
+              (fun () -> EvalRunner.compareAgentsAsync config evaluator [ "agent", agent ] dataset token :> Task)
+              (fun () -> EvalRunner.compareAgentsAsync config evaluator [] { dataset with Cases = [] } token :> Task) ]
+
+        for call in calls do
+            Assert.ThrowsExactlyAsync<UnauthorizedAccessException>(fun () -> call ())
+            |> _.Wait()
 
     [<TestMethod>]
     member _.``RunCase forwards execution correlation to LLM evaluator``() =

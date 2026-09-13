@@ -23,11 +23,17 @@ let private tempDir () =
     Directory.CreateDirectory dir |> ignore
     dir
 
+let private authorizationScope session =
+    let principal =
+        SecurityPrincipal.create (TenantId.parse "tenant") (UserId.parse "user") []
+
+    AuthorizationScope.tryCreate principal None (WorkspaceId.parse "workspace") (Some(SessionId.parse session))
+    |> Option.get
+
 // ---------------- Episodic ----------------
 
-let private episode owner id timestamp importance : Episode =
-    { Owner = owner
-      Id = id
+let private episode id timestamp importance : Episode =
+    { Id = id
       Action = "act"
       Observation = "observed"
       Context = "ctx"
@@ -40,19 +46,28 @@ let private episode owner id timestamp importance : Episode =
 
 [<TestClass>]
 type EpisodicTests() =
+    let scope session =
+        let principal =
+            SecurityPrincipal.create (TenantId.parse "tenant") (UserId.parse "user") []
+
+        AuthorizationScope.tryCreate principal None (WorkspaceId.parse "workspace") (Some(SessionId.parse session))
+        |> Option.get
+
     let exercise (make: unit -> EpisodicMemory) =
         task {
-            let ownerA, ownerB = Guid.NewGuid().ToString("N"), Guid.NewGuid().ToString("N")
+            let ownerA, ownerB =
+                scope (Guid.NewGuid().ToString("N")), scope (Guid.NewGuid().ToString("N"))
+
             let cutoff = DateTimeOffset.UtcNow
             let generatedExpiredCount = Random.Shared.Next(2, 7)
             let memory = make ()
-            do! memory.RecordAsync(episode ownerA "shared" cutoff 0.8)
-            do! memory.RecordAsync(episode ownerB "shared" cutoff 0.8)
+            do! memory.RecordAsync ownerA (episode "shared" cutoff 0.8)
+            do! memory.RecordAsync ownerB (episode "shared" cutoff 0.8)
 
             for index in 1..generatedExpiredCount do
-                do! memory.RecordAsync(episode ownerA (sprintf "expired-%d" index) (cutoff.AddTicks(-1L)) 0.8)
+                do! memory.RecordAsync ownerA (episode (sprintf "expired-%d" index) (cutoff.AddTicks(-1L)) 0.8)
 
-            do! memory.RecordAsync(episode ownerA "exact-cutoff" cutoff 0.8)
+            do! memory.RecordAsync ownerA (episode "exact-cutoff" cutoff 0.8)
 
             match! memory.DeleteExpiredAsync ownerA cutoff with
             | Error failure -> Assert.Fail failure.Message
@@ -75,14 +90,15 @@ type EpisodicTests() =
             Assert.AreEqual(0, deletedOwnerItems.Length)
             Assert.AreEqual(1, isolatedItems.Length)
 
-            do! afterDelete.RecordAsync(episode ownerA "after-delete" (cutoff.AddMinutes(1.0)) 0.8)
+            do! afterDelete.RecordAsync ownerA (episode "after-delete" (cutoff.AddMinutes(1.0)) 0.8)
             let finalReload = make ()
             let! restored = finalReload.QueryAsync ownerA (EpisodeQuery.Recent 20)
             Assert.AreEqual([ "after-delete" ], restored |> List.map (fun item -> item.Id))
 
-            match! finalReload.DeleteOwnerAsync " " with
-            | Ok _ -> Assert.Fail "Blank episodic-memory owners must be rejected."
-            | Error failure -> Assert.AreEqual(PlatformErrorCategory.InvalidInput, failure.Category)
+            let! deleted = finalReload.DeleteOwnerAsync ownerA
+            Assert.AreEqual(Ok 1, deleted)
+            let! repeated = finalReload.DeleteOwnerAsync ownerA
+            Assert.AreEqual(Ok 0, repeated)
         }
 
     [<TestMethod>]
@@ -105,40 +121,50 @@ type EpisodicTests() =
     [<TestMethod>]
     member _.File_RejectsCorruptEpisodicEventsBeforeMutation() =
         let dir = tempDir ()
-        let path = Path.Combine(dir, "episodic.jsonl")
+        let owner = scope agent
+        let key = AuthorizationScope.identity owner |> AuthorizationIdentity.storageKey
+        let path = Path.Combine(dir, "episodic", key + ".jsonl")
         let memory = EpisodicMemories.file dir None
-        let original = episode agent "original" DateTimeOffset.UtcNow 0.8
-        memory.RecordAsync original |> _.GetAwaiter().GetResult()
+        let original = episode "original" DateTimeOffset.UtcNow 0.8
+        memory.RecordAsync owner original |> _.GetAwaiter().GetResult()
         File.AppendAllText(path, "{invalid" + Environment.NewLine)
         let before = File.ReadAllBytes path
-        let added = episode agent "added" DateTimeOffset.UtcNow 0.8
+        let added = episode "added" DateTimeOffset.UtcNow 0.8
 
         let error =
-            Assert.ThrowsExactly<InvalidDataException>(fun () -> memory.RecordAsync added |> _.GetAwaiter().GetResult())
+            Assert.ThrowsExactly<InvalidDataException>(fun () ->
+                memory.RecordAsync owner added |> _.GetAwaiter().GetResult())
 
-        StringAssert.Contains(error.Message, path)
+        StringAssert.Contains(error.Message, "episodic/" + key)
         StringAssert.Contains(error.Message, "event 2")
         CollectionAssert.AreEqual(before, File.ReadAllBytes path)
 
+        Assert.ThrowsExactly<InvalidDataException>(fun () ->
+            memory.QueryAsync owner (EpisodeQuery.Recent 10)
+            |> _.GetAwaiter().GetResult()
+            |> ignore)
+        |> ignore
+
+        File.WriteAllLines(path, File.ReadAllLines(path) |> Array.take 1)
+
         let retained =
-            memory.QueryAsync agent (EpisodeQuery.Recent 10) |> _.GetAwaiter().GetResult()
+            memory.QueryAsync owner (EpisodeQuery.Recent 10) |> _.GetAwaiter().GetResult()
 
         Assert.IsFalse(retained |> List.exists (fun item -> item.Id = added.Id))
+        Directory.Delete(dir, true)
 
 // ---------------- Graph ----------------
 
-let private node owner id createdAt : GraphNode =
-    { Owner = owner
-      Id = id
+let private node id createdAt : GraphNode =
+    { Id = id
       EntityType = "thing"
       Properties = Map.ofList [ "color", "red" ]
       CreatedAt = createdAt
       LastAccessed = createdAt
       AccessCount = 0 }
 
-let private relation owner subject predicate object' timestamp : GraphRelation =
-    { Owner = owner
-      Subject = subject
+let private relation subject predicate object' timestamp : GraphRelation =
+    { Subject = subject
       Predicate = predicate
       Object = object'
       Confidence = 1.0
@@ -148,26 +174,35 @@ let private relation owner subject predicate object' timestamp : GraphRelation =
 
 [<TestClass>]
 type GraphTests() =
+    let scope session =
+        let principal =
+            SecurityPrincipal.create (TenantId.parse "tenant") (UserId.parse "user") []
+
+        AuthorizationScope.tryCreate principal None (WorkspaceId.parse "workspace") (Some(SessionId.parse session))
+        |> Option.get
+
     let exercise (make: unit -> GraphMemory) =
         task {
-            let ownerA, ownerB = Guid.NewGuid().ToString("N"), Guid.NewGuid().ToString("N")
+            let ownerA, ownerB =
+                scope (Guid.NewGuid().ToString("N")), scope (Guid.NewGuid().ToString("N"))
+
             let cutoff = DateTimeOffset.UtcNow
             let generatedExpiredCount = Random.Shared.Next(2, 6)
             let graph = make ()
 
             for owner in [ ownerA; ownerB ] do
-                do! graph.UpsertNodeAsync(node owner "shared" cutoff)
-                do! graph.UpsertNodeAsync(node owner "target" cutoff)
-                do! graph.AddRelationAsync(relation owner "shared" "exact" "target" cutoff)
+                do! graph.UpsertNodeAsync owner (node "shared" cutoff)
+                do! graph.UpsertNodeAsync owner (node "target" cutoff)
+                do! graph.AddRelationAsync owner (relation "shared" "exact" "target" cutoff)
 
-            do! graph.UpsertNodeAsync(node ownerA "exact-cutoff" cutoff)
+            do! graph.UpsertNodeAsync ownerA (node "exact-cutoff" cutoff)
 
             for index in 1..generatedExpiredCount do
                 let nodeId = sprintf "expired-%d" index
-                do! graph.UpsertNodeAsync(node ownerA nodeId (cutoff.AddTicks(-1L)))
-                do! graph.AddRelationAsync(relation ownerA nodeId "cascade" "target" cutoff)
+                do! graph.UpsertNodeAsync ownerA (node nodeId (cutoff.AddTicks(-1L)))
+                do! graph.AddRelationAsync ownerA (relation nodeId "cascade" "target" cutoff)
 
-            do! graph.AddRelationAsync(relation ownerA "shared" "expired" "target" (cutoff.AddTicks(-1L)))
+            do! graph.AddRelationAsync ownerA (relation "shared" "expired" "target" (cutoff.AddTicks(-1L)))
 
             match! graph.DeleteExpiredAsync ownerA cutoff with
             | Error failure -> Assert.Fail failure.Message
@@ -188,7 +223,7 @@ type GraphTests() =
             let! isolatedRelation = afterRelationDelete.QueryAsync ownerB (GraphQuery.ByEntity "target")
             Assert.AreEqual(1, isolatedRelation.Relations.Length)
 
-            do! afterRelationDelete.AddRelationAsync(relation ownerA "shared" "restored" "target" cutoff)
+            do! afterRelationDelete.AddRelationAsync ownerA (relation "shared" "restored" "target" cutoff)
             do! afterRelationDelete.RemoveNodeAsync ownerA "target"
             let afterNodeDelete = make ()
             let! withoutNode = afterNodeDelete.QueryAsync ownerA (GraphQuery.ByEntity "target")
@@ -205,14 +240,15 @@ type GraphTests() =
             Assert.AreEqual(0, deletedOwner.Length)
             Assert.AreEqual(1, retainedOwner.Relations.Length)
 
-            do! afterOwnerDelete.UpsertNodeAsync(node ownerA "after-delete" (cutoff.AddMinutes(1.0)))
+            do! afterOwnerDelete.UpsertNodeAsync ownerA (node "after-delete" (cutoff.AddMinutes(1.0)))
             let finalReload = make ()
             let! restored = finalReload.GetByTypeAsync ownerA "thing"
             Assert.AreEqual([ "after-delete" ], restored |> List.map (fun item -> item.Id))
 
-            match! finalReload.DeleteOwnerAsync " " with
-            | Ok _ -> Assert.Fail "Blank graph-memory owners must be rejected."
-            | Error failure -> Assert.AreEqual(PlatformErrorCategory.InvalidInput, failure.Category)
+            let! deleted = finalReload.DeleteOwnerAsync ownerA
+            Assert.AreEqual(Ok 1, deleted)
+            let! repeated = finalReload.DeleteOwnerAsync ownerA
+            Assert.AreEqual(Ok 0, repeated)
         }
 
     [<TestMethod>]
@@ -235,10 +271,12 @@ type GraphTests() =
     [<TestMethod>]
     member _.File_RejectsCorruptGraphEventsBeforeMutation() =
         let dir = tempDir ()
-        let path = Path.Combine(dir, "graph.jsonl")
+        let owner = scope agent
+        let key = AuthorizationScope.identity owner |> AuthorizationIdentity.storageKey
+        let path = Path.Combine(dir, "graph", key + ".jsonl")
         let graph = GraphMemories.file dir None
 
-        graph.UpsertNodeAsync(node agent "original" DateTimeOffset.UtcNow)
+        graph.UpsertNodeAsync owner (node "original" DateTimeOffset.UtcNow)
         |> _.GetAwaiter().GetResult()
 
         File.AppendAllText(path, "{invalid" + Environment.NewLine)
@@ -246,21 +284,26 @@ type GraphTests() =
 
         let error =
             Assert.ThrowsExactly<InvalidDataException>(fun () ->
-                graph.UpsertNodeAsync(node agent "added" DateTimeOffset.UtcNow)
+                graph.UpsertNodeAsync owner (node "added" DateTimeOffset.UtcNow)
                 |> _.GetAwaiter().GetResult())
 
-        StringAssert.Contains(error.Message, path)
+        StringAssert.Contains(error.Message, "graph/" + key)
         StringAssert.Contains(error.Message, "event 2")
         CollectionAssert.AreEqual(before, File.ReadAllBytes path)
 
-        let retained = graph.GetByTypeAsync agent "thing" |> _.GetAwaiter().GetResult()
+        Assert.ThrowsExactly<InvalidDataException>(fun () ->
+            graph.GetByTypeAsync owner "thing" |> _.GetAwaiter().GetResult() |> ignore)
+        |> ignore
+
+        File.WriteAllLines(path, File.ReadAllLines(path) |> Array.take 1)
+        let retained = graph.GetByTypeAsync owner "thing" |> _.GetAwaiter().GetResult()
         Assert.IsFalse(retained |> List.exists (fun item -> item.Id = "added"))
+        Directory.Delete(dir, true)
 
 // ---------------- Tiered ----------------
 
-let private tieredEntry owner key tier timestamp : TieredMemoryEntry =
-    { Owner = owner
-      Key = key
+let private tieredEntry key tier timestamp : TieredMemoryEntry =
+    { Key = key
       Value = "v"
       Tier = tier
       Timestamp = timestamp
@@ -270,36 +313,45 @@ let private tieredEntry owner key tier timestamp : TieredMemoryEntry =
 
 [<TestClass>]
 type TieredTests() =
+    let scope session =
+        let principal =
+            SecurityPrincipal.create (TenantId.parse "tenant") (UserId.parse "user") []
+
+        AuthorizationScope.tryCreate principal None (WorkspaceId.parse "workspace") (Some(SessionId.parse session))
+        |> Option.get
+
     let exercise (make: unit -> TieredMemory) =
         task {
-            let ownerA, ownerB = Guid.NewGuid().ToString("N"), Guid.NewGuid().ToString("N")
+            let ownerA, ownerB =
+                scope (Guid.NewGuid().ToString("N")), scope (Guid.NewGuid().ToString("N"))
+
             let cutoff = DateTimeOffset.UtcNow
             let generatedExpiredCount = Random.Shared.Next(2, 6)
             let memory = make ()
 
             for owner in [ ownerA; ownerB ] do
-                do! memory.StoreAsync(tieredEntry owner "shared" MemoryTier.LongTerm cutoff)
+                do! memory.StoreAsync owner (tieredEntry "shared" MemoryTier.LongTerm cutoff)
 
                 for key in [ "capacity-a"; "capacity-b"; "capacity-c" ] do
-                    do! memory.StoreAsync(tieredEntry owner key MemoryTier.ShortTerm cutoff)
+                    do! memory.StoreAsync owner (tieredEntry key MemoryTier.ShortTerm cutoff)
 
-            do! memory.StoreAsync(tieredEntry ownerA "accessed" MemoryTier.MidTerm cutoff)
+            do! memory.StoreAsync ownerA (tieredEntry "accessed" MemoryTier.MidTerm cutoff)
             do! memory.RecordAccessAsync ownerA [ "accessed" ] cutoff
 
             for index in 1..generatedExpiredCount do
                 do!
-                    memory.StoreAsync(
-                        tieredEntry ownerA (sprintf "expired-%d" index) MemoryTier.MidTerm (cutoff.AddTicks(-1L))
-                    )
+                    memory.StoreAsync
+                        ownerA
+                        (tieredEntry (sprintf "expired-%d" index) MemoryTier.MidTerm (cutoff.AddTicks(-1L)))
 
-            do! memory.StoreAsync(tieredEntry ownerA "exact-cutoff" MemoryTier.MidTerm cutoff)
+            do! memory.StoreAsync ownerA (tieredEntry "exact-cutoff" MemoryTier.MidTerm cutoff)
 
             do!
-                memory.StoreAsync(
-                    tieredEntry ownerA "ttl-expired" MemoryTier.MidTerm (cutoff.AddHours(-1.0).AddTicks(-1L))
-                )
+                memory.StoreAsync
+                    ownerA
+                    (tieredEntry "ttl-expired" MemoryTier.MidTerm (cutoff.AddHours(-1.0).AddTicks(-1L)))
 
-            do! memory.StoreAsync(tieredEntry ownerA "ttl-boundary" MemoryTier.MidTerm (cutoff.AddHours(-1.0)))
+            do! memory.StoreAsync ownerA (tieredEntry "ttl-boundary" MemoryTier.MidTerm (cutoff.AddHours(-1.0)))
 
             let! evicted = memory.EvictAsync ownerA cutoff
             Assert.AreEqual(1, evicted)
@@ -350,17 +402,18 @@ type TieredTests() =
             Assert.AreEqual(3, retained.Length)
 
             do!
-                afterOwnerDelete.StoreAsync(
-                    tieredEntry ownerA "after-delete" MemoryTier.LongTerm (cutoff.AddMinutes(1.0))
-                )
+                afterOwnerDelete.StoreAsync
+                    ownerA
+                    (tieredEntry "after-delete" MemoryTier.LongTerm (cutoff.AddMinutes(1.0)))
 
             let finalReload = make ()
             let! restored = finalReload.RetrieveAsync ownerA "v" 20
             Assert.AreEqual([ "after-delete" ], restored |> List.map (fun entry -> entry.Key))
 
-            match! finalReload.DeleteOwnerAsync " " with
-            | Ok _ -> Assert.Fail "Blank tiered-memory owners must be rejected."
-            | Error failure -> Assert.AreEqual(PlatformErrorCategory.InvalidInput, failure.Category)
+            let! deleted = finalReload.DeleteOwnerAsync ownerA
+            Assert.AreEqual(Ok 1, deleted)
+            let! repeated = finalReload.DeleteOwnerAsync ownerA
+            Assert.AreEqual(Ok 0, repeated)
         }
 
     [<TestMethod>]
@@ -390,10 +443,12 @@ type TieredTests() =
     [<TestMethod>]
     member _.File_RejectsCorruptTieredEventsBeforeMutation() =
         let dir = tempDir ()
-        let path = Path.Combine(dir, "tiered.jsonl")
+        let owner = scope agent
+        let key = AuthorizationScope.identity owner |> AuthorizationIdentity.storageKey
+        let path = Path.Combine(dir, "tiered", key + ".jsonl")
         let memory = TieredMemories.file dir TieredMemoryConfig.Default None
 
-        memory.StoreAsync(tieredEntry agent "original" MemoryTier.LongTerm DateTimeOffset.UtcNow)
+        memory.StoreAsync owner (tieredEntry "original" MemoryTier.LongTerm DateTimeOffset.UtcNow)
         |> _.GetAwaiter().GetResult()
 
         File.AppendAllText(path, "{invalid" + Environment.NewLine)
@@ -401,21 +456,26 @@ type TieredTests() =
 
         let error =
             Assert.ThrowsExactly<InvalidDataException>(fun () ->
-                memory.StoreAsync(tieredEntry agent "added" MemoryTier.LongTerm DateTimeOffset.UtcNow)
+                memory.StoreAsync owner (tieredEntry "added" MemoryTier.LongTerm DateTimeOffset.UtcNow)
                 |> _.GetAwaiter().GetResult())
 
-        StringAssert.Contains(error.Message, path)
+        StringAssert.Contains(error.Message, "tiered/" + key)
         StringAssert.Contains(error.Message, "event 2")
         CollectionAssert.AreEqual(before, File.ReadAllBytes path)
 
-        let retained = memory.RetrieveAsync agent "v" 10 |> _.GetAwaiter().GetResult()
+        Assert.ThrowsExactly<InvalidDataException>(fun () ->
+            memory.RetrieveAsync owner "v" 10 |> _.GetAwaiter().GetResult() |> ignore)
+        |> ignore
+
+        File.WriteAllLines(path, File.ReadAllLines(path) |> Array.take 1)
+        let retained = memory.RetrieveAsync owner "v" 10 |> _.GetAwaiter().GetResult()
         Assert.IsFalse(retained |> List.exists (fun item -> item.Key = "added"))
+        Directory.Delete(dir, true)
 
 // ---------------- Working memory ----------------
 
-let private wmItem (owner: ExecutionId) key addedAt expiresAt pinned : WorkingMemoryItem =
-    { ExecutionId = owner
-      Key = key
+let private wmItem key addedAt expiresAt pinned : WorkingMemoryItem =
+    { Key = key
       Content = "content"
       Attention = 0.9
       Source = "test"
@@ -425,23 +485,34 @@ let private wmItem (owner: ExecutionId) key addedAt expiresAt pinned : WorkingMe
 
 [<TestClass>]
 type WorkingMemoryTests() =
+    let address session executionId =
+        let principal =
+            SecurityPrincipal.create (TenantId.parse "tenant") (UserId.parse "user") []
+
+        let scope =
+            AuthorizationScope.tryCreate principal None (WorkspaceId.parse "workspace") (Some(SessionId.parse session))
+            |> Option.get
+
+        WorkingMemoryAddress.create scope executionId
+
     let exercise (make: unit -> WorkingMemory) =
         task {
-            let ownerA, ownerB = ExecutionId.generate (), ExecutionId.generate ()
+            let ownerA = address "a" (ExecutionId.generate ())
+            let ownerB = address "b" (ExecutionId.generate ())
             let cutoff = DateTimeOffset.UtcNow
             let generatedExpiredCount = Random.Shared.Next(2, 6)
             let memory = make ()
-            do! memory.SetAsync(wmItem ownerA "shared" cutoff None false)
-            do! memory.SetAsync(wmItem ownerB "shared" cutoff None false)
+            do! memory.SetAsync ownerA (wmItem "shared" cutoff None false)
+            do! memory.SetAsync ownerB (wmItem "shared" cutoff None false)
 
             for index in 1..generatedExpiredCount do
                 do!
-                    memory.SetAsync(
-                        wmItem ownerA (sprintf "expired-%d" index) cutoff (Some(cutoff.AddTicks(-1L))) false
-                    )
+                    memory.SetAsync
+                        ownerA
+                        (wmItem (sprintf "expired-%d" index) cutoff (Some(cutoff.AddTicks(-1L))) false)
 
-            do! memory.SetAsync(wmItem ownerA "exact-cutoff" cutoff (Some cutoff) false)
-            do! memory.SetAsync(wmItem ownerA "pinned" cutoff (Some(cutoff.AddTicks(-1L))) true)
+            do! memory.SetAsync ownerA (wmItem "exact-cutoff" cutoff (Some cutoff) false)
+            do! memory.SetAsync ownerA (wmItem "pinned" cutoff (Some(cutoff.AddTicks(-1L))) true)
 
             match! memory.DeleteExpiredAsync ownerA cutoff with
             | Error failure -> Assert.Fail failure.Message
@@ -466,7 +537,7 @@ type WorkingMemoryTests() =
             Assert.AreEqual(1, isolatedItems.Length)
 
             let addedAt = cutoff.AddHours(1.0)
-            do! afterDelete.SetAsync(wmItem ownerA "after-delete" addedAt None false)
+            do! afterDelete.SetAsync ownerA (wmItem "after-delete" addedAt None false)
             let finalReload = make ()
             let! restored = finalReload.GetAsync ownerA "after-delete"
             Assert.IsTrue(restored.IsSome)
@@ -494,22 +565,39 @@ type WorkingMemoryTests() =
     [<TestMethod>]
     member _.File_RejectsCorruptWorkingEventsBeforeMutation() =
         let dir = tempDir ()
-        let path = Path.Combine(dir, "working.jsonl")
+        let executionId = ExecutionId.generate ()
+        let owner = address agent executionId
+
+        let identityKey =
+            WorkingMemoryAddress.authorization owner
+            |> AuthorizationScope.identity
+            |> AuthorizationIdentity.storageKey
+
+        let path =
+            Path.Combine(dir, "working", identityKey, ExecutionId.serialize executionId + ".jsonl")
+
         let memory = WorkingMemories.file dir WorkingMemoryConfig.Default
-        let owner = ExecutionId.generate ()
-        let original = wmItem owner "original" DateTimeOffset.UtcNow None false
-        memory.SetAsync original |> _.GetAwaiter().GetResult()
+        let original = wmItem "original" DateTimeOffset.UtcNow None false
+        memory.SetAsync owner original |> _.GetAwaiter().GetResult()
         File.AppendAllText(path, "{invalid" + Environment.NewLine)
         let before = File.ReadAllBytes path
-        let added = wmItem owner "added" DateTimeOffset.UtcNow None false
+        let added = wmItem "added" DateTimeOffset.UtcNow None false
 
         let error =
-            Assert.ThrowsExactly<InvalidDataException>(fun () -> memory.SetAsync added |> _.GetAwaiter().GetResult())
+            Assert.ThrowsExactly<InvalidDataException>(fun () ->
+                memory.SetAsync owner added |> _.GetAwaiter().GetResult())
 
-        StringAssert.Contains(error.Message, path)
+        StringAssert.Contains(error.Message, "working/" + identityKey + "/" + ExecutionId.serialize executionId)
         StringAssert.Contains(error.Message, "event 2")
         CollectionAssert.AreEqual(before, File.ReadAllBytes path)
+
+        Assert.ThrowsExactly<InvalidDataException>(fun () ->
+            memory.GetAsync owner "added" |> _.GetAwaiter().GetResult() |> ignore)
+        |> ignore
+
+        File.WriteAllLines(path, File.ReadAllLines(path) |> Array.take 1)
         Assert.IsTrue((memory.GetAsync owner "added" |> _.GetAwaiter().GetResult()).IsNone)
+        Directory.Delete(dir, true)
 
 // ---------------- Metrics ----------------
 
@@ -517,44 +605,41 @@ type WorkingMemoryTests() =
 type MetricsTests() =
     let exercise (make: unit -> MetricsCollector) =
         task {
-            let ownerA, ownerB = "metrics/a", "metrics/b"
+            let ownerA, ownerB = authorizationScope "metrics-a", authorizationScope "metrics-b"
             let cutoff = DateTimeOffset(2026, 6, 1, 12, 0, 0, TimeSpan.Zero)
             let correlation = CorrelationContext.root ()
             let llmCount = Random.Shared.Next(2, 7)
             let first = make ()
 
             for index in 1..llmCount do
-                first.Record(
-                    MetricRecord.llmCall
+                first.Record
+                    ownerA
+                    (MetricRecord.llmCall
                         correlation
-                        ownerA
                         (cutoff.AddMinutes(float index))
                         (index * 10)
                         (index * 5)
-                        (int64 (index * 20))
-                )
+                        (int64 (index * 20)))
 
-            first.Record(
-                MetricRecord.custom
+            first.Record
+                ownerA
+                (MetricRecord.custom
                     correlation
-                    ownerA
                     (cutoff.AddTicks(-1L))
                     { Name = "old"
                       Value = 1.0
-                      Labels = Map.empty }
-            )
+                      Labels = Map.empty })
 
-            first.Record(
-                MetricRecord.custom
+            first.Record
+                ownerA
+                (MetricRecord.custom
                     correlation
-                    ownerA
                     cutoff
                     { Name = "boundary"
                       Value = 2.0
-                      Labels = Map.empty }
-            )
+                      Labels = Map.empty })
 
-            first.Record(MetricRecord.toolCall correlation ownerB cutoff "search" 30L true)
+            first.Record ownerB (MetricRecord.toolCall correlation cutoff "search" 30L true)
 
             let reloaded = make ()
             let metricsA = reloaded.GetMetrics ownerA
@@ -565,7 +650,8 @@ type MetricsTests() =
             Assert.AreEqual(expectedOutput, metricsA.TotalOutputTokens)
             Assert.AreEqual(0, metricsA.TotalToolCalls)
             Assert.AreEqual(1, (reloaded.GetMetrics ownerB).TotalToolCalls)
-            Assert.AreEqual(llmCount + 3, (reloaded.GetByExecution correlation.ExecutionId).Length)
+            Assert.AreEqual(llmCount + 2, (reloaded.GetByExecution ownerA correlation.ExecutionId).Length)
+            Assert.AreEqual(1, (reloaded.GetByExecution ownerB correlation.ExecutionId).Length)
 
             match! reloaded.DeleteExpiredAsync ownerA cutoff with
             | Error failure -> Assert.Fail failure.Message
@@ -574,15 +660,11 @@ type MetricsTests() =
             let afterExpiry = make ()
             Assert.AreEqual(TimeSpan.FromMinutes(float llmCount), (afterExpiry.GetMetrics ownerA).TotalDuration)
 
-            match! afterExpiry.DeleteOwnerAsync ownerB with
+            match! afterExpiry.DeleteScopeAsync ownerB with
             | Error failure -> Assert.Fail failure.Message
             | Ok count -> Assert.AreEqual(1, count)
 
-            match! afterExpiry.DeleteOwnerAsync " " with
-            | Ok _ -> Assert.Fail "Blank metric owners must be rejected."
-            | Error failure -> Assert.AreEqual(PlatformErrorCategory.InvalidInput, failure.Category)
-
-            match! afterExpiry.DeleteOwnerAsync ownerA with
+            match! afterExpiry.DeleteScopeAsync ownerA with
             | Error failure -> Assert.Fail failure.Message
             | Ok count -> Assert.AreEqual(llmCount + 1, count)
 
@@ -590,7 +672,7 @@ type MetricsTests() =
             Assert.AreEqual(0, (afterDeletion.GetMetrics ownerA).TotalLlmCalls)
             Assert.AreEqual(0, (afterDeletion.GetMetrics ownerB).TotalToolCalls)
 
-            afterDeletion.Record(MetricRecord.llmCall correlation ownerA (cutoff.AddDays 1) 7 3 11L)
+            afterDeletion.Record ownerA (MetricRecord.llmCall correlation (cutoff.AddDays 1) 7 3 11L)
             Assert.AreEqual(1, ((make ()).GetMetrics ownerA).TotalLlmCalls)
         }
 
@@ -614,23 +696,30 @@ type MetricsTests() =
     [<TestMethod>]
     member _.File_RejectsCorruptEventsBeforeMutation() =
         let dir = tempDir ()
-        let path = Path.Combine(dir, "metrics.jsonl")
+        let scope = authorizationScope agent
+
+        let identityKey =
+            AuthorizationScope.identity scope |> AuthorizationIdentity.storageKey
+
+        let path = Path.Combine(dir, "metrics", identityKey + ".jsonl")
         let collector = MetricsCollectors.file dir
         let correlation = CorrelationContext.root ()
-        let original = MetricRecord.llmCall correlation agent DateTimeOffset.UtcNow 10 5 20L
-        collector.Record original
+        let original = MetricRecord.llmCall correlation DateTimeOffset.UtcNow 10 5 20L
+        collector.Record scope original
         File.AppendAllText(path, "{invalid" + Environment.NewLine)
         let before = File.ReadAllBytes path
 
         let error =
             Assert.ThrowsExactly<InvalidDataException>(fun () ->
-                collector.Record(MetricRecord.llmCall correlation agent DateTimeOffset.UtcNow 20 10 30L))
+                collector.Record scope (MetricRecord.llmCall correlation DateTimeOffset.UtcNow 20 10 30L))
 
-        StringAssert.Contains(error.Message, path)
+        StringAssert.Contains(error.Message, "metrics/" + identityKey)
         StringAssert.Contains(error.Message, "event 2")
         StringAssert.Contains(error.Message, "docs/migrations")
         CollectionAssert.AreEqual(before, File.ReadAllBytes path)
-        Assert.AreEqual(1, collector.GetMetrics(agent).TotalLlmCalls)
+
+        Assert.ThrowsExactly<InvalidDataException>(fun () -> collector.GetMetrics scope |> ignore)
+        |> ignore
 
 // ---------------- Trace store ----------------
 
@@ -650,24 +739,25 @@ let private executionTrace () : ExecutionTrace =
 type TraceStoreTests() =
     let exercise (make: unit -> TraceStore) =
         task {
+            let scope = authorizationScope "trace"
             let first = make ()
             let expected = executionTrace ()
-            do! first.SaveAsync expected
-            do! first.SaveAsync(executionTrace ())
+            do! first.SaveAsync scope expected
+            do! first.SaveAsync scope (executionTrace ())
             let reloaded = make ()
-            let! traces = reloaded.GetTracesAsync agent 10
+            let! traces = reloaded.GetTracesAsync scope agent 10
             Assert.AreEqual(2, traces.Length)
             Assert.IsTrue(traces |> List.exists (fun trace -> trace.Correlation = expected.Correlation))
 
-            let! forExecution = reloaded.GetByExecutionAsync expected.Correlation.ExecutionId
+            let! forExecution = reloaded.GetByExecutionAsync scope expected.Correlation.ExecutionId
             Assert.AreEqual([ expected ], forExecution)
 
-            let! unknownExecution = reloaded.GetByExecutionAsync(ExecutionId.generate ())
+            let! unknownExecution = reloaded.GetByExecutionAsync scope (ExecutionId.generate ())
             Assert.IsTrue(unknownExecution.IsEmpty)
         }
 
     [<TestMethod>]
-    member _.TraceStorePurgesByOwnerAcrossBackends() =
+    member _.TraceStorePurgesByScopeAcrossBackends() =
         let dir = tempDir ()
         let factory = sqliteFactory ()
         let inMemory = InMemoryTraceStore.create ()
@@ -678,48 +768,43 @@ type TraceStoreTests() =
               (fun () -> TraceStores.ado factory) ]
 
         for make in stores do
-            let ownerA = "owner-a"
-            let ownerB = "owner-b"
+            let ownerA = authorizationScope "owner-a"
+            let ownerB = authorizationScope "owner-b"
             let cutoff = DateTimeOffset.UtcNow
             let expiredCount = Random.Shared.Next(1, 5)
             let retainedCount = Random.Shared.Next(1, 5)
             let otherCount = Random.Shared.Next(1, 5)
 
-            let trace owner timestamp =
+            let trace timestamp =
                 { executionTrace () with
-                    AgentId = owner
                     StartedAt = timestamp }
 
             let store = make ()
 
             for _ in 1..expiredCount do
-                store.SaveAsync(trace ownerA (cutoff.AddMinutes(-1.0))) |> _.Wait()
+                store.SaveAsync ownerA (trace (cutoff.AddMinutes(-1.0))) |> _.Wait()
 
             for _ in 1..retainedCount do
-                store.SaveAsync(trace ownerA cutoff) |> _.Wait()
+                store.SaveAsync ownerA (trace cutoff) |> _.Wait()
 
             for _ in 1..otherCount do
-                store.SaveAsync(trace ownerB (cutoff.AddMinutes(-1.0))) |> _.Wait()
+                store.SaveAsync ownerB (trace (cutoff.AddMinutes(-1.0))) |> _.Wait()
 
             match store.DeleteExpiredAsync ownerA cutoff |> _.Result with
             | Error failure -> Assert.Fail(failure.Message)
             | Ok deleted -> Assert.AreEqual(expiredCount, deleted)
 
             let reloaded = make ()
-            Assert.AreEqual(retainedCount, reloaded.GetTracesAsync ownerA 100 |> _.Result |> List.length)
-            Assert.AreEqual(otherCount, reloaded.GetTracesAsync ownerB 100 |> _.Result |> List.length)
+            Assert.AreEqual(retainedCount, reloaded.GetTracesAsync ownerA agent 100 |> _.Result |> List.length)
+            Assert.AreEqual(otherCount, reloaded.GetTracesAsync ownerB agent 100 |> _.Result |> List.length)
 
-            match reloaded.DeleteOwnerAsync ownerA |> _.Result with
+            match reloaded.DeleteScopeAsync ownerA |> _.Result with
             | Error failure -> Assert.Fail(failure.Message)
             | Ok deleted -> Assert.AreEqual(retainedCount, deleted)
 
             let reloadedAgain = make ()
-            Assert.AreEqual(0, reloadedAgain.GetTracesAsync ownerA 100 |> _.Result |> List.length)
-            Assert.AreEqual(otherCount, reloadedAgain.GetTracesAsync ownerB 100 |> _.Result |> List.length)
-
-            match reloadedAgain.DeleteOwnerAsync " " |> _.Result with
-            | Ok _ -> Assert.Fail("Blank trace owner unexpectedly accepted.")
-            | Error failure -> Assert.AreEqual(PlatformErrorCategory.InvalidInput, failure.Category)
+            Assert.AreEqual(0, reloadedAgain.GetTracesAsync ownerA agent 100 |> _.Result |> List.length)
+            Assert.AreEqual(otherCount, reloadedAgain.GetTracesAsync ownerB agent 100 |> _.Result |> List.length)
 
     [<TestMethod>]
     member _.Ado_Persists() =
@@ -754,7 +839,10 @@ type TraceStoreTests() =
             |> _.Wait()
 
             let error =
-                Assert.ThrowsExactly<InvalidDataException>(fun () -> TraceStores.ado factory |> ignore)
+                Assert.ThrowsExactlyAsync<InvalidDataException>(fun () ->
+                    (TraceStores.ado factory).GetTracesAsync (authorizationScope "trace") agent 10
+                    :> Threading.Tasks.Task)
+                |> _.GetAwaiter().GetResult()
 
             StringAssert.Contains(error.Message, "unversioned 'nao_events'")
             StringAssert.Contains(error.Message, "docs/migrations")
@@ -786,10 +874,15 @@ type TraceStoreTests() =
     [<TestMethod>]
     member _.File_RejectsUnversionedEventsBeforeMutation() =
         let dir = tempDir ()
-        let path = Path.Combine(dir, "trace-store.jsonl")
+        let scope = authorizationScope "trace"
+
+        let identityKey =
+            AuthorizationScope.identity scope |> AuthorizationIdentity.storageKey
+
+        let path = Path.Combine(dir, "trace-store", identityKey + ".jsonl")
         let store = TraceStores.file dir
         let original = executionTrace ()
-        store.SaveAsync original |> _.GetAwaiter().GetResult()
+        store.SaveAsync scope original |> _.GetAwaiter().GetResult()
 
         let persisted = File.ReadAllText path
         StringAssert.Contains(persisted, "\"schemaVersion\":1")
@@ -799,32 +892,42 @@ type TraceStoreTests() =
         let added = executionTrace ()
 
         let error =
-            Assert.ThrowsExactly<InvalidDataException>(fun () -> store.SaveAsync added |> _.GetAwaiter().GetResult())
+            Assert.ThrowsExactly<InvalidDataException>(fun () ->
+                store.SaveAsync scope added |> _.GetAwaiter().GetResult())
 
-        StringAssert.Contains(error.Message, path)
+        StringAssert.Contains(error.Message, "trace-store/" + identityKey)
         StringAssert.Contains(error.Message, "event 1")
         StringAssert.Contains(error.Message, "docs/migrations")
         CollectionAssert.AreEqual(before, File.ReadAllBytes path)
 
-        let traces = store.GetTracesAsync agent 10 |> _.GetAwaiter().GetResult()
-        Assert.IsFalse(traces |> List.exists (fun trace -> trace.Id = added.Id))
+        Assert.ThrowsExactlyAsync<InvalidDataException>(fun () ->
+            store.GetTracesAsync scope agent 10 :> Threading.Tasks.Task)
+        |> _.GetAwaiter().GetResult()
+        |> ignore
 
 // ---------------- Tracer ----------------
 
 [<TestClass>]
 type TracerTests() =
+    let scope =
+        let principal =
+            SecurityPrincipal.create (TenantId.parse "tenant") (UserId.parse "tracer") []
+
+        AuthorizationScope.tryCreate principal None (WorkspaceId.parse "workspace") None
+        |> Option.get
+
     let exercise (make: unit -> Tracer) =
         let correlation = CorrelationContext.root ()
         let first = make ()
-        let root = first.StartTrace correlation "op"
-        let child = first.StartSpan root "child"
-        first.EndSpan child SpanStatus.Ok
+        let root = first.StartTrace scope correlation "op"
+        let child = first.StartSpan scope root "child"
+        first.EndSpan scope child SpanStatus.Ok
         let traceId = root.TraceId
         let reloaded = make ()
-        let spans = reloaded.GetTrace traceId
+        let spans = reloaded.GetTrace scope traceId
         Assert.AreEqual(2, spans.Length)
         Assert.IsTrue(spans |> List.forall (fun span -> span.Correlation = correlation))
-        Assert.AreEqual(2, reloaded.GetByExecution(correlation.ExecutionId).Length)
+        Assert.AreEqual(2, reloaded.GetByExecution scope correlation.ExecutionId |> List.length)
 
     [<TestMethod>]
     member _.Ado_Persists() =
@@ -839,19 +942,28 @@ type TracerTests() =
     [<TestMethod>]
     member _.File_RejectsCorruptSpansBeforeMutation() =
         let dir = tempDir ()
-        let path = Path.Combine(dir, "tracer.jsonl")
+
+        let identityKey =
+            AuthorizationScope.identity scope |> AuthorizationIdentity.storageKey
+
+        let path = Path.Combine(dir, "tracer", identityKey + ".jsonl")
         let tracer = Tracers.file dir
-        let root = tracer.StartTrace (CorrelationContext.root ()) "root"
+        let root = tracer.StartTrace scope (CorrelationContext.root ()) "root"
 
         StringAssert.Contains(File.ReadAllText(path), "\"schemaVersion\":1")
         File.AppendAllText(path, "{invalid" + Environment.NewLine)
         let before = File.ReadAllBytes path
 
         let error =
-            Assert.ThrowsExactly<InvalidDataException>(fun () -> tracer.StartSpan root "child" |> ignore)
+            Assert.ThrowsExactly<InvalidDataException>(fun () -> tracer.StartSpan scope root "child" |> ignore)
 
-        StringAssert.Contains(error.Message, path)
+        StringAssert.Contains(error.Message, "tracer/" + identityKey)
         StringAssert.Contains(error.Message, "span 2")
         StringAssert.Contains(error.Message, "docs/migrations")
         CollectionAssert.AreEqual(before, File.ReadAllBytes path)
-        Assert.AreEqual(1, tracer.GetTrace(root.TraceId).Length)
+
+        Assert.ThrowsExactly<InvalidDataException>(fun () -> tracer.GetTrace scope root.TraceId |> ignore)
+        |> ignore
+
+        File.WriteAllLines(path, File.ReadAllLines(path) |> Array.take 1)
+        Assert.AreEqual(1, tracer.GetTrace scope root.TraceId |> List.length)

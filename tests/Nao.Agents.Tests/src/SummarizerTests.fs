@@ -110,11 +110,87 @@ type SummarizerTests() =
 type MemoryConsolidationTests() =
 
     [<TestMethod>]
+    member _.EveryConsolidationStrategyRemainsInsideAuthenticatedScope() =
+        let scope tenant =
+            let principal =
+                SecurityPrincipal.createAuthenticated
+                    (TenantId.parse tenant)
+                    (UserId.parse "user")
+                    (Some(ServiceId.parse "private-service"))
+                    []
+                    [ "private-role" ]
+                    (Map.ofList [ "private-claim", "private-value" ])
+                    AuthenticationStrength.MultiFactor
+
+            AuthorizationScope.tryCreate
+                principal
+                None
+                (WorkspaceId.parse "workspace")
+                (Some(SessionId.parse "session"))
+            |> Option.get
+
+        let own, other = scope "tenant-a", scope "tenant-b"
+
+        let provider =
+            LlmProvider.create (fun () -> "scoped-summary") (fun _ messages _ ->
+                let prompt = messages |> List.map _.Content |> String.concat "\n"
+
+                for excluded in
+                    [ "foreign"
+                      "private-service"
+                      "private-role"
+                      "private-claim"
+                      "private-value" ] do
+                    Assert.IsFalse(prompt.Contains excluded, sprintf "Summary prompt leaked %s." excluded)
+
+                Task.FromResult(CompletionResult.create "own summary" "stop" None None))
+
+        let strategies =
+            [ ConsolidationStrategy.Deduplicate
+              ConsolidationStrategy.MergeSimilar 0.5
+              ConsolidationStrategy.ImportanceDecay(0.01, TimeSpan.Zero)
+              ConsolidationStrategy.Summarize(provider, CompletionOptions.Default)
+              ConsolidationStrategy.Composite
+                  [ ConsolidationStrategy.Deduplicate; ConsolidationStrategy.MergeSimilar 0.5 ] ]
+
+        for strategy in strategies do
+            let store = InMemoryStore.create ()
+
+            for index in 1..10 do
+                let entry =
+                    { Key = string index
+                      Value = "own fact"
+                      Timestamp = DateTimeOffset.UtcNow.AddDays(-1)
+                      Tags = [ "facts" ] }
+
+                store.SaveAsync own entry |> _.Wait()
+                store.SaveAsync other { entry with Value = "foreign fact" } |> _.Wait()
+
+            let foreign = store.RecallAllAsync other |> _.Result
+
+            let result =
+                MemoryConsolidation.consolidateAsync (CorrelationContext.root ()) store own strategy
+                |> _.Result
+
+            Assert.AreEqual(10, result.TotalBefore)
+            Assert.AreEqual(foreign, store.RecallAllAsync other |> _.Result)
+
+    [<TestMethod>]
     member _.SummarizeUsesSuppliedCorrelation() =
         let correlation = CorrelationContext.root ()
         let observed = ref None
         let store = InMemoryStore.create ()
-        let owner = "consolidation-test"
+
+        let principal =
+            SecurityPrincipal.create (TenantId.parse "tenant") (UserId.parse "user") []
+
+        let owner =
+            AuthorizationScope.tryCreate
+                principal
+                None
+                (WorkspaceId.parse "workspace")
+                (Some(SessionId.parse "consolidation"))
+            |> Option.get
 
         for index in 1..10 do
             store.SaveAsync

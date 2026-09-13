@@ -47,12 +47,6 @@ type TurnRecord =
         TurnId: string
         /// Execution identity, correlation, causation, and attempt for this turn.
         Correlation: CorrelationContext
-        /// Session this turn belongs to.
-        SessionId: string
-        /// User who initiated the turn.
-        UserId: string
-        /// Workspace the turn ran against.
-        WorkspaceKey: string
         /// Agent that handled the turn.
         AgentName: string
         /// The user's prompt.
@@ -73,9 +67,6 @@ module TurnRecord =
     let empty correlation : TurnRecord =
         { TurnId = ""
           Correlation = correlation
-          SessionId = ""
-          UserId = ""
-          WorkspaceKey = ""
           AgentName = ""
           Input = ""
           Output = ""

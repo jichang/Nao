@@ -38,7 +38,7 @@ The following foundations already exist. Checked items describe current capabili
 - [x] Orleans session and workspace runtime
 - [x] Permission, policy, constitution, and audit abstractions
 - [x] Tracing, metrics, execution journal, resilience, and evaluation primitives
-- [ ] Production process and container isolation
+- [x] Production process and container isolation
 - [ ] End-to-end knowledge ingestion and RAG
 - [ ] Indexed vector and production graph backends
 - [ ] Continuous production evaluation and drift management

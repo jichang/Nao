@@ -11,14 +11,12 @@ type MemoryTier =
     | ShortTerm
     /// Session state — persists within a conversation session
     | MidTerm
-    /// Long-term persistent memory — survives across sessions
+    /// Long-term persistent memory; tier changes do not widen authorization scope
     | LongTerm
 
 /// A memory item with tier classification
 type TieredMemoryEntry =
     {
-        /// Owner of this memory namespace
-        Owner: string
         /// The memory content
         Key: string
         Value: string
@@ -28,7 +26,7 @@ type TieredMemoryEntry =
         Timestamp: DateTimeOffset
         /// Access count for LRU/frequency-based eviction
         AccessCount: int
-        /// Relevance score (updated by retrieval)
+        /// Host-supplied relevance used to break ranking ties
         Relevance: float
         /// Tags for filtering
         Tags: string list
@@ -70,19 +68,19 @@ type TieredMemoryConfig =
 type TieredMemory =
     {
         /// Store a memory at a specific tier
-        StoreAsync: TieredMemoryEntry -> Task<unit>
+        StoreAsync: AuthorizationScope -> TieredMemoryEntry -> Task<unit>
         /// Retrieve relevant memories across all tiers
-        RetrieveAsync: string -> string -> int -> Task<TieredMemoryEntry list>
+        RetrieveAsync: AuthorizationScope -> string -> int -> Task<TieredMemoryEntry list>
         /// Retrieve memories from a specific tier
-        RetrieveFromTierAsync: string -> MemoryTier -> int -> Task<TieredMemoryEntry list>
+        RetrieveFromTierAsync: AuthorizationScope -> MemoryTier -> int -> Task<TieredMemoryEntry list>
         /// Record accesses and apply automatic promotion policy
-        RecordAccessAsync: string -> string list -> DateTimeOffset -> Task<unit>
+        RecordAccessAsync: AuthorizationScope -> string list -> DateTimeOffset -> Task<unit>
         /// Promote a memory to a higher tier
-        PromoteAsync: string -> string -> MemoryTier -> Task<unit>
+        PromoteAsync: AuthorizationScope -> string -> MemoryTier -> Task<unit>
         /// Evict memories that exceed capacity or TTL
-        EvictAsync: string -> DateTimeOffset -> Task<int>
+        EvictAsync: AuthorizationScope -> DateTimeOffset -> Task<int>
         /// Delete every memory owned by one scope
-        DeleteOwnerAsync: string -> Task<Result<int, PlatformFailure>>
+        DeleteOwnerAsync: AuthorizationScope -> Task<Result<int, PlatformFailure>>
         /// Delete memories created before a strict cutoff
-        DeleteExpiredAsync: string -> DateTimeOffset -> Task<Result<int, PlatformFailure>>
+        DeleteExpiredAsync: AuthorizationScope -> DateTimeOffset -> Task<Result<int, PlatformFailure>>
     }

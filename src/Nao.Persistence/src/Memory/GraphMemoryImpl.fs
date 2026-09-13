@@ -7,6 +7,7 @@ open Nao.Agents
 
 module InMemoryGraphMemory =
     let create (relationExtractor: (string -> Task<GraphRelation list>) option) : GraphMemory =
+        let sync = obj ()
         let nodes = ConcurrentDictionary<string * string, GraphNode>()
 
         let relations =
@@ -15,21 +16,23 @@ module InMemoryGraphMemory =
         let nodeKey owner nodeId = owner, nodeId
         let relationKey owner subject predicate object' = owner, subject, predicate, object'
 
-        let requireOwner owner =
-            if String.IsNullOrWhiteSpace owner then
-                invalidArg (nameof owner) "Graph-memory owner cannot be blank."
+        let ownerKey = AuthorizationScope.identity >> AuthorizationIdentity.storageKey
 
         let ownedNodes owner =
-            nodes.Values |> Seq.filter (fun node -> node.Owner = owner)
+            nodes
+            |> Seq.choose (fun pair -> if fst pair.Key = owner then Some pair.Value else None)
 
         let ownedRelations owner =
-            relations.Values |> Seq.filter (fun relation -> relation.Owner = owner)
+            relations
+            |> Seq.choose (fun pair ->
+                let partition, _, _, _ = pair.Key
+                if partition = owner then Some pair.Value else None)
 
-        let upsertNodeAsync (node: GraphNode) =
-            requireOwner node.Owner
+        let upsertNodeAsync scope (node: GraphNode) =
+            let owner = ownerKey scope
 
             nodes.AddOrUpdate(
-                nodeKey node.Owner node.Id,
+                nodeKey owner node.Id,
                 node,
                 fun _ existing ->
                     { node with
@@ -40,10 +43,10 @@ module InMemoryGraphMemory =
 
             Task.FromResult()
 
-        let addRelationAsync (relation: GraphRelation) =
-            requireOwner relation.Owner
+        let addRelationAsync scope (relation: GraphRelation) =
+            let owner = ownerKey scope
 
-            relations.TryAdd(relationKey relation.Owner relation.Subject relation.Predicate relation.Object, relation)
+            relations.TryAdd(relationKey owner relation.Subject relation.Predicate relation.Object, relation)
             |> ignore
 
             Task.FromResult()
@@ -76,8 +79,8 @@ module InMemoryGraphMemory =
 
             search [ [ from' ] ] (Set.singleton from') 0
 
-        let queryAsync owner query =
-            requireOwner owner
+        let queryAsync scope query =
+            let owner = ownerKey scope
             let graphNodes = ownedNodes owner |> Seq.toList
             let graphRelations = ownedRelations owner |> Seq.toList
 
@@ -137,7 +140,7 @@ module InMemoryGraphMemory =
                                       if frontier |> Set.contains relation.Object then
                                           relation.Subject ])
                                 |> Set.ofList
-                                |> Set.difference visited
+                                |> fun found -> Set.difference found visited
 
                             collect neighbors (Set.union visited neighbors) (depth + 1)
 
@@ -155,8 +158,8 @@ module InMemoryGraphMemory =
             relations.TryRemove(relationKey owner relation.Subject relation.Predicate relation.Object)
             |> ignore
 
-        let removeNodeAsync owner nodeId =
-            requireOwner owner
+        let removeNodeAsync scope nodeId =
+            let owner = ownerKey scope
             nodes.TryRemove(nodeKey owner nodeId) |> ignore
 
             ownedRelations owner
@@ -166,22 +169,20 @@ module InMemoryGraphMemory =
 
             Task.FromResult()
 
-        let removeRelationAsync owner subject predicate object' =
-            requireOwner owner
+        let removeRelationAsync scope subject predicate object' =
+            let owner = ownerKey scope
             relations.TryRemove(relationKey owner subject predicate object') |> ignore
             Task.FromResult()
 
-        let getByTypeAsync owner entityType =
-            requireOwner owner
+        let getByTypeAsync scope entityType =
+            let owner = ownerKey scope
 
             ownedNodes owner
             |> Seq.filter (fun node -> node.EntityType = entityType)
             |> Seq.toList
             |> Task.FromResult
 
-        let extractRelationsAsync owner text =
-            requireOwner owner
-
+        let extractRelationsAsync scope text =
             task {
                 let! extracted =
                     match relationExtractor with
@@ -221,8 +222,7 @@ module InMemoryGraphMemory =
                                             None
                                         else
                                             Some
-                                                { Owner = owner
-                                                  Subject = subject
+                                                { Subject = subject
                                                   Predicate = pattern
                                                   Object = object'
                                                   Confidence = 0.5
@@ -232,77 +232,62 @@ module InMemoryGraphMemory =
 
                         Task.FromResult found
 
-                if extracted |> List.exists (fun relation -> relation.Owner <> owner) then
-                    invalidArg (nameof owner) "Extracted graph relations must belong to the requested owner."
-
-                for relation in extracted do
-                    do! addRelationAsync relation
+                lock sync (fun () ->
+                    for relation in extracted do
+                        addRelationAsync scope relation |> _.GetAwaiter().GetResult())
 
                 return extracted
             }
 
-        let delete predicate =
+        let delete scope predicate =
+            let owner = ownerKey scope
+
             let nodeMatches =
-                nodes.Values
+                ownedNodes owner
                 |> Seq.filter (fun node -> predicate (Choice1Of2 node))
                 |> Seq.toArray
 
-            let deletedNodeIds =
-                nodeMatches |> Array.map (fun node -> node.Owner, node.Id) |> Set.ofArray
+            let deletedNodeIds = nodeMatches |> Array.map (fun node -> node.Id) |> Set.ofArray
 
             let relationMatches =
-                relations.Values
+                ownedRelations owner
                 |> Seq.filter (fun relation ->
                     predicate (Choice2Of2 relation)
-                    || deletedNodeIds.Contains(relation.Owner, relation.Subject)
-                    || deletedNodeIds.Contains(relation.Owner, relation.Object))
+                    || deletedNodeIds.Contains relation.Subject
+                    || deletedNodeIds.Contains relation.Object)
                 |> Seq.toArray
 
             nodeMatches
-            |> Array.iter (fun node -> nodes.TryRemove(nodeKey node.Owner node.Id) |> ignore)
+            |> Array.iter (fun node -> nodes.TryRemove(nodeKey owner node.Id) |> ignore)
 
-            relationMatches
-            |> Array.iter (fun relation -> removeRelation relation.Owner relation)
+            relationMatches |> Array.iter (removeRelation owner)
 
             Task.FromResult(nodeMatches.Length + relationMatches.Length)
 
-        let protect owner operation =
+        let deleteOwnerAsync scope =
             task {
-                if String.IsNullOrWhiteSpace owner then
-                    return
-                        Error(
-                            PlatformFailure.create
-                                PlatformErrorCategory.InvalidInput
-                                "Graph-memory owner cannot be blank."
-                                false
-                                None
-                        )
-                else
-                    try
-                        let! count = operation ()
-                        return Ok count
-                    with error ->
-                        return Error(PlatformFailure.fromException PlatformFailureBoundary.Storage None error)
+                let! count = delete scope (fun _ -> true)
+                return Ok count
             }
 
-        let deleteOwnerAsync owner =
-            protect owner (fun () ->
-                delete (function
-                    | Choice1Of2 node -> node.Owner = owner
-                    | Choice2Of2 relation -> relation.Owner = owner))
+        let deleteExpiredAsync scope before =
+            task {
+                let! count =
+                    delete scope (function
+                        | Choice1Of2 node -> node.CreatedAt < before
+                        | Choice2Of2 relation -> relation.Timestamp < before)
 
-        let deleteExpiredAsync owner before =
-            protect owner (fun () ->
-                delete (function
-                    | Choice1Of2 node -> node.Owner = owner && node.CreatedAt < before
-                    | Choice2Of2 relation -> relation.Owner = owner && relation.Timestamp < before))
+                return Ok count
+            }
 
-        { UpsertNodeAsync = upsertNodeAsync
-          AddRelationAsync = addRelationAsync
-          QueryAsync = queryAsync
-          RemoveNodeAsync = removeNodeAsync
-          RemoveRelationAsync = removeRelationAsync
-          GetByTypeAsync = getByTypeAsync
+        { UpsertNodeAsync = fun scope node -> lock sync (fun () -> upsertNodeAsync scope node)
+          AddRelationAsync = fun scope relation -> lock sync (fun () -> addRelationAsync scope relation)
+          QueryAsync = fun scope query -> lock sync (fun () -> queryAsync scope query)
+          RemoveNodeAsync = fun scope nodeId -> lock sync (fun () -> removeNodeAsync scope nodeId)
+          RemoveRelationAsync =
+            fun scope subject predicate object' ->
+                lock sync (fun () -> removeRelationAsync scope subject predicate object')
+          GetByTypeAsync = fun scope entityType -> lock sync (fun () -> getByTypeAsync scope entityType)
           ExtractRelationsAsync = extractRelationsAsync
-          DeleteOwnerAsync = deleteOwnerAsync
-          DeleteExpiredAsync = deleteExpiredAsync }
+          DeleteOwnerAsync = fun scope -> lock sync (fun () -> deleteOwnerAsync scope)
+          DeleteExpiredAsync = fun scope before -> lock sync (fun () -> deleteExpiredAsync scope before) }

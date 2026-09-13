@@ -187,7 +187,7 @@ module private MemorySearch =
         keyScore + tagScore + valueScore
 
 module private MemoryTool =
-    let search (config: MemoryToolConfig) (store: MemoryStore) (owner: unit -> string) =
+    let search (config: MemoryToolConfig) (store: MemoryStore) =
         let input =
             ToolCodec.create
                 "object\n  - query (required): string - Concrete words, names, or facts to find.\n  - intent (required): string - Why this prior information is needed for the current task.\n  - tags (optional): string[] - Restrict results to memories carrying at least one tag.\n  - limit (optional): positive integer - Maximum results, bounded by host policy."
@@ -201,9 +201,10 @@ module private MemoryTool =
                 (fun _ -> Error "Tool outputs are not decoded by the runtime.")
 
         let operation =
-            ToolOperation.create ToolReplaySafety.RetrySafe (fun _ (search: MemorySearchInput) ->
+            ToolOperation.create ToolReplaySafety.RetrySafe (fun context (search: MemorySearchInput) ->
                 task {
-                    let! all = store.RecallAllAsync(owner ())
+                    let authorization = AgentContext.requireAuthorization context
+                    let! all = store.RecallAllAsync authorization
 
                     let filtered =
                         if search.Tags.IsEmpty then
@@ -247,7 +248,7 @@ module private MemoryTool =
             output
             operation
 
-    let remember (store: MemoryStore) (owner: unit -> string) =
+    let remember (store: MemoryStore) =
         let input =
             ToolCodec.create
                 "object\n  - key (required): string - Stable descriptive identifier.\n  - value (required): string - Durable fact, preference, or decision to retain.\n  - tags (optional): string[] - Retrieval classifications."
@@ -261,15 +262,17 @@ module private MemoryTool =
                 (fun _ -> Error "Tool outputs are not decoded by the runtime.")
 
         let operation =
-            ToolOperation.create ToolReplaySafety.ExternallySideEffecting (fun _ (memory: MemoryRememberInput) ->
+            ToolOperation.create ToolReplaySafety.ExternallySideEffecting (fun context (memory: MemoryRememberInput) ->
                 task {
+                    let authorization = AgentContext.requireAuthorization context
+
                     let entry =
                         { Key = memory.Key
                           Value = memory.Value
                           Timestamp = DateTimeOffset.UtcNow
                           Tags = memory.Tags }
 
-                    do! store.SaveAsync (owner ()) entry
+                    do! store.SaveAsync authorization entry
                     return Ok memory.Key
                 })
 
@@ -282,7 +285,7 @@ module private MemoryTool =
             output
             operation
 
-    let forget (store: MemoryStore) (owner: unit -> string) =
+    let forget (store: MemoryStore) =
         let input =
             ToolCodec.create
                 "object\n  - key (required): string - Exact stored key to delete.\n  - reason (required): string - Why deletion is requested.\n  - confirmedByUser (required): boolean - Must be true only when the user explicitly requested this deletion."
@@ -296,12 +299,14 @@ module private MemoryTool =
                 (fun _ -> Error "Tool outputs are not decoded by the runtime.")
 
         let operation =
-            ToolOperation.create ToolReplaySafety.ExternallySideEffecting (fun _ (request: MemoryForgetInput) ->
+            ToolOperation.create ToolReplaySafety.ExternallySideEffecting (fun context (request: MemoryForgetInput) ->
                 task {
+                    let authorization = AgentContext.requireAuthorization context
+
                     if not request.ConfirmedByUser then
                         return Error(ToolExecError.InvalidInput "Memory deletion requires explicit user confirmation.")
                     else
-                        do! store.ForgetAsync (owner ()) request.Key
+                        do! store.ForgetAsync authorization request.Key
                         return Ok request.Key
                 })
 
@@ -321,11 +326,11 @@ module MemoryTools =
 
     let isMemoryTool (tool: Tool) = names.Contains tool.Name
 
-    /// Creates the memory tools enabled by host policy for one runtime owner scope.
-    let create (config: MemoryToolConfig) (store: MemoryStore) (owner: unit -> string) : Tool list =
+    /// Creates tools that derive ownership from each invocation's authenticated context.
+    let create (config: MemoryToolConfig) (store: MemoryStore) : Tool list =
         [ if config.SearchEnabled then
-              MemoryTool.search config store owner
+              MemoryTool.search config store
           if config.RememberEnabled then
-              MemoryTool.remember store owner
+              MemoryTool.remember store
           if config.ForgetEnabled then
-              MemoryTool.forget store owner ]
+              MemoryTool.forget store ]

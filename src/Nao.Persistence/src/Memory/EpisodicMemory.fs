@@ -1,98 +1,143 @@
 namespace Nao.Persistence
 
 open System
+open System.IO
+open System.Data.Common
+open System.Threading.Tasks
 open Nao.Agents
 
 [<RequireQualifiedAccess>]
 type EpisodicEvent =
-    | Record of Episode
-    | Link of owner: string * fromId: string * toId: string
-    | ForgetBelow of owner: string * importanceThreshold: float
-    | DeleteOwner of owner: string
-    | DeleteExpired of owner: string * before: DateTimeOffset
+    | Record of episode: Episode * embedding: float array
+    | Link of fromId: string * toId: string
+    | ForgetBelow of importanceThreshold: float
+    | DeleteOwner
+    | DeleteExpired of before: DateTimeOffset
 
 type EpisodicDocument = { Version: int; Event: EpisodicEvent }
 
 module PersistentEpisodicMemory =
-    let create context (store: EventStore) (embeddingProvider: EmbeddingProvider option) : EpisodicMemory =
-        let inner = InMemoryEpisodicMemory.create embeddingProvider
+    /// The host supplies a separate stream for each claim-free authorization partition key.
+    let create (openStore: string -> EventStore) (embeddingProvider: EmbeddingProvider option) : EpisodicMemory =
+        let sync = obj ()
 
-        let loadEvents () =
-            EventStream.loadCurrent
-                context
-                1
-                FSharpJson.deserialize<EpisodicDocument>
-                (fun document -> document.Version)
-                (fun document -> document.Event)
-                store
+        let load scope =
+            let key = AuthorizationScope.identity scope |> AuthorizationIdentity.storageKey
+            let store = openStore key
+            let projection = EpisodicProjection()
 
-        let replay event =
-            match event with
-            | EpisodicEvent.Record episode -> inner.RecordAsync episode |> _.GetAwaiter().GetResult()
-            | EpisodicEvent.Link(owner, fromId, toId) -> inner.LinkAsync owner fromId toId |> _.GetAwaiter().GetResult()
-            | EpisodicEvent.ForgetBelow(owner, threshold) ->
-                inner.ForgetBelowAsync owner threshold |> _.GetAwaiter().GetResult() |> ignore
-            | EpisodicEvent.DeleteOwner owner -> inner.DeleteOwnerAsync owner |> _.GetAwaiter().GetResult() |> ignore
-            | EpisodicEvent.DeleteExpired(owner, before) ->
-                inner.DeleteExpiredAsync owner before |> _.GetAwaiter().GetResult() |> ignore
+            let events =
+                EventStream.loadCurrent
+                    ("episodic/" + key)
+                    1
+                    FSharpJson.deserialize<EpisodicDocument>
+                    (fun document -> document.Version)
+                    (fun document -> document.Event)
+                    store
 
-        do loadEvents () |> List.iter replay
+            for event in events do
+                match event with
+                | EpisodicEvent.Record(episode, embedding) -> projection.Record scope episode embedding
+                | EpisodicEvent.Link(fromId, toId) -> projection.Link scope fromId toId
+                | EpisodicEvent.ForgetBelow threshold ->
+                    projection.Delete scope (fun episode -> episode.Importance < threshold)
+                    |> ignore
+                | EpisodicEvent.DeleteOwner -> projection.Delete scope (fun _ -> true) |> ignore
+                | EpisodicEvent.DeleteExpired before ->
+                    projection.Delete scope (fun episode -> episode.Timestamp < before) |> ignore
 
-        let append event =
-            store.Append(FSharpJson.serialize { Version = 1; Event = event })
+            store, projection
 
-        let appendAfter operation event =
+        let read scope operation =
             task {
-                loadEvents () |> ignore
-                do! operation ()
-                append event
+                return
+                    lock sync (fun () ->
+                        let _, projection = load scope
+                        operation projection)
             }
 
-        let countAfter operation event =
+        let mutate scope operation event =
             task {
-                loadEvents () |> ignore
-                let! count = operation ()
-                append event
-                return count
+                return
+                    lock sync (fun () ->
+                        let store, projection = load scope
+                        let result = operation projection
+                        let document: EpisodicDocument = { Version = 1; Event = event }
+                        store.Append(FSharpJson.serialize document)
+                        result)
             }
 
-        let deleteAfter operation event =
+        let protect operation =
+            let failure error =
+                Error(PlatformFailure.fromException PlatformFailureBoundary.Storage None error)
+
             task {
-                loadEvents () |> ignore
-                let! result = operation ()
-
-                match result with
-                | Ok _ -> append event
-                | Error _ -> ()
-
-                return result
+                try
+                    let! count = operation ()
+                    return Ok count
+                with
+                | :? IOException as error -> return failure error
+                | :? InvalidDataException as error -> return failure error
+                | :? DbException as error -> return failure error
+                | :? UnauthorizedAccessException as error -> return failure error
             }
 
-        let linkAsync owner fromId toId =
-            appendAfter (fun () -> inner.LinkAsync owner fromId toId) (EpisodicEvent.Link(owner, fromId, toId))
+        { RecordAsync =
+            fun scope episode ->
+                task {
+                    do! read scope (fun _ -> ())
+                    let! embedding = EpisodicEmbedding.compute embeddingProvider (EpisodicEmbedding.episodeText episode)
 
-        let forgetBelowAsync owner threshold =
-            countAfter (fun () -> inner.ForgetBelowAsync owner threshold) (EpisodicEvent.ForgetBelow(owner, threshold))
-
-        let deleteOwnerAsync owner =
-            deleteAfter (fun () -> inner.DeleteOwnerAsync owner) (EpisodicEvent.DeleteOwner owner)
-
-        let deleteExpiredAsync owner before =
-            deleteAfter (fun () -> inner.DeleteExpiredAsync owner before) (EpisodicEvent.DeleteExpired(owner, before))
-
-        { RecordAsync = fun episode -> appendAfter (fun () -> inner.RecordAsync episode) (EpisodicEvent.Record episode)
-          QueryAsync = inner.QueryAsync
-          LinkAsync = linkAsync
-          GetChainAsync = inner.GetChainAsync
-          SynthesizeAsync = inner.SynthesizeAsync
-          ForgetBelowAsync = forgetBelowAsync
-          DeleteOwnerAsync = deleteOwnerAsync
-          DeleteExpiredAsync = deleteExpiredAsync }
+                    return!
+                        mutate
+                            scope
+                            (fun projection -> projection.Record scope episode embedding)
+                            (EpisodicEvent.Record(episode, embedding))
+                }
+          QueryAsync =
+            fun scope query ->
+                task {
+                    match query with
+                    | EpisodeQuery.BySimilarity(text, _) ->
+                        do! read scope (fun _ -> ())
+                        let! embedding = EpisodicEmbedding.compute embeddingProvider text
+                        return! read scope (fun projection -> projection.Query scope query embedding)
+                    | _ -> return! read scope (fun projection -> projection.Query scope query [||])
+                }
+          LinkAsync =
+            fun scope fromId toId ->
+                mutate scope (fun projection -> projection.Link scope fromId toId) (EpisodicEvent.Link(fromId, toId))
+          GetChainAsync = fun scope id -> read scope (fun projection -> projection.GetChain scope id)
+          SynthesizeAsync =
+            fun scope text ->
+                task {
+                    do! read scope (fun _ -> ())
+                    let! embedding = EpisodicEmbedding.compute embeddingProvider text
+                    return! read scope (fun projection -> projection.Synthesize scope embedding)
+                }
+          ForgetBelowAsync =
+            fun scope threshold ->
+                mutate
+                    scope
+                    (fun projection -> projection.Delete scope (fun episode -> episode.Importance < threshold))
+                    (EpisodicEvent.ForgetBelow threshold)
+          DeleteOwnerAsync =
+            fun scope ->
+                protect (fun () ->
+                    mutate scope (fun projection -> projection.Delete scope (fun _ -> true)) EpisodicEvent.DeleteOwner)
+          DeleteExpiredAsync =
+            fun scope before ->
+                protect (fun () ->
+                    mutate
+                        scope
+                        (fun projection -> projection.Delete scope (fun episode -> episode.Timestamp < before))
+                        (EpisodicEvent.DeleteExpired before)) }
 
 module EpisodicMemories =
-    let ado (factory: DbConnectionFactory) (embeddingProvider: EmbeddingProvider option) : EpisodicMemory =
-        PersistentEpisodicMemory.create "episodic" (EventStore.db factory "episodic") embeddingProvider
+    let ado (factory: DbConnectionFactory) embeddingProvider : EpisodicMemory =
+        PersistentEpisodicMemory.create (fun key -> EventStore.db factory ("episodic/" + key)) embeddingProvider
 
-    let file (baseDir: string) (embeddingProvider: EmbeddingProvider option) : EpisodicMemory =
-        let path = System.IO.Path.Combine(baseDir, "episodic.jsonl")
-        PersistentEpisodicMemory.create path (EventStore.file path) embeddingProvider
+    let file (baseDir: string) embeddingProvider : EpisodicMemory =
+        PersistentEpisodicMemory.create
+            (fun key -> EventStore.file (Path.Combine(baseDir, "episodic", key + ".jsonl")))
+            embeddingProvider

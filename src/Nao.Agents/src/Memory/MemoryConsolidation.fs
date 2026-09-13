@@ -30,9 +30,9 @@ type ConsolidationResult =
 type MemoryConsolidation =
     {
         /// Run a consolidation pass
-        ConsolidateAsync: CorrelationContext -> ConsolidationStrategy -> Task<ConsolidationResult>
+        ConsolidateAsync: AuthorizationScope -> CorrelationContext -> ConsolidationStrategy -> Task<ConsolidationResult>
         /// Get consolidation statistics
-        GetStatsAsync: unit -> Task<ConsolidationResult>
+        GetStatsAsync: AuthorizationScope -> Task<ConsolidationResult>
     }
 
 /// Memory consolidation operating on `MemoryStore`.
@@ -45,9 +45,9 @@ module MemoryConsolidation =
         let union = Set.union wordsA wordsB |> Set.count |> float
         if union = 0.0 then 0.0 else intersection / union
 
-    let mergeSimilarAsync (store: MemoryStore) (agentId: string) (threshold: float) : Task<int> =
+    let mergeSimilarAsync (store: MemoryStore) (authorization: AuthorizationScope) (threshold: float) : Task<int> =
         task {
-            let! entries = store.RecallAllAsync agentId
+            let! entries = store.RecallAllAsync authorization
             let mutable merged = 0
             let processed = System.Collections.Generic.HashSet<string>()
 
@@ -80,17 +80,17 @@ module MemoryConsolidation =
                                 Tags = combinedTags }
                         // Remove old entries and save merged
                         for e in cluster do
-                            do! store.ForgetAsync agentId e.Key
+                            do! store.ForgetAsync authorization e.Key
 
-                        do! store.SaveAsync agentId mergedEntry
+                        do! store.SaveAsync authorization mergedEntry
                         merged <- merged + (cluster.Count - 1)
 
             return merged
         }
 
-    let deduplicateAsync (store: MemoryStore) (agentId: string) : Task<int> =
+    let deduplicateAsync (store: MemoryStore) (authorization: AuthorizationScope) : Task<int> =
         task {
-            let! entries = store.RecallAllAsync agentId
+            let! entries = store.RecallAllAsync authorization
             let seen = System.Collections.Generic.HashSet<string>()
             let mutable removed = 0
 
@@ -98,7 +98,7 @@ module MemoryConsolidation =
                 let normalized = entry.Value.Trim().ToLowerInvariant()
 
                 if seen.Contains normalized then
-                    do! store.ForgetAsync agentId entry.Key
+                    do! store.ForgetAsync authorization entry.Key
                     removed <- removed + 1
                 else
                     seen.Add(normalized) |> ignore
@@ -108,12 +108,12 @@ module MemoryConsolidation =
 
     let importanceDecayAsync
         (store: MemoryStore)
-        (agentId: string)
+        (authorization: AuthorizationScope)
         (decayFactor: float)
         (minAge: TimeSpan)
         : Task<int> =
         task {
-            let! entries = store.RecallAllAsync agentId
+            let! entries = store.RecallAllAsync authorization
             let now = DateTimeOffset.UtcNow
             let mutable decayed = 0
 
@@ -131,7 +131,7 @@ module MemoryConsolidation =
                     let newDecay = decayCount * decayFactor
 
                     if newDecay < 0.1 then
-                        do! store.ForgetAsync agentId entry.Key
+                        do! store.ForgetAsync authorization entry.Key
                         decayed <- decayed + 1
                     else
                         let updatedTags =
@@ -140,8 +140,8 @@ module MemoryConsolidation =
                             |> fun tags -> sprintf "decay:%.3f" newDecay :: tags
 
                         let updated = { entry with Tags = updatedTags }
-                        do! store.ForgetAsync agentId entry.Key
-                        do! store.SaveAsync agentId updated
+                        do! store.ForgetAsync authorization entry.Key
+                        do! store.SaveAsync authorization updated
 
             return decayed
         }
@@ -151,10 +151,10 @@ module MemoryConsolidation =
         (provider: LlmProvider)
         (options: CompletionOptions)
         (store: MemoryStore)
-        (agentId: string)
+        (authorization: AuthorizationScope)
         : Task<int> =
         task {
-            let! entries = store.RecallAllAsync agentId
+            let! entries = store.RecallAllAsync authorization
 
             if entries.Length < 10 then
                 return 0
@@ -185,7 +185,7 @@ module MemoryConsolidation =
                     let! result = provider.CompleteAsync correlation prompt options
                     // Replace cluster with summary
                     for e in group do
-                        do! store.ForgetAsync agentId e.Key
+                        do! store.ForgetAsync authorization e.Key
 
                     let summaryEntry: MemoryEntry =
                         { Key = sprintf "consolidated:%s:%s" tag (Guid.NewGuid().ToString("N").[..7])
@@ -193,7 +193,7 @@ module MemoryConsolidation =
                           Timestamp = DateTimeOffset.UtcNow
                           Tags = [ tag; "consolidated" ] }
 
-                    do! store.SaveAsync agentId summaryEntry
+                    do! store.SaveAsync authorization summaryEntry
                     summarized <- summarized + group.Length
 
                 return summarized
@@ -202,17 +202,17 @@ module MemoryConsolidation =
     let rec consolidateAsync
         (correlation: CorrelationContext)
         (store: MemoryStore)
-        (agentId: string)
+        (authorization: AuthorizationScope)
         (strategy: ConsolidationStrategy)
         : Task<ConsolidationResult> =
         task {
-            let! beforeEntries = store.RecallAllAsync agentId
+            let! beforeEntries = store.RecallAllAsync authorization
             let totalBefore = beforeEntries.Length
 
             match strategy with
             | ConsolidationStrategy.MergeSimilar threshold ->
-                let! merged = mergeSimilarAsync store agentId threshold
-                let! afterEntries = store.RecallAllAsync agentId
+                let! merged = mergeSimilarAsync store authorization threshold
+                let! afterEntries = store.RecallAllAsync authorization
 
                 return
                     { Merged = merged
@@ -222,8 +222,8 @@ module MemoryConsolidation =
                       TotalAfter = afterEntries.Length }
 
             | ConsolidationStrategy.Deduplicate ->
-                let! removed = deduplicateAsync store agentId
-                let! afterEntries = store.RecallAllAsync agentId
+                let! removed = deduplicateAsync store authorization
+                let! afterEntries = store.RecallAllAsync authorization
 
                 return
                     { Merged = 0
@@ -233,8 +233,8 @@ module MemoryConsolidation =
                       TotalAfter = afterEntries.Length }
 
             | ConsolidationStrategy.ImportanceDecay(factor, minAge) ->
-                let! removed = importanceDecayAsync store agentId factor minAge
-                let! afterEntries = store.RecallAllAsync agentId
+                let! removed = importanceDecayAsync store authorization factor minAge
+                let! afterEntries = store.RecallAllAsync authorization
 
                 return
                     { Merged = 0
@@ -244,8 +244,8 @@ module MemoryConsolidation =
                       TotalAfter = afterEntries.Length }
 
             | ConsolidationStrategy.Summarize(provider, options) ->
-                let! summarized = summarizeClusterAsync correlation provider options store agentId
-                let! afterEntries = store.RecallAllAsync agentId
+                let! summarized = summarizeClusterAsync correlation provider options store authorization
+                let! afterEntries = store.RecallAllAsync authorization
 
                 return
                     { Merged = 0
@@ -260,12 +260,12 @@ module MemoryConsolidation =
                 let mutable totalSummarized = 0
 
                 for strat in strategies do
-                    let! result = consolidateAsync correlation store agentId strat
+                    let! result = consolidateAsync correlation store authorization strat
                     totalMerged <- totalMerged + result.Merged
                     totalRemoved <- totalRemoved + result.Removed
                     totalSummarized <- totalSummarized + result.Summarized
 
-                let! afterEntries = store.RecallAllAsync agentId
+                let! afterEntries = store.RecallAllAsync authorization
 
                 return
                     { Merged = totalMerged

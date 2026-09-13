@@ -2,30 +2,28 @@
 
 ## Scope
 
-- First incompatible version: next unreleased Nao package version.
+- Current unreleased format: version 1.
 - Affected packages and APIs: `Nao.Agents.ToolSideEffectPhase`, the ETCLOVG harness, and Nao persistence observability adapters.
-- Affected files, streams, tables, or Orleans state: `tool-side-effects.json` and `nao_tool_side_effects` rows.
+- Affected files and streams: identity-partitioned `execution-journal/<identity-sha256>` version-1 streams.
 
 ## Breaking changes
 
-`ToolSideEffectPhase` adds `CompensationSucceeded` and `CompensationFailed`. Durable phase values add `compensation-succeeded` and `compensation-failed`. Failed harness executions compensate successful reversible tool calls in reverse execution order. Each outcome retains the original operation identity and correlation; only a durably recorded successful compensation marks its execution record reverted. Reversible tools now require an execution journal.
-
-Older readers reject the new phase values because their semantics cannot be inferred safely.
+Tool side-effect transitions require `AuthorizationScope` and no longer contain owner strings. Failed harness executions compensate successful reversible tool calls in reverse execution order. Each outcome retains the original operation identity and correlation; only a durably recorded successful compensation marks its execution record reverted. Records, checkpoints, side effects, compensation marks, and deletion tombstones share one version-1 identity stream. Reversible tools require an execution journal.
 
 ## Before upgrade
 
 1. Stop writers.
-2. Back up execution-journal files and databases.
-3. Validate that the backup can be restored.
+2. Delete unreleased execution-journal development data.
+3. Deploy the identity-partitioned implementation.
 
 ## Migration
 
-No transformation is required for existing transition rows. Deploy the new version before any writer emits compensation phases. All processes reading the same file or table must be upgraded together. Delete development journal data instead when retention is unnecessary.
+Nao is unreleased, so there is no compatibility reader or retained-data migration.
 
 ## Validation
 
-Run the harness compensation tests and execution-journal backend parity tests. Confirm successful reversible calls unwind newest-first, compensation outcomes retain the original execution and idempotency identities, failed compensation remains revertible, and file and ADO.NET readers round-trip the new phase values.
+Run harness compensation and execution-journal identity-isolation tests. Confirm successful reversible calls unwind newest-first, compensation outcomes retain the original execution and idempotency identities, failed compensation remains revertible, and file and ADO.NET streams replay all version-1 phases.
 
 ## Rollback
 
-Rollback is not possible after compensation phases are written because older binaries reject them. Stop writers and restore the pre-upgrade backup before deploying an older version.
+Rollback is unsupported for this unreleased breaking redesign.

@@ -82,6 +82,7 @@ module EvalRunner =
         (cancellationToken: CancellationToken)
         : Task<EvalResult> =
         task {
+            AuthorizationScope.requireOwner run.Owner execution.Authorization
             let sw = Stopwatch.StartNew()
             let context = execution.CreateAgentContext()
 
@@ -105,8 +106,13 @@ module EvalRunner =
                 task {
                     match executionResult.Status, executionResult.Outputs.Response with
                     | ExecutionTerminalStatus.Succeeded, Some output ->
+                        let evaluationContext =
+                            { Authorization = execution.Authorization
+                              Correlation = executionResult.Correlation
+                              CancellationToken = cancellationToken }
+
                         let! verdict, reason =
-                            evaluator.EvaluateAsync executionResult.Correlation case output
+                            evaluator.EvaluateAsync evaluationContext case output
                             |> _.WaitAsync(cancellationToken)
 
                         return output, verdict, reason
@@ -160,6 +166,8 @@ module EvalRunner =
         (cancellationToken: CancellationToken)
         : Task<EvalReport> =
         task {
+            AuthorizationScope.requireOwner dataset.Owner config.Execution.Authorization
+
             if config.MaxParallelism > 1 && config.StopOnFirstFailure then
                 invalidArg
                     (nameof config)
@@ -218,6 +226,7 @@ module EvalRunner =
         (cancellationToken: CancellationToken)
         : Task<EvalReport> =
         task {
+            AuthorizationScope.requireOwner dataset.Owner config.Execution.Authorization
             let results = ResizeArray<EvalResult>()
             let run = EvalRun.create dataset.Owner dataset.Id
 
@@ -245,6 +254,7 @@ module EvalRunner =
         (cancellationToken: CancellationToken)
         : Task<(string * EvalReport) list> =
         task {
+            AuthorizationScope.requireOwner dataset.Owner config.Execution.Authorization
             let mutable reports = []
 
             for (name, agent) in agents do

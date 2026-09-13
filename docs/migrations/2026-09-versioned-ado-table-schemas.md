@@ -2,15 +2,15 @@
 
 ## Scope
 
-- First incompatible version: `0.2.0` development schema after FND-05 database versioning.
+- Current unreleased schema version: 1.
 - Affected APIs: all ADO.NET persistence factories.
-- Affected tables: `nao_events`, `nao_feedback_turns`, `nao_feedback_entries`, `nao_memory`, `nao_semantic`, `nao_audit`, `nao_execution_journal`, and `nao_schema_versions`.
+- Affected tables: `nao_events`, `nao_memory`, `nao_semantic`, and `nao_schema_versions`.
 
 ## Breaking changes
 
 Every current ADO.NET persistence table requires component schema version 1 in `nao_schema_versions`. Fresh marker and component tables are created atomically. Existing unmarked tables, missing marked tables, malformed markers, and unsupported versions reject before table or row mutation. Event payload schema versions remain independently required. Nao does not stamp existing tables automatically or include an in-process converter.
 
-The current component keys are `events`, `feedback-turns`, `feedback-entries`, `memory`, `semantic-memory`, `audit`, and `execution-journal`.
+The current component keys are `events`, `memory`, and `semantic-memory`. Audit, execution-journal, turn, and feedback persistence use identity-partitioned version-1 events in `nao_events`.
 
 ## Before upgrade
 

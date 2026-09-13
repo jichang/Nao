@@ -10,10 +10,17 @@ open Nao.Persistence
 type TraceTests() =
     let correlation = CorrelationContext.root ()
 
+    let scope =
+        let principal =
+            SecurityPrincipal.create (TenantId.parse "tenant") (UserId.parse "trace-tests") []
+
+        AuthorizationScope.tryCreate principal None (WorkspaceId.parse "workspace") None
+        |> Option.get
+
     [<TestMethod>]
     member _.StartTraceCreatesRootSpan() =
         let tracer = InMemory.tracer ()
-        let span = tracer.StartTrace correlation "test-op"
+        let span = tracer.StartTrace scope correlation "test-op"
         Assert.AreEqual("test-op", span.OperationName)
         Assert.IsTrue(span.ParentSpanId.IsNone)
         Assert.IsTrue(span.EndTime.IsNone)
@@ -21,8 +28,8 @@ type TraceTests() =
     [<TestMethod>]
     member _.StartSpanCreatesChild() =
         let tracer = InMemory.tracer ()
-        let root = tracer.StartTrace correlation "root"
-        let child = tracer.StartSpan root "child-op"
+        let root = tracer.StartTrace scope correlation "root"
+        let child = tracer.StartSpan scope root "child-op"
         Assert.AreEqual("child-op", child.OperationName)
         Assert.AreEqual(Some root.Id, child.ParentSpanId)
         Assert.AreEqual(root.TraceId, child.TraceId)
@@ -31,9 +38,9 @@ type TraceTests() =
     [<TestMethod>]
     member _.EndSpanSetsEndTimeAndStatus() =
         let tracer = InMemory.tracer ()
-        let span = tracer.StartTrace correlation "op"
-        tracer.EndSpan span SpanStatus.Ok
-        let traces = tracer.GetTrace(span.TraceId)
+        let span = tracer.StartTrace scope correlation "op"
+        tracer.EndSpan scope span SpanStatus.Ok
+        let traces = tracer.GetTrace scope span.TraceId
         Assert.AreEqual(1, traces.Length)
         Assert.IsTrue(traces.[0].EndTime.IsSome)
         Assert.AreEqual(SpanStatus.Ok, traces.[0].Status)
@@ -41,9 +48,9 @@ type TraceTests() =
     [<TestMethod>]
     member _.EndSpanWithError() =
         let tracer = InMemory.tracer ()
-        let span = tracer.StartTrace correlation "op"
-        tracer.EndSpan span (SpanStatus.Error "failed")
-        let traces = tracer.GetTrace(span.TraceId)
+        let span = tracer.StartTrace scope correlation "op"
+        tracer.EndSpan scope span (SpanStatus.Error "failed")
+        let traces = tracer.GetTrace scope span.TraceId
 
         match traces.[0].Status with
         | SpanStatus.Error msg -> Assert.AreEqual("failed", msg)
@@ -52,45 +59,51 @@ type TraceTests() =
     [<TestMethod>]
     member _.AddEventAppendsToSpan() =
         let tracer = InMemory.tracer ()
-        let span = tracer.StartTrace correlation "op"
-        tracer.AddEvent span "something-happened" (Map.ofList [ "key", "value" ])
-        let traces = tracer.GetTrace(span.TraceId)
+        let span = tracer.StartTrace scope correlation "op"
+        tracer.AddEvent scope span "something-happened" (Map.ofList [ "key", "value" ])
+        let traces = tracer.GetTrace scope span.TraceId
         Assert.AreEqual(1, traces.[0].Events.Length)
         Assert.AreEqual("something-happened", traces.[0].Events.[0].Name)
 
     [<TestMethod>]
     member _.SetAttributesMergesWithExisting() =
         let tracer = InMemory.tracer ()
-        let span = tracer.StartTrace correlation "op"
-        tracer.SetAttributes span (Map.ofList [ "env", "test" ])
+        let span = tracer.StartTrace scope correlation "op"
+        tracer.SetAttributes scope span (Map.ofList [ "env", "test" ])
         // After first SetAttributes, get the updated span from the store
-        let updated = (tracer.GetTrace(span.TraceId)) |> List.head
-        tracer.SetAttributes updated (Map.ofList [ "version", "1.0" ])
-        let traces = tracer.GetTrace(span.TraceId)
+        let updated = tracer.GetTrace scope span.TraceId |> List.head
+        tracer.SetAttributes scope updated (Map.ofList [ "version", "1.0" ])
+        let traces = tracer.GetTrace scope span.TraceId
         Assert.IsTrue(traces.[0].Attributes.ContainsKey("env"))
         Assert.IsTrue(traces.[0].Attributes.ContainsKey("version"))
 
     [<TestMethod>]
     member _.GetTraceReturnsAllSpansForTrace() =
         let tracer = InMemory.tracer ()
-        let root = tracer.StartTrace correlation "root"
-        let _child1 = tracer.StartSpan root "child1"
-        let _child2 = tracer.StartSpan root "child2"
-        let traces = tracer.GetTrace(root.TraceId)
+        let root = tracer.StartTrace scope correlation "root"
+        let _child1 = tracer.StartSpan scope root "child1"
+        let _child2 = tracer.StartSpan scope root "child2"
+        let traces = tracer.GetTrace scope root.TraceId
         Assert.AreEqual(3, traces.Length)
 
 [<TestClass>]
 type MetricsTests() =
-    let owner = "metrics-tests"
+    let scope =
+        let principal =
+            SecurityPrincipal.create (TenantId.parse "tenant") (UserId.parse "metrics-tests") []
+
+        AuthorizationScope.tryCreate principal None (WorkspaceId.parse "workspace") None
+        |> Option.get
+
     let timestamp = DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero)
     let correlation = CorrelationContext.root ()
 
     [<TestMethod>]
     member _.RecordLlmCallTracksTokensAndCalls() =
         let collector = InMemory.metrics ()
-        collector.Record(MetricRecord.llmCall correlation owner timestamp 100 50 200L)
-        collector.Record(MetricRecord.llmCall correlation owner (timestamp.AddSeconds 1) 200 100 300L)
-        let metrics = collector.GetMetrics owner
+        collector.Record scope (MetricRecord.llmCall correlation timestamp 100 50 200L)
+        collector.Record scope (MetricRecord.llmCall correlation (timestamp.AddSeconds 1) 200 100 300L)
+        let metrics = collector.GetMetrics scope
         Assert.AreEqual(2, metrics.TotalLlmCalls)
         Assert.AreEqual(300, metrics.TotalInputTokens)
         Assert.AreEqual(150, metrics.TotalOutputTokens)
@@ -98,35 +111,35 @@ type MetricsTests() =
     [<TestMethod>]
     member _.RecordToolCallTracksCount() =
         let collector = InMemory.metrics ()
-        collector.Record(MetricRecord.toolCall correlation owner timestamp "search" 50L true)
-        collector.Record(MetricRecord.toolCall correlation owner (timestamp.AddSeconds 1) "calc" 30L false)
-        let metrics = collector.GetMetrics owner
+        collector.Record scope (MetricRecord.toolCall correlation timestamp "search" 50L true)
+        collector.Record scope (MetricRecord.toolCall correlation (timestamp.AddSeconds 1) "calc" 30L false)
+        let metrics = collector.GetMetrics scope
         Assert.AreEqual(2, metrics.TotalToolCalls)
 
     [<TestMethod>]
     member _.AvgLatencyCalculatedCorrectly() =
         let collector = InMemory.metrics ()
-        collector.Record(MetricRecord.llmCall correlation owner timestamp 100 50 100L)
-        collector.Record(MetricRecord.llmCall correlation owner (timestamp.AddSeconds 1) 100 50 300L)
-        let metrics = collector.GetMetrics owner
+        collector.Record scope (MetricRecord.llmCall correlation timestamp 100 50 100L)
+        collector.Record scope (MetricRecord.llmCall correlation (timestamp.AddSeconds 1) 100 50 300L)
+        let metrics = collector.GetMetrics scope
         Assert.AreEqual(200.0, metrics.AvgLatencyMs)
 
     [<TestMethod>]
     member _.EstimateCostUsesModel() =
         let collector = InMemory.metrics ()
-        collector.Record(MetricRecord.llmCall correlation owner timestamp 1000 500 100L)
+        collector.Record scope (MetricRecord.llmCall correlation timestamp 1000 500 100L)
 
         let model: CostModel =
             { InputCostPer1K = 0.0025m
               OutputCostPer1K = 0.01m }
 
-        let cost = collector.EstimateCost owner model
+        let cost = collector.EstimateCost scope model
         Assert.AreEqual(0.0075m, cost)
 
     [<TestMethod>]
     member _.ZeroMetricsOnFreshCollector() =
         let collector = InMemory.metrics ()
-        let metrics = collector.GetMetrics owner
+        let metrics = collector.GetMetrics scope
         Assert.AreEqual(0, metrics.TotalLlmCalls)
         Assert.AreEqual(0, metrics.TotalInputTokens)
         Assert.AreEqual(0, metrics.TotalToolCalls)

@@ -47,7 +47,11 @@ module PublishingConversationStore =
     /// Build the event scope for a conversation write. The action id is the turn id carried
     /// by the messages (empty when none) so each write is attributed to the turn that
     /// produced it.
-    let buildScope (sessionId: string) (conversationName: string) (messages: PersistedMessage array) : EventScope =
+    let buildScope
+        (authorization: AuthorizationScope)
+        (conversationName: string)
+        (messages: PersistedMessage array)
+        : EventScope =
         let turnId =
             messages
             |> Array.tryPick (fun m ->
@@ -57,10 +61,20 @@ module PublishingConversationStore =
                     Some m.TurnId)
             |> Option.defaultValue ""
 
-        let userId, sid =
-            match sessionId.IndexOf('/') with
-            | i when i >= 0 -> sessionId.Substring(0, i), sessionId.Substring(i + 1)
-            | _ -> sessionId, sessionId
+        let userId = AuthorizationScope.userId authorization |> UserId.value
+
+        let sessionId =
+            AuthorizationScope.sessionId authorization
+            |> Option.map SessionId.value
+            |> Option.defaultValue ""
+
+        let workspaceId = AuthorizationScope.workspaceId authorization |> WorkspaceId.value
+
+        let sessionKey =
+            if String.IsNullOrEmpty sessionId then
+                userId
+            else
+                sprintf "%s/%s" userId sessionId
 
         let correlation =
             messages
@@ -68,12 +82,16 @@ module PublishingConversationStore =
             |> Option.map _.Correlation
             |> Option.defaultWith CorrelationContext.root
 
-        EventScope.Create(userId, sid, conversationName, "", turnId, sessionId, correlation)
+        EventScope.Create(userId, sessionId, conversationName, workspaceId, turnId, sessionKey, correlation)
 
     let create (bus: EventBus) (inner: ConversationStore) : ConversationStore =
-        let appendAsync (sessionId: string) (conversationName: string) (messages: PersistedMessage array) =
+        let appendAsync
+            (authorization: AuthorizationScope)
+            (conversationName: string)
+            (messages: PersistedMessage array)
+            =
             task {
-                do! inner.AppendAsync sessionId conversationName messages
+                do! inner.AppendAsync authorization conversationName messages
 
                 if messages.Length > 0 then
                     let signal =
@@ -81,55 +99,59 @@ module PublishingConversationStore =
 
                     do!
                         EventBus.publishAsync
-                            (ConversationCaptured(buildScope sessionId conversationName messages, signal))
+                            (ConversationCaptured(buildScope authorization conversationName messages, signal))
                             bus
             }
             :> Task
 
-        let saveAsync (sessionId: string) (conversationName: string) (messages: PersistedMessage array) =
+        let saveAsync
+            (authorization: AuthorizationScope)
+            (conversationName: string)
+            (messages: PersistedMessage array)
+            =
             task {
-                do! inner.SaveAsync sessionId conversationName messages
+                do! inner.SaveAsync authorization conversationName messages
 
                 let signal =
                     ConversationSaved(conversationName, messages |> Array.map toMessage |> Array.toList)
 
                 do!
                     EventBus.publishAsync
-                        (ConversationCaptured(buildScope sessionId conversationName messages, signal))
+                        (ConversationCaptured(buildScope authorization conversationName messages, signal))
                         bus
             }
             :> Task
 
-        let loadAsync (sessionId: string) (conversationName: string) =
-            inner.LoadAsync sessionId conversationName
+        let loadAsync authorization conversationName =
+            inner.LoadAsync authorization conversationName
 
-        let loadByExecutionAsync executionId = inner.LoadByExecutionAsync executionId
+        let loadByExecutionAsync authorization executionId =
+            inner.LoadByExecutionAsync authorization executionId
 
-        let listConversationsAsync (sessionId: string) = inner.ListConversationsAsync sessionId
+        let listConversationsAsync authorization =
+            inner.ListConversationsAsync authorization
 
-        let listSessionsAsync () = inner.ListSessionsAsync()
-
-        let deleteConversationAsync (sessionId: string) (conversationName: string) =
+        let deleteConversationAsync authorization conversationName =
             task {
-                do! inner.DeleteConversationAsync sessionId conversationName
+                do! inner.DeleteConversationAsync authorization conversationName
 
                 do!
                     (EventBus.publishAsync
                         (ConversationCaptured(
-                            buildScope sessionId conversationName [||],
+                            buildScope authorization conversationName [||],
                             ConversationDeleted conversationName
                         ))
                         bus)
             }
             :> Task
 
-        let deleteSessionAsync (sessionId: string) =
+        let deleteScopeAsync authorization =
             task {
-                do! inner.DeleteSessionAsync sessionId
+                do! inner.DeleteScopeAsync authorization
 
                 do!
                     (EventBus.publishAsync
-                        (ConversationCaptured(buildScope sessionId "" [||], SessionConversationsDeleted))
+                        (ConversationCaptured(buildScope authorization "" [||], SessionConversationsDeleted))
                         bus)
             }
             :> Task
@@ -139,6 +161,5 @@ module PublishingConversationStore =
           LoadAsync = loadAsync
           LoadByExecutionAsync = loadByExecutionAsync
           ListConversationsAsync = listConversationsAsync
-          ListSessionsAsync = listSessionsAsync
           DeleteConversationAsync = deleteConversationAsync
-          DeleteSessionAsync = deleteSessionAsync }
+          DeleteScopeAsync = deleteScopeAsync }

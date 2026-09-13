@@ -40,17 +40,17 @@ and [<RequireQualifiedAccess>] RegressionCategory =
 /// Functional execution-trace persistence operations for regression comparison.
 type TraceStore =
     {
-        /// Save an execution trace
-        SaveAsync: ExecutionTrace -> Task<unit>
-        /// Get the most recent successful trace for an agent + task pattern
-        GetBaselineAsync: string -> string -> Task<ExecutionTrace option>
-        /// Get all traces for an agent
-        GetTracesAsync: string -> int -> Task<ExecutionTrace list>
-        GetByExecutionAsync: ExecutionId -> Task<ExecutionTrace list>
-        /// Delete every trace owned by an agent
-        DeleteOwnerAsync: string -> Task<Result<int, PlatformFailure>>
-        /// Delete traces owned by an agent that precede a retention cutoff
-        DeleteExpiredAsync: string -> DateTimeOffset -> Task<Result<int, PlatformFailure>>
+        /// Save an execution trace in one authenticated scope.
+        SaveAsync: AuthorizationScope -> ExecutionTrace -> Task<unit>
+        /// Get the most recent successful trace for an agent + task pattern in one scope.
+        GetBaselineAsync: AuthorizationScope -> string -> string -> Task<ExecutionTrace option>
+        /// Get all traces for an agent in one authenticated scope.
+        GetTracesAsync: AuthorizationScope -> string -> int -> Task<ExecutionTrace list>
+        GetByExecutionAsync: AuthorizationScope -> ExecutionId -> Task<ExecutionTrace list>
+        /// Delete every trace in one authenticated scope.
+        DeleteScopeAsync: AuthorizationScope -> Task<Result<int, PlatformFailure>>
+        /// Delete traces in one authenticated scope that precede a retention cutoff.
+        DeleteExpiredAsync: AuthorizationScope -> DateTimeOffset -> Task<Result<int, PlatformFailure>>
     }
 
 module Regression =

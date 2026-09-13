@@ -132,6 +132,13 @@ type AuditLogTests() =
 
     let agentId = "test"
 
+    let scope =
+        let principal =
+            SecurityPrincipal.create (TenantId.parse "tenant") (UserId.parse "audit-user") []
+
+        AuthorizationScope.tryCreate principal None (WorkspaceId.parse "workspace") None
+        |> Option.get
+
     [<TestMethod>]
     member _.RecordAndQuery() =
         let audit = InMemory.auditLog ()
@@ -139,10 +146,11 @@ type AuditLogTests() =
         let entry =
             AuditLog.toolInvocation agentId "search" "query" "results" true PermissionDecision.Allow None
 
-        audit.RecordAsync(entry).Wait()
+        audit.RecordAsync scope entry |> _.Wait()
 
         let results =
-            (audit.QueryAsync agentId (DateTimeOffset.UtcNow.AddHours(-1.0))).Result
+            audit.QueryAsync scope agentId (DateTimeOffset.UtcNow.AddHours(-1.0))
+            |> _.Result
 
         Assert.AreEqual(1, results.Length)
         Assert.AreEqual(agentId, results.[0].AgentId)
@@ -153,9 +161,9 @@ type AuditLogTests() =
         let execId = ExecutionId.generate ()
         let entry1 = AuditLog.llmCall agentId "gpt-4" (Some execId)
         let entry2 = AuditLog.llmCall agentId "gpt-4" (Some(ExecutionId.generate ()))
-        audit.RecordAsync(entry1).Wait()
-        audit.RecordAsync(entry2).Wait()
-        let results = (audit.QueryByExecutionAsync execId).Result
+        audit.RecordAsync scope entry1 |> _.Wait()
+        audit.RecordAsync scope entry2 |> _.Wait()
+        let results = audit.QueryByExecutionAsync scope execId |> _.Result
         Assert.AreEqual(1, results.Length)
 
     [<TestMethod>]
@@ -169,11 +177,12 @@ type AuditLogTests() =
             { AuditLog.toolInvocation agentId "t2" "" "" false PermissionDecision.Deny None with
                 Permitted = false }
 
-        audit.RecordAsync(permitted).Wait()
-        audit.RecordAsync(denied).Wait()
+        audit.RecordAsync scope permitted |> _.Wait()
+        audit.RecordAsync scope denied |> _.Wait()
 
         let count =
-            (audit.GetDeniedCountAsync agentId (DateTimeOffset.UtcNow.AddHours(-1.0))).Result
+            audit.GetDeniedCountAsync scope agentId (DateTimeOffset.UtcNow.AddHours(-1.0))
+            |> _.Result
 
         Assert.AreEqual(1, count)
 

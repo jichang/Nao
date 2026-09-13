@@ -2,24 +2,24 @@
 
 ## Scope
 
-- First incompatible version: `0.2.0` development schema after FND-05 tracer versioning.
+- Current unreleased format: version 1.
 - Affected APIs: `Tracers.file` and `Tracers.ado` persisted representations.
-- Affected data: `tracer.jsonl` and rows in the `tracer` event stream.
+- Affected data: `tracer/<identity-sha256>.jsonl` and rows in `tracer/<identity-sha256>` event streams.
 
 ## Breaking changes
 
-Each persisted span snapshot is now a version-1 envelope containing `schemaVersion` and `value`. Earlier bare spans, unsupported versions, and malformed snapshots are rejected before replay or mutation. Nao does not include a legacy reader or in-process converter.
+Every tracer operation now requires an authenticated `AuthorizationScope`. Each claim-free authorization identity selects its own stream, and persisted span snapshots remain version-1 envelopes containing `schemaVersion` and `value`. Span payloads contain neither ownership nor authentication evidence. Bare spans, unsupported versions, malformed snapshots, and the former unpartitioned stream are rejected or ignored rather than read through compatibility logic.
 
 ## Before upgrade
 
 1. Stop all processes writing tracer data.
-2. Back up the JSONL file or event table containing the `tracer` stream.
-3. Verify the backup before deploying the new version.
+2. Delete the unreleased unpartitioned `tracer.jsonl` file and `tracer` event stream.
+3. Deploy the identity-partitioned implementation and begin new version-1 streams.
 
 ## Migration
 
-Delete development traces when retention is unnecessary. For retained data, externally wrap each bare span as `{ "schemaVersion": 1, "value": <old-span> }` without changing identifiers, relationships, timestamps, status, attributes, or events. Validate every transformed row before replacing active data, then verify trace reconstruction and span updates.
+Nao is unreleased, so there is no compatibility reader or retained-data migration. Development trace data from the former abstraction must be discarded.
 
 ## Rollback
 
-Older implementations cannot read version-1 envelopes. Restore the complete backup before rollback and never mix bare spans and envelopes in one stream.
+Rollback is unsupported for this unreleased breaking redesign. Never copy unpartitioned spans into an authenticated identity stream.

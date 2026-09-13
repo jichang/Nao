@@ -141,23 +141,15 @@ module EtclovgHarness =
         | ExecutionTerminalStatus.LimitExceeded _ -> HarnessCheckpointPhase.LimitExceeded
         | ExecutionTerminalStatus.Indeterminate _ -> HarnessCheckpointPhase.Indeterminate
 
-    let private saveCheckpoint config request phase =
+    let private saveCheckpoint (config: EtclovgConfig) (request: ExecutionRequest) phase =
         match config.ExecutionJournal with
         | None -> Task.CompletedTask
         | Some journal ->
-            let scope = eventScope request
-
-            let owner =
-                if String.IsNullOrWhiteSpace scope.SessionKey then
-                    sprintf "execution:%s" (ExecutionId.serialize request.Correlation.ExecutionId)
-                else
-                    scope.SessionKey
-
             journal.Checkpoints.Save
+                request.Authorization
                 { Id = Guid.NewGuid()
                   IdempotencyKey = request.IdempotencyKey
                   Correlation = request.Correlation
-                  Owner = owner
                   TurnId = request.TurnId |> TurnId.value
                   AgentId = request.AgentId
                   Phase = phase
@@ -171,7 +163,7 @@ module EtclovgHarness =
         (trace: ExecutionTrace)
         (policyViolations: PolicyViolation list)
         (constitutionViolations: ConstitutionViolation list)
-        (metricsOwner: string)
+        (metricsScope: AuthorizationScope)
         (metrics: MetricsCollector option)
         (auditEntries: int)
         : ExecutionResult =
@@ -181,7 +173,7 @@ module EtclovgHarness =
 
         let evidence: ExecutionEvidence =
             { Trace = Some trace
-              Metrics = metrics |> Option.map (fun value -> value.GetMetrics metricsOwner)
+              Metrics = metrics |> Option.map (fun value -> value.GetMetrics metricsScope)
               Judgement = None
               Regression = None
               AuditEntries = auditEntries }
@@ -216,7 +208,7 @@ module EtclovgHarness =
           Evidence = evidence
           PolicyDecisions = decisions }
 
-    let private stoppedResult status correlation artifacts usage trace policyViolations sessionKey metrics =
+    let private stoppedResult status correlation artifacts usage trace policyViolations authorization metrics =
         let result =
             failResult
                 (HarnessError.ExecutionFailed(status.ToString()))
@@ -226,7 +218,7 @@ module EtclovgHarness =
                 trace
                 policyViolations
                 []
-                sessionKey
+                authorization
                 metrics
                 0
 
@@ -254,7 +246,7 @@ module EtclovgHarness =
             match config.ExecutionJournal with
             | None -> return ResumeDecision.Execute
             | Some journal ->
-                let! checkpoints = journal.Checkpoints.GetByIdempotencyKey request.IdempotencyKey
+                let! checkpoints = journal.Checkpoints.GetByIdempotencyKey request.Authorization request.IdempotencyKey
 
                 if checkpoints |> List.exists (_.Phase >> isTerminalCheckpoint) then
                     return
@@ -264,7 +256,10 @@ module EtclovgHarness =
                     let executionIds =
                         checkpoints |> List.map _.Correlation.ExecutionId |> List.distinct
 
-                    let! sideEffectGroups = executionIds |> List.map journal.SideEffects.GetByExecution |> Task.WhenAll
+                    let! sideEffectGroups =
+                        executionIds
+                        |> List.map (journal.SideEffects.GetByExecution request.Authorization)
+                        |> Task.WhenAll
 
                     let latestSideEffects =
                         sideEffectGroups
@@ -292,6 +287,7 @@ module EtclovgHarness =
                             |> List.filter (fun transition -> transition.Phase <> ToolSideEffectPhase.Quarantined) do
                             do!
                                 journal.SideEffects.Save
+                                    request.Authorization
                                     { transition with
                                         Id = Guid.NewGuid()
                                         Phase = ToolSideEffectPhase.Quarantined
@@ -319,7 +315,7 @@ module EtclovgHarness =
             ResourceUsage.Zero
             trace
             []
-            scope.SessionKey
+            request.Authorization
             config.Metrics
 
     let rec private runAgentAsync
@@ -332,6 +328,25 @@ module EtclovgHarness =
         (callerCancellation: System.Threading.CancellationToken)
         : Task<ExecutionResult> =
         task {
+            let authorization =
+                match parentExecutionContext with
+                | None ->
+                    AuthorizationScope.startAgent
+                        agent.Metadata.Id
+                        request.Correlation.ExecutionId
+                        request.Authorization
+                | Some _ ->
+                    AuthorizationScope.requireAgent
+                        agent.Metadata.Id
+                        request.Correlation.ExecutionId
+                        request.Authorization
+
+                    request.Authorization
+
+            let request =
+                { request with
+                    Authorization = authorization }
+
             let input = request.Input
             let scope = eventScope request
             let artifacts = ResizeArray<Artifact>()
@@ -353,8 +368,15 @@ module EtclovgHarness =
                     let childCorrelation = CorrelationContext.delegateFrom request.Correlation
 
                     let childRequest =
+                        let childAuthorization =
+                            AuthorizationScope.delegateAgent
+                                agent.Metadata.Id
+                                child.Metadata.Id
+                                childCorrelation.ExecutionId
+                                request.Authorization
+
                         ExecutionRequest.create
-                            request.Authorization
+                            childAuthorization
                             request.TurnId
                             request.ConversationId
                             child.Metadata.Id
@@ -413,7 +435,6 @@ module EtclovgHarness =
                 { Id = Guid.NewGuid()
                   IdempotencyKey = idempotencyKey
                   Correlation = request.Correlation
-                  Owner = toolContext.SessionKey
                   TurnId = toolContext.TurnId
                   ToolName = tool.Name
                   ReplaySafety = tool.ReplaySafety
@@ -451,10 +472,10 @@ module EtclovgHarness =
 
                             do!
                                 journal.SideEffects.Save
+                                    request.Authorization
                                     { Id = Guid.NewGuid()
                                       IdempotencyKey = record.IdempotencyKey
                                       Correlation = record.Correlation
-                                      Owner = record.Owner
                                       TurnId = record.TurnId
                                       ToolName = record.ToolName
                                       Input = record.Input
@@ -463,7 +484,7 @@ module EtclovgHarness =
                                       RecordedAt = DateTimeOffset.UtcNow }
 
                             match result with
-                            | Ok() -> do! journal.MarkRevertedAsync record.Id
+                            | Ok() -> do! journal.MarkRevertedAsync request.Authorization record.Id
                             | Error _ -> ()
                 }
 
@@ -474,6 +495,10 @@ module EtclovgHarness =
                 (toolInput: string)
                 =
                 task {
+                    let toolContext =
+                        { toolContext with
+                            Authorization = Some request.Authorization }
+
                     let policyResult =
                         config.PolicyEngine
                         |> Option.map (fun engine ->
@@ -571,10 +596,10 @@ module EtclovgHarness =
                                         match journal with
                                         | Some value ->
                                             value.SideEffects.Save
+                                                request.Authorization
                                                 { Id = Guid.NewGuid()
                                                   IdempotencyKey = idempotencyKey
                                                   Correlation = request.Correlation
-                                                  Owner = toolContext.SessionKey
                                                   TurnId = toolContext.TurnId
                                                   ToolName = tool.Name
                                                   Input = effectiveToolInput
@@ -612,7 +637,7 @@ module EtclovgHarness =
                                                     output
                                                     started.ElapsedMilliseconds
 
-                                            do! value.RecordAsync record
+                                            do! value.RecordAsync request.Authorization record
 
                                             if Tool.canRevert tool then
                                                 reversibleExecutions.Add(record, tool)
@@ -640,10 +665,10 @@ module EtclovgHarness =
                                         | Some value ->
                                             do!
                                                 value.RecordAsync
+                                                    request.Authorization
                                                     { Id = Guid.NewGuid()
                                                       IdempotencyKey = idempotencyKey
                                                       Correlation = request.Correlation
-                                                      Owner = toolContext.SessionKey
                                                       TurnId = toolContext.TurnId
                                                       ToolName = tool.Name
                                                       ReplaySafety = tool.ReplaySafety
@@ -689,7 +714,8 @@ module EtclovgHarness =
                     CancellationToken = execCtx.CancellationToken
                     NextToolCallKey = execCtx.NextToolCallKey
                     NextArtifactKey = execCtx.NextArtifactKey
-                    PublishArtifact = publishCapturedArtifact }
+                    PublishArtifact = publishCapturedArtifact
+                    Authorization = Some request.Authorization }
 
             let dispatcher =
                 { RunAgent = executeChild
@@ -736,7 +762,7 @@ module EtclovgHarness =
                         trace
                         policyViolations
                         []
-                        agentContext.SessionKey
+                        request.Authorization
                         None
                         0
             | None ->
@@ -759,7 +785,7 @@ module EtclovgHarness =
                             trace
                             policyViolations
                             []
-                            agentContext.SessionKey
+                            request.Authorization
                             None
                             0
                 | ReadinessResult.Ready ->
@@ -781,7 +807,7 @@ module EtclovgHarness =
                                 trace
                                 policyViolations
                                 []
-                                agentContext.SessionKey
+                                request.Authorization
                                 None
                                 0
                     | Ok initializedLc ->
@@ -796,9 +822,14 @@ module EtclovgHarness =
                         let rootSpan =
                             config.Tracer
                             |> Option.map (fun t ->
-                                let s = t.StartTrace execCtx.Correlation (sprintf "harness:%s" agent.Metadata.Name)
+                                let s =
+                                    t.StartTrace
+                                        request.Authorization
+                                        execCtx.Correlation
+                                        (sprintf "harness:%s" agent.Metadata.Name)
 
                                 t.SetAttributes
+                                    request.Authorization
                                     s
                                     (Map.ofList
                                         [ "agent.name", agent.Metadata.Name
@@ -814,6 +845,7 @@ module EtclovgHarness =
                             let toolNames = tools |> List.map (fun t -> t.Name) |> String.concat ","
 
                             tracer.SetAttributes
+                                request.Authorization
                                 span
                                 (Map.ofList [ "tools.available", toolNames; "tools.count", string tools.Length ])
                         | _ -> ()
@@ -824,9 +856,10 @@ module EtclovgHarness =
                         let execSpan =
                             match rootSpan, config.Tracer with
                             | Some parent, Some tracer ->
-                                let s = tracer.StartSpan parent "agent.execute"
+                                let s = tracer.StartSpan request.Authorization parent "agent.execute"
 
                                 tracer.SetAttributes
+                                    request.Authorization
                                     s
                                     (Map.ofList [ "sandbox.isolation", string request.Sandbox.Isolation ])
 
@@ -912,15 +945,16 @@ module EtclovgHarness =
                         match execSpan, config.Tracer with
                         | Some s, Some tracer ->
                             match executionOutcome with
-                            | Ok(Ok _) -> tracer.EndSpan s SpanStatus.Ok
-                            | Ok(Error limit) -> tracer.EndSpan s (SpanStatus.Error(sprintf "%A" limit))
+                            | Ok(Ok _) -> tracer.EndSpan request.Authorization s SpanStatus.Ok
+                            | Ok(Error limit) ->
+                                tracer.EndSpan request.Authorization s (SpanStatus.Error(sprintf "%A" limit))
                             | Error status ->
                                 let failure =
                                     status.ToPlatformFailure(
                                         request.Correlation.ExecutionId |> ExecutionId.serialize |> Some
                                     )
 
-                                tracer.EndSpan s (SpanStatus.Error failure.Message)
+                                tracer.EndSpan request.Authorization s (SpanStatus.Error failure.Message)
                         | _ -> ()
 
                         match executionOutcome with
@@ -936,11 +970,12 @@ module EtclovgHarness =
                             trace <- trace |> Verification.fail failure.Message
 
                             match config.TraceStore with
-                            | Some store -> do! store.SaveAsync trace
+                            | Some store -> do! store.SaveAsync request.Authorization trace
                             | None -> ()
 
                             match rootSpan, config.Tracer with
-                            | Some span, Some tracer -> tracer.EndSpan span (SpanStatus.Error failure.Message)
+                            | Some span, Some tracer ->
+                                tracer.EndSpan request.Authorization span (SpanStatus.Error failure.Message)
                             | _ -> ()
 
                             return
@@ -951,7 +986,7 @@ module EtclovgHarness =
                                     execCtx.Usage
                                     trace
                                     policyViolations
-                                    agentContext.SessionKey
+                                    request.Authorization
                                     config.Metrics
 
                         | Ok(Error limitExceeded) ->
@@ -966,12 +1001,15 @@ module EtclovgHarness =
                             trace <- trace |> Verification.fail (sprintf "Limit exceeded: %A" limitExceeded)
 
                             match config.TraceStore with
-                            | Some store -> do! store.SaveAsync trace
+                            | Some store -> do! store.SaveAsync request.Authorization trace
                             | None -> ()
                             // End root span on failure
                             match rootSpan, config.Tracer with
                             | Some s, Some tracer ->
-                                tracer.EndSpan s (SpanStatus.Error(sprintf "Limit exceeded: %A" limitExceeded))
+                                tracer.EndSpan
+                                    request.Authorization
+                                    s
+                                    (SpanStatus.Error(sprintf "Limit exceeded: %A" limitExceeded))
                             | _ -> ()
 
                             return
@@ -983,7 +1021,7 @@ module EtclovgHarness =
                                     trace
                                     policyViolations
                                     []
-                                    agentContext.SessionKey
+                                    request.Authorization
                                     config.Metrics
                                     0
 
@@ -1006,19 +1044,20 @@ module EtclovgHarness =
                                     let violationNames = constitutionViolations |> List.map (fun v -> v.RuleId)
 
                                     do!
-                                        audit.RecordAsync(
-                                            AuditLog.constitutionCheck
+                                        audit.RecordAsync
+                                            request.Authorization
+                                            (AuditLog.constitutionCheck
                                                 agent.Metadata.Id
                                                 violationNames
-                                                (Some execCtx.ExecutionId)
-                                        )
+                                                (Some execCtx.ExecutionId))
                                 | None -> ()
 
                                 let! _ =
                                     AgentLifecycle.failAsync agent.Metadata.Id (exn "Constitution violation") _startedLc
                                 // End root span on constitution violation
                                 match rootSpan, config.Tracer with
-                                | Some s, Some tracer -> tracer.EndSpan s (SpanStatus.Error "Constitution violation")
+                                | Some s, Some tracer ->
+                                    tracer.EndSpan request.Authorization s (SpanStatus.Error "Constitution violation")
                                 | _ -> ()
 
                                 let violationIds = constitutionViolations |> List.map (fun v -> v.RuleId)
@@ -1032,7 +1071,7 @@ module EtclovgHarness =
                                         trace
                                         policyViolations
                                         constitutionViolations
-                                        agentContext.SessionKey
+                                        request.Authorization
                                         config.Metrics
                                         1
                             else
@@ -1066,7 +1105,8 @@ module EtclovgHarness =
                                     match config.TraceStore with
                                     | Some store ->
                                         task {
-                                            let! baseline = store.GetBaselineAsync agent.Metadata.Id input
+                                            let! baseline =
+                                                store.GetBaselineAsync request.Authorization agent.Metadata.Id input
 
                                             match baseline with
                                             | Some b -> return Some(Regression.detect b trace)
@@ -1076,27 +1116,28 @@ module EtclovgHarness =
 
                                 // === V: Save trace ===
                                 match config.TraceStore with
-                                | Some store -> do! store.SaveAsync trace
+                                | Some store -> do! store.SaveAsync request.Authorization trace
                                 | None -> ()
 
                                 // === G: Audit ===
                                 match config.AuditLog with
                                 | Some audit ->
                                     do!
-                                        audit.RecordAsync(
-                                            AuditLog.llmCall agent.Metadata.Id "unknown" (Some execCtx.ExecutionId)
-                                        )
+                                        audit.RecordAsync
+                                            request.Authorization
+                                            (AuditLog.llmCall agent.Metadata.Id "unknown" (Some execCtx.ExecutionId))
                                 | None -> ()
 
                                 // === O: End root span ===
                                 match rootSpan, config.Tracer with
                                 | Some s, Some tracer ->
                                     tracer.AddEvent
+                                        request.Authorization
                                         s
                                         "harness.complete"
                                         (Map.ofList [ "response.length", string response.Length ])
 
-                                    tracer.EndSpan s SpanStatus.Ok
+                                    tracer.EndSpan request.Authorization s SpanStatus.Ok
                                 | _ -> ()
 
                                 EventBus.publishAsync
@@ -1106,7 +1147,7 @@ module EtclovgHarness =
 
                                 let metrics =
                                     config.Metrics
-                                    |> Option.map (fun value -> value.GetMetrics agentContext.SessionKey)
+                                    |> Option.map (fun value -> value.GetMetrics request.Authorization)
 
                                 let decisions: ExecutionPolicyDecisions =
                                     { PolicyViolations = policyViolations

@@ -1,7 +1,7 @@
 namespace Nao.Eval
 
 open System
-open System.Collections.Concurrent
+open System.Collections.Generic
 open System.IO
 open System.Text.Json
 open System.Text.Json.Serialization
@@ -9,37 +9,32 @@ open System.Threading.Tasks
 open FSharp.SystemTextJson
 open Nao.Agents
 
-/// Durable datasets and their derived evaluation reports.
+/// Durable evaluation data. Every operation is scoped by host-authenticated authority.
 type EvalArchive =
-    { SaveDatasetAsync: EvalDataset -> Task
-      SaveReportAsync: EvalReport -> Task
-      GetDatasetAsync: string -> Guid -> Task<EvalDataset option>
-      GetReportsAsync: string -> Guid -> int -> Task<EvalReport list>
-      GetResultsByExecutionAsync: string -> ExecutionId -> Task<EvalResult list>
-      DeleteOwnerAsync: string -> Task<Result<int, PlatformFailure>>
-      DeleteExpiredAsync: string -> DateTimeOffset -> Task<Result<int, PlatformFailure>> }
+    { SaveDatasetAsync: AuthorizationScope -> EvalDataset -> Task
+      SaveReportAsync: AuthorizationScope -> EvalReport -> Task
+      GetDatasetAsync: AuthorizationScope -> Guid -> Task<EvalDataset option>
+      GetReportsAsync: AuthorizationScope -> Guid -> int -> Task<EvalReport list>
+      GetResultsByExecutionAsync: AuthorizationScope -> ExecutionId -> Task<EvalResult list>
+      DeleteOwnerAsync: AuthorizationScope -> Task<Result<int, PlatformFailure>>
+      DeleteExpiredAsync: AuthorizationScope -> DateTimeOffset -> Task<Result<int, PlatformFailure>> }
 
 [<RequireQualifiedAccess>]
 type private EvalArchiveEvent =
     | SaveDataset of EvalDataset
     | SaveReport of EvalReport
-    | DeleteOwner of string
-    | DeleteExpired of string * DateTimeOffset
+    | DeleteOwner of AuthorizationIdentity
+    | DeleteExpired of AuthorizationIdentity * DateTimeOffset
 
 type private EvalArchiveDocument =
     { Version: int
       Event: EvalArchiveEvent }
 
 module private EvalArchiveState =
-    let failure = PlatformFailure.fromException PlatformFailureBoundary.Storage None
-
-    let validateOwner owner =
-        if String.IsNullOrWhiteSpace owner then
-            invalidArg (nameof owner) "Evaluation archive owner cannot be blank."
+    let failure (error: exn) =
+        PlatformFailure.fromException PlatformFailureBoundary.Storage None error
 
     let validateReport (report: EvalReport) =
-        validateOwner report.Owner
-
         if report.Results |> List.exists (fun result -> result.Owner <> report.Owner) then
             invalidArg (nameof report) "Every evaluation result must match its report owner."
 
@@ -53,112 +48,116 @@ module private EvalArchiveState =
             invalidArg (nameof report) "Every evaluation result must match its report run."
 
     let create persist initialEvents : EvalArchive =
-        let datasets = ConcurrentDictionary<string * Guid, EvalDataset>()
-        let reports = ConcurrentDictionary<string * Guid, EvalReport>()
+        let gate = obj ()
+        let datasets = Dictionary<AuthorizationIdentity * Guid, EvalDataset>()
+        let reports = Dictionary<AuthorizationIdentity * Guid, EvalReport>()
 
         let delete owner before =
             let mutable deleted = 0
 
-            for dataset in datasets.Values do
+            for dataset in datasets.Values |> Seq.toArray do
                 if dataset.Owner = owner && before dataset.CreatedAt then
-                    match datasets.TryRemove((dataset.Owner, dataset.Id)) with
-                    | true, _ -> deleted <- deleted + 1
-                    | false, _ -> ()
+                    if datasets.Remove((dataset.Owner, dataset.Id)) then
+                        deleted <- deleted + 1
 
-            for report in reports.Values do
+            for report in reports.Values |> Seq.toArray do
                 if report.Owner = owner && before report.RunAt then
-                    match reports.TryRemove((report.Owner, report.Id)) with
-                    | true, _ -> deleted <- deleted + 1
-                    | false, _ -> ()
+                    if reports.Remove((report.Owner, report.Id)) then
+                        deleted <- deleted + 1
 
             deleted
 
         let apply event =
             match event with
             | EvalArchiveEvent.SaveDataset dataset -> datasets.[(dataset.Owner, dataset.Id)] <- dataset
-            | EvalArchiveEvent.SaveReport report -> reports.[(report.Owner, report.Id)] <- report
+            | EvalArchiveEvent.SaveReport report ->
+                validateReport report
+                reports.[(report.Owner, report.Id)] <- report
             | EvalArchiveEvent.DeleteOwner owner -> delete owner (fun _ -> true) |> ignore
             | EvalArchiveEvent.DeleteExpired(owner, cutoff) ->
                 delete owner (fun timestamp -> timestamp < cutoff) |> ignore
 
         initialEvents |> Seq.iter apply
 
-        let saveDatasetAsync (dataset: EvalDataset) =
-            validateOwner dataset.Owner
-            let event = EvalArchiveEvent.SaveDataset dataset
-            apply event
-            persist event
-            Task.CompletedTask
-
-        let saveReportAsync report =
-            validateReport report
-            let event = EvalArchiveEvent.SaveReport report
-            apply event
-            persist event
-            Task.CompletedTask
-
-        let protect owner operation =
+        let saveDatasetAsync authorization (dataset: EvalDataset) =
             task {
-                if String.IsNullOrWhiteSpace owner then
-                    return
-                        Error(
-                            PlatformFailure.create
-                                PlatformErrorCategory.InvalidInput
-                                "Evaluation archive owner cannot be blank."
-                                false
-                                None
-                        )
-                else
-                    try
-                        let count = operation ()
-                        return Ok count
-                    with ex ->
-                        return Error(failure ex)
+                AuthorizationScope.requireOwner dataset.Owner authorization
+
+                lock gate (fun () ->
+                    let event = EvalArchiveEvent.SaveDataset dataset
+                    persist event
+                    apply event)
             }
+            :> Task
 
-        let deleteOwnerAsync owner =
-            protect owner (fun () ->
-                let count = delete owner (fun _ -> true)
-                persist (EvalArchiveEvent.DeleteOwner owner)
-                count)
+        let saveReportAsync authorization (report: EvalReport) =
+            task {
+                AuthorizationScope.requireOwner report.Owner authorization
+                validateReport report
 
-        let deleteExpiredAsync owner cutoff =
-            protect owner (fun () ->
-                let count = delete owner (fun timestamp -> timestamp < cutoff)
-                persist (EvalArchiveEvent.DeleteExpired(owner, cutoff))
-                count)
+                lock gate (fun () ->
+                    let event = EvalArchiveEvent.SaveReport report
+                    persist event
+                    apply event)
+            }
+            :> Task
+
+        let deleteAsync authorization before event =
+            task {
+                let owner = AuthorizationScope.identity authorization
+
+                try
+                    return
+                        lock gate (fun () ->
+                            persist (event owner)
+                            delete owner before)
+                        |> Ok
+                with
+                | :? IOException as error -> return Error(failure error)
+                | :? UnauthorizedAccessException as error -> return Error(failure error)
+            }
 
         { SaveDatasetAsync = saveDatasetAsync
           SaveReportAsync = saveReportAsync
           GetDatasetAsync =
-            fun owner id ->
+            fun authorization id ->
                 Task.FromResult(
-                    datasets.TryGetValue((owner, id))
-                    |> function
-                        | true, value -> Some value
-                        | false, _ -> None
+                    lock gate (fun () ->
+                        datasets.TryGetValue((AuthorizationScope.identity authorization, id))
+                        |> function
+                            | true, value -> Some value
+                            | false, _ -> None)
                 )
           GetReportsAsync =
-            fun owner datasetId limit ->
+            fun authorization datasetId limit ->
+                let owner = AuthorizationScope.identity authorization
+
                 Task.FromResult(
-                    reports.Values
-                    |> Seq.filter (fun report -> report.Owner = owner && report.DatasetId = datasetId)
-                    |> Seq.sortByDescending (fun report -> report.RunAt)
-                    |> Seq.truncate limit
-                    |> Seq.toList
+                    lock gate (fun () ->
+                        reports.Values
+                        |> Seq.filter (fun report -> report.Owner = owner && report.DatasetId = datasetId)
+                        |> Seq.sortByDescending (fun report -> report.RunAt)
+                        |> Seq.truncate limit
+                        |> Seq.toList)
                 )
           GetResultsByExecutionAsync =
-            fun owner executionId ->
+            fun authorization executionId ->
+                let owner = AuthorizationScope.identity authorization
+
                 Task.FromResult(
-                    reports.Values
-                    |> Seq.filter (fun report -> report.Owner = owner)
-                    |> Seq.collect _.Results
-                    |> Seq.filter (fun result -> result.ExecutionId = executionId)
-                    |> Seq.sortByDescending _.Timestamp
-                    |> Seq.toList
+                    lock gate (fun () ->
+                        reports.Values
+                        |> Seq.filter (fun report -> report.Owner = owner)
+                        |> Seq.collect _.Results
+                        |> Seq.filter (fun result -> result.ExecutionId = executionId)
+                        |> Seq.sortByDescending _.Timestamp
+                        |> Seq.toList)
                 )
-          DeleteOwnerAsync = deleteOwnerAsync
-          DeleteExpiredAsync = deleteExpiredAsync }
+          DeleteOwnerAsync = fun authorization -> deleteAsync authorization (fun _ -> true) EvalArchiveEvent.DeleteOwner
+          DeleteExpiredAsync =
+            fun authorization cutoff ->
+                deleteAsync authorization (fun timestamp -> timestamp < cutoff) (fun owner ->
+                    EvalArchiveEvent.DeleteExpired(owner, cutoff)) }
 
 module EvalArchives =
     let inMemory () =

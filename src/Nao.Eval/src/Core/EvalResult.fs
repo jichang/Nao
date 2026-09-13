@@ -28,7 +28,7 @@ type EvalResult =
         /// Stable identity for this evaluated result
         Id: Guid
         /// Retention owner inherited explicitly from the evaluation run
-        Owner: string
+        Owner: AuthorizationIdentity
         /// Dataset revision evaluated by this result
         DatasetId: Guid
         /// Evaluation run that produced this result
@@ -62,16 +62,13 @@ module EvalResult =
 /// Stable identity shared by every result and report in one evaluation run.
 type EvalRun =
     { Id: Guid
-      Owner: string
+      Owner: AuthorizationIdentity
       DatasetId: Guid
       StartedAt: DateTimeOffset }
 
 [<RequireQualifiedAccess>]
 module EvalRun =
     let create owner datasetId =
-        if String.IsNullOrWhiteSpace owner then
-            invalidArg (nameof owner) "Evaluation run owner cannot be blank."
-
         { Id = Guid.NewGuid()
           Owner = owner
           DatasetId = datasetId

@@ -46,17 +46,17 @@ and [<RequireQualifiedAccess>] AuditAction =
 type AuditLog =
     {
         /// Record an audit entry
-        RecordAsync: AuditEntry -> Task<unit>
-        /// Query audit entries for an agent
-        QueryAsync: string -> DateTimeOffset -> Task<AuditEntry list>
-        /// Query all entries for an execution
-        QueryByExecutionAsync: ExecutionId -> Task<AuditEntry list>
-        /// Get a count of denied actions for an agent
-        GetDeniedCountAsync: string -> DateTimeOffset -> Task<int>
-        /// Delete every audit entry owned by an agent
-        DeleteOwnerAsync: string -> Task<Result<int, PlatformFailure>>
-        /// Delete audit entries owned by an agent that precede a retention cutoff
-        DeleteExpiredAsync: string -> DateTimeOffset -> Task<Result<int, PlatformFailure>>
+        RecordAsync: AuthorizationScope -> AuditEntry -> Task<unit>
+        /// Query audit entries for an agent within an authenticated scope
+        QueryAsync: AuthorizationScope -> string -> DateTimeOffset -> Task<AuditEntry list>
+        /// Query all entries for an execution within an authenticated scope
+        QueryByExecutionAsync: AuthorizationScope -> ExecutionId -> Task<AuditEntry list>
+        /// Get a count of denied actions for an agent within an authenticated scope
+        GetDeniedCountAsync: AuthorizationScope -> string -> DateTimeOffset -> Task<int>
+        /// Delete every audit entry in an authenticated scope
+        DeleteScopeAsync: AuthorizationScope -> Task<Result<int, PlatformFailure>>
+        /// Delete audit entries in an authenticated scope that precede a retention cutoff
+        DeleteExpiredAsync: AuthorizationScope -> DateTimeOffset -> Task<Result<int, PlatformFailure>>
     }
 
 module AuditLog =

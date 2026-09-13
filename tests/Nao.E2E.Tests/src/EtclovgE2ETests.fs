@@ -12,6 +12,13 @@ module private EtclovgHarness =
     let runAsync config context agent request =
         Nao.Agents.EtclovgHarness.runAsync config context agent request System.Threading.CancellationToken.None
 
+    let telemetryScope session =
+        let principal =
+            SecurityPrincipal.create (TenantId.parse "e2e") (UserId.parse "user") []
+
+        AuthorizationScope.tryCreate principal None (WorkspaceId.parse "workspace") (Some(SessionId.parse session))
+        |> Option.get
+
 // =============================================================================
 // ETCLOVG Architecture E2E Tests
 // Complete examples demonstrating all seven layers working together
@@ -324,8 +331,7 @@ type EtclovgContextMemoryTests() =
     member _.TieredMemoryOrganizesData() =
         // Create memories at different tiers
         let shortTerm: TieredMemoryEntry =
-            { Owner = "tiered-memory-e2e"
-              Key = "current-task"
+            { Key = "current-task"
               Value = "answering user question about stocks"
               Tier = MemoryTier.ShortTerm
               Timestamp = DateTimeOffset.UtcNow
@@ -334,8 +340,7 @@ type EtclovgContextMemoryTests() =
               Tags = [ "context" ] }
 
         let midTerm: TieredMemoryEntry =
-            { Owner = "tiered-memory-e2e"
-              Key = "user-preference"
+            { Key = "user-preference"
               Value = "prefers brief responses"
               Tier = MemoryTier.MidTerm
               Timestamp = DateTimeOffset.UtcNow.AddMinutes(-30.0)
@@ -344,8 +349,7 @@ type EtclovgContextMemoryTests() =
               Tags = [ "preference" ] }
 
         let longTerm: TieredMemoryEntry =
-            { Owner = "tiered-memory-e2e"
-              Key = "user-name"
+            { Key = "user-name"
               Value = "Alice"
               Tier = MemoryTier.LongTerm
               Timestamp = DateTimeOffset.UtcNow.AddDays(-30.0)
@@ -457,19 +461,20 @@ type EtclovgObservabilityTests() =
     [<TestMethod>]
     member _.DistributedTracingAcrossAgentCalls() =
         let tracer = InMemory.tracer ()
+        let scope = EtclovgHarness.telemetryScope "tracing"
         let correlation = CorrelationContext.root ()
 
         // Root span: user request arrives
-        let rootSpan = tracer.StartTrace correlation "user-request"
-        tracer.SetAttributes rootSpan (Map.ofList [ "user.id", "alice"; "request.type", "stock-query" ])
+        let rootSpan = tracer.StartTrace scope correlation "user-request"
+        tracer.SetAttributes scope rootSpan (Map.ofList [ "user.id", "alice"; "request.type", "stock-query" ])
 
         // Child span: orchestrator processing
-        let orchestratorSpan = tracer.StartSpan rootSpan "orchestrator.process"
-        tracer.AddEvent orchestratorSpan "routing-decision" (Map.ofList [ "selected-tool", "get_stock_price" ])
+        let orchestratorSpan = tracer.StartSpan scope rootSpan "orchestrator.process"
+        tracer.AddEvent scope orchestratorSpan "routing-decision" (Map.ofList [ "selected-tool", "get_stock_price" ])
 
         // Grandchild span: tool invocation
-        let toolSpan = tracer.StartSpan orchestratorSpan "tool.invoke.get_stock_price"
-        tracer.SetAttributes toolSpan (Map.ofList [ "tool.input", "AAPL" ])
+        let toolSpan = tracer.StartSpan scope orchestratorSpan "tool.invoke.get_stock_price"
+        tracer.SetAttributes scope toolSpan (Map.ofList [ "tool.input", "AAPL" ])
         // Simulate tool execution
         let toolResult =
             match
@@ -481,15 +486,15 @@ type EtclovgObservabilityTests() =
                 Assert.Fail(failure.Message)
                 ""
 
-        tracer.AddEvent toolSpan "tool-result" (Map.ofList [ "output", toolResult ])
-        tracer.EndSpan toolSpan SpanStatus.Ok
+        tracer.AddEvent scope toolSpan "tool-result" (Map.ofList [ "output", toolResult ])
+        tracer.EndSpan scope toolSpan SpanStatus.Ok
 
         // End orchestrator
-        tracer.EndSpan orchestratorSpan SpanStatus.Ok
-        tracer.EndSpan rootSpan SpanStatus.Ok
+        tracer.EndSpan scope orchestratorSpan SpanStatus.Ok
+        tracer.EndSpan scope rootSpan SpanStatus.Ok
 
         // Verify trace structure
-        let allSpans = tracer.GetTrace(rootSpan.TraceId)
+        let allSpans = tracer.GetTrace scope rootSpan.TraceId
         Assert.AreEqual(3, allSpans.Length)
         // All spans share the same trace ID
         Assert.IsTrue(allSpans |> List.forall (fun s -> s.TraceId = rootSpan.TraceId))
@@ -502,17 +507,19 @@ type EtclovgObservabilityTests() =
     [<TestMethod>]
     member _.MetricsTrackCostAndLatency() =
         let metrics = InMemory.metrics ()
-        let owner = "e2e/metrics"
+        let scope = EtclovgHarness.telemetryScope "metrics"
         let startedAt = DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero)
         let correlation = CorrelationContext.root ()
 
         // Simulate a multi-step agent execution
-        metrics.Record(MetricRecord.llmCall correlation owner startedAt 500 200 150L) // First LLM call: routing decision
-        metrics.Record(MetricRecord.toolCall correlation owner (startedAt.AddSeconds 1) "get_stock_price" 25L true)
-        metrics.Record(MetricRecord.llmCall correlation owner (startedAt.AddSeconds 2) 800 300 200L) // Second LLM call: format response
-        metrics.Record(MetricRecord.llmCall correlation owner (startedAt.AddSeconds 3) 200 100 100L) // Third: summarize
+        metrics.Record scope (MetricRecord.llmCall correlation startedAt 500 200 150L) // First LLM call: routing decision
 
-        let summary = metrics.GetMetrics owner
+        metrics.Record scope (MetricRecord.toolCall correlation (startedAt.AddSeconds 1) "get_stock_price" 25L true)
+
+        metrics.Record scope (MetricRecord.llmCall correlation (startedAt.AddSeconds 2) 800 300 200L) // Second LLM call: format response
+        metrics.Record scope (MetricRecord.llmCall correlation (startedAt.AddSeconds 3) 200 100 100L) // Third: summarize
+
+        let summary = metrics.GetMetrics scope
         Assert.AreEqual(3, summary.TotalLlmCalls)
         Assert.AreEqual(1500, summary.TotalInputTokens)
         Assert.AreEqual(600, summary.TotalOutputTokens)
@@ -523,7 +530,7 @@ type EtclovgObservabilityTests() =
             { InputCostPer1K = 0.0025m
               OutputCostPer1K = 0.01m }
 
-        let cost = metrics.EstimateCost owner costModel
+        let cost = metrics.EstimateCost scope costModel
         Assert.IsTrue(cost > 0m)
         Assert.AreEqual(0.00975m, cost)
 
@@ -664,6 +671,7 @@ type EtclovgVerificationTests() =
     [<TestMethod>]
     member _.RegressionDetectionComparesBaselines() =
         let store = InMemoryTraceStore.create ()
+        let scope = EtclovgHarness.telemetryScope "regression"
 
         // Save a baseline trace (fast, 2 steps)
         let baseline =
@@ -677,7 +685,7 @@ type EtclovgVerificationTests() =
                 StartedAt = DateTimeOffset.UtcNow.AddHours(-1.0)
                 CompletedAt = Some(DateTimeOffset.UtcNow.AddHours(-1.0).AddMilliseconds(120.0)) }
 
-        store.SaveAsync(baseline).Wait()
+        store.SaveAsync scope baseline |> _.Wait()
 
         // New execution is much slower with more steps
         let current =
@@ -768,44 +776,38 @@ type EtclovgGovernanceTests() =
     [<TestMethod>]
     member _.AuditLogTracksAllActions() =
         let audit = InMemory.auditLog ()
+        let scope = EtclovgHarness.telemetryScope "audit"
         let execId = ExecutionId.generate ()
 
         // Record a sequence of actions
-        audit.RecordAsync(AuditLog.llmCall agentId "gpt-4o" (Some execId)).Wait()
+        audit.RecordAsync scope (AuditLog.llmCall agentId "gpt-4o" (Some execId))
+        |> _.Wait()
 
-        audit
-            .RecordAsync(
-                AuditLog.toolInvocation
-                    agentId
-                    "get_stock_price"
-                    "AAPL"
-                    """{"price":189.45}"""
-                    true
-                    PermissionDecision.Allow
-                    (Some execId)
-            )
-            .Wait()
+        audit.RecordAsync
+            scope
+            (AuditLog.toolInvocation
+                agentId
+                "get_stock_price"
+                "AAPL"
+                """{"price":189.45}"""
+                true
+                PermissionDecision.Allow
+                (Some execId))
+        |> _.Wait()
 
-        audit
-            .RecordAsync(
-                AuditLog.toolInvocation
-                    agentId
-                    "delete_all_data"
-                    "confirm"
-                    ""
-                    false
-                    PermissionDecision.Deny
-                    (Some execId)
-            )
-            .Wait()
+        audit.RecordAsync
+            scope
+            (AuditLog.toolInvocation agentId "delete_all_data" "confirm" "" false PermissionDecision.Deny (Some execId))
+        |> _.Wait()
 
         // Query all entries for this execution
-        let entries = (audit.QueryByExecutionAsync execId).Result
+        let entries = audit.QueryByExecutionAsync scope execId |> _.Result
         Assert.AreEqual(3, entries.Length)
 
         // Check denied count
         let deniedCount =
-            (audit.GetDeniedCountAsync agentId (DateTimeOffset.UtcNow.AddMinutes(-1.0))).Result
+            audit.GetDeniedCountAsync scope agentId (DateTimeOffset.UtcNow.AddMinutes(-1.0))
+            |> _.Result
 
         Assert.AreEqual(1, deniedCount)
 
@@ -950,13 +952,9 @@ type EtclovgFullIntegrationTests() =
             { (AgentContext.unrestrictedForTests ()) with
                 SessionKey = "e2e/full-harness" }
 
-        let result =
-            (EtclovgHarness.runAsync
-                config
-                context
-                agent
-                (request sandbox context agent "What is the AAPL stock price?"))
-                .Result
+        let executionRequest = request sandbox context agent "What is the AAPL stock price?"
+
+        let result = (EtclovgHarness.runAsync config context agent executionRequest).Result
 
         // Verify success
         Assert.AreEqual(ExecutionTerminalStatus.Succeeded, result.Status)
@@ -973,14 +971,18 @@ type EtclovgFullIntegrationTests() =
         // V: Trace stored
         Assert.IsTrue(result.Evidence.Trace.IsSome)
         Assert.IsTrue(result.Evidence.Trace.Value.Success)
-        let storedTraces = (traceStore.GetTracesAsync agentId 10).Result
+
+        let storedTraces =
+            traceStore.GetTracesAsync executionRequest.Authorization agentId 10 |> _.Result
+
         Assert.AreEqual(1, storedTraces.Length)
 
         // G: Audit recorded
         Assert.IsTrue(result.Evidence.AuditEntries > 0)
 
         let auditEntries =
-            (audit.QueryAsync agentId (DateTimeOffset.UtcNow.AddMinutes(-1.0))).Result
+            audit.QueryAsync executionRequest.Authorization agentId (DateTimeOffset.UtcNow.AddMinutes(-1.0))
+            |> _.Result
 
         Assert.IsTrue(auditEntries.Length > 0)
 
@@ -1113,13 +1115,11 @@ type EtclovgFullIntegrationTests() =
             { (AgentContext.unrestrictedForTests ()) with
                 SessionKey = "e2e/orchestrator" }
 
+        let executionRequest =
+            request sandbox context orchestrator "What is the stock price of AAPL?"
+
         let result =
-            (EtclovgHarness.runAsync
-                config
-                context
-                orchestrator
-                (request sandbox context orchestrator "What is the stock price of AAPL?"))
-                .Result
+            (EtclovgHarness.runAsync config context orchestrator executionRequest).Result
 
         // The orchestrator should have: called LLM -> invoked tool -> called LLM -> produced response
         Assert.AreEqual(ExecutionTerminalStatus.Succeeded, result.Status)
@@ -1136,7 +1136,9 @@ type EtclovgFullIntegrationTests() =
         Assert.IsTrue(result.Evidence.Metrics.Value.TotalLlmCalls >= 1)
 
         // Trace stored for future regression detection
-        let traces = (traceStore.GetTracesAsync agentId 10).Result
+        let traces =
+            traceStore.GetTracesAsync executionRequest.Authorization agentId 10 |> _.Result
+
         Assert.AreEqual(1, traces.Length)
         Assert.IsTrue(traces.[0].Success)
 
@@ -1176,28 +1178,34 @@ type EtclovgFullIntegrationTests() =
                     SessionKey = sessionKey
                     TurnId = turnId }
 
+            let executionRequest =
+                request sandbox context orchestrator "What is the stock price of AAPL?"
+
             let result =
-                EtclovgHarness.runAsync
-                    config
-                    context
-                    orchestrator
-                    (request sandbox context orchestrator "What is the stock price of AAPL?")
+                EtclovgHarness.runAsync config context orchestrator executionRequest
                 |> _.GetAwaiter().GetResult()
 
             Assert.AreEqual(ExecutionTerminalStatus.Succeeded, result.Status)
             let executionId = result.Correlation.ExecutionId
             Assert.AreEqual(correlation.ExecutionId, executionId)
 
-            let spans = (Tracers.file root).GetByExecution executionId
-            let metricRecords = (MetricsCollectors.file root).GetByExecution executionId
+            let spans =
+                (Tracers.file root).GetByExecution executionRequest.Authorization executionId
+
+            let metricRecords =
+                (MetricsCollectors.file root).GetByExecution executionRequest.Authorization executionId
 
             let journalRecords =
-                (ExecutionJournals.file root).GetByExecutionAsync executionId |> _.Result
+                (ExecutionJournals.file root).GetByExecutionAsync executionRequest.Authorization executionId
+                |> _.Result
 
-            let traces = (TraceStores.file root).GetByExecutionAsync executionId |> _.Result
+            let traces =
+                (TraceStores.file root).GetByExecutionAsync executionRequest.Authorization executionId
+                |> _.Result
 
             let auditEntries =
-                (AuditLogs.file root).QueryByExecutionAsync executionId |> _.Result
+                (AuditLogs.file root).QueryByExecutionAsync executionRequest.Authorization executionId
+                |> _.Result
 
             Assert.IsTrue(spans.Length > 0)
             Assert.IsTrue(metricRecords.Length > 0)

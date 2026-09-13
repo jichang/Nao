@@ -64,8 +64,7 @@ type PersistedMessage =
 
 /// Metadata about a persisted conversation
 type ConversationMeta =
-    { SessionId: string
-      ConversationName: string
+    { ConversationName: string
       AgentName: string
       CreatedAt: DateTimeOffset
       LastMessageAt: DateTimeOffset
@@ -73,30 +72,27 @@ type ConversationMeta =
 
 /// Pluggable functional capability for external conversation persistence.
 /// Factories can store to files, databases, or cloud storage.
-/// All methods are organized by session ID for grouping.
+/// Every operation is bound to a complete authenticated authorization scope.
 type ConversationStore =
     /// Append messages to a conversation (incremental — does not rewrite the whole history)
     {
-        AppendAsync: string -> string -> PersistedMessage array -> Task
+        AppendAsync: AuthorizationScope -> string -> PersistedMessage array -> Task
 
         /// Save the full conversation (overwrites any existing data for this session+conversation)
-        SaveAsync: string -> string -> PersistedMessage array -> Task
+        SaveAsync: AuthorizationScope -> string -> PersistedMessage array -> Task
 
         /// Load the full conversation history for a session+conversation
-        LoadAsync: string -> string -> Task<PersistedMessage array>
+        LoadAsync: AuthorizationScope -> string -> Task<PersistedMessage array>
 
         /// Load every message produced by one execution
-        LoadByExecutionAsync: ExecutionId -> Task<PersistedMessage array>
+        LoadByExecutionAsync: AuthorizationScope -> ExecutionId -> Task<PersistedMessage array>
 
         /// List all conversations for a session
-        ListConversationsAsync: string -> Task<ConversationMeta array>
-
-        /// List all session IDs that have stored conversations
-        ListSessionsAsync: unit -> Task<string array>
+        ListConversationsAsync: AuthorizationScope -> Task<ConversationMeta array>
 
         /// Delete a specific conversation
-        DeleteConversationAsync: string -> string -> Task
+        DeleteConversationAsync: AuthorizationScope -> string -> Task
 
         /// Delete all data for a session
-        DeleteSessionAsync: string -> Task
+        DeleteScopeAsync: AuthorizationScope -> Task
     }

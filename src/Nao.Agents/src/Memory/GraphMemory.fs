@@ -5,8 +5,7 @@ open System.Threading.Tasks
 
 /// A relationship between two entities in the knowledge graph
 type GraphRelation =
-    { Owner: string
-      Subject: string
+    { Subject: string
       Predicate: string
       Object: string
       Confidence: float
@@ -16,8 +15,7 @@ type GraphRelation =
 
 /// A node in the knowledge graph with typed properties
 type GraphNode =
-    { Owner: string
-      Id: string
+    { Id: string
       EntityType: string
       Properties: Map<string, string>
       CreatedAt: DateTimeOffset
@@ -46,12 +44,12 @@ type GraphTraversalResult =
 
 /// Functional graph-based memory (knowledge graph) operations.
 type GraphMemory =
-    { UpsertNodeAsync: GraphNode -> Task<unit>
-      AddRelationAsync: GraphRelation -> Task<unit>
-      QueryAsync: string -> GraphQuery -> Task<GraphTraversalResult>
-      RemoveNodeAsync: string -> string -> Task<unit>
-      RemoveRelationAsync: string -> string -> string -> string -> Task<unit>
-      GetByTypeAsync: string -> string -> Task<GraphNode list>
-      ExtractRelationsAsync: string -> string -> Task<GraphRelation list>
-      DeleteOwnerAsync: string -> Task<Result<int, PlatformFailure>>
-      DeleteExpiredAsync: string -> DateTimeOffset -> Task<Result<int, PlatformFailure>> }
+    { UpsertNodeAsync: AuthorizationScope -> GraphNode -> Task<unit>
+      AddRelationAsync: AuthorizationScope -> GraphRelation -> Task<unit>
+      QueryAsync: AuthorizationScope -> GraphQuery -> Task<GraphTraversalResult>
+      RemoveNodeAsync: AuthorizationScope -> string -> Task<unit>
+      RemoveRelationAsync: AuthorizationScope -> string -> string -> string -> Task<unit>
+      GetByTypeAsync: AuthorizationScope -> string -> Task<GraphNode list>
+      ExtractRelationsAsync: AuthorizationScope -> string -> Task<GraphRelation list>
+      DeleteOwnerAsync: AuthorizationScope -> Task<Result<int, PlatformFailure>>
+      DeleteExpiredAsync: AuthorizationScope -> DateTimeOffset -> Task<Result<int, PlatformFailure>> }

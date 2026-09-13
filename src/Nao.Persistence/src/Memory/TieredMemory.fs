@@ -1,124 +1,160 @@
 namespace Nao.Persistence
 
 open System
+open System.IO
+open System.Data.Common
 open Nao.Agents
 
 [<RequireQualifiedAccess>]
 type TieredEvent =
     | Store of TieredMemoryEntry
-    | RecordAccess of owner: string * keys: string list * asOf: DateTimeOffset
-    | Promote of owner: string * key: string * targetTier: MemoryTier
-    | Evict of owner: string * asOf: DateTimeOffset
-    | DeleteOwner of owner: string
-    | DeleteExpired of owner: string * before: DateTimeOffset
+    | RecordAccess of keys: string list * asOf: DateTimeOffset
+    | Promote of key: string * targetTier: MemoryTier
+    | Evict of asOf: DateTimeOffset
+    | DeleteOwner
+    | DeleteExpired of before: DateTimeOffset
 
-type TieredDocument = { Version: int; Event: TieredEvent }
+type TieredDocument =
+    { Version: int
+      Policy: TieredMemoryConfig
+      Event: TieredEvent }
 
 module PersistentTieredMemory =
+    /// The host supplies a separate stream for each claim-free authorization partition key.
     let create
-        context
-        (store: EventStore)
+        (openStore: string -> EventStore)
         (config: TieredMemoryConfig)
         (embeddingProvider: EmbeddingProvider option)
         : TieredMemory =
-        let inner = InMemoryTieredMemory.create config embeddingProvider
+        InMemoryTieredMemory.validateConfig config
+        let sync = obj ()
 
-        let loadEvents () =
-            EventStream.loadCurrent
-                context
-                1
-                FSharpJson.deserialize<TieredDocument>
-                (fun document -> document.Version)
-                (fun document -> document.Event)
-                store
+        let load scope =
+            let key = AuthorizationScope.identity scope |> AuthorizationIdentity.storageKey
+            let store = openStore key
+            let inner = InMemoryTieredMemory.create config embeddingProvider
 
-        let replay event =
-            match event with
-            | TieredEvent.Store entry -> inner.StoreAsync entry |> _.GetAwaiter().GetResult()
-            | TieredEvent.RecordAccess(owner, keys, asOf) ->
-                inner.RecordAccessAsync owner keys asOf |> _.GetAwaiter().GetResult()
-            | TieredEvent.Promote(owner, key, targetTier) ->
-                inner.PromoteAsync owner key targetTier |> _.GetAwaiter().GetResult()
-            | TieredEvent.Evict(owner, asOf) -> inner.EvictAsync owner asOf |> _.GetAwaiter().GetResult() |> ignore
-            | TieredEvent.DeleteOwner owner -> inner.DeleteOwnerAsync owner |> _.GetAwaiter().GetResult() |> ignore
-            | TieredEvent.DeleteExpired(owner, before) ->
-                inner.DeleteExpiredAsync owner before |> _.GetAwaiter().GetResult() |> ignore
+            let events =
+                EventStream.loadCurrent
+                    ("tiered/" + key)
+                    1
+                    FSharpJson.deserialize<TieredDocument>
+                    (fun document -> document.Version)
+                    (fun document ->
+                        if document.Policy <> config then
+                            raise (
+                                InvalidDataException
+                                    "Tiered-memory replay policy does not match the configured policy."
+                            )
 
-        do loadEvents () |> List.iter replay
+                        document.Event)
+                    store
 
-        let append event =
-            store.Append(FSharpJson.serialize { Version = 1; Event = event })
+            for event in events do
+                match event with
+                | TieredEvent.Store entry -> inner.StoreAsync scope entry |> _.GetAwaiter().GetResult()
+                | TieredEvent.RecordAccess(keys, asOf) ->
+                    inner.RecordAccessAsync scope keys asOf |> _.GetAwaiter().GetResult()
+                | TieredEvent.Promote(key, tier) -> inner.PromoteAsync scope key tier |> _.GetAwaiter().GetResult()
+                | TieredEvent.Evict asOf -> inner.EvictAsync scope asOf |> _.GetAwaiter().GetResult() |> ignore
+                | TieredEvent.DeleteOwner -> inner.DeleteOwnerAsync scope |> _.GetAwaiter().GetResult() |> ignore
+                | TieredEvent.DeleteExpired before ->
+                    inner.DeleteExpiredAsync scope before |> _.GetAwaiter().GetResult() |> ignore
 
-        let appendAfter operation event =
+            store, inner
+
+        let read scope operation =
             task {
-                loadEvents () |> ignore
-                do! operation ()
-                append event
+                return
+                    lock sync (fun () ->
+                        let _, inner = load scope
+                        operation inner)
             }
 
-        let countAfter operation event =
+        let mutate scope operation event =
             task {
-                loadEvents () |> ignore
-                let! count = operation ()
-                append event
-                return count
+                return
+                    lock sync (fun () ->
+                        let store, inner = load scope
+                        let result = operation inner
+
+                        let document: TieredDocument =
+                            { Version = 1
+                              Policy = config
+                              Event = event }
+
+                        store.Append(FSharpJson.serialize document)
+                        result)
             }
 
-        let deleteAfter operation event =
+        let protect operation =
+            let failure error =
+                Error(PlatformFailure.fromException PlatformFailureBoundary.Storage None error)
+
             task {
-                loadEvents () |> ignore
-                let! result = operation ()
-
-                match result with
-                | Ok _ -> append event
-                | Error _ -> ()
-
-                return result
+                try
+                    return! operation ()
+                with
+                | :? IOException as error -> return failure error
+                | :? InvalidDataException as error -> return failure error
+                | :? DbException as error -> return failure error
+                | :? UnauthorizedAccessException as error -> return failure error
             }
 
-        let storeAsync entry =
-            appendAfter (fun () -> inner.StoreAsync entry) (TieredEvent.Store entry)
-
-        let recordAccessAsync owner keys asOf =
-            appendAfter
-                (fun () -> inner.RecordAccessAsync owner keys asOf)
-                (TieredEvent.RecordAccess(owner, keys, asOf))
-
-        let promoteAsync owner key targetTier =
-            appendAfter
-                (fun () -> inner.PromoteAsync owner key targetTier)
-                (TieredEvent.Promote(owner, key, targetTier))
-
-        let evictAsync owner asOf =
-            countAfter (fun () -> inner.EvictAsync owner asOf) (TieredEvent.Evict(owner, asOf))
-
-        let deleteOwnerAsync owner =
-            deleteAfter (fun () -> inner.DeleteOwnerAsync owner) (TieredEvent.DeleteOwner owner)
-
-        let deleteExpiredAsync owner before =
-            deleteAfter (fun () -> inner.DeleteExpiredAsync owner before) (TieredEvent.DeleteExpired(owner, before))
-
-        { StoreAsync = storeAsync
-          RetrieveAsync = inner.RetrieveAsync
-          RetrieveFromTierAsync = inner.RetrieveFromTierAsync
-          RecordAccessAsync = recordAccessAsync
-          PromoteAsync = promoteAsync
-          EvictAsync = evictAsync
-          DeleteOwnerAsync = deleteOwnerAsync
-          DeleteExpiredAsync = deleteExpiredAsync }
+        { StoreAsync =
+            fun scope entry ->
+                mutate
+                    scope
+                    (fun inner -> inner.StoreAsync scope entry |> _.GetAwaiter().GetResult())
+                    (TieredEvent.Store entry)
+          RetrieveAsync =
+            fun scope query count ->
+                task {
+                    let! inner = read scope id
+                    return! inner.RetrieveAsync scope query count
+                }
+          RetrieveFromTierAsync =
+            fun scope tier count ->
+                read scope (fun inner -> inner.RetrieveFromTierAsync scope tier count |> _.GetAwaiter().GetResult())
+          RecordAccessAsync =
+            fun scope keys asOf ->
+                mutate
+                    scope
+                    (fun inner -> inner.RecordAccessAsync scope keys asOf |> _.GetAwaiter().GetResult())
+                    (TieredEvent.RecordAccess(keys, asOf))
+          PromoteAsync =
+            fun scope key tier ->
+                mutate
+                    scope
+                    (fun inner -> inner.PromoteAsync scope key tier |> _.GetAwaiter().GetResult())
+                    (TieredEvent.Promote(key, tier))
+          EvictAsync =
+            fun scope asOf ->
+                mutate
+                    scope
+                    (fun inner -> inner.EvictAsync scope asOf |> _.GetAwaiter().GetResult())
+                    (TieredEvent.Evict asOf)
+          DeleteOwnerAsync =
+            fun scope ->
+                protect (fun () ->
+                    mutate
+                        scope
+                        (fun inner -> inner.DeleteOwnerAsync scope |> _.GetAwaiter().GetResult())
+                        TieredEvent.DeleteOwner)
+          DeleteExpiredAsync =
+            fun scope before ->
+                protect (fun () ->
+                    mutate
+                        scope
+                        (fun inner -> inner.DeleteExpiredAsync scope before |> _.GetAwaiter().GetResult())
+                        (TieredEvent.DeleteExpired before)) }
 
 module TieredMemories =
-    let ado
-        (factory: DbConnectionFactory)
-        (config: TieredMemoryConfig)
-        (embeddingProvider: EmbeddingProvider option)
-        : TieredMemory =
-        PersistentTieredMemory.create "tiered" (EventStore.db factory "tiered") config embeddingProvider
+    let ado (factory: DbConnectionFactory) config embeddingProvider : TieredMemory =
+        PersistentTieredMemory.create (fun key -> EventStore.db factory ("tiered/" + key)) config embeddingProvider
 
-    let file
-        (baseDir: string)
-        (config: TieredMemoryConfig)
-        (embeddingProvider: EmbeddingProvider option)
-        : TieredMemory =
-        let path = System.IO.Path.Combine(baseDir, "tiered.jsonl")
-        PersistentTieredMemory.create path (EventStore.file path) config embeddingProvider
+    let file (baseDir: string) config embeddingProvider : TieredMemory =
+        PersistentTieredMemory.create
+            (fun key -> EventStore.file (Path.Combine(baseDir, "tiered", key + ".jsonl")))
+            config
+            embeddingProvider

@@ -1,294 +1,180 @@
 namespace Nao.Persistence
 
 open System
-open System.Data.Common
 open System.IO
 open System.Threading.Tasks
 open Nao.Agents
 
-module private AuditOperations =
-    let private failure =
-        PlatformFailure.fromException PlatformFailureBoundary.Storage None
+module private AuditState =
+    let create (initial: (AuthorizationScope * AuditEntry) seq) : AuditLog =
+        let entries =
+            System.Collections.Concurrent.ConcurrentDictionary<string * Guid, AuditEntry>()
 
-    let protect owner operation =
-        task {
-            if String.IsNullOrWhiteSpace owner then
-                return
-                    Error(
-                        PlatformFailure.create
-                            PlatformErrorCategory.InvalidInput
-                            "Audit owner cannot be blank."
-                            false
-                            None
-                    )
-            else
-                try
-                    let! count = operation ()
-                    return Ok count
-                with ex ->
-                    return Error(failure ex)
-        }
+        let ownerKey = AuthorizationScope.identity >> AuthorizationIdentity.storageKey
+
+        for scope, entry in initial do
+            entries.[(ownerKey scope, entry.Id)] <- entry
+
+        let owned scope =
+            let owner = ownerKey scope
+
+            entries
+            |> Seq.choose (fun pair -> if fst pair.Key = owner then Some pair.Value else None)
+            |> Seq.toArray
+
+        let delete scope predicate =
+            task {
+                let owner = ownerKey scope
+                let mutable deleted = 0
+
+                for pair in entries do
+                    if fst pair.Key = owner && predicate pair.Value then
+                        match entries.TryRemove pair.Key with
+                        | true, _ -> deleted <- deleted + 1
+                        | false, _ -> ()
+
+                return Ok deleted
+            }
+
+        { RecordAsync =
+            fun scope entry ->
+                entries.[(ownerKey scope, entry.Id)] <- entry
+                Task.FromResult()
+          QueryAsync =
+            fun scope agentId since ->
+                owned scope
+                |> Seq.filter (fun entry -> entry.AgentId = agentId && entry.Timestamp >= since)
+                |> Seq.sortByDescending _.Timestamp
+                |> Seq.toList
+                |> Task.FromResult
+          QueryByExecutionAsync =
+            fun scope executionId ->
+                owned scope
+                |> Seq.filter (fun entry -> entry.ExecutionId = Some executionId)
+                |> Seq.sortBy _.Timestamp
+                |> Seq.toList
+                |> Task.FromResult
+          GetDeniedCountAsync =
+            fun scope agentId since ->
+                owned scope
+                |> Seq.filter (fun entry -> entry.AgentId = agentId && entry.Timestamp >= since && not entry.Permitted)
+                |> Seq.length
+                |> Task.FromResult
+          DeleteScopeAsync = fun scope -> delete scope (fun _ -> true)
+          DeleteExpiredAsync = fun scope before -> delete scope (fun entry -> entry.Timestamp < before) }
 
 module InMemoryAuditLog =
-    let create () : AuditLog =
-        let entries = System.Collections.Concurrent.ConcurrentDictionary<Guid, AuditEntry>()
+    let create () : AuditLog = AuditState.create Seq.empty
 
-        let delete (predicate: AuditEntry -> bool) =
-            entries
-            |> Seq.filter (fun pair -> predicate pair.Value)
-            |> Seq.sumBy (fun pair -> if entries.TryRemove(pair.Key) |> fst then 1 else 0)
-            |> Task.FromResult
+[<RequireQualifiedAccess>]
+type AuditEvent =
+    | Accepted of AuditEntry
+    | DeleteScope
+    | DeleteExpired of DateTimeOffset
 
-        let recordAsync (entry: AuditEntry) =
-            entries.[entry.Id] <- entry
-            Task.FromResult()
+type AuditDocument = { Version: int; Event: AuditEvent }
 
-        let queryAsync agentId since =
-            entries.Values
-            |> Seq.filter (fun entry -> entry.AgentId = agentId && entry.Timestamp >= since)
-            |> Seq.sortByDescending (fun entry -> entry.Timestamp)
-            |> Seq.toList
-            |> Task.FromResult
-
-        let queryByExecutionAsync (executionId: ExecutionId) =
-            entries.Values
-            |> Seq.filter (fun entry -> entry.ExecutionId = Some executionId)
-            |> Seq.sortBy (fun entry -> entry.Timestamp)
-            |> Seq.toList
-            |> Task.FromResult
-
-        let getDeniedCountAsync agentId since =
-            entries.Values
-            |> Seq.filter (fun entry -> entry.AgentId = agentId && entry.Timestamp >= since && not entry.Permitted)
-            |> Seq.length
-            |> Task.FromResult
-
-        let deleteOwnerAsync owner =
-            AuditOperations.protect owner (fun () -> delete (fun entry -> entry.AgentId = owner))
-
-        let deleteExpiredAsync owner before =
-            AuditOperations.protect owner (fun () ->
-                delete (fun entry -> entry.AgentId = owner && entry.Timestamp < before))
-
-        { RecordAsync = recordAsync
-          QueryAsync = queryAsync
-          QueryByExecutionAsync = queryByExecutionAsync
-          GetDeniedCountAsync = getDeniedCountAsync
-          DeleteOwnerAsync = deleteOwnerAsync
-          DeleteExpiredAsync = deleteExpiredAsync }
-
-module private AdoAudit =
-    let ensureAsync factory =
-        AdoSchema.ensureVersionedTable
-            factory
-            "audit"
-            "nao_audit"
-            "CREATE TABLE IF NOT EXISTS nao_audit (audit_id TEXT NOT NULL PRIMARY KEY, audit_ts TEXT NOT NULL, agent_name TEXT NOT NULL, agent_desc TEXT NOT NULL, action_json TEXT NOT NULL, audit_input TEXT NULL, audit_output TEXT NULL, permitted INTEGER NOT NULL, permission_level TEXT NOT NULL, violations TEXT NOT NULL, execution_id TEXT NULL, metadata TEXT NOT NULL)"
-
-    let mapEntry (reader: DbDataReader) : AuditEntry =
-        let id = Ado.getString reader "audit_id"
-
+module PersistentAuditLog =
+    let private decode context lineNumber line =
         try
-            { Id = Guid.Parse id
-              Timestamp = Time.fromIso (Ado.getString reader "audit_ts")
-              AgentId = Ado.getString reader "agent_name"
-              Action = AuditActionCodec.fromJson (Ado.getString reader "action_json")
-              Input = Ado.getStringOpt reader "audit_input"
-              Output = Ado.getStringOpt reader "audit_output"
-              Permitted = Ado.getBool reader "permitted"
-              Decision = PermissionDecisionCodec.fromString (Ado.getString reader "permission_level")
-              ConstitutionViolations = Json.tagsFromJson (Ado.getString reader "violations")
-              ExecutionId = Ado.getStringOpt reader "execution_id" |> Option.map ExecutionId.parse
-              Metadata = Json.mapFromJson (Ado.getString reader "metadata") }
+            let document = FSharpJson.deserialize<AuditDocument> line
+
+            if isNull (box document) || document.Version <> 1 then
+                raise (System.Text.Json.JsonException("Expected audit schema version 1."))
+
+            document.Event
         with ex ->
             raise (
-                InvalidDataException(sprintf "Audit row '%s' is invalid. Follow docs/migrations before writing." id, ex)
+                InvalidDataException(
+                    sprintf
+                        "Audit stream '%s' is invalid at event %d. Follow docs/migrations before writing."
+                        context
+                        lineNumber,
+                    ex
+                )
             )
 
-    let columns =
-        "audit_id, audit_ts, agent_name, agent_desc, action_json, audit_input, audit_output, permitted, permission_level, violations, execution_id, metadata"
-
-module AdoAuditLog =
-    let create (factory: DbConnectionFactory) : AuditLog =
-        let validateAsync () =
-            task {
-                do! AdoAudit.ensureAsync factory
-
-                let! _ = Ado.query factory ("SELECT " + AdoAudit.columns + " FROM nao_audit") [] AdoAudit.mapEntry
-
-                return ()
-            }
-
-        let byAgent agentId =
-            Ado.query
-                factory
-                ("SELECT " + AdoAudit.columns + " FROM nao_audit WHERE agent_name = @a")
-                [ "@a", box agentId ]
-                AdoAudit.mapEntry
-
-        let recordAsync (entry: AuditEntry) =
-            task {
-                do! validateAsync ()
-
-                let value option =
-                    match option with
-                    | Some text -> box text
-                    | None -> box DBNull.Value
-
-                let execution = entry.ExecutionId |> Option.map ExecutionId.serialize |> value
-
-                let! _ =
-                    Ado.executeNonQuery
-                        factory
-                        "INSERT INTO nao_audit (audit_id, audit_ts, agent_name, agent_desc, action_json, audit_input, audit_output, permitted, permission_level, violations, execution_id, metadata) VALUES (@id, @ts, @an, @ad, @ac, @in, @out, @pm, @pl, @vi, @ex, @md)"
-                        [ "@id", box (entry.Id.ToString("D"))
-                          "@ts", box (Time.toIso entry.Timestamp)
-                          "@an", box entry.AgentId
-                          "@ad", box ""
-                          "@ac", box (AuditActionCodec.toJson entry.Action)
-                          "@in", value entry.Input
-                          "@out", value entry.Output
-                          "@pm", Ado.boolValue entry.Permitted
-                          "@pl", box (PermissionDecisionCodec.toString entry.Decision)
-                          "@vi", box (Json.tagsToJson entry.ConstitutionViolations)
-                          "@ex", execution
-                          "@md", box (Json.mapToJson entry.Metadata) ]
-
-                return ()
-            }
-
-        let queryAsync agentId since =
-            task {
-                do! AdoAudit.ensureAsync factory
-                let! entries = byAgent agentId
-
-                return
-                    entries
-                    |> List.filter (fun entry -> entry.Timestamp >= since)
-                    |> List.sortByDescending (fun entry -> entry.Timestamp)
-            }
-
-        let queryByExecutionAsync (executionId: ExecutionId) =
-            task {
-                do! AdoAudit.ensureAsync factory
-
-                let! entries =
-                    Ado.query
-                        factory
-                        ("SELECT " + AdoAudit.columns + " FROM nao_audit WHERE execution_id = @e")
-                        [ "@e", box (ExecutionId.serialize executionId) ]
-                        AdoAudit.mapEntry
-
-                return entries |> List.sortBy (fun entry -> entry.Timestamp)
-            }
-
-        let getDeniedCountAsync agentId since =
-            task {
-                do! AdoAudit.ensureAsync factory
-                let! entries = byAgent agentId
-
-                return
-                    entries
-                    |> List.filter (fun entry -> entry.Timestamp >= since && not entry.Permitted)
-                    |> List.length
-            }
-
-        let delete sql parameters =
-            task {
-                do! validateAsync ()
-                return! Ado.executeNonQuery factory sql parameters
-            }
-
-        let deleteOwnerAsync owner =
-            AuditOperations.protect owner (fun () ->
-                delete "DELETE FROM nao_audit WHERE agent_name = @a" [ "@a", box owner ])
-
-        let deleteExpiredAsync owner before =
-            AuditOperations.protect owner (fun () ->
-                delete
-                    "DELETE FROM nao_audit WHERE agent_name = @a AND audit_ts < @before"
-                    [ "@a", box owner; "@before", box (Time.toIso before) ])
-
-        { RecordAsync = recordAsync
-          QueryAsync = queryAsync
-          QueryByExecutionAsync = queryByExecutionAsync
-          GetDeniedCountAsync = getDeniedCountAsync
-          DeleteOwnerAsync = deleteOwnerAsync
-          DeleteExpiredAsync = deleteExpiredAsync }
-
-module FileAuditLog =
-    [<Literal>]
-    let private CurrentSchemaVersion = 1
-
-    let create baseDir : AuditLog =
+    /// The host supplies a separate stream for each claim-free authorization partition key.
+    let create (openStore: string -> EventStore) : AuditLog =
         let sync = obj ()
-        let file = Path.Combine(baseDir, "audit-log.json")
 
-        let load () : Dto.AuditEntryDto list =
-            VersionedFileJson.read<Dto.AuditEntryDto list> "Audit log" CurrentSchemaVersion file []
+        let load scope =
+            let key = AuthorizationScope.identity scope |> AuthorizationIdentity.storageKey
+            let context = "audit/" + key
+            let store = openStore key
+            let inner = InMemoryAuditLog.create ()
 
-        let save entries =
-            VersionedFileJson.write CurrentSchemaVersion file entries
+            let events =
+                store.LoadAll() |> List.mapi (fun index line -> decode context (index + 1) line)
 
-        let delete predicate =
+            for event in events do
+                match event with
+                | AuditEvent.Accepted entry -> inner.RecordAsync scope entry |> _.GetAwaiter().GetResult()
+                | AuditEvent.DeleteScope -> inner.DeleteScopeAsync scope |> _.GetAwaiter().GetResult() |> ignore
+                | AuditEvent.DeleteExpired before ->
+                    inner.DeleteExpiredAsync scope before |> _.GetAwaiter().GetResult() |> ignore
+
+            store, inner
+
+        let read scope operation =
+            lock sync (fun () ->
+                let _, inner = load scope
+                operation inner)
+
+        let mutate scope operation event =
+            lock sync (fun () ->
+                let store, inner = load scope
+                let result = operation inner
+                store.Append(FSharpJson.serialize { Version = 1; Event = event })
+                result)
+
+        let protect operation =
             task {
-                return
-                    lock sync (fun () ->
-                        let entries = load ()
-                        let retained = entries |> List.filter (Dto.ofAuditDto >> predicate >> not)
-                        save retained
-                        entries.Length - retained.Length)
+                try
+                    return Ok(operation ())
+                with ex ->
+                    return Error(PlatformFailure.fromException PlatformFailureBoundary.Storage None ex)
             }
 
-        let recordAsync entry =
-            task { lock sync (fun () -> save (load () @ [ Dto.toAuditDto entry ])) }
-
-        let queryAsync agentId since =
-            task {
-                return
-                    lock sync (fun () ->
-                        load ()
-                        |> List.map Dto.ofAuditDto
-                        |> List.filter (fun entry -> entry.AgentId = agentId && entry.Timestamp >= since)
-                        |> List.sortByDescending (fun entry -> entry.Timestamp))
-            }
-
-        let queryByExecutionAsync executionId =
-            task {
-                return
-                    lock sync (fun () ->
-                        load ()
-                        |> List.map Dto.ofAuditDto
-                        |> List.filter (fun entry -> entry.ExecutionId = Some executionId)
-                        |> List.sortBy (fun entry -> entry.Timestamp))
-            }
-
-        let getDeniedCountAsync agentId since =
-            task {
-                return
-                    lock sync (fun () ->
-                        load ()
-                        |> List.map Dto.ofAuditDto
-                        |> List.filter (fun entry ->
-                            entry.AgentId = agentId && entry.Timestamp >= since && not entry.Permitted)
-                        |> List.length)
-            }
-
-        let deleteOwnerAsync owner =
-            AuditOperations.protect owner (fun () -> delete (fun entry -> entry.AgentId = owner))
-
-        let deleteExpiredAsync owner before =
-            AuditOperations.protect owner (fun () ->
-                delete (fun entry -> entry.AgentId = owner && entry.Timestamp < before))
-
-        { RecordAsync = recordAsync
-          QueryAsync = queryAsync
-          QueryByExecutionAsync = queryByExecutionAsync
-          GetDeniedCountAsync = getDeniedCountAsync
-          DeleteOwnerAsync = deleteOwnerAsync
-          DeleteExpiredAsync = deleteExpiredAsync }
+        { RecordAsync =
+            fun scope entry ->
+                task {
+                    mutate
+                        scope
+                        (fun inner -> inner.RecordAsync scope entry |> _.GetAwaiter().GetResult())
+                        (AuditEvent.Accepted entry)
+                }
+          QueryAsync = fun scope agentId since -> read scope (fun inner -> inner.QueryAsync scope agentId since)
+          QueryByExecutionAsync =
+            fun scope executionId -> read scope (fun inner -> inner.QueryByExecutionAsync scope executionId)
+          GetDeniedCountAsync =
+            fun scope agentId since -> read scope (fun inner -> inner.GetDeniedCountAsync scope agentId since)
+          DeleteScopeAsync =
+            fun scope ->
+                protect (fun () ->
+                    mutate
+                        scope
+                        (fun inner ->
+                            inner.DeleteScopeAsync scope
+                            |> _.GetAwaiter().GetResult()
+                            |> Result.defaultWith (fun failure -> raise (InvalidOperationException failure.Message)))
+                        AuditEvent.DeleteScope)
+          DeleteExpiredAsync =
+            fun scope before ->
+                protect (fun () ->
+                    mutate
+                        scope
+                        (fun inner ->
+                            inner.DeleteExpiredAsync scope before
+                            |> _.GetAwaiter().GetResult()
+                            |> Result.defaultWith (fun failure -> raise (InvalidOperationException failure.Message)))
+                        (AuditEvent.DeleteExpired before)) }
 
 module AuditLogs =
     let inMemory () : AuditLog = InMemoryAuditLog.create ()
-    let ado factory : AuditLog = AdoAuditLog.create factory
-    let file baseDir : AuditLog = FileAuditLog.create baseDir
+
+    let ado factory : AuditLog =
+        PersistentAuditLog.create (fun key -> EventStore.db factory ("audit/" + key))
+
+    let file baseDir : AuditLog =
+        PersistentAuditLog.create (fun key -> EventStore.file (Path.Combine(baseDir, "audit", key + ".jsonl")))

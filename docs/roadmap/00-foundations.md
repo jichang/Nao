@@ -64,7 +64,7 @@ This workstream establishes an accurate baseline, stable platform vocabulary, pa
 - [x] Each durable record has an owner, retention policy, and deletion path.
 - [x] Error categories map consistently across agents, tools, providers, storage, and hosts.
 
-Lifecycle coverage includes session turns, audit, key/value memory, semantic memory, execution-scoped working memory, owner-scoped episodic, graph, and tiered memory, traces, metrics, feedback, execution journals, and derived evaluation datasets/reports. Session destruction coordinates its conversation, turn, memory, metric, and journal owners before clearing runtime identity. Canonical exception and HTTP mappings preserve category and retryability across agent, tool, provider, storage, and host boundaries. FND-03 is complete.
+Lifecycle coverage includes session turns, audit, key/value memory, semantic memory, execution-scoped working memory, owner-scoped episodic, graph, and tiered memory, traces, metrics, feedback, execution journals, and derived evaluation datasets/reports. Session destruction coordinates conversation and turn ownership plus authenticated memory, metric, trace, and journal scopes before clearing runtime identity. Canonical exception and HTTP mappings preserve category and retryability across agent, tool, provider, storage, and host boundaries. FND-03 is complete.
 
 ## FND-04 — Package and dependency architecture
 

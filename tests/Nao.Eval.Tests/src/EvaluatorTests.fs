@@ -21,8 +21,25 @@ module private CapturingProvider =
             ))
 
 module private Evaluation =
+    let context () =
+        let principal =
+            SecurityPrincipal.createAuthenticated
+                (TenantId.parse "eval-tenant")
+                (UserId.parse "eval-user")
+                (Some(ServiceId.parse "eval-service"))
+                []
+                [ "private-role" ]
+                (Map.ofList [ "private-claim", "private-claim-value" ])
+                AuthenticationStrength.MultiFactor
+
+        { Authorization =
+            AuthorizationScope.tryCreate principal None (WorkspaceId.parse "eval-workspace") None
+            |> Option.get
+          Correlation = CorrelationContext.root ()
+          CancellationToken = System.Threading.CancellationToken.None }
+
     let evaluate (evaluator: Evaluator) case actual =
-        evaluator.EvaluateAsync (CorrelationContext.root ()) case actual
+        evaluator.EvaluateAsync (context ()) case actual
 
 open Evaluation
 
@@ -125,7 +142,7 @@ type LlmJudgeTests() =
     member _.``Prompt example and parser share the DTO contract``() =
         let capturedPrompt = ref ""
         let capturedCorrelation = ref None
-        let correlation = CorrelationContext.root ()
+        let context = context ()
 
         let provider =
             CapturingProvider.create """{"score":5,"reason":"correct"}""" capturedPrompt capturedCorrelation
@@ -133,12 +150,15 @@ type LlmJudgeTests() =
         let evaluator = LlmJudge.create provider
         let case = EvalCase.create "judge" "question" "answer"
 
-        let verdict, reason = evaluator.EvaluateAsync correlation case "answer" |> _.Result
+        let verdict, reason = evaluator.EvaluateAsync context case "answer" |> _.Result
 
         Assert.AreEqual(EvalVerdict.Pass, verdict)
         Assert.AreEqual("correct", reason)
-        Assert.AreEqual(Some correlation, capturedCorrelation.Value)
+        Assert.AreEqual(Some context.Correlation, capturedCorrelation.Value)
         StringAssert.Contains(capturedPrompt.Value, """{"score":5,"reason":"brief explanation"}""")
+        Assert.IsFalse(capturedPrompt.Value.Contains("private-role"))
+        Assert.IsFalse(capturedPrompt.Value.Contains("private-claim"))
+        Assert.IsFalse(capturedPrompt.Value.Contains("eval-service"))
 
     [<TestMethod>]
     member _.``Missing required response field fails``() =
@@ -180,6 +200,45 @@ type VerificationJudgeTests() =
 
 [<TestClass>]
 type CompositeTests() =
+
+    [<TestMethod>]
+    member _.``Composite forwards authenticated context to every evaluator``() =
+        let context = context ()
+        let mutable count = 0
+
+        let capture name =
+            Evaluator.create name (fun actualContext _ _ ->
+                Assert.AreEqual(context, actualContext)
+                System.Threading.Interlocked.Increment(&count) |> ignore
+                Task.FromResult(EvalVerdict.Pass, "ok"))
+
+        let composite =
+            Composite.all [ capture "first"; Composite.any [ capture "second" ] ]
+
+        let verdict, _ =
+            composite.EvaluateAsync context (EvalCase.create "case" "input" "answer") "answer"
+            |> _.Result
+
+        Assert.AreEqual(EvalVerdict.Pass, verdict)
+        Assert.AreEqual(2, count)
+
+    [<TestMethod>]
+    member _.``Cancelled context prevents evaluator invocation``() =
+        use cancellation = new System.Threading.CancellationTokenSource()
+        cancellation.Cancel()
+
+        let context =
+            { context () with
+                CancellationToken = cancellation.Token }
+
+        let evaluator =
+            Evaluator.create "must-not-run" (fun _ _ _ ->
+                Assert.Fail "Cancelled evaluator must not execute."
+                Task.FromResult(EvalVerdict.Pass, "unexpected"))
+
+        Assert.ThrowsExactlyAsync<System.OperationCanceledException>(fun () ->
+            evaluator.EvaluateAsync context (EvalCase.create "case" "input" "answer") "answer" :> Task)
+        |> _.Wait()
 
     [<TestMethod>]
     member _.``Composite All passes when all evaluators pass``() =

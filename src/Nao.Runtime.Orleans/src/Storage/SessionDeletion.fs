@@ -5,95 +5,117 @@ open Nao.Agents
 
 /// Identity and owner scopes required to destroy one session.
 type SessionDeletionRequest =
-    { SessionKey: string
-      MemoryOwner: string
-      UserId: string
-      SessionId: string }
+    private
+        { SessionKey: string
+          Authorization: AuthorizationScope }
 
 /// Effects participating in coordinated session destruction.
 type SessionDeletion =
-    { DeleteConversationDataAsync: string -> Task
-      DeleteTurnDataAsync: string -> Task<Result<int, PlatformFailure>>
-      DeleteMemoryOwnerAsync: string -> Task<Result<int, PlatformFailure>>
-      DeleteMetricsOwnerAsync: string -> Task<Result<int, PlatformFailure>>
-      DeleteJournalOwnerAsync: string -> Task<Result<int, PlatformFailure>>
+    { DeleteConversationDataAsync: AuthorizationScope -> Task
+      DeleteTurnDataAsync: AuthorizationScope -> Task<Result<int, PlatformFailure>>
+      DeleteMemoryOwnerAsync: AuthorizationScope -> Task<Result<int, PlatformFailure>>
+      DeleteMetricsScopeAsync: AuthorizationScope -> Task<Result<int, PlatformFailure>>
+      DeleteTraceScopeAsync: AuthorizationScope -> Task<Result<int, PlatformFailure>>
+      DeleteJournalScopeAsync: AuthorizationScope -> Task<Result<int, PlatformFailure>>
       RemoveDirectoryEntryAsync: string -> string -> Task
       ClearRuntimeStateAsync: unit -> Task }
 
 [<RequireQualifiedAccess>]
 module SessionDeletion =
-    let request sessionKey memoryOwner userId sessionId : SessionDeletionRequest =
+    let request sessionKey authorization : SessionDeletionRequest =
+        let userId = AuthorizationScope.userId authorization |> UserId.value
+
+        let sessionId =
+            AuthorizationScope.sessionId authorization
+            |> Option.map SessionId.value
+            |> Option.defaultWith (fun () ->
+                raise (System.UnauthorizedAccessException "Session deletion requires a session authorization scope."))
+
+        let matchesExplicitSession = sessionKey = sprintf "%s/%s" userId sessionId
+        let matchesDefaultSession = sessionId = "default" && sessionKey = userId
+
+        if not (matchesExplicitSession || matchesDefaultSession) then
+            raise (System.UnauthorizedAccessException "Session deletion key does not match the authenticated scope.")
+
         { SessionKey = sessionKey
-          MemoryOwner = memoryOwner
-          UserId = userId
-          SessionId = sessionId }
+          Authorization = authorization }
 
     let create
         deleteConversationDataAsync
         deleteTurnDataAsync
         deleteMemoryOwnerAsync
-        deleteMetricsOwnerAsync
-        deleteJournalOwnerAsync
+        deleteMetricsScopeAsync
+        deleteTraceScopeAsync
+        deleteJournalScopeAsync
         removeDirectoryEntryAsync
         clearRuntimeStateAsync
         : SessionDeletion =
         { DeleteConversationDataAsync = deleteConversationDataAsync
           DeleteTurnDataAsync = deleteTurnDataAsync
           DeleteMemoryOwnerAsync = deleteMemoryOwnerAsync
-          DeleteMetricsOwnerAsync = deleteMetricsOwnerAsync
-          DeleteJournalOwnerAsync = deleteJournalOwnerAsync
+          DeleteMetricsScopeAsync = deleteMetricsScopeAsync
+          DeleteTraceScopeAsync = deleteTraceScopeAsync
+          DeleteJournalScopeAsync = deleteJournalScopeAsync
           RemoveDirectoryEntryAsync = removeDirectoryEntryAsync
           ClearRuntimeStateAsync = clearRuntimeStateAsync }
 
     /// Delete session-owned data before clearing the runtime state that identifies it.
     let executeAsync request deletion =
         task {
-            do! deletion.DeleteConversationDataAsync request.SessionKey
+            do! deletion.DeleteConversationDataAsync request.Authorization
 
             let deletions =
-                [ request.SessionKey, deletion.DeleteTurnDataAsync
-                  request.MemoryOwner, deletion.DeleteMemoryOwnerAsync
-                  request.SessionKey, deletion.DeleteMetricsOwnerAsync
-                  request.SessionKey, deletion.DeleteJournalOwnerAsync ]
+                [ (fun () -> deletion.DeleteTurnDataAsync request.Authorization)
+                  (fun () -> deletion.DeleteMemoryOwnerAsync request.Authorization)
+                  (fun () -> deletion.DeleteMetricsScopeAsync request.Authorization)
+                  (fun () -> deletion.DeleteTraceScopeAsync request.Authorization)
+                  (fun () -> deletion.DeleteJournalScopeAsync request.Authorization) ]
 
             let mutable deletionFailure = None
 
-            for owner, deleteOwnerAsync in deletions do
+            for deleteOwnerAsync in deletions do
                 if deletionFailure.IsNone then
-                    match! deleteOwnerAsync owner with
+                    match! deleteOwnerAsync () with
                     | Error failure -> deletionFailure <- Some failure
                     | Ok _ -> ()
 
             match deletionFailure with
             | Some failure -> return Error failure
             | None ->
-                do! deletion.RemoveDirectoryEntryAsync request.UserId request.SessionId
+                let userId = AuthorizationScope.userId request.Authorization |> UserId.value
+
+                let sessionId =
+                    AuthorizationScope.sessionId request.Authorization
+                    |> Option.get
+                    |> SessionId.value
+
+                do! deletion.RemoveDirectoryEntryAsync userId sessionId
                 do! deletion.ClearRuntimeStateAsync()
                 return Ok()
         }
 
     let executeForSessionAsync
         sessionKey
-        memoryOwner
-        parseKey
+        authorization
         deleteConversationDataAsync
         deleteTurnDataAsync
         deleteMemoryOwnerAsync
-        deleteMetricsOwnerAsync
-        deleteJournalOwnerAsync
+        deleteMetricsScopeAsync
+        deleteTraceScopeAsync
+        deleteJournalScopeAsync
         removeDirectoryEntryAsync
         clearRuntimeStateAsync
         =
-        let userId, sessionId = parseKey sessionKey
-        let request = request sessionKey memoryOwner userId sessionId
+        let request = request sessionKey authorization
 
         let deletion =
             create
                 deleteConversationDataAsync
                 deleteTurnDataAsync
                 deleteMemoryOwnerAsync
-                deleteMetricsOwnerAsync
-                deleteJournalOwnerAsync
+                deleteMetricsScopeAsync
+                deleteTraceScopeAsync
+                deleteJournalScopeAsync
                 removeDirectoryEntryAsync
                 clearRuntimeStateAsync
 

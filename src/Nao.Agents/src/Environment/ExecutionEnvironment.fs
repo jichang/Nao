@@ -119,6 +119,13 @@ type ContainerHostSupport =
 exception ContainerHostUnsupportedException of reasons: string list
 
 module ExecutionEnvironment =
+    let private requireWorkerAuthorization (context: AgentContext) =
+        if
+            context.ExecutionBoundary = ExecutionBoundary.HarnessRequired
+            && context.Authorization.IsNone
+        then
+            raise (UnauthorizedAccessException "Protected worker execution requires a host-authenticated principal.")
+
     type ContainerImageVerificationEvidence =
         { VerifierId: string
           PolicyVersion: string
@@ -343,6 +350,8 @@ module ExecutionEnvironment =
         { ExecuteAsync =
             fun ctx agentContext agent input ->
                 task {
+                    requireWorkerAuthorization agentContext
+
                     let workerReference =
                         agent.WorkerReference
                         |> Option.defaultWith (fun () ->
@@ -611,6 +620,7 @@ module ExecutionEnvironment =
                                     config.ProtocolVersion
                                     (workerReference |> WorkerAgentReference.value)
                                     ctx
+                                    agentContext
                                     enforceFileSystemPolicy
                                     allowedPaths
                                     secrets
@@ -816,6 +826,8 @@ module ExecutionEnvironment =
         { ExecuteAsync =
             fun ctx agentContext agent input ->
                 task {
+                    requireWorkerAuthorization agentContext
+
                     let containerIdentifier = Guid.NewGuid().ToString("N")
                     let containerName = "nao-" + containerIdentifier
 

@@ -255,7 +255,7 @@ type SessionGrain
         memoryStore: MemoryStore,
         memoryToolConfig: MemoryToolConfig,
         grainFactory: IGrainFactory
-    ) as this =
+    ) =
     inherit Grain()
 
     /// The recorder for the turn currently being processed (None when idle). Held so the
@@ -376,13 +376,12 @@ type SessionGrain
             let ctx = activeConversation ()
 
             if ctx.Messages.Count = 0 then
+                let authorization = requireCurrentScope ()
                 let sessionId = persistentState.State.Info.SessionId
-                let userId = persistentState.State.Info.UserId
                 let convName = persistentState.State.Info.ActiveConversation
 
                 if not (String.IsNullOrEmpty sessionId) then
-                    let grainKey = sprintf "%s/%s" userId sessionId
-                    let! loaded = conversationStore.LoadAsync grainKey convName
+                    let! loaded = conversationStore.LoadAsync authorization convName
 
                     for pm in loaded do
                         ctx.Messages.Add(toMessageRecord pm)
@@ -428,6 +427,7 @@ type SessionGrain
         (artifacts: Artifact list)
         : Task =
         task {
+            let authorization = requireCurrentScope ()
             let ctx = activeConversation ()
             let stepRecords = steps |> List.map toStepRecord
 
@@ -465,11 +465,9 @@ type SessionGrain
             ctx.Messages.Add assistantRecord
 
             let sessionId = persistentState.State.Info.SessionId
-            let userId = persistentState.State.Info.UserId
             let convName = persistentState.State.Info.ActiveConversation
 
             if not (String.IsNullOrEmpty sessionId) then
-                let grainKey = sprintf "%s/%s" userId sessionId
                 let now = DateTimeOffset.UtcNow
 
                 let persisted =
@@ -484,7 +482,7 @@ type SessionGrain
                            [||]
                            (artifactRecords |> List.toArray) |]
 
-                do! conversationStore.AppendAsync grainKey convName persisted
+                do! conversationStore.AppendAsync authorization convName persisted
 
                 // Persist each sub-agent delegation as a nested child conversation, so the
                 // delegated work is browsable beneath its parent rather than only inlined as a
@@ -507,7 +505,7 @@ type SessionGrain
                         [| toPersistedMessage now correlation turnId "User" s.Input [||] [||] [||]
                            toPersistedMessage now correlation turnId "Assistant" s.Output [||] [||] [||] |]
 
-                    do! conversationStore.AppendAsync grainKey childName childMsgs
+                    do! conversationStore.AppendAsync authorization childName childMsgs
         }
 
     // ─── Tool resolution ───
@@ -525,14 +523,9 @@ type SessionGrain
 
     let agentExists (workspace: WorkspaceDefinitions) (name: string) : bool = (findBuiltAgent workspace name).IsSome
 
-    /// Stable external-storage owner for this session. The grain key is immutable even
-    /// though the session's selected agent and other runtime settings may change.
-    let memoryOwner () =
-        sprintf "session:%s" (this.GetPrimaryKeyString())
-
     let addMemoryAgentTool (tools: Tool list) =
         let existingNames = tools |> List.map _.Name |> Set.ofList
-        let memoryTools = MemoryTools.create memoryToolConfig memoryStore memoryOwner
+        let memoryTools = MemoryTools.create memoryToolConfig memoryStore
 
         if memoryTools.IsEmpty || existingNames.Contains "memory" then
             tools
@@ -585,16 +578,7 @@ type SessionGrain
                     // event bus and capture this turn's whole execution (rounds, tool calls,
                     // delegations) — not just the harness-level final answer. It filters bus events
                     // by `scope.ActionId = turnId`, so a shared bus never cross-talks between turns.
-                    let recorder =
-                        TurnRecorder.create (
-                            turnId,
-                            correlation,
-                            info.SessionId,
-                            info.UserId,
-                            info.WorkspaceKey,
-                            agentName,
-                            contextualInput
-                        )
+                    let recorder = TurnRecorder.create (turnId, correlation, agentName, contextualInput)
                     // Expose this turn's recorder so GetLiveStepsAsync can stream progress while
                     // the harness runs; always clear it once the turn finishes (success or not).
                     currentRecorder <- Some recorder
@@ -720,7 +704,8 @@ type SessionGrain
                           GetGrantedResources =
                             (fun () -> lock grantedResources (fun () -> List.ofSeq grantedResources))
                           RequestPermission = requestPermission
-                          PublishArtifact = publishArtifact }
+                          PublishArtifact = publishArtifact
+                          Authorization = None }
 
                     try
                         // Subscribe the recorder for this turn's progress signals; detached in finally.
@@ -920,8 +905,6 @@ type SessionGrain
                     let fb =
                         { Id = Guid.NewGuid()
                           TurnId = info.LastTurnId
-                          SessionId = info.SessionId
-                          UserId = info.UserId
                           Sentiment = parsedSentiment
                           Comment =
                             if String.IsNullOrWhiteSpace comment then
@@ -931,7 +914,7 @@ type SessionGrain
                           CreatedAt = DateTimeOffset.UtcNow
                           Metadata = Map.empty }
 
-                    do! feedback.SubmitFeedbackAsync fb
+                    do! feedback.SubmitFeedbackAsync (requireCurrentScope ()) fb
                     return [||]
             }
 
@@ -1006,18 +989,17 @@ type SessionGrain
 
         member this.ClearHistoryAsync() : Task =
             task {
-                requireCurrentScope () |> ignore
+                let authorization = requireCurrentScope ()
                 let ctx = activeConversation ()
                 ctx.Messages.Clear()
-                let grainKey = this.GetPrimaryKeyString()
                 let convName = persistentState.State.Info.ActiveConversation
-                do! conversationStore.DeleteConversationAsync grainKey convName
+                do! conversationStore.DeleteConversationAsync authorization convName
                 do! persistentState.WriteStateAsync()
             }
 
         member _.SaveMemoryAsync(key: string, value: string) : Task =
             task {
-                requireCurrentScope () |> ignore
+                let authorization = requireCurrentScope ()
 
                 let entry =
                     { Key = key
@@ -1025,21 +1007,21 @@ type SessionGrain
                       Timestamp = DateTimeOffset.UtcNow
                       Tags = [] }
 
-                do! memoryStore.SaveAsync (memoryOwner ()) entry
+                do! memoryStore.SaveAsync authorization entry
             }
 
         member _.RecallMemoryAsync(key: string) : Task<MemoryEntry array> =
             task {
-                requireCurrentScope () |> ignore
-                let! entries = memoryStore.RecallAsync (memoryOwner ()) key
+                let authorization = requireCurrentScope ()
+                let! entries = memoryStore.RecallAsync authorization key
                 return entries |> List.toArray
             }
 
         member _.ClearMemoriesAsync() : Task =
             task {
-                requireCurrentScope () |> ignore
+                let authorization = requireCurrentScope ()
 
-                match! memoryStore.DeleteOwnerAsync(memoryOwner ()) with
+                match! memoryStore.DeleteOwnerAsync authorization with
                 | Ok _ -> return ()
                 | Error failure -> return PlatformFailure.raiseException failure
             }
@@ -1061,7 +1043,7 @@ type SessionGrain
 
         member this.DestroyAsync() : Task =
             task {
-                requireCurrentScope () |> ignore
+                let authorization = requireCurrentScope ()
                 let grainKey = this.GetPrimaryKeyString()
 
                 try
@@ -1071,18 +1053,21 @@ type SessionGrain
                     match!
                         SessionDeletion.executeForSessionAsync
                             grainKey
-                            (memoryOwner ())
-                            parseKey
-                            conversationStore.DeleteSessionAsync
-                            feedback.DeleteSessionAsync
+                            authorization
+                            conversationStore.DeleteScopeAsync
+                            feedback.DeleteScopeAsync
                             memoryStore.DeleteOwnerAsync
-                            (fun sessionKey ->
+                            (fun scope ->
                                 match deletionServices.Metrics with
-                                | Some metrics -> metrics.DeleteOwnerAsync sessionKey
+                                | Some metrics -> metrics.DeleteScopeAsync scope
                                 | None -> Task.FromResult(Ok 0))
-                            (fun sessionKey ->
+                            (fun scope ->
+                                match deletionServices.TraceStore with
+                                | Some traces -> traces.DeleteScopeAsync scope
+                                | None -> Task.FromResult(Ok 0))
+                            (fun scope ->
                                 match deletionServices.ExecutionJournal with
-                                | Some journal -> journal.DeleteOwnerAsync sessionKey
+                                | Some journal -> journal.DeleteScopeAsync scope
                                 | None -> Task.FromResult(Ok 0))
                             (fun userId sessionId ->
                                 grainFactory.GetGrain<ISessionDirectoryGrain>(userId).RemoveAsync sessionId)

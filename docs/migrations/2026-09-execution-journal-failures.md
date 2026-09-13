@@ -2,25 +2,23 @@
 
 ## Scope
 
-- First incompatible version: next unreleased Nao package version.
+- Current unreleased format: version 1.
 - Affected packages and APIs: `Nao.Agents.ExecutionRecord` and Nao persistence observability adapters.
-- Affected files, streams, tables, or Orleans state: execution-journal file records and `nao_execution_journal` rows.
+- Affected files and streams: identity-partitioned `execution-journal/<identity-sha256>` version-1 streams.
 
 ## Breaking changes
 
-Execution records now carry an optional typed tool failure. File records add `failureKind`, `failureMessage`, and `failureRetryable`; ADO.NET rows add nullable `failure_kind`, `failure_message`, and `failure_retryable` columns. The three values must all be present or all be absent. Failed records can produce deterministic replay fixtures but are excluded from compensation candidates.
+Owner-free execution records carry an optional typed tool failure inside authenticated version-1 journal events. Failed records can produce deterministic replay fixtures but are excluded from compensation candidates.
 
 ## Before upgrade
 
 1. Stop writers.
-2. Back up execution-journal files and databases.
-3. Validate that the backup can be restored.
+2. Delete unreleased execution-journal development data.
+3. Deploy the identity-partitioned implementation.
 
 ## Migration
 
-Nao does not read the previous execution-journal shape. Reset existing execution-journal data, or externally transform every record by adding absent failure fields to file records and nullable failure columns to the ADO.NET table. Do not infer failures for historical records.
-
-For ADO.NET storage, the clean development path is to drop the existing execution-journal component and let Nao create the current schema. Preserve other component tables when they share the same database.
+Nao is unreleased, so there is no compatibility reader or retained-data migration. Do not infer failures for discarded historical records.
 
 ## Validation
 
@@ -28,4 +26,4 @@ Run the execution-journal backend parity tests and deterministic replay tests. C
 
 ## Rollback
 
-The new execution-journal shape is not readable by older binaries. Stop writers and restore the pre-upgrade backup before rolling back. Failed outcomes recorded after upgrade cannot be retained through rollback without an external reverse transformation.
+Rollback is unsupported for this unreleased breaking redesign.

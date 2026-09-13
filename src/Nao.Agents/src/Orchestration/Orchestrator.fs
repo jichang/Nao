@@ -62,7 +62,7 @@ module Orchestrator =
         let id = config.Id
         let eventBus = config.Bus
         let eventScope = config.Scope
-        let traceContext: (Tracer * Span) option = None
+        let traceContext: (AuthorizationScope * Tracer * Span) option = None
 
         let report (signal: ProgressSignal) =
             EventBus.publishAsync (NaoEvent.TurnProgress(eventScope, signal)) eventBus
@@ -73,10 +73,14 @@ module Orchestrator =
         /// Start a child span for a tool invocation, tagging it with the tool name, its
         /// parameters, the invoking agent, and the current round. Returns None when no tracer
         /// is wired so callers stay allocation-free in the untraced path.
-        let startToolSpan (toolName: string) (toolInput: string) (round: int) : (Tracer * Span) option =
+        let startToolSpan
+            (toolName: string)
+            (toolInput: string)
+            (round: int)
+            : (AuthorizationScope * Tracer * Span) option =
             match traceContext with
-            | Some(tracer, parent) ->
-                let span = tracer.StartSpan parent "tool.invoke"
+            | Some(scope, tracer, parent) ->
+                let span = tracer.StartSpan scope parent "tool.invoke"
 
                 let trimmedInput =
                     if String.IsNullOrEmpty toolInput then
@@ -87,6 +91,7 @@ module Orchestrator =
                         toolInput
 
                 tracer.SetAttributes
+                    scope
                     span
                     (Map.ofList
                         [ "tool.name", toolName
@@ -94,40 +99,48 @@ module Orchestrator =
                           "agent.name", config.Name
                           "round", string round ])
 
-                Some(tracer, span)
+                Some(scope, tracer, span)
             | None -> None
 
         /// Close a tool-invocation span with the given status, recording a `tool.result` event
         /// with any extra attributes (e.g. result size). No-op when tracing is disabled.
-        let endToolSpan (span: (Tracer * Span) option) (status: SpanStatus) (resultAttrs: Map<string, string>) =
+        let endToolSpan
+            (span: (AuthorizationScope * Tracer * Span) option)
+            (status: SpanStatus)
+            (resultAttrs: Map<string, string>)
+            =
             match span with
-            | Some(tracer, s) ->
+            | Some(scope, tracer, s) ->
                 if not (Map.isEmpty resultAttrs) then
-                    tracer.AddEvent s "tool.result" resultAttrs
+                    tracer.AddEvent scope s "tool.result" resultAttrs
 
-                tracer.EndSpan s status
+                tracer.EndSpan scope s status
             | None -> ()
 
         /// Start a child span for one planning round (the subclass's `Orchestrate` call), so the
         /// LLM planning step is always traced even when a custom orchestrator adds no spans of its
         /// own. Returns None when no tracer is wired.
-        let startRoundSpan (round: int) : (Tracer * Span) option =
+        let startRoundSpan (round: int) : (AuthorizationScope * Tracer * Span) option =
             match traceContext with
-            | Some(tracer, parent) ->
-                let span = tracer.StartSpan parent "agent.plan"
-                tracer.SetAttributes span (Map.ofList [ "agent.name", config.Name; "round", string round ])
-                Some(tracer, span)
+            | Some(scope, tracer, parent) ->
+                let span = tracer.StartSpan scope parent "agent.plan"
+                tracer.SetAttributes scope span (Map.ofList [ "agent.name", config.Name; "round", string round ])
+                Some(scope, tracer, span)
             | None -> None
 
         /// Close a planning-round span, recording an `agent.plan.result` event with any extra
         /// attributes (reasoning length, action count). No-op when tracing is disabled.
-        let endRoundSpan (span: (Tracer * Span) option) (status: SpanStatus) (attrs: Map<string, string>) =
+        let endRoundSpan
+            (span: (AuthorizationScope * Tracer * Span) option)
+            (status: SpanStatus)
+            (attrs: Map<string, string>)
+            =
             match span with
-            | Some(tracer, s) ->
+            | Some(scope, tracer, s) ->
                 if not (Map.isEmpty attrs) then
-                    tracer.AddEvent s "agent.plan.result" attrs
+                    tracer.AddEvent scope s "agent.plan.result" attrs
 
-                tracer.EndSpan s status
+                tracer.EndSpan scope s status
             | None -> ()
 
         /// Run one planning round: build the prompt (`GenerateReasoningPrompt`), call the LLM,
@@ -137,7 +150,7 @@ module Orchestrator =
         /// supplies the prompt and the parser and can never accidentally drop the round's trace.
         let reasonAsync
             (correlation: CorrelationContext)
-            (metricsOwner: string)
+            (authorization: AuthorizationScope option)
             (conversation: Conversation)
             (round: int)
             (successfulToolCalls: Collections.Generic.HashSet<string * string>)
@@ -165,12 +178,13 @@ module Orchestrator =
                 let messages = prepared.Messages
                 let roundSpan = startRoundSpan round
 
-                let startLlmSpan (attempt: int) (messageCount: int) : (Tracer * Span) option =
+                let startLlmSpan (attempt: int) (messageCount: int) : (AuthorizationScope * Tracer * Span) option =
                     match traceContext with
-                    | Some(tracer, parent) ->
-                        let span = tracer.StartSpan parent "llm.call"
+                    | Some(scope, tracer, parent) ->
+                        let span = tracer.StartSpan scope parent "llm.call"
 
                         tracer.SetAttributes
+                            scope
                             span
                             (Map.ofList
                                 [ "agent.name", config.Name
@@ -178,23 +192,24 @@ module Orchestrator =
                                   "attempt", string attempt
                                   "messages.count", string messageCount ])
 
-                        Some(tracer, span)
+                        Some(scope, tracer, span)
                     | None -> None
 
                 let endLlmSpan
-                    (span: (Tracer * Span) option)
+                    (span: (AuthorizationScope * Tracer * Span) option)
                     (status: SpanStatus)
                     (outputLength: int)
                     (elapsedMs: int64)
                     =
                     match span with
-                    | Some(tracer, child) ->
+                    | Some(scope, tracer, child) ->
                         tracer.AddEvent
+                            scope
                             child
                             "llm.response"
                             (Map.ofList [ "output.length", string outputLength; "latency.ms", string elapsedMs ])
 
-                        tracer.EndSpan child status
+                        tracer.EndSpan scope child status
                     | None -> ()
 
                 let recordMetrics (usage: TokenUsage option) (elapsedMs: int64) =
@@ -203,17 +218,17 @@ module Orchestrator =
                         |> Option.map (fun usage -> usage.InputTokens, usage.OutputTokens)
                         |> Option.defaultValue (0, 0)
 
-                    RuntimeMetrics.get ()
-                    |> Option.iter (fun metrics ->
-                        metrics.Record(
-                            MetricRecord.llmCall
-                                correlation
-                                metricsOwner
-                                DateTimeOffset.UtcNow
-                                inputTokens
-                                outputTokens
-                                elapsedMs
-                        ))
+                    match RuntimeMetrics.get (), authorization with
+                    | Some metrics, Some scope ->
+                        metrics.Record
+                            scope
+                            (MetricRecord.llmCall correlation DateTimeOffset.UtcNow inputTokens outputTokens elapsedMs)
+                    | Some _, None ->
+                        raise (
+                            UnauthorizedAccessException
+                                "Metrics recording requires a host-authenticated authorization scope."
+                        )
+                    | None, _ -> ()
 
                 let invokeProvider (attempt: int) (streaming: bool) (prompt: Conversation) =
                     task {
@@ -413,7 +428,7 @@ module Orchestrator =
                     let! response, parseActions =
                         reasonAsync
                             agentContext.Correlation
-                            agentContext.SessionKey
+                            agentContext.Authorization
                             conversation
                             (rounds + 1)
                             successfulToolCalls
@@ -458,15 +473,16 @@ module Orchestrator =
 
                                         match RuntimeMetrics.get () with
                                         | Some metrics ->
-                                            metrics.Record(
-                                                MetricRecord.toolCall
+                                            let authorization = AgentContext.requireAuthorization agentContext
+
+                                            metrics.Record
+                                                authorization
+                                                (MetricRecord.toolCall
                                                     agentContext.Correlation
-                                                    agentContext.SessionKey
                                                     DateTimeOffset.UtcNow
                                                     toolName
                                                     toolExecution.DurationMs
-                                                    toolExecution.Success
-                                            )
+                                                    toolExecution.Success)
                                         | None -> ()
 
                                         if toolExecution.Success then
@@ -593,7 +609,7 @@ module Orchestrator =
                     let! response, parseActions =
                         reasonAsync
                             agentContext.Correlation
-                            agentContext.SessionKey
+                            agentContext.Authorization
                             conversation
                             (rounds + 1)
                             successfulToolCalls

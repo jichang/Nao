@@ -7,26 +7,21 @@ open System.Threading.Tasks
 open Nao.Agents
 
 module private SemanticOperations =
-    let private failure =
-        PlatformFailure.fromException PlatformFailureBoundary.Storage None
+    let ownerKey = AuthorizationScope.identity >> AuthorizationIdentity.storageKey
 
-    let protect owner operation =
+    let private failure (error: exn) =
+        PlatformFailure.fromException PlatformFailureBoundary.Storage None error
+
+    let protect operation =
         task {
-            if String.IsNullOrWhiteSpace owner then
-                return
-                    Error(
-                        PlatformFailure.create
-                            PlatformErrorCategory.InvalidInput
-                            "Semantic memory owner cannot be blank."
-                            false
-                            None
-                    )
-            else
-                try
-                    let! count = operation ()
-                    return Ok count
-                with ex ->
-                    return Error(failure ex)
+            try
+                let! count = operation ()
+                return Ok count
+            with
+            | :? IOException as error -> return Error(failure error)
+            | :? InvalidDataException as error -> return Error(failure error)
+            | :? DbException as error -> return Error(failure error)
+            | :? UnauthorizedAccessException as error -> return Error(failure error)
         }
 
 /// In-memory semantic memory factory.
@@ -36,7 +31,7 @@ module InMemorySemanticMemory =
             System.Collections.Concurrent.ConcurrentDictionary<string, SemanticEntry list>()
 
         { StoreAsync =
-            fun agentId key content ->
+            fun scope key content ->
                 task {
                     let! embedding = embeddingProvider.EmbedAsync content
 
@@ -48,18 +43,18 @@ module InMemorySemanticMemory =
                           Tags = [] }
 
                     store.AddOrUpdate(
-                        agentId,
+                        SemanticOperations.ownerKey scope,
                         [ entry ],
                         fun _ existing -> entry :: (existing |> List.filter (fun item -> item.Key <> key))
                     )
                     |> ignore
                 }
           RetrieveAsync =
-            fun agentId query topK ->
+            fun scope query topK ->
                 task {
                     let! queryEmbedding = embeddingProvider.EmbedAsync query
 
-                    match store.TryGetValue agentId with
+                    match store.TryGetValue(SemanticOperations.ownerKey scope) with
                     | true, entries ->
                         return
                             entries
@@ -71,25 +66,29 @@ module InMemorySemanticMemory =
                     | false, _ -> return []
                 }
           RemoveAsync =
-            fun agentId key ->
+            fun scope key ->
                 task {
-                    match store.TryGetValue agentId with
-                    | true, entries -> store.[agentId] <- entries |> List.filter (fun entry -> entry.Key <> key)
+                    let ownerKey = SemanticOperations.ownerKey scope
+
+                    match store.TryGetValue ownerKey with
+                    | true, entries -> store.[ownerKey] <- entries |> List.filter (fun entry -> entry.Key <> key)
                     | false, _ -> ()
                 }
           DeleteOwnerAsync =
-            fun owner ->
-                SemanticOperations.protect owner (fun () ->
-                    match store.TryRemove owner with
+            fun scope ->
+                SemanticOperations.protect (fun () ->
+                    match store.TryRemove(SemanticOperations.ownerKey scope) with
                     | true, entries -> Task.FromResult entries.Length
                     | false, _ -> Task.FromResult 0)
           DeleteExpiredAsync =
-            fun owner before ->
-                SemanticOperations.protect owner (fun () ->
-                    match store.TryGetValue owner with
+            fun scope before ->
+                SemanticOperations.protect (fun () ->
+                    let ownerKey = SemanticOperations.ownerKey scope
+
+                    match store.TryGetValue ownerKey with
                     | true, entries ->
                         let retained = entries |> List.filter (fun entry -> entry.Timestamp >= before)
-                        store.[owner] <- retained
+                        store.[ownerKey] <- retained
                         Task.FromResult(entries.Length - retained.Length)
                     | false, _ -> Task.FromResult 0) }
 
@@ -136,11 +135,32 @@ module SimpleEmbeddingProvider =
 module AdoSemanticMemory =
     let create (embeddingProvider: EmbeddingProvider) (factory: DbConnectionFactory) : SemanticMemory =
         let ensureAsync () =
-            AdoSchema.ensureVersionedTable
-                factory
-                "semantic-memory"
-                "nao_semantic"
-                "CREATE TABLE IF NOT EXISTS nao_semantic (agent TEXT NOT NULL, sem_key TEXT NOT NULL, sem_content TEXT NOT NULL, sem_embedding TEXT NOT NULL, sem_ts TEXT NOT NULL, sem_tags TEXT NOT NULL, PRIMARY KEY (agent, sem_key))"
+            task {
+                do!
+                    AdoSchema.ensureVersionedTable
+                        factory
+                        "semantic-memory"
+                        "nao_semantic"
+                        "CREATE TABLE IF NOT EXISTS nao_semantic (owner_key TEXT NOT NULL, sem_key TEXT NOT NULL, sem_content TEXT NOT NULL, sem_embedding TEXT NOT NULL, sem_ts TEXT NOT NULL, sem_tags TEXT NOT NULL, PRIMARY KEY (owner_key, sem_key))"
+
+                try
+                    let! _ =
+                        Ado.query
+                            factory
+                            "SELECT owner_key, sem_key, sem_content, sem_embedding, sem_ts, sem_tags FROM nao_semantic WHERE 1 = 0"
+                            []
+                            ignore
+
+                    return ()
+                with :? DbException as error ->
+                    return
+                        raise (
+                            InvalidDataException(
+                                "Semantic-memory table has an incompatible shape. Follow docs/migrations before accessing or mutating this database.",
+                                error
+                            )
+                        )
+            }
 
         let mapEntry (reader: DbDataReader) : SemanticEntry =
             let key = Ado.getString reader "sem_key"
@@ -159,46 +179,46 @@ module AdoSemanticMemory =
                     )
                 )
 
-        let validateAsync () =
+        let loadAll scope =
+            Ado.query
+                factory
+                "SELECT sem_key, sem_content, sem_embedding, sem_ts, sem_tags FROM nao_semantic WHERE owner_key = @a"
+                [ "@a", box (SemanticOperations.ownerKey scope) ]
+                mapEntry
+
+        let validateAsync scope =
             task {
                 do! ensureAsync ()
-
-                let! _ =
-                    Ado.query
-                        factory
-                        "SELECT sem_key, sem_content, sem_embedding, sem_ts, sem_tags FROM nao_semantic"
-                        []
-                        mapEntry
-
+                let! _ = loadAll scope
                 return ()
             }
 
-        let removeAsync agentId key =
+        let removeAsync scope key =
             task {
-                do! validateAsync ()
+                do! validateAsync scope
 
                 let! _ =
                     Ado.executeNonQuery
                         factory
-                        "DELETE FROM nao_semantic WHERE agent = @a AND sem_key = @k"
-                        [ "@a", box agentId; "@k", box key ]
+                        "DELETE FROM nao_semantic WHERE owner_key = @a AND sem_key = @k"
+                        [ "@a", box (SemanticOperations.ownerKey scope); "@k", box key ]
 
                 return ()
             }
 
         { StoreAsync =
-            fun agentId key content ->
+            fun scope key content ->
                 task {
-                    do! validateAsync ()
+                    do! validateAsync scope
                     let! embedding = embeddingProvider.EmbedAsync content
 
                     do!
                         Ado.executeTransaction
                             factory
-                            [ "DELETE FROM nao_semantic WHERE agent = @a AND sem_key = @k",
-                              [ "@a", box agentId; "@k", box key ]
-                              "INSERT INTO nao_semantic (agent, sem_key, sem_content, sem_embedding, sem_ts, sem_tags) VALUES (@a, @k, @c, @e, @t, @g)",
-                              [ "@a", box agentId
+                            [ "DELETE FROM nao_semantic WHERE owner_key = @a AND sem_key = @k",
+                              [ "@a", box (SemanticOperations.ownerKey scope); "@k", box key ]
+                              "INSERT INTO nao_semantic (owner_key, sem_key, sem_content, sem_embedding, sem_ts, sem_tags) VALUES (@a, @k, @c, @e, @t, @g)",
+                              [ "@a", box (SemanticOperations.ownerKey scope)
                                 "@k", box key
                                 "@c", box content
                                 "@e", box (Json.floatsToJson embedding)
@@ -206,17 +226,12 @@ module AdoSemanticMemory =
                                 "@g", box (Json.tagsToJson []) ] ]
                 }
           RetrieveAsync =
-            fun agentId query topK ->
+            fun scope query topK ->
                 task {
                     do! ensureAsync ()
                     let! queryEmbedding = embeddingProvider.EmbedAsync query
 
-                    let! entries =
-                        Ado.query
-                            factory
-                            "SELECT sem_key, sem_content, sem_embedding, sem_ts, sem_tags FROM nao_semantic WHERE agent = @a"
-                            [ "@a", box agentId ]
-                            mapEntry
+                    let! entries = loadAll scope
 
                     return
                         entries
@@ -228,28 +243,32 @@ module AdoSemanticMemory =
                 }
           RemoveAsync = removeAsync
           DeleteOwnerAsync =
-            fun owner ->
-                SemanticOperations.protect owner (fun () ->
+            fun scope ->
+                SemanticOperations.protect (fun () ->
                     task {
-                        do! validateAsync ()
-
-                        return!
-                            Ado.executeNonQuery factory "DELETE FROM nao_semantic WHERE agent = @a" [ "@a", box owner ]
-                    })
-          DeleteExpiredAsync =
-            fun owner before ->
-                SemanticOperations.protect owner (fun () ->
-                    task {
-                        do! validateAsync ()
+                        do! validateAsync scope
 
                         return!
                             Ado.executeNonQuery
                                 factory
-                                "DELETE FROM nao_semantic WHERE agent = @a AND sem_ts < @before"
-                                [ "@a", box owner; "@before", box (Time.toIso before) ]
+                                "DELETE FROM nao_semantic WHERE owner_key = @a"
+                                [ "@a", box (SemanticOperations.ownerKey scope) ]
+                    })
+          DeleteExpiredAsync =
+            fun scope before ->
+                SemanticOperations.protect (fun () ->
+                    task {
+                        do! validateAsync scope
+
+                        return!
+                            Ado.executeNonQuery
+                                factory
+                                "DELETE FROM nao_semantic WHERE owner_key = @a AND sem_ts < @before"
+                                [ "@a", box (SemanticOperations.ownerKey scope)
+                                  "@before", box (Time.toIso before) ]
                     }) }
 
-/// FileSystem-backed semantic memory. One JSON document per agent.
+/// FileSystem-backed semantic memory. One JSON document per authorization identity.
 module FileSemanticMemory =
     [<Literal>]
     let private CurrentSchemaVersion = 1
@@ -257,21 +276,21 @@ module FileSemanticMemory =
     let create (embeddingProvider: EmbeddingProvider) (baseDir: string) : SemanticMemory =
         let sync = obj ()
 
-        let agentFile agentId =
-            Path.Combine(baseDir, sprintf "%s.json" (Sanitize.id agentId))
+        let scopeFile scope =
+            Path.Combine(baseDir, sprintf "%s.json" (SemanticOperations.ownerKey scope))
 
-        let load agentId =
+        let load scope =
             VersionedFileJson.read<Dto.SemanticEntryDto list>
                 "Semantic memory document"
                 CurrentSchemaVersion
-                (agentFile agentId)
+                (scopeFile scope)
                 []
 
-        let save agentId entries =
-            VersionedFileJson.write CurrentSchemaVersion (agentFile agentId) entries
+        let save scope entries =
+            VersionedFileJson.write CurrentSchemaVersion (scopeFile scope) entries
 
         { StoreAsync =
-            fun agentId key content ->
+            fun scope key content ->
                 task {
                     let! embedding = embeddingProvider.EmbedAsync content
 
@@ -284,15 +303,15 @@ module FileSemanticMemory =
 
                     lock sync (fun () ->
                         save
-                            agentId
+                            scope
                             (Dto.toSemanticDto entry
-                             :: (load agentId |> List.filter (fun item -> item.Key <> key))))
+                             :: (load scope |> List.filter (fun item -> item.Key <> key))))
                 }
           RetrieveAsync =
-            fun agentId query topK ->
+            fun scope query topK ->
                 task {
                     let! queryEmbedding = embeddingProvider.EmbedAsync query
-                    let entries = lock sync (fun () -> load agentId |> List.map Dto.ofSemanticDto)
+                    let entries = lock sync (fun () -> load scope |> List.map Dto.ofSemanticDto)
 
                     return
                         entries
@@ -303,16 +322,16 @@ module FileSemanticMemory =
                         |> List.map fst
                 }
           RemoveAsync =
-            fun agentId key ->
-                task { lock sync (fun () -> save agentId (load agentId |> List.filter (fun item -> item.Key <> key))) }
+            fun scope key ->
+                task { lock sync (fun () -> save scope (load scope |> List.filter (fun item -> item.Key <> key))) }
           DeleteOwnerAsync =
-            fun owner ->
-                SemanticOperations.protect owner (fun () ->
+            fun scope ->
+                SemanticOperations.protect (fun () ->
                     task {
                         return
                             lock sync (fun () ->
-                                let entries = load owner
-                                let file = agentFile owner
+                                let entries = load scope
+                                let file = scopeFile scope
 
                                 if File.Exists file then
                                     File.Delete file
@@ -320,18 +339,18 @@ module FileSemanticMemory =
                                 entries.Length)
                     })
           DeleteExpiredAsync =
-            fun owner before ->
-                SemanticOperations.protect owner (fun () ->
+            fun scope before ->
+                SemanticOperations.protect (fun () ->
                     task {
                         return
                             lock sync (fun () ->
-                                let entries = load owner
+                                let entries = load scope
 
                                 let retained =
                                     entries
                                     |> List.filter (Dto.ofSemanticDto >> fun entry -> entry.Timestamp >= before)
 
-                                save owner retained
+                                save scope retained
                                 entries.Length - retained.Length)
                     }) }
 

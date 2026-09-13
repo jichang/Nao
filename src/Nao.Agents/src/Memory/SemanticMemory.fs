@@ -21,11 +21,11 @@ type EmbeddingProvider =
 
 /// Functional semantic memory that uses embeddings for similarity-based retrieval.
 type SemanticMemory =
-    { StoreAsync: string -> string -> string -> Task<unit>
-      RetrieveAsync: string -> string -> int -> Task<SemanticEntry list>
-      RemoveAsync: string -> string -> Task<unit>
-      DeleteOwnerAsync: string -> Task<Result<int, PlatformFailure>>
-      DeleteExpiredAsync: string -> DateTimeOffset -> Task<Result<int, PlatformFailure>> }
+    { StoreAsync: AuthorizationScope -> string -> string -> Task<unit>
+      RetrieveAsync: AuthorizationScope -> string -> int -> Task<SemanticEntry list>
+      RemoveAsync: AuthorizationScope -> string -> Task<unit>
+      DeleteOwnerAsync: AuthorizationScope -> Task<Result<int, PlatformFailure>>
+      DeleteExpiredAsync: AuthorizationScope -> DateTimeOffset -> Task<Result<int, PlatformFailure>> }
 
 module SemanticSimilarity =
 

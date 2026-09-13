@@ -12,7 +12,7 @@ This workstream makes the ETCLOVG harness the single reliable execution path and
 - [x] Resource-limit and sandbox configuration contracts exist.
 - [x] Resource permissions support allow, deny, and ask outcomes.
 - [x] Policy, constitution, audit, execution-journal, retry, circuit-breaker, and fallback primitives exist.
-- [ ] Process and container isolation are enforced by real execution environments.
+- [x] Process and container isolation are enforced by real execution environments.
 - [x] Every tool path uses identical production authorization semantics.
 
 ## HAR-01 — One execution contract
@@ -97,18 +97,22 @@ Executable replay is introduced and governed as part of HAR-02; persistence even
 
 ## SEC-01 — Identity and security principal
 
-- [ ] Define a transport-neutral principal containing tenant, subject, service identity, roles, claims, and authentication strength.
-- [ ] Propagate the principal through sessions, agents, tools, knowledge retrieval, storage, telemetry, and evaluation.
-- [ ] Distinguish user authority from agent-delegated authority.
-- [ ] Define impersonation and service-to-service delegation rules.
-- [ ] Reject missing or ambiguous tenant context on protected operations.
+- [x] Define a transport-neutral principal containing tenant, subject, service identity, roles, claims, and authentication strength.
+- [x] Propagate the principal through sessions, agents, tools, knowledge retrieval, storage, telemetry, and evaluation.
+- [x] Distinguish user authority from agent-delegated authority.
+- [x] Define impersonation and service-to-service delegation rules.
+- [x] Reject missing or ambiguous tenant context on protected operations.
 - [ ] Provide host adapters for OIDC/OAuth claims without coupling core packages to one identity provider.
 
 **Acceptance criteria**
 
-- [ ] Authorization decisions can identify the original user and every delegation.
-- [ ] Cross-tenant principal substitution fails closed.
-- [ ] Authentication details are not leaked into prompts or model-visible context.
+- [x] Authorization decisions can identify the original user and every delegation.
+- [x] Cross-tenant principal substitution fails closed.
+- [x] Authentication details are not leaked into prompts or model-visible context.
+
+**Propagation progress:** `AgentContext.Authorization` carries the complete scope and is rebound at agent, delegation, and tool-dispatch boundaries. The principal retains the original user separately from an optional host-authorized effective user. Impersonation requires authenticated evidence, a distinct user, and a reason; it cannot be initiated from an agent scope. A service-authenticated principal retains its root service and an ordered service lineage. Only the current service can append a distinct service, direct-user scopes cannot introduce services, and service delegation closes before agent execution. The scope also retains an ordered `AgentAuthority` chain. Root binding rejects pre-existing authority; child delegation requires the current agent, rejects self-delegation and execution replay, preserves the principal and ownership identity, and extends rather than replaces the chain. Scope containment requires identical ownership and authentication evidence plus service- and agent-lineage prefixes.
+
+Worker protocol v1 carries impersonation, service, principal, and agent authority separately from model input and rejects missing, malformed, duplicate, or mismatched authority. Evaluation callbacks receive mandatory `EvaluationContext`; evaluation archives plus every current memory store require authenticated ownership for every operation. Memory tools, consolidation, Orleans session memory/deletion, metrics telemetry, live spans, durable execution traces, audit storage, execution journals, turn records, feedback, and conversations propagate that scope, and persistent partitions include the full ownership lineage without authentication evidence. Durable payloads contain neither authentication nor delegation evidence. Automated identity, harness, worker, evaluator, tool, storage, telemetry, and runtime tests cover cross-tenant substitution, prompt privacy, complete ownership isolation, and authority non-escalation. Provider-neutral OIDC/OAuth host adapters remain incomplete, so SEC-01 stays open.
 
 ## GOV-01 — Permission enforcement
 
@@ -171,7 +175,7 @@ Executable replay is introduced and governed as part of HAR-02; persistence even
 
 ### Exit criteria for R1
 
-- [ ] HAR-01 through HAR-04 are complete for supported environments.
+- [x] HAR-01 through HAR-04 are complete for supported environments.
 - [ ] SEC-01, SEC-02, and GOV-01 through GOV-03 are complete.
 - [ ] Security threat models and abuse cases are reviewed.
 - [ ] Fail-closed and isolation tests run in CI.

@@ -16,19 +16,19 @@ type MemoryEntry =
         Tags: string list
     }
 
-/// Functional operations for persisting and retrieving agent memories.
+/// Key/value memory owned by the complete authenticated scope, not a caller-supplied owner string.
 type MemoryStore =
     {
-        /// Save a memory entry for an agent
-        SaveAsync: string -> MemoryEntry -> Task<unit>
-        /// Recall memories by key prefix match
-        RecallAsync: string -> string -> Task<MemoryEntry list>
-        /// Recall all memories for an agent
-        RecallAllAsync: string -> Task<MemoryEntry list>
+        /// Save a memory entry in the authenticated scope.
+        SaveAsync: AuthorizationScope -> MemoryEntry -> Task<unit>
+        /// Recall memories by case-insensitive key substring match.
+        RecallAsync: AuthorizationScope -> string -> Task<MemoryEntry list>
+        /// Recall all memories in the authenticated scope.
+        RecallAllAsync: AuthorizationScope -> Task<MemoryEntry list>
         /// Forget (delete) a memory by key
-        ForgetAsync: string -> string -> Task<unit>
-        /// Delete every memory owned by an agent
-        DeleteOwnerAsync: string -> Task<Result<int, PlatformFailure>>
-        /// Delete memories owned by an agent that precede a retention cutoff
-        DeleteExpiredAsync: string -> DateTimeOffset -> Task<Result<int, PlatformFailure>>
+        ForgetAsync: AuthorizationScope -> string -> Task<unit>
+        /// Delete every memory in the authenticated scope.
+        DeleteOwnerAsync: AuthorizationScope -> Task<Result<int, PlatformFailure>>
+        /// Delete memories in the authenticated scope that precede a retention cutoff.
+        DeleteExpiredAsync: AuthorizationScope -> DateTimeOffset -> Task<Result<int, PlatformFailure>>
     }

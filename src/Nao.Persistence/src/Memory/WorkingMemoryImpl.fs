@@ -1,85 +1,84 @@
 namespace Nao.Persistence
 
 open System
-open System.Threading.Tasks
-open System.Collections.Concurrent
+open System.Collections.Generic
 open Nao.Agents
 
-module InMemoryWorkingMemory =
-    let create (config: WorkingMemoryConfig) : WorkingMemory =
-        let items = ConcurrentDictionary<ExecutionId * string, WorkingMemoryItem>()
+module internal WorkingMemoryAddressing =
+    let key address =
+        let authorizationKey =
+            WorkingMemoryAddress.authorization address
+            |> AuthorizationScope.identity
+            |> AuthorizationIdentity.storageKey
 
-        let key owner itemKey = owner, itemKey
+        authorizationKey, WorkingMemoryAddress.executionId address |> ExecutionId.serialize
 
-        let owned owner =
-            items.Values
-            |> Seq.filter (fun (item: WorkingMemoryItem) -> item.ExecutionId = owner)
+type internal WorkingMemoryProjection(config: WorkingMemoryConfig) =
+    let sync = obj ()
+    let items = Dictionary<(string * string) * string, WorkingMemoryItem>()
+    let addressKey address = WorkingMemoryAddressing.key address
+    let itemKey address key = addressKey address, key
 
-        let normalize (item: WorkingMemoryItem) =
-            if item.Pinned then
-                { item with ExpiresAt = None }
-            elif item.ExpiresAt.IsNone then
-                { item with
-                    ExpiresAt = Some(item.AddedAt + config.DefaultTtl) }
-            else
-                item
+    let owned address =
+        let owner = addressKey address
 
-        let evictOverCapacity owner =
-            let excess = (owned owner |> Seq.length) - config.Capacity
+        items
+        |> Seq.choose (fun pair -> if fst pair.Key = owner then Some pair.Value else None)
+        |> Seq.toList
 
-            if excess > 0 then
-                owned owner
-                |> Seq.filter (fun item -> not item.Pinned)
-                |> Seq.sortBy (fun item -> item.Attention)
-                |> Seq.truncate excess
-                |> Seq.iter (fun item -> items.TryRemove(key owner item.Key) |> ignore)
+    let normalize (item: WorkingMemoryItem) : WorkingMemoryItem =
+        if item.Pinned then
+            { item with ExpiresAt = None }
+        elif item.ExpiresAt.IsNone then
+            { item with
+                ExpiresAt = Some(item.AddedAt + config.DefaultTtl) }
+        else
+            item
 
-        let setAsync (item: WorkingMemoryItem) =
-            let normalized = normalize item
-            items.[key item.ExecutionId item.Key] <- normalized
-            evictOverCapacity item.ExecutionId
-            Task.FromResult()
+    let remove address (item: WorkingMemoryItem) =
+        items.Remove(itemKey address item.Key) |> ignore
 
-        let getAsync owner itemKey =
-            match items.TryGetValue(key owner itemKey) with
-            | true, item ->
-                let boosted =
-                    { item with
-                        Attention = min 1.0 (item.Attention + 0.1) }
+    let evictOverCapacity address =
+        let candidates = owned address
+        let excess = candidates.Length - config.Capacity
 
-                items.[key owner itemKey] <- boosted
-                Task.FromResult(Some boosted)
-            | false, _ -> Task.FromResult None
+        if excess > 0 then
+            candidates
+            |> List.filter (fun item -> not item.Pinned)
+            |> List.sortBy (fun item -> item.Attention, item.AddedAt, item.Key)
+            |> List.truncate excess
+            |> List.iter (remove address)
 
-        let getAllAsync owner =
-            owned owner
-            |> Seq.sortByDescending (fun item -> item.Attention)
-            |> Seq.toList
-            |> Task.FromResult
+    member _.Set address (item: WorkingMemoryItem) =
+        lock sync (fun () ->
+            items.[itemKey address item.Key] <- normalize item
+            evictOverCapacity address)
 
-        let getActiveAsync owner minimum =
-            owned owner
-            |> Seq.filter (fun item -> item.Attention >= minimum)
-            |> Seq.sortByDescending (fun item -> item.Attention)
-            |> Seq.toList
-            |> Task.FromResult
+    member _.Get address key =
+        lock sync (fun () ->
+            match items.TryGetValue(itemKey address key) with
+            | true, item -> Some item
+            | false, _ -> None)
 
-        let update owner itemKey change =
-            match items.TryGetValue(key owner itemKey) with
-            | true, item -> items.[key owner itemKey] <- change item
-            | false, _ -> ()
+    member _.GetAll address =
+        lock sync (fun () ->
+            owned address
+            |> List.sortByDescending (fun item -> item.Attention, item.AddedAt, item.Key))
 
-            Task.FromResult()
+    member this.GetActive address minimum =
+        this.GetAll address |> List.filter (fun item -> item.Attention >= minimum)
 
-        let focusAsync owner itemKey boost =
-            update owner itemKey (fun item ->
-                { item with
-                    Attention = min 1.0 (item.Attention + boost) })
+    member _.Update address key (change: WorkingMemoryItem -> WorkingMemoryItem) =
+        lock sync (fun () ->
+            match items.TryGetValue(itemKey address key) with
+            | true, item -> items.[itemKey address key] <- change item
+            | false, _ -> ())
 
-        let decayAsync owner asOf =
+    member _.Decay address asOf =
+        lock sync (fun () ->
             let mutable removed = 0
 
-            for item in owned owner |> Seq.toArray do
+            for item in owned address do
                 if not item.Pinned then
                     let expired = item.ExpiresAt |> Option.exists (fun expiry -> expiry < asOf)
 
@@ -88,74 +87,82 @@ module InMemoryWorkingMemory =
                             Attention = item.Attention * (1.0 - config.DecayRate) }
 
                     if expired || decayed.Attention < config.EvictionThreshold then
-                        items.TryRemove(key owner item.Key) |> ignore
+                        remove address item
                         removed <- removed + 1
                     else
-                        items.[key owner item.Key] <- decayed
+                        items.[itemKey address item.Key] <- decayed
 
-            Task.FromResult removed
+            removed)
 
-        let pinAsync owner itemKey =
-            update owner itemKey (fun item ->
-                { item with
-                    Pinned = true
-                    ExpiresAt = None })
+    member _.Delete address (predicate: WorkingMemoryItem -> bool) =
+        lock sync (fun () ->
+            let matches = owned address |> List.filter predicate
+            matches |> List.iter (remove address)
+            matches.Length)
 
-        let unpinAsync owner itemKey (asOf: DateTimeOffset) =
-            update owner itemKey (fun item ->
-                { item with
-                    Pinned = false
-                    ExpiresAt = Some(asOf + config.DefaultTtl) })
+    member this.Render address topK =
+        this.GetAll address
+        |> List.truncate topK
+        |> List.mapi (fun index item ->
+            sprintf "[%d] (%s, attention=%.2f) %s" (index + 1) item.Source item.Attention item.Content)
+        |> String.concat "\n"
 
-        let removeAsync owner itemKey =
-            items.TryRemove(key owner itemKey) |> ignore
-            Task.FromResult()
+module InMemoryWorkingMemory =
+    let internal validateConfig (config: WorkingMemoryConfig) =
+        if config.Capacity < 0 then
+            invalidArg (nameof config) "Working-memory capacity cannot be negative."
 
-        let delete predicate =
-            let matches = items.Values |> Seq.filter predicate |> Seq.toArray
+        if config.DefaultTtl < TimeSpan.Zero then
+            invalidArg (nameof config) "Working-memory default TTL cannot be negative."
 
-            matches
-            |> Array.iter (fun (item: WorkingMemoryItem) -> items.TryRemove(key item.ExecutionId item.Key) |> ignore)
+        if config.DecayRate < 0.0 || config.DecayRate > 1.0 then
+            invalidArg (nameof config) "Working-memory decay rate must be between zero and one."
 
-            Task.FromResult matches.Length
+        if config.EvictionThreshold < 0.0 || config.EvictionThreshold > 1.0 then
+            invalidArg (nameof config) "Working-memory eviction threshold must be between zero and one."
 
-        let protect owner operation =
-            task {
-                try
-                    let! count = operation ()
-                    return Ok count
-                with ex ->
-                    return Error(PlatformFailure.fromException PlatformFailureBoundary.Storage None ex)
-            }
+    let create (config: WorkingMemoryConfig) : WorkingMemory =
+        validateConfig config
+        let projection = WorkingMemoryProjection config
 
-        let deleteOwnerAsync owner =
-            protect owner (fun () -> delete (fun (item: WorkingMemoryItem) -> item.ExecutionId = owner))
-
-        let deleteExpiredAsync owner before =
-            protect owner (fun () ->
-                delete (fun (item: WorkingMemoryItem) ->
-                    item.ExecutionId = owner
-                    && not item.Pinned
-                    && (item.ExpiresAt |> Option.exists (fun expiry -> expiry < before))))
-
-        let renderContextAsync owner topK =
-            owned owner
-            |> Seq.sortByDescending (fun item -> item.Attention)
-            |> Seq.truncate topK
-            |> Seq.mapi (fun index item ->
-                sprintf "[%d] (%s, attention=%.2f) %s" (index + 1) item.Source item.Attention item.Content)
-            |> String.concat "\n"
-            |> Task.FromResult
-
-        { SetAsync = setAsync
-          GetAsync = getAsync
-          GetAllAsync = getAllAsync
-          GetActiveAsync = getActiveAsync
-          FocusAsync = focusAsync
-          DecayAsync = decayAsync
-          PinAsync = pinAsync
-          UnpinAsync = unpinAsync
-          RemoveAsync = removeAsync
-          DeleteOwnerAsync = deleteOwnerAsync
-          DeleteExpiredAsync = deleteExpiredAsync
-          RenderContextAsync = renderContextAsync }
+        { SetAsync = fun address item -> task { projection.Set address item }
+          GetAsync = fun address key -> task { return projection.Get address key }
+          GetAllAsync = fun address -> task { return projection.GetAll address }
+          GetActiveAsync = fun address minimum -> task { return projection.GetActive address minimum }
+          FocusAsync =
+            fun address key boost ->
+                task {
+                    projection.Update address key (fun item ->
+                        { item with
+                            Attention = min 1.0 (item.Attention + boost) })
+                }
+          DecayAsync = fun address asOf -> task { return projection.Decay address asOf }
+          PinAsync =
+            fun address key ->
+                task {
+                    projection.Update address key (fun item ->
+                        { item with
+                            Pinned = true
+                            ExpiresAt = None })
+                }
+          UnpinAsync =
+            fun address key asOf ->
+                task {
+                    projection.Update address key (fun item ->
+                        { item with
+                            Pinned = false
+                            ExpiresAt = Some(asOf + config.DefaultTtl) })
+                }
+          RemoveAsync = fun address key -> task { projection.Delete address (fun item -> item.Key = key) |> ignore }
+          DeleteOwnerAsync = fun address -> task { return Ok(projection.Delete address (fun _ -> true)) }
+          DeleteExpiredAsync =
+            fun address before ->
+                task {
+                    return
+                        Ok(
+                            projection.Delete address (fun item ->
+                                not item.Pinned
+                                && (item.ExpiresAt |> Option.exists (fun expiry -> expiry < before)))
+                        )
+                }
+          RenderContextAsync = fun address topK -> task { return projection.Render address topK } }

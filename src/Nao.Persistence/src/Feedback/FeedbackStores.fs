@@ -1,546 +1,337 @@
 namespace Nao.Persistence
 
 open System
+open System.Collections.Concurrent
 open System.IO
-open System.Text.Json.Serialization
 open System.Threading.Tasks
 open Nao.Agents
 
-module private TurnOperations =
-    let private failure =
-        PlatformFailure.fromException PlatformFailureBoundary.Storage None
+module private FeedbackPersistence =
+    let key = AuthorizationScope.identity >> AuthorizationIdentity.storageKey
 
-    let protect (sessionId: string) operation =
+    let failure operation =
         task {
-            if String.IsNullOrWhiteSpace sessionId then
-                return
-                    Error(
-                        PlatformFailure.create
-                            PlatformErrorCategory.InvalidInput
-                            "Turn session cannot be blank."
-                            false
-                            None
-                    )
-            else
-                try
-                    let! count = operation ()
-                    return Ok count
-                with ex ->
-                    return Error(failure ex)
+            try
+                return Ok(operation ())
+            with ex ->
+                return Error(PlatformFailure.fromException PlatformFailureBoundary.Storage None ex)
         }
 
-module private FeedbackOperations =
-    let private failure =
-        PlatformFailure.fromException PlatformFailureBoundary.Storage None
+module InMemoryTurnStore =
+    let create () : TurnStore =
+        let turns = ConcurrentDictionary<string * string, TurnRecord>()
 
-    let protect (owner: string) operation =
-        task {
-            if String.IsNullOrWhiteSpace owner then
-                return
-                    Error(
-                        PlatformFailure.create
-                            PlatformErrorCategory.InvalidInput
-                            "Feedback owner cannot be blank."
-                            false
-                            None
-                    )
-            else
-                try
-                    let! count = operation ()
-                    return Ok count
-                with ex ->
-                    return Error(failure ex)
-        }
+        let owned scope =
+            let owner = FeedbackPersistence.key scope
 
-// ─── Database (ADO.NET) implementations of the feedback stores ───
+            turns
+            |> Seq.choose (fun pair -> if fst pair.Key = owner then Some pair.Value else None)
 
-/// Generic JSON-payload table helpers shared by the ADO-backed feedback stores.
-///
-/// Each feedback artifact is stored as a single row: a string primary key plus a
-/// JSON payload column serialized with <see cref="FeedbackJson"/>. Filtering and
-/// status edits load the (small) artifact set and project in F#, mirroring the
-/// JSONL file stores. The schema is portable (CREATE TABLE IF NOT EXISTS) and works
-/// against any ADO.NET provider supplied via <see cref="DbConnectionFactory"/>.
-module private AdoPayload =
-
-    let schemaKey table =
-        match table with
-        | "nao_feedback_turns" -> "feedback-turns"
-        | "nao_feedback_entries" -> "feedback-entries"
-        | _ -> invalidArg (nameof table) (sprintf "Unknown feedback table '%s'." table)
-
-    let ensure (factory: DbConnectionFactory) (table: string) : Task =
-        AdoSchema.ensureVersionedTable
-            factory
-            (schemaKey table)
-            table
-            (sprintf "CREATE TABLE IF NOT EXISTS %s (item_id TEXT NOT NULL PRIMARY KEY, payload TEXT NOT NULL)" table)
-
-    let getAll<'a> (factory: DbConnectionFactory) (table: string) : Task<'a list> =
-        task {
-            do! ensure factory table
-
-            return!
-                Ado.query factory (sprintf "SELECT item_id, payload FROM %s" table) [] (fun reader ->
-                    let id = Ado.getString reader "item_id"
-
-                    try
-                        FeedbackJson.deserialize<'a> (Ado.getString reader "payload")
-                    with ex ->
-                        raise (
-                            InvalidDataException(
-                                sprintf
-                                    "Feedback table '%s' row '%s' is invalid. Follow docs/migrations before writing."
-                                    table
-                                    id,
-                                ex
-                            )
-                        ))
-        }
-
-    /// Insert-or-replace a single artifact by primary key (DELETE + INSERT in one tx).
-    let upsert (factory: DbConnectionFactory) (table: string) (id: string) (item: 'a) : Task =
-        task {
-            let! _ = getAll<'a> factory table
-
-            do!
-                Ado.executeTransaction
-                    factory
-                    [ sprintf "DELETE FROM %s WHERE item_id = @id" table, [ "@id", box id ]
-                      sprintf "INSERT INTO %s (item_id, payload) VALUES (@id, @p)" table,
-                      [ "@id", box id; "@p", box (FeedbackJson.serialize item) ] ]
-        }
-
-    let delete (factory: DbConnectionFactory) (table: string) (id: string) : Task<bool> =
-        task {
-            do! ensure factory table
-            let! n = Ado.executeNonQuery factory (sprintf "DELETE FROM %s WHERE item_id = @id" table) [ "@id", box id ]
-            return n > 0
-        }
-
-/// Turns persisted in the nao_feedback_turns table (keyed by TurnId).
-module AdoTurnStore =
-    let create (factory: DbConnectionFactory) : TurnStore =
-        let table = "nao_feedback_turns"
-
-        let saveAsync (turn: TurnRecord) =
-            AdoPayload.upsert factory table turn.TurnId turn
-
-        let getAsync (turnId: string) =
+        let delete scope predicate =
             task {
-                let! all = AdoPayload.getAll<TurnRecord> factory table
-                return all |> List.tryFind (fun t -> t.TurnId = turnId)
-            }
-
-        let getForSessionAsync (sessionId: string) =
-            task {
-                let! all = AdoPayload.getAll<TurnRecord> factory table
-                return all |> List.filter (fun t -> t.SessionId = sessionId)
-            }
-
-        let getForExecutionAsync executionId =
-            task {
-                let! all = AdoPayload.getAll<TurnRecord> factory table
-                return all |> List.filter (fun turn -> turn.Correlation.ExecutionId = executionId)
-            }
-
-        let delete (predicate: TurnRecord -> bool) =
-            task {
-                let! all = AdoPayload.getAll<TurnRecord> factory table
-                let matches = all |> List.filter predicate
+                let owner = FeedbackPersistence.key scope
                 let mutable deleted = 0
 
-                for turn in matches do
-                    let! removed = AdoPayload.delete factory table turn.TurnId
+                for pair in turns do
+                    if fst pair.Key = owner && predicate pair.Value then
+                        match turns.TryRemove pair.Key with
+                        | true, _ -> deleted <- deleted + 1
+                        | false, _ -> ()
 
-                    if removed then
-                        deleted <- deleted + 1
-
-                return deleted
+                return Ok deleted
             }
 
-        let deleteSessionAsync (sessionId: string) =
-            TurnOperations.protect sessionId (fun () -> delete (fun turn -> turn.SessionId = sessionId))
+        { SaveAsync =
+            fun scope turn ->
+                turns.[(FeedbackPersistence.key scope, turn.TurnId)] <- turn
+                Task.CompletedTask
+          GetAsync =
+            fun scope turnId ->
+                match turns.TryGetValue((FeedbackPersistence.key scope, turnId)) with
+                | true, turn -> Some turn
+                | false, _ -> None
+                |> Task.FromResult
+          GetAllAsync = fun scope -> owned scope |> Seq.toList |> Task.FromResult
+          GetForExecutionAsync =
+            fun scope executionId ->
+                owned scope
+                |> Seq.filter (fun turn -> turn.Correlation.ExecutionId = executionId)
+                |> Seq.sortBy _.CreatedAt
+                |> Seq.toList
+                |> Task.FromResult
+          DeleteScopeAsync = fun scope -> delete scope (fun _ -> true)
+          DeleteExpiredAsync = fun scope before -> delete scope (fun turn -> turn.CreatedAt < before) }
 
-        let deleteExpiredAsync (sessionId: string) before =
-            TurnOperations.protect sessionId (fun () ->
-                delete (fun turn -> turn.SessionId = sessionId && turn.CreatedAt < before))
+module InMemoryFeedbackStore =
+    let create () : FeedbackStore =
+        let entries = ConcurrentDictionary<string * Guid, Feedback>()
 
-        { SaveAsync = saveAsync
-          GetAsync = getAsync
-          GetForSessionAsync = getForSessionAsync
-          GetForExecutionAsync = getForExecutionAsync
-          DeleteSessionAsync = deleteSessionAsync
-          DeleteExpiredAsync = deleteExpiredAsync }
+        let owned scope =
+            let owner = FeedbackPersistence.key scope
 
-/// Feedback persisted in the nao_feedback_entries table (keyed by feedback Id).
-module AdoFeedbackStore =
-    let create (factory: DbConnectionFactory) : FeedbackStore =
-        let table = "nao_feedback_entries"
+            entries
+            |> Seq.choose (fun pair -> if fst pair.Key = owner then Some pair.Value else None)
 
-        let saveAsync (feedback: Feedback) =
-            AdoPayload.upsert factory table (feedback.Id.ToString("D")) feedback
-
-        let getForTurnAsync turnId =
+        let delete scope predicate =
             task {
-                let! all = AdoPayload.getAll<Feedback> factory table
-                return all |> List.filter (fun f -> f.TurnId = turnId)
-            }
-
-        let getForSessionAsync sessionId =
-            task {
-                let! all = AdoPayload.getAll<Feedback> factory table
-                return all |> List.filter (fun f -> f.SessionId = sessionId)
-            }
-
-        let getAllAsync () =
-            AdoPayload.getAll<Feedback> factory table
-
-        let delete (predicate: Feedback -> bool) =
-            task {
-                let! all = getAllAsync ()
-                let matches = all |> List.filter predicate
+                let owner = FeedbackPersistence.key scope
                 let mutable deleted = 0
 
-                for feedback in matches do
-                    let! removed = AdoPayload.delete factory table (feedback.Id.ToString("D"))
+                for pair in entries do
+                    if fst pair.Key = owner && predicate pair.Value then
+                        match entries.TryRemove pair.Key with
+                        | true, _ -> deleted <- deleted + 1
+                        | false, _ -> ()
 
-                    if removed then
-                        deleted <- deleted + 1
-
-                return deleted
+                return Ok deleted
             }
 
-        let deleteOwnerAsync (owner: string) =
-            FeedbackOperations.protect owner (fun () -> delete (fun feedback -> feedback.UserId = owner))
-
-        let deleteExpiredAsync (owner: string) before =
-            FeedbackOperations.protect owner (fun () ->
-                delete (fun feedback -> feedback.UserId = owner && feedback.CreatedAt < before))
-
-        { SaveAsync = saveAsync
-          GetForTurnAsync = getForTurnAsync
-          GetForSessionAsync = getForSessionAsync
-          GetAllAsync = getAllAsync
-          DeleteOwnerAsync = deleteOwnerAsync
-          DeleteExpiredAsync = deleteExpiredAsync }
-
-// ─── File (JSONL) implementations of the feedback stores (moved out of Nao.Agents) ───
-
-/// Append-only JSONL helpers shared by the file-backed stores.
-module private Jsonl =
-    let private sync = obj ()
-
-    let append (path: string) (line: string) =
-        lock sync (fun () ->
-            Directory.CreateDirectory(Path.GetDirectoryName path) |> ignore
-            File.AppendAllText(path, line + "\n"))
-
-    let readAll<'a> (path: string) : 'a list =
-        if not (File.Exists path) then
-            []
-        else
-            File.ReadAllLines path
-            |> Array.filter (fun l -> not (String.IsNullOrWhiteSpace l))
-            |> Array.choose (fun l ->
-                try
-                    Some(FeedbackJson.deserialize<'a> l)
-                with _ ->
-                    None)
-            |> Array.toList
-
-    /// Rewrite the whole file from a list (used for update/delete on mutable stores).
-    let writeAll<'a> (path: string) (items: 'a list) =
-        lock sync (fun () ->
-            Directory.CreateDirectory(Path.GetDirectoryName path) |> ignore
-            let lines = items |> List.map FeedbackJson.serialize
-            File.WriteAllText(path, String.Join("\n", lines) + (if List.isEmpty lines then "" else "\n")))
-
-[<CLIMutable>]
-type TurnStoreEnvelope =
-    { [<JsonPropertyName("schemaVersion")>]
-      SchemaVersion: int
-      [<JsonPropertyName("kind")>]
-      Kind: string
-      [<JsonPropertyName("record")>]
-      Record: TurnRecord option
-      [<JsonPropertyName("sessionId")>]
-      SessionId: string option
-      [<JsonPropertyName("before")>]
-      Before: DateTimeOffset option }
-
-[<CLIMutable>]
-type FeedbackStoreEnvelope =
-    { [<JsonPropertyName("schemaVersion")>]
-      SchemaVersion: int
-      [<JsonPropertyName("kind")>]
-      Kind: string
-      [<JsonPropertyName("record")>]
-      Record: Feedback option
-      [<JsonPropertyName("owner")>]
-      Owner: string option
-      [<JsonPropertyName("before")>]
-      Before: DateTimeOffset option }
+        { SaveAsync =
+            fun scope feedback ->
+                entries.[(FeedbackPersistence.key scope, feedback.Id)] <- feedback
+                Task.CompletedTask
+          GetForTurnAsync =
+            fun scope turnId ->
+                owned scope
+                |> Seq.filter (fun feedback -> feedback.TurnId = turnId)
+                |> Seq.sortBy _.CreatedAt
+                |> Seq.toList
+                |> Task.FromResult
+          GetAllAsync = fun scope -> owned scope |> Seq.toList |> Task.FromResult
+          DeleteScopeAsync = fun scope -> delete scope (fun _ -> true)
+          DeleteExpiredAsync = fun scope before -> delete scope (fun feedback -> feedback.CreatedAt < before) }
 
 [<RequireQualifiedAccess>]
-type private TurnStoreEvent =
-    | Save of TurnRecord
-    | DeleteSession of string
-    | DeleteExpired of string * DateTimeOffset
+type TurnStoreEvent =
+    | Accepted of TurnRecord
+    | DeleteScope
+    | DeleteExpired of DateTimeOffset
+
+type TurnStoreDocument = { Version: int; Event: TurnStoreEvent }
 
 [<RequireQualifiedAccess>]
-type private FeedbackStoreEvent =
-    | Save of Feedback
-    | DeleteOwner of string
-    | DeleteExpired of string * DateTimeOffset
+type FeedbackStoreEvent =
+    | Accepted of Feedback
+    | DeleteScope
+    | DeleteExpired of DateTimeOffset
 
-module private LifecycleEnvelope =
-    let readAt path lineNumber decode line =
+type FeedbackStoreDocument =
+    { Version: int
+      Event: FeedbackStoreEvent }
+
+module private FeedbackStream =
+    let private decode stream deserialize getVersion getEvent eventNumber line =
         try
-            decode lineNumber line
+            let document = deserialize line
+
+            if isNull (box document) || getVersion document <> 1 then
+                raise (System.Text.Json.JsonException(sprintf "Expected %s schema version 1." stream))
+
+            getEvent document
         with ex ->
             raise (
                 InvalidDataException(
                     sprintf
-                        "Lifecycle event file '%s' is invalid at line %d. Follow docs/migrations before writing."
-                        path
-                        lineNumber,
+                        "%s stream is invalid at event %d. Follow docs/migrations before writing."
+                        stream
+                        eventNumber,
                     ex
                 )
             )
 
-    let turn event =
-        match event with
-        | TurnStoreEvent.Save record ->
-            { SchemaVersion = 1
-              Kind = "turn.upsert"
-              Record = Some record
-              SessionId = None
-              Before = None }
-        | TurnStoreEvent.DeleteSession sessionId ->
-            { SchemaVersion = 1
-              Kind = "turn.session-deleted"
-              Record = None
-              SessionId = Some sessionId
-              Before = None }
-        | TurnStoreEvent.DeleteExpired(sessionId, before) ->
-            { SchemaVersion = 1
-              Kind = "turn.expired-deleted"
-              Record = None
-              SessionId = Some sessionId
-              Before = Some before }
+    let decodeTurn stream eventNumber line =
+        decode
+            stream
+            FeedbackJson.deserialize<TurnStoreDocument>
+            (fun document -> document.Version)
+            (fun document -> document.Event)
+            eventNumber
+            line
 
-    let readTurn lineNumber line =
-        let envelope = FeedbackJson.deserialize<TurnStoreEnvelope> line
+    let decodeFeedback stream eventNumber line =
+        decode
+            stream
+            FeedbackJson.deserialize<FeedbackStoreDocument>
+            (fun document -> document.Version)
+            (fun document -> document.Event)
+            eventNumber
+            line
 
-        if envelope.SchemaVersion <> 1 then
-            raise (InvalidDataException(sprintf "Unsupported turn-store schema version at line %d." lineNumber))
+module PersistentTurnStore =
+    let create (openStore: string -> EventStore) : TurnStore =
+        let sync = obj ()
 
-        match envelope.Kind, envelope.Record, envelope.SessionId, envelope.Before with
-        | "turn.upsert", Some record, _, _ -> TurnStoreEvent.Save record
-        | "turn.session-deleted", _, Some sessionId, _ -> TurnStoreEvent.DeleteSession sessionId
-        | "turn.expired-deleted", _, Some sessionId, Some before -> TurnStoreEvent.DeleteExpired(sessionId, before)
-        | _ ->
-            raise (InvalidDataException(sprintf "Invalid turn-store event '%s' at line %d." envelope.Kind lineNumber))
+        let load scope =
+            let key = FeedbackPersistence.key scope
+            let context = "turn-store/" + key
+            let store = openStore key
+            let inner = InMemoryTurnStore.create ()
 
-    let feedback event =
-        match event with
-        | FeedbackStoreEvent.Save record ->
-            { SchemaVersion = 1
-              Kind = "feedback.upsert"
-              Record = Some record
-              Owner = None
-              Before = None }
-        | FeedbackStoreEvent.DeleteOwner owner ->
-            { SchemaVersion = 1
-              Kind = "feedback.owner-deleted"
-              Record = None
-              Owner = Some owner
-              Before = None }
-        | FeedbackStoreEvent.DeleteExpired(owner, before) ->
-            { SchemaVersion = 1
-              Kind = "feedback.expired-deleted"
-              Record = None
-              Owner = Some owner
-              Before = Some before }
+            store.LoadAll()
+            |> List.iteri (fun index line ->
+                let event = FeedbackStream.decodeTurn context (index + 1) line
 
-    let readFeedback lineNumber line =
-        let envelope = FeedbackJson.deserialize<FeedbackStoreEnvelope> line
+                match event with
+                | TurnStoreEvent.Accepted turn -> inner.SaveAsync scope turn |> _.GetAwaiter().GetResult()
+                | TurnStoreEvent.DeleteScope -> inner.DeleteScopeAsync scope |> _.GetAwaiter().GetResult() |> ignore
+                | TurnStoreEvent.DeleteExpired before ->
+                    inner.DeleteExpiredAsync scope before |> _.GetAwaiter().GetResult() |> ignore)
 
-        if envelope.SchemaVersion <> 1 then
-            raise (InvalidDataException(sprintf "Unsupported feedback-store schema version at line %d." lineNumber))
+            store, inner
 
-        match envelope.Kind, envelope.Record, envelope.Owner, envelope.Before with
-        | "feedback.upsert", Some record, _, _ -> FeedbackStoreEvent.Save record
-        | "feedback.owner-deleted", _, Some owner, _ -> FeedbackStoreEvent.DeleteOwner owner
-        | "feedback.expired-deleted", _, Some owner, Some before -> FeedbackStoreEvent.DeleteExpired(owner, before)
-        | _ ->
-            raise (
-                InvalidDataException(sprintf "Invalid feedback-store event '%s' at line %d." envelope.Kind lineNumber)
-            )
+        let read scope operation =
+            lock sync (fun () ->
+                let _, inner = load scope
+                operation inner)
 
-/// Turn records persisted as JSONL at <baseDir>/turns.jsonl.
+        let mutate scope operation (event: TurnStoreEvent) =
+            lock sync (fun () ->
+                let store, inner = load scope
+                let result = operation inner
+                let document: TurnStoreDocument = { Version = 1; Event = event }
+                store.Append(FeedbackJson.serialize document)
+                result)
+
+        { SaveAsync =
+            fun scope turn ->
+                task {
+                    mutate
+                        scope
+                        (fun inner -> inner.SaveAsync scope turn |> _.GetAwaiter().GetResult())
+                        (TurnStoreEvent.Accepted turn)
+                }
+          GetAsync = fun scope turnId -> read scope (fun inner -> inner.GetAsync scope turnId)
+          GetAllAsync = fun scope -> read scope (fun inner -> inner.GetAllAsync scope)
+          GetForExecutionAsync =
+            fun scope executionId -> read scope (fun inner -> inner.GetForExecutionAsync scope executionId)
+          DeleteScopeAsync =
+            fun scope ->
+                FeedbackPersistence.failure (fun () ->
+                    mutate
+                        scope
+                        (fun inner ->
+                            inner.DeleteScopeAsync scope
+                            |> _.GetAwaiter().GetResult()
+                            |> Result.defaultWith (fun failure -> raise (InvalidOperationException failure.Message)))
+                        TurnStoreEvent.DeleteScope)
+          DeleteExpiredAsync =
+            fun scope before ->
+                FeedbackPersistence.failure (fun () ->
+                    mutate
+                        scope
+                        (fun inner ->
+                            inner.DeleteExpiredAsync scope before
+                            |> _.GetAwaiter().GetResult()
+                            |> Result.defaultWith (fun failure -> raise (InvalidOperationException failure.Message)))
+                        (TurnStoreEvent.DeleteExpired before)) }
+
+module PersistentFeedbackStore =
+    let create (openStore: string -> EventStore) : FeedbackStore =
+        let sync = obj ()
+
+        let load scope =
+            let key = FeedbackPersistence.key scope
+            let context = "feedback-store/" + key
+            let store = openStore key
+            let inner = InMemoryFeedbackStore.create ()
+
+            store.LoadAll()
+            |> List.iteri (fun index line ->
+                let event = FeedbackStream.decodeFeedback context (index + 1) line
+
+                match event with
+                | FeedbackStoreEvent.Accepted feedback -> inner.SaveAsync scope feedback |> _.GetAwaiter().GetResult()
+                | FeedbackStoreEvent.DeleteScope ->
+                    inner.DeleteScopeAsync scope |> _.GetAwaiter().GetResult() |> ignore
+                | FeedbackStoreEvent.DeleteExpired before ->
+                    inner.DeleteExpiredAsync scope before |> _.GetAwaiter().GetResult() |> ignore)
+
+            store, inner
+
+        let read scope operation =
+            lock sync (fun () ->
+                let _, inner = load scope
+                operation inner)
+
+        let mutate scope operation (event: FeedbackStoreEvent) =
+            lock sync (fun () ->
+                let store, inner = load scope
+                let result = operation inner
+                let document: FeedbackStoreDocument = { Version = 1; Event = event }
+                store.Append(FeedbackJson.serialize document)
+                result)
+
+        { SaveAsync =
+            fun scope feedback ->
+                task {
+                    mutate
+                        scope
+                        (fun inner -> inner.SaveAsync scope feedback |> _.GetAwaiter().GetResult())
+                        (FeedbackStoreEvent.Accepted feedback)
+                }
+          GetForTurnAsync = fun scope turnId -> read scope (fun inner -> inner.GetForTurnAsync scope turnId)
+          GetAllAsync = fun scope -> read scope (fun inner -> inner.GetAllAsync scope)
+          DeleteScopeAsync =
+            fun scope ->
+                FeedbackPersistence.failure (fun () ->
+                    mutate
+                        scope
+                        (fun inner ->
+                            inner.DeleteScopeAsync scope
+                            |> _.GetAwaiter().GetResult()
+                            |> Result.defaultWith (fun failure -> raise (InvalidOperationException failure.Message)))
+                        FeedbackStoreEvent.DeleteScope)
+          DeleteExpiredAsync =
+            fun scope before ->
+                FeedbackPersistence.failure (fun () ->
+                    mutate
+                        scope
+                        (fun inner ->
+                            inner.DeleteExpiredAsync scope before
+                            |> _.GetAwaiter().GetResult()
+                            |> Result.defaultWith (fun failure -> raise (InvalidOperationException failure.Message)))
+                        (FeedbackStoreEvent.DeleteExpired before)) }
+
+module TurnStores =
+    let inMemory () = InMemoryTurnStore.create ()
+
+    let file baseDir =
+        PersistentTurnStore.create (fun key -> EventStore.file (Path.Combine(baseDir, "turn-store", key + ".jsonl")))
+
+    let ado factory =
+        PersistentTurnStore.create (fun key -> EventStore.db factory ("turn-store/" + key))
+
+module FeedbackStores =
+    let inMemory () = InMemoryFeedbackStore.create ()
+
+    let file baseDir =
+        PersistentFeedbackStore.create (fun key ->
+            EventStore.file (Path.Combine(baseDir, "feedback-store", key + ".jsonl")))
+
+    let ado factory =
+        PersistentFeedbackStore.create (fun key -> EventStore.db factory ("feedback-store/" + key))
+
 module FileTurnStore =
-    let create (baseDir: string) : TurnStore =
-        let path = Path.Combine(baseDir, "turns.jsonl")
+    let create = TurnStores.file
 
-        let readEvents () =
-            if not (File.Exists path) then
-                []
-            else
-                File.ReadAllLines path
-                |> Array.filter (String.IsNullOrWhiteSpace >> not)
-                |> Array.mapi (fun index line ->
-                    LifecycleEnvelope.readAt path (index + 1) LifecycleEnvelope.readTurn line)
-                |> Array.toList
+module AdoTurnStore =
+    let create = TurnStores.ado
 
-        let load () =
-            let turns = System.Collections.Generic.Dictionary<string, TurnRecord>()
-
-            let remove (predicate: TurnRecord -> bool) =
-                turns.Values
-                |> Seq.filter predicate
-                |> Seq.map (fun turn -> turn.TurnId)
-                |> Seq.toArray
-                |> Array.iter (turns.Remove >> ignore)
-
-            for event in readEvents () do
-                match event with
-                | TurnStoreEvent.Save turn -> turns.[turn.TurnId] <- turn
-                | TurnStoreEvent.DeleteSession sessionId -> remove (fun turn -> turn.SessionId = sessionId)
-                | TurnStoreEvent.DeleteExpired(sessionId, before) ->
-                    remove (fun turn -> turn.SessionId = sessionId && turn.CreatedAt < before)
-
-            turns.Values |> Seq.toList
-
-        let saveAsync (turn: TurnRecord) =
-            readEvents () |> ignore
-            Jsonl.append path (FeedbackJson.serialize (LifecycleEnvelope.turn (TurnStoreEvent.Save turn)))
-            Task.CompletedTask
-
-        let getAsync (turnId: string) =
-            load () |> List.tryFind (fun turn -> turn.TurnId = turnId) |> Task.FromResult
-
-        let getForSessionAsync (sessionId: string) =
-            load ()
-            |> List.filter (fun turn -> turn.SessionId = sessionId)
-            |> Task.FromResult
-
-        let getForExecutionAsync executionId =
-            load ()
-            |> List.filter (fun turn -> turn.Correlation.ExecutionId = executionId)
-            |> Task.FromResult
-
-        let delete event (predicate: TurnRecord -> bool) =
-            let count = load () |> List.filter predicate |> List.length
-            Jsonl.append path (FeedbackJson.serialize (LifecycleEnvelope.turn event))
-            Task.FromResult count
-
-        let deleteSessionAsync (sessionId: string) =
-            TurnOperations.protect sessionId (fun () ->
-                delete (TurnStoreEvent.DeleteSession sessionId) (fun turn -> turn.SessionId = sessionId))
-
-        let deleteExpiredAsync (sessionId: string) before =
-            TurnOperations.protect sessionId (fun () ->
-                delete (TurnStoreEvent.DeleteExpired(sessionId, before)) (fun turn ->
-                    turn.SessionId = sessionId && turn.CreatedAt < before))
-
-        { SaveAsync = saveAsync
-          GetAsync = getAsync
-          GetForSessionAsync = getForSessionAsync
-          GetForExecutionAsync = getForExecutionAsync
-          DeleteSessionAsync = deleteSessionAsync
-          DeleteExpiredAsync = deleteExpiredAsync }
-
-/// Feedback persisted as JSONL at <baseDir>/feedback.jsonl.
 module FileFeedbackStore =
-    let create (baseDir: string) : FeedbackStore =
-        let path = Path.Combine(baseDir, "feedback.jsonl")
+    let create = FeedbackStores.file
 
-        let readEvents () =
-            if not (File.Exists path) then
-                []
-            else
-                File.ReadAllLines path
-                |> Array.filter (String.IsNullOrWhiteSpace >> not)
-                |> Array.mapi (fun index line ->
-                    LifecycleEnvelope.readAt path (index + 1) LifecycleEnvelope.readFeedback line)
-                |> Array.toList
+module AdoFeedbackStore =
+    let create = FeedbackStores.ado
 
-        let load () =
-            let entries = System.Collections.Generic.Dictionary<Guid, Feedback>()
-
-            let remove (predicate: Feedback -> bool) =
-                entries.Values
-                |> Seq.filter predicate
-                |> Seq.map (fun feedback -> feedback.Id)
-                |> Seq.toArray
-                |> Array.iter (entries.Remove >> ignore)
-
-            for event in readEvents () do
-                match event with
-                | FeedbackStoreEvent.Save feedback -> entries.[feedback.Id] <- feedback
-                | FeedbackStoreEvent.DeleteOwner owner -> remove (fun feedback -> feedback.UserId = owner)
-                | FeedbackStoreEvent.DeleteExpired(owner, before) ->
-                    remove (fun feedback -> feedback.UserId = owner && feedback.CreatedAt < before)
-
-            entries.Values |> Seq.toList
-
-        let saveAsync (feedback: Feedback) =
-            readEvents () |> ignore
-            Jsonl.append path (FeedbackJson.serialize (LifecycleEnvelope.feedback (FeedbackStoreEvent.Save feedback)))
-            Task.CompletedTask
-
-        let getForTurnAsync turnId =
-            load ()
-            |> List.filter (fun feedback -> feedback.TurnId = turnId)
-            |> Task.FromResult
-
-        let getForSessionAsync sessionId =
-            load ()
-            |> List.filter (fun feedback -> feedback.SessionId = sessionId)
-            |> Task.FromResult
-
-        let getAllAsync () = load () |> Task.FromResult
-
-        let delete event (predicate: Feedback -> bool) =
-            let count = load () |> List.filter predicate |> List.length
-            Jsonl.append path (FeedbackJson.serialize (LifecycleEnvelope.feedback event))
-            Task.FromResult count
-
-        let deleteOwnerAsync (owner: string) =
-            FeedbackOperations.protect owner (fun () ->
-                delete (FeedbackStoreEvent.DeleteOwner owner) (fun feedback -> feedback.UserId = owner))
-
-        let deleteExpiredAsync (owner: string) before =
-            FeedbackOperations.protect owner (fun () ->
-                delete (FeedbackStoreEvent.DeleteExpired(owner, before)) (fun feedback ->
-                    feedback.UserId = owner && feedback.CreatedAt < before))
-
-        { SaveAsync = saveAsync
-          GetForTurnAsync = getForTurnAsync
-          GetForSessionAsync = getForSessionAsync
-          GetAllAsync = getAllAsync
-          DeleteOwnerAsync = deleteOwnerAsync
-          DeleteExpiredAsync = deleteExpiredAsync }
-
-/// Backend factories for <see cref="FeedbackService"/>, mirroring <see cref="PersistenceMode"/>:
-///   File baseDir (local JSONL files) | Database factory (any ADO.NET store).
 module FeedbackDb =
-
-    /// File-backed service rooted at <baseDir> (e.g. <NAO_DATA_DIR>/feedback).
-    let file (baseDir: string) : FeedbackService =
+    let file baseDir =
         Directory.CreateDirectory baseDir |> ignore
-        FeedbackService.create (FileTurnStore.create baseDir) (FileFeedbackStore.create baseDir)
+        FeedbackService.create (TurnStores.file baseDir) (FeedbackStores.file baseDir)
 
-    /// Database-backed service over any ADO.NET provider (SQLite, PostgreSQL, SQL Server, ...).
-    /// Tables are created on demand (CREATE TABLE IF NOT EXISTS).
-    let database (factory: DbConnectionFactory) : FeedbackService =
-        FeedbackService.create (AdoTurnStore.create factory) (AdoFeedbackStore.create factory)
+    let database factory =
+        FeedbackService.create (TurnStores.ado factory) (FeedbackStores.ado factory)
 
-    /// Select the backend with a single knob:
-    ///   File baseDir (local files) | Database factory (any ADO.NET store).
-    let create (mode: PersistenceMode) : FeedbackService =
+    let create mode =
         match mode with
         | PersistenceMode.File baseDir -> file baseDir
         | PersistenceMode.Database factory -> database factory

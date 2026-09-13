@@ -16,10 +16,6 @@ type Feedback =
         Id: Guid
         /// Turn this feedback refers to.
         TurnId: string
-        /// Session the turn belonged to.
-        SessionId: string
-        /// User who gave the feedback.
-        UserId: string
         /// Positive / negative / neutral.
         Sentiment: FeedbackSentiment
         /// Optional free-text explanation from the user.

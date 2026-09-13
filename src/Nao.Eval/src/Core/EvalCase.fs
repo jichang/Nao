@@ -1,6 +1,7 @@
 namespace Nao.Eval
 
 open System
+open Nao.Agents
 
 /// A single evaluation test case
 type EvalCase =
@@ -40,18 +41,18 @@ module EvalCase =
           Metadata = Map.empty }
 
     /// Add tags to a case
-    let withTags tags case = { case with Tags = tags }
+    let withTags tags (case: EvalCase) = { case with Tags = tags }
 
     /// Add metadata to a case
-    let withMetadata metadata case = { case with Metadata = metadata }
+    let withMetadata metadata (case: EvalCase) = { case with Metadata = metadata }
 
     /// Add description to a case
-    let withDescription desc case = { case with Description = desc }
+    let withDescription desc (case: EvalCase) = { case with Description = desc }
 
 /// A dataset is a named collection of eval cases
 type EvalDataset =
     { Id: Guid
-      Owner: string
+      Owner: AuthorizationIdentity
       CreatedAt: DateTimeOffset
       Name: string
       Cases: EvalCase list }
@@ -59,9 +60,6 @@ type EvalDataset =
 module EvalDataset =
 
     let create owner name cases =
-        if String.IsNullOrWhiteSpace owner then
-            invalidArg (nameof owner) "Evaluation dataset owner cannot be blank."
-
         { Id = Guid.NewGuid()
           Owner = owner
           CreatedAt = DateTimeOffset.UtcNow

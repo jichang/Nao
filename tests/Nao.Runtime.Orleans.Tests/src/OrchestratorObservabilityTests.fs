@@ -65,20 +65,20 @@ type OrchestratorObservabilityTests() =
           Bus = bus
           Scope = scope }
 
-    let request (context: AgentContext) (agent: Agent) input =
+    let authorization () =
         let principal =
             SecurityPrincipal.create (TenantId.parse "tenant") (UserId.parse scope.UserId) []
 
-        let authorization =
-            AuthorizationScope.tryCreate
-                principal
-                None
-                (WorkspaceId.parse scope.WorkspaceKey)
-                (Some(SessionId.parse scope.SessionId))
-            |> Option.get
+        AuthorizationScope.tryCreate
+            principal
+            None
+            (WorkspaceId.parse scope.WorkspaceKey)
+            (Some(SessionId.parse scope.SessionId))
+        |> Option.get
 
+    let request (context: AgentContext) (agent: Agent) input =
         ExecutionRequest.create
-            authorization
+            (authorization ())
             (TurnId.parse scope.ActionId)
             scope.ConversationId
             agent.Metadata.Id
@@ -139,12 +139,16 @@ type OrchestratorObservabilityTests() =
             EtclovgHarness.runAsync harnessConfig context agent (request context agent "start")
             |> _.Result
 
-        let history = journal.GetHistoryAsync() |> _.Result
+        let authorized = authorization ()
+        let history = journal.GetHistoryAsync authorized |> _.Result
 
         Assert.AreEqual(ExecutionTerminalStatus.Succeeded, result.Status)
-        let aggregate = metrics.GetMetrics context.SessionKey
+        let aggregate = metrics.GetMetrics authorized
         Assert.AreEqual(1, aggregate.TotalToolCalls)
-        let executionMetrics = metrics.GetByExecution context.Correlation.ExecutionId
+
+        let executionMetrics =
+            metrics.GetByExecution authorized context.Correlation.ExecutionId
+
         Assert.AreEqual(aggregate.TotalLlmCalls + aggregate.TotalToolCalls, executionMetrics.Length)
 
         Assert.IsTrue(
@@ -152,7 +156,9 @@ type OrchestratorObservabilityTests() =
             |> List.forall (fun metric -> metric.Correlation = context.Correlation)
         )
 
-        let executionSpans = tracer.GetByExecution context.Correlation.ExecutionId
+        let executionSpans =
+            tracer.GetByExecution authorized context.Correlation.ExecutionId
+
         Assert.IsTrue(executionSpans.Length >= 2)
 
         Assert.IsTrue(
@@ -164,7 +170,6 @@ type OrchestratorObservabilityTests() =
         Assert.AreEqual("echo", history.Head.ToolName)
         Assert.AreEqual("hello", history.Head.Input)
         Assert.AreEqual("hello", history.Head.Output)
-        Assert.AreEqual("user/session", history.Head.Owner)
         Assert.AreEqual(context.Correlation, history.Head.Correlation)
         StringAssert.StartsWith(IdempotencyKey.value history.Head.IdempotencyKey, "tool:")
         Assert.AreEqual(ToolReplaySafety.RetrySafe, history.Head.ReplaySafety)
@@ -185,7 +190,7 @@ type OrchestratorObservabilityTests() =
                 ToolCodec.text
                 (ToolOperation.create ToolReplaySafety.ExternallySideEffecting (fun _ input ->
                     task {
-                        let! transitions = journal.SideEffects.GetByIdempotencyKey expectedKey.Value
+                        let! transitions = journal.SideEffects.GetByIdempotencyKey (authorization ()) expectedKey.Value
 
                         intentVisibleDuringExecution <-
                             transitions |> List.map _.Phase = [ ToolSideEffectPhase.IntentRecorded ]
@@ -216,7 +221,9 @@ type OrchestratorObservabilityTests() =
         let result =
             EtclovgHarness.runAsync harnessConfig context agent executionRequest |> _.Result
 
-        let transitions = journal.SideEffects.GetByIdempotencyKey toolKey |> _.Result
+        let transitions =
+            journal.SideEffects.GetByIdempotencyKey executionRequest.Authorization toolKey
+            |> _.Result
 
         Assert.AreEqual(ExecutionTerminalStatus.Succeeded, result.Status)
         Assert.IsTrue(intentVisibleDuringExecution)
@@ -298,7 +305,9 @@ type OrchestratorObservabilityTests() =
         let result =
             EtclovgHarness.runAsync harnessConfig context agent executionRequest |> _.Result
 
-        let transitions = journal.SideEffects.GetByIdempotencyKey toolKey |> _.Result
+        let transitions =
+            journal.SideEffects.GetByIdempotencyKey executionRequest.Authorization toolKey
+            |> _.Result
 
         Assert.AreEqual(ExecutionTerminalStatus.Succeeded, result.Status)
 
@@ -366,7 +375,10 @@ type OrchestratorObservabilityTests() =
         let childProvider = ScriptedProvider.create [ "child done" ]
 
         let child =
-            TestOrchestrator.create (config childProvider [] bus) (fun response -> [ Respond response ])
+            TestOrchestrator.create
+                { config childProvider [] bus with
+                    Id = "memory-agent" }
+                (fun response -> [ Respond response ])
 
         let childTool =
             AgentTool.create "memory" "Memory specialist." 1000 "string" "string" child

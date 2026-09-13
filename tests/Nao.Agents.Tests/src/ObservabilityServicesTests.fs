@@ -31,6 +31,13 @@ open ObservabilityTestHelpers
 [<TestClass>]
 type ObservabilityServicesTests() =
 
+    let scope session =
+        let principal =
+            SecurityPrincipal.create (TenantId.parse "tenant") (UserId.parse "dev") []
+
+        AuthorizationScope.tryCreate principal None (WorkspaceId.parse "workspace") (Some(SessionId.parse session))
+        |> Option.get
+
     let tempDir () =
         let dir =
             Path.Combine(Path.GetTempPath(), "nao-obs-" + Guid.NewGuid().ToString("N"))
@@ -52,11 +59,17 @@ type ObservabilityServicesTests() =
         let observability = ObservabilityServices.create bus (backingFactory root)
         let correlation = CorrelationContext.root ()
 
+        let authorization = scope "s1"
         let services = observability.ServicesFor "dev/s1" "" correlation
-        services.Metrics.Value.Record(MetricRecord.llmCall correlation "dev/s1" DateTimeOffset.UtcNow 10 20 5L)
+        services.Metrics.Value.Record authorization (MetricRecord.llmCall correlation DateTimeOffset.UtcNow 10 20 5L)
 
         // The write still reaches the real backing store (reads stay correct).
-        let expected = Path.Combine(root, "dev_s1", "observability", "metrics.jsonl")
+        let key =
+            AuthorizationScope.identity authorization |> AuthorizationIdentity.storageKey
+
+        let expected =
+            Path.Combine(root, "dev_s1", "observability", "metrics", key + ".jsonl")
+
         Assert.IsTrue(File.Exists expected, sprintf "expected metrics file at %s" expected)
 
     [<TestMethod>]
@@ -69,7 +82,7 @@ type ObservabilityServicesTests() =
         let correlation = CorrelationContext.root ()
 
         let services = observability.ServicesFor "dev/s1" "" correlation
-        services.Metrics.Value.Record(MetricRecord.llmCall correlation "dev/s1" DateTimeOffset.UtcNow 10 20 5L)
+        services.Metrics.Value.Record (scope "s1") (MetricRecord.llmCall correlation DateTimeOffset.UtcNow 10 20 5L)
 
         // The write is teed to the bus as an ObservabilityCaptured event.
         match signals () with
@@ -88,8 +101,9 @@ type ObservabilityServicesTests() =
         let observability = ObservabilityServices.create bus (backingFactory root)
         let correlation = CorrelationContext.root ()
 
-        (observability.ServicesFor "dev/s1" "" correlation)
-            .Metrics.Value.Record(MetricRecord.toolCall correlation "dev/s1" DateTimeOffset.UtcNow "search" 3L true)
+        (observability.ServicesFor "dev/s1" "" correlation).Metrics.Value.Record
+            (scope "s1")
+            (MetricRecord.toolCall correlation DateTimeOffset.UtcNow "search" 3L true)
 
         match List.ofSeq received with
         | [ ObservabilityCaptured(scope, MetricRecorded { Payload = MetricPayload.ToolCall("search", 3L, true) }) ] ->
@@ -107,8 +121,9 @@ type ObservabilityServicesTests() =
         let observability = ObservabilityServices.create bus (backingFactory root)
         let correlation = CorrelationContext.root ()
 
-        (observability.ServicesFor "dev/s1" "turn-1" correlation)
-            .Metrics.Value.Record(MetricRecord.toolCall correlation "dev/s1" DateTimeOffset.UtcNow "search" 3L true)
+        (observability.ServicesFor "dev/s1" "turn-1" correlation).Metrics.Value.Record
+            (scope "s1")
+            (MetricRecord.toolCall correlation DateTimeOffset.UtcNow "search" 3L true)
 
         match List.ofSeq received with
         | [ ObservabilityCaptured(scope, MetricRecorded _) ] -> Assert.AreEqual(correlation, scope.Correlation)
@@ -122,14 +137,22 @@ type ObservabilityServicesTests() =
         let correlation1 = CorrelationContext.root ()
         let correlation2 = CorrelationContext.root ()
 
-        (observability.ServicesFor "dev/s1" "" correlation1)
-            .Metrics.Value.Record(MetricRecord.llmCall correlation1 "dev/s1" DateTimeOffset.UtcNow 1 1 1L)
+        (observability.ServicesFor "dev/s1" "" correlation1).Metrics.Value.Record
+            (scope "s1")
+            (MetricRecord.llmCall correlation1 DateTimeOffset.UtcNow 1 1 1L)
 
-        (observability.ServicesFor "dev/s2" "" correlation2)
-            .Metrics.Value.Record(MetricRecord.llmCall correlation2 "dev/s2" DateTimeOffset.UtcNow 1 1 1L)
+        (observability.ServicesFor "dev/s2" "" correlation2).Metrics.Value.Record
+            (scope "s2")
+            (MetricRecord.llmCall correlation2 DateTimeOffset.UtcNow 1 1 1L)
 
-        Assert.IsTrue(File.Exists(Path.Combine(root, "dev_s1", "observability", "metrics.jsonl")))
-        Assert.IsTrue(File.Exists(Path.Combine(root, "dev_s2", "observability", "metrics.jsonl")))
+        let key1 =
+            AuthorizationScope.identity (scope "s1") |> AuthorizationIdentity.storageKey
+
+        let key2 =
+            AuthorizationScope.identity (scope "s2") |> AuthorizationIdentity.storageKey
+
+        Assert.IsTrue(File.Exists(Path.Combine(root, "dev_s1", "observability", "metrics", key1 + ".jsonl")))
+        Assert.IsTrue(File.Exists(Path.Combine(root, "dev_s2", "observability", "metrics", key2 + ".jsonl")))
 
     [<TestMethod>]
     member _.PreservesNoneSinks() =

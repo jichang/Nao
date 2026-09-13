@@ -1,27 +1,25 @@
-# Versioned conversation files
+# Authenticated conversation streams
 
 ## Scope
 
-- First incompatible version: `0.2.0` development schema after FND-05 conversation versioning.
-- Affected API: `FileConversationStore` persisted representation only.
-- Affected files: `messages.json`, `meta.json`, and `conversations.json` under session conversation directories.
+- Current unreleased format: version 1.
+- Affected API: `ConversationStore` and `FileConversationStore`.
+- Affected files: `conversation/<identity-sha256>.jsonl`.
 
 ## Breaking changes
 
-Conversation files are version-1 documents containing `schemaVersion` and `value`. Earlier raw message arrays, metadata objects, and index arrays are rejected before append or rewrite. Nao does not include a legacy reader or in-process converter.
+Every conversation operation now requires an authenticated `AuthorizationScope`. `ConversationMeta.SessionId` and caller-selected session storage keys were removed. Saved messages, appended messages, conversation deletion, and scope deletion are version-1 events in a stream selected from the complete claim-free identity. Payloads contain no authorization evidence.
 
 ## Before upgrade
 
 1. Stop every writer using the sessions directory.
-2. Export conversations that must be retained or back up the complete sessions directory.
-3. Verify the backup before deploying the new version.
+2. Delete unreleased conversation development directories.
+3. Deploy the identity-partitioned implementation.
 
 ## Migration
 
-For development data that need not be retained, delete the old session directories. For retained data, transform each file externally into `{ "schemaVersion": 1, "value": <old-json> }`, preserving the old JSON value exactly, then deploy and validate conversation listing, load, and append behavior.
-
-Do not infer session identity, conversation identity, ownership, or message roles while transforming data.
+Nao is unreleased, so there is no compatibility reader or retained-data migration. Do not copy caller-keyed conversation files into authenticated streams.
 
 ## Rollback
 
-The older implementation cannot read version-1 documents. Restore the complete backup before running it; do not mix old and new conversation files in one sessions directory.
+Rollback is unsupported for this unreleased breaking redesign.

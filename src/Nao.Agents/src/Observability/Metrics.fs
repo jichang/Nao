@@ -31,33 +31,29 @@ type MetricPayload =
     | ToolCall of toolName: string * durationMs: int64 * success: bool
     | Custom of MetricPoint
 
-/// Durable identity and ownership for a metric observation.
+/// One metric observation. Authorization identity is supplied separately by the host.
 type MetricRecord =
     { Id: Guid
       Correlation: CorrelationContext
-      Owner: string
       Timestamp: DateTimeOffset
       Payload: MetricPayload }
 
 module MetricRecord =
-    let llmCall correlation owner timestamp inputTokens outputTokens latencyMs : MetricRecord =
+    let llmCall correlation timestamp inputTokens outputTokens latencyMs : MetricRecord =
         { Id = Guid.NewGuid()
           Correlation = correlation
-          Owner = owner
           Timestamp = timestamp
           Payload = MetricPayload.LlmCall(inputTokens, outputTokens, latencyMs) }
 
-    let toolCall correlation owner timestamp toolName durationMs success : MetricRecord =
+    let toolCall correlation timestamp toolName durationMs success : MetricRecord =
         { Id = Guid.NewGuid()
           Correlation = correlation
-          Owner = owner
           Timestamp = timestamp
           Payload = MetricPayload.ToolCall(toolName, durationMs, success) }
 
-    let custom correlation owner timestamp point : MetricRecord =
+    let custom correlation timestamp point : MetricRecord =
         { Id = Guid.NewGuid()
           Correlation = correlation
-          Owner = owner
           Timestamp = timestamp
           Payload = MetricPayload.Custom point }
 
@@ -114,17 +110,17 @@ type ExecutionMetrics =
 type MetricsCollector =
     {
         /// Accept one complete metric observation
-        Record: MetricRecord -> unit
-        /// Get aggregated metrics for one owner
-        GetMetrics: string -> ExecutionMetrics
-        /// Get observations produced by one execution
-        GetByExecution: ExecutionId -> MetricRecord list
-        /// Calculate one owner's cost using a cost model
-        EstimateCost: string -> CostModel -> decimal
-        /// Delete every metric observation owned by one scope
-        DeleteOwnerAsync: string -> Task<Result<int, PlatformFailure>>
-        /// Delete observations before a strict cutoff
-        DeleteExpiredAsync: string -> DateTimeOffset -> Task<Result<int, PlatformFailure>>
+        Record: AuthorizationScope -> MetricRecord -> unit
+        /// Get aggregated metrics in one authenticated scope
+        GetMetrics: AuthorizationScope -> ExecutionMetrics
+        /// Get observations produced by one execution in one authenticated scope
+        GetByExecution: AuthorizationScope -> ExecutionId -> MetricRecord list
+        /// Calculate one authenticated scope's cost using a cost model
+        EstimateCost: AuthorizationScope -> CostModel -> decimal
+        /// Delete every metric observation in one authenticated scope
+        DeleteScopeAsync: AuthorizationScope -> Task<Result<int, PlatformFailure>>
+        /// Delete observations in one authenticated scope before a strict cutoff
+        DeleteExpiredAsync: AuthorizationScope -> DateTimeOffset -> Task<Result<int, PlatformFailure>>
     }
 
 module internal RuntimeMetrics =

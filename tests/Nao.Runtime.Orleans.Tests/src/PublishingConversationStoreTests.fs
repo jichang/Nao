@@ -9,381 +9,270 @@ open Nao.Agents
 open Nao.Persistence
 open Nao.Runtime.Orleans
 
-/// Records the events published to the bus.
-type private ConvRecordingConsumer =
-    { Consumer: EventConsumer
-      Received: ResizeArray<NaoEvent>
-      Signals: unit -> ConversationSignal list }
+module private ConversationTestHelpers =
+    let scope tenant user group workspace session =
+        let principal =
+            SecurityPrincipal.createAuthenticated
+                (TenantId.parse tenant)
+                (UserId.parse user)
+                (Some(ServiceId.parse "private-service"))
+                [ GroupId.parse "group"; GroupId.parse "other" ]
+                [ "private-role" ]
+                (Map.ofList [ "private-claim", "private-value" ])
+                AuthenticationStrength.MultiFactor
 
-module private PublishingConversationStoreTestHelpers =
-    let convRecordingConsumer () =
-        let received = ResizeArray<NaoEvent>()
+        AuthorizationScope.tryCreate
+            principal
+            (group |> Option.map GroupId.parse)
+            (WorkspaceId.parse workspace)
+            (session |> Option.map SessionId.parse)
+        |> Option.get
 
-        let signals () =
-            received
-            |> Seq.choose (function
-                | ConversationCaptured(_, s) -> Some s
-                | _ -> None)
-            |> List.ofSeq
+    let owner = scope "tenant" "user" (Some "group") "workspace" (Some "session")
 
-        let consumer =
-            EventConsumer.create (fun evt ->
-                received.Add evt
-                Task.CompletedTask)
+    let owners =
+        [ owner
+          scope "other" "user" (Some "group") "workspace" (Some "session")
+          scope "tenant" "other" (Some "group") "workspace" (Some "session")
+          scope "tenant" "user" (Some "other") "workspace" (Some "session")
+          scope "tenant" "user" None "workspace" (Some "session")
+          scope "tenant" "user" (Some "group") "other" (Some "session")
+          scope "tenant" "user" (Some "group") "workspace" (Some "other")
+          scope "tenant" "user" (Some "group") "workspace" None ]
 
-        { Consumer = consumer
-          Received = received
-          Signals = signals }
+    let key authorization =
+        AuthorizationScope.identity authorization |> AuthorizationIdentity.storageKey
 
-open PublishingConversationStoreTestHelpers
+    let root () =
+        let path =
+            Path.Combine(Path.GetTempPath(), "nao-conversation-scope-" + Guid.NewGuid().ToString("N"))
 
-[<TestClass>]
-type PublishingConversationStoreTests() =
+        Directory.CreateDirectory path |> ignore
+        path
 
-    let newRoot () =
-        let dir =
-            Path.Combine(Path.GetTempPath(), "nao-pubconv-" + Guid.NewGuid().ToString("N"))
-
-        Directory.CreateDirectory dir |> ignore
-        dir
-
-    let cleanup (dir: string) =
-        if Directory.Exists dir then
-            Directory.Delete(dir, true)
-
-    let messageWith correlation role content turnId : PersistedMessage =
+    let message correlation role content turnId : PersistedMessage =
         { Role = role
           Content = content
-          Timestamp = DateTimeOffset.UtcNow
+          Timestamp = DateTimeOffset(2026, 9, 13, 0, 0, 0, TimeSpan.Zero)
           Correlation = correlation
           TurnId = turnId
           Steps = [||]
           Attachments = [||]
           Artifacts = [||] }
 
-    let message role content turnId =
-        messageWith (CorrelationContext.root ()) role content turnId
-
-    /// Build a tee over a real FileConversationStore + a subscribed recorder.
-    let setup (root: string) =
-        let bus = InMemoryEventBus.create ()
-        let recorder = convRecordingConsumer ()
-        EventBus.subscribe recorder.Consumer bus
-
-        let store =
-            FileConversationStore.create root |> PublishingConversationStore.create bus
-
-        store, recorder
-
-    [<TestMethod>]
-    member _.Append_WritesToBackingAndPublishes() =
-        let root = newRoot ()
-
-        try
-            let store, recorder = setup root
-            let correlation = CorrelationContext.root ()
-            let artifactCount = Random.Shared.Next(1, 5)
-
-            let artifacts =
-                [| for index in 1..artifactCount ->
-                       let artifact = ArtifactRecord()
-                       artifact.Id <- ArtifactId.generate () |> ArtifactId.serialize
-
-                       artifact.IdempotencyKey <-
-                           IdempotencyKey.forExecution correlation.ExecutionId
-                           |> IdempotencyKey.operation "artifact" index
-                           |> IdempotencyKey.value
-
-                       artifact.Kind <- sprintf "artifact-%d" index
-                       artifact.ContentType <- "application/json"
-                       artifact.Payload <- sprintf "{\"index\":%d}" index
-                       artifact |]
-
-            let input =
-                { messageWith correlation "User" "hi" "t1" with
-                    Artifacts = artifacts }
-
-            store.AppendAsync "dev/s1" "default" [| input |] |> fun t -> t.Wait()
-
-            // Backing still persisted (reads stay correct).
-            let loaded = (store.LoadAsync "dev/s1" "default").Result
-            Assert.AreEqual(1, loaded.Length)
-            Assert.AreEqual("hi", loaded.[0].Content)
-            Assert.AreEqual(correlation, loaded.[0].Correlation)
-            Assert.AreEqual(artifacts.Length, loaded.[0].Artifacts.Length)
-
-            for expected, actual in Array.zip artifacts loaded.[0].Artifacts do
-                Assert.AreEqual(expected.Id, actual.Id)
-                Assert.AreEqual(expected.Kind, actual.Kind)
-                Assert.AreEqual(expected.ContentType, actual.ContentType)
-                Assert.AreEqual(expected.Payload, actual.Payload)
-
-            let executionMessages =
-                store.LoadByExecutionAsync correlation.ExecutionId |> _.Result
-
-            Assert.AreEqual(1, executionMessages.Length)
-            Assert.AreEqual(correlation, executionMessages.[0].Correlation)
-
-            let messagesPath =
-                Directory.GetFiles(root, "messages.json", SearchOption.AllDirectories)
-                |> Array.exactlyOne
-
-            let persistedJson = File.ReadAllText messagesPath
-            Assert.IsFalse(persistedJson.Contains('\n'), "Persisted conversation JSON must remain compact")
-            Assert.IsFalse(persistedJson.Contains('\r'), "Persisted conversation JSON must remain compact")
-
-            use persisted = JsonDocument.Parse persistedJson
-            Assert.AreEqual(1, persisted.RootElement.GetProperty("schemaVersion").GetInt32())
-            Assert.AreEqual(1, persisted.RootElement.GetProperty("value").GetArrayLength())
-
-            Assert.AreEqual(
-                artifacts.Length,
-                persisted.RootElement.GetProperty("value").[0].GetProperty("Artifacts").GetArrayLength()
-            )
-
-            // ...and the write was teed to the bus.
-            match recorder.Signals() with
-            | [ MessagesAppended("default", msgs) ] ->
-                Assert.AreEqual(1, msgs.Length)
-                Assert.AreEqual("hi", msgs.[0].Content)
-                Assert.AreEqual("User", msgs.[0].Role)
-                Assert.AreEqual(correlation, msgs.[0].Correlation)
-                Assert.AreEqual(artifacts.Length, msgs.[0].Artifacts.Length)
-
-                for expected, actual in List.zip (List.ofArray artifacts) msgs.[0].Artifacts do
-                    Assert.AreEqual(expected.Id, ArtifactId.serialize actual.Id)
-                    Assert.AreEqual(expected.Kind, actual.Kind)
-                    Assert.AreEqual(expected.ContentType, actual.ContentType)
-                    Assert.AreEqual(expected.Payload, actual.Payload)
-            | other -> Assert.Fail(sprintf "expected one MessagesAppended, got %A" other)
-        finally
-            cleanup root
-
-    [<TestMethod>]
-    member _.Append_RejectsCorruptMessagesWithoutMutationOrPublication() =
-        let root = newRoot ()
-
-        try
-            let store, recorder = setup root
-
-            store.AppendAsync "dev/s1" "default" [| message "User" "original" "t1" |]
-            |> _.GetAwaiter().GetResult()
-
-            let messagesPath =
-                Directory.GetFiles(root, "messages.json", SearchOption.AllDirectories)
-                |> Array.exactlyOne
-
-            let metaPath =
-                Directory.GetFiles(root, "meta.json", SearchOption.AllDirectories)
-                |> Array.exactlyOne
-
-            let indexPath =
-                Directory.GetFiles(root, "conversations.json", SearchOption.AllDirectories)
-                |> Array.exactlyOne
-
-            File.WriteAllText(messagesPath, "{invalid")
-
-            let messagesBefore = File.ReadAllBytes messagesPath
-            let metaBefore = File.ReadAllBytes metaPath
-            let indexBefore = File.ReadAllBytes indexPath
-            let eventsBefore = recorder.Received.Count
-
-            let error =
-                Assert.ThrowsExactly<InvalidDataException>(fun () ->
-                    store.AppendAsync "dev/s1" "default" [| message "User" "new" "t2" |]
-                    |> _.GetAwaiter().GetResult())
-
-            StringAssert.Contains(error.Message, messagesPath)
-            StringAssert.Contains(error.Message, "Restore or remove")
-            CollectionAssert.AreEqual(messagesBefore, File.ReadAllBytes messagesPath)
-            CollectionAssert.AreEqual(metaBefore, File.ReadAllBytes metaPath)
-            CollectionAssert.AreEqual(indexBefore, File.ReadAllBytes indexPath)
-            Assert.AreEqual(eventsBefore, recorder.Received.Count)
-        finally
-            cleanup root
-
-    [<TestMethod>]
-    member _.Append_RejectsUnsupportedMessagesWithoutMutationOrPublication() =
-        let root = newRoot ()
-
-        try
-            let store, recorder = setup root
-
-            store.AppendAsync "dev/s1" "default" [| message "User" "original" "t1" |]
-            |> _.Wait()
-
-            let messagesPath =
-                Directory.GetFiles(root, "messages.json", SearchOption.AllDirectories)
-                |> Array.exactlyOne
-
-            let versionOne = File.ReadAllText messagesPath
-            let unsupported = versionOne.Replace("\"schemaVersion\":1", "\"schemaVersion\":2")
-            File.WriteAllText(messagesPath, unsupported)
-            let before = File.ReadAllBytes messagesPath
-            let eventsBefore = recorder.Received.Count
-
-            let error =
-                Assert.ThrowsExactly<InvalidDataException>(fun () ->
-                    store.AppendAsync "dev/s1" "default" [| message "User" "new" "t2" |]
-                    |> _.GetAwaiter().GetResult())
-
-            StringAssert.Contains(error.Message, "unsupported schema version 2")
-            CollectionAssert.AreEqual(before, File.ReadAllBytes messagesPath)
-            Assert.AreEqual(eventsBefore, recorder.Received.Count)
-        finally
-            cleanup root
-
-    [<TestMethod>]
-    member _.Append_RejectsUnversionedMessagesWithoutMutationOrPublication() =
-        let root = newRoot ()
-
-        try
-            let store, recorder = setup root
-
-            store.AppendAsync "dev/s1" "default" [| message "User" "original" "t1" |]
-            |> _.GetAwaiter().GetResult()
-
-            let messagesPath =
-                Directory.GetFiles(root, "messages.json", SearchOption.AllDirectories)
-                |> Array.exactlyOne
-
-            let metaPath =
-                Directory.GetFiles(root, "meta.json", SearchOption.AllDirectories)
-                |> Array.exactlyOne
-
-            let indexPath =
-                Directory.GetFiles(root, "conversations.json", SearchOption.AllDirectories)
-                |> Array.exactlyOne
-
-            File.WriteAllText(messagesPath, "[]")
-
-            let messagesBefore = File.ReadAllBytes messagesPath
-            let metaBefore = File.ReadAllBytes metaPath
-            let indexBefore = File.ReadAllBytes indexPath
-            let eventsBefore = recorder.Received.Count
-
-            let error =
-                Assert.ThrowsExactly<InvalidDataException>(fun () ->
-                    store.AppendAsync "dev/s1" "default" [| message "User" "new" "t2" |]
-                    |> _.GetAwaiter().GetResult())
-
-            StringAssert.Contains(error.Message, messagesPath)
-            StringAssert.Contains(error.Message, "docs/migrations")
-            CollectionAssert.AreEqual(messagesBefore, File.ReadAllBytes messagesPath)
-            CollectionAssert.AreEqual(metaBefore, File.ReadAllBytes metaPath)
-            CollectionAssert.AreEqual(indexBefore, File.ReadAllBytes indexPath)
-            Assert.AreEqual(eventsBefore, recorder.Received.Count)
-        finally
-            cleanup root
-
-    [<TestMethod>]
-    member _.Append_StampsScopeFromKeyAndTurn() =
-        let root = newRoot ()
-
-        try
-            let store, recorder = setup root
-            let correlation = CorrelationContext.root ()
-
-            store.AppendAsync "dev/s1" "chat-7" [| messageWith correlation "Assistant" "yo" "turn-9" |]
-            |> fun t -> t.Wait()
-
-            match List.ofSeq recorder.Received with
-            | [ ConversationCaptured(scope, _) ] ->
-                Assert.AreEqual("dev", scope.UserId)
-                Assert.AreEqual("s1", scope.SessionId)
-                Assert.AreEqual("chat-7", scope.ConversationId)
-                Assert.AreEqual("turn-9", scope.ActionId)
-                Assert.AreEqual("dev/s1", scope.SessionKey)
-                Assert.AreEqual(correlation, scope.Correlation)
-            | other -> Assert.Fail(sprintf "unexpected events %A" other)
-        finally
-            cleanup root
-
-    [<TestMethod>]
-    member _.EmptyAppend_PublishesNothing() =
-        let root = newRoot ()
-
-        try
-            let store, recorder = setup root
-            store.AppendAsync "dev/s1" "default" [||] |> fun t -> t.Wait()
-            Assert.AreEqual(0, recorder.Received.Count)
-        finally
-            cleanup root
-
-    [<TestMethod>]
-    member _.Save_PublishesConversationSaved() =
-        let root = newRoot ()
-
-        try
-            let store, recorder = setup root
-
-            store.SaveAsync "dev/s1" "default" [| message "User" "a" "t1"; message "Assistant" "b" "t1" |]
-            |> fun t -> t.Wait()
-
-            match recorder.Signals() with
-            | [ ConversationSaved("default", msgs) ] -> Assert.AreEqual(2, msgs.Length)
-            | other -> Assert.Fail(sprintf "expected ConversationSaved, got %A" other)
-        finally
-            cleanup root
-
-    [<TestMethod>]
-    member _.DeleteConversation_PublishesConversationDeleted() =
-        let root = newRoot ()
-
-        try
-            let store, recorder = setup root
-
-            store.AppendAsync "dev/s1" "default" [| message "User" "hi" "t1" |]
-            |> fun t -> t.Wait()
-
-            store.DeleteConversationAsync "dev/s1" "default" |> fun t -> t.Wait()
-
-            Assert.IsTrue(recorder.Signals() |> List.contains (ConversationDeleted "default"))
-        finally
-            cleanup root
-
-    [<TestMethod>]
-    member _.DeleteSession_PublishesSessionConversationsDeleted() =
-        let root = newRoot ()
-
-        try
-            let store, recorder = setup root
-
-            store.AppendAsync "dev/s1" "default" [| message "User" "hi" "t1" |]
-            |> fun t -> t.Wait()
-
-            store.DeleteSessionAsync "dev/s1" |> fun t -> t.Wait()
-
-            Assert.IsTrue(recorder.Signals() |> List.contains SessionConversationsDeleted)
-        finally
-            cleanup root
+open ConversationTestHelpers
 
 [<TestClass>]
-type WorkspaceRegistryTests() =
+type ConversationAuthorizationTests() =
+    [<TestMethod>]
+    member _.CompleteIdentityPartitionsAllOperations() =
+        let directory = root ()
+
+        try
+            let store = FileConversationStore.create directory
+            let correlation = CorrelationContext.root ()
+
+            for index, authorization in List.indexed owners do
+                store.SaveAsync authorization "shared" [| message correlation "User" (string index) "turn" |]
+                |> _.Wait()
+
+            for index, authorization in List.indexed owners do
+                let loaded = store.LoadAsync authorization "shared" |> _.Result
+                CollectionAssert.AreEqual([| string index |], loaded |> Array.map _.Content)
+
+                Assert.AreEqual(
+                    1,
+                    store.LoadByExecutionAsync authorization correlation.ExecutionId
+                    |> _.Result
+                    |> Array.length
+                )
+
+                CollectionAssert.AreEqual(
+                    [| "shared" |],
+                    store.ListConversationsAsync authorization
+                    |> _.Result
+                    |> Array.map _.ConversationName
+                )
+
+            store.DeleteConversationAsync owner "shared" |> _.Wait()
+            Assert.AreEqual(0, store.LoadAsync owner "shared" |> _.Result |> Array.length)
+
+            for authorization in owners |> List.tail do
+                Assert.AreEqual(1, store.LoadAsync authorization "shared" |> _.Result |> Array.length)
+
+            store.DeleteScopeAsync owners.[1] |> _.Wait()
+            Assert.AreEqual(0, store.ListConversationsAsync owners.[1] |> _.Result |> Array.length)
+            Assert.AreEqual(1, store.ListConversationsAsync owners.[2] |> _.Result |> Array.length)
+        finally
+            Directory.Delete(directory, true)
 
     [<TestMethod>]
-    member _.Register_ReplacesAndRemovePreservesRegistrySemantics() =
-        let registry = WorkspaceRegistry.create ()
-        let id = WorkspaceId.create "workspace"
-        let first = WorkspaceDefinitions.Empty
+    member _.AppendSaveAndReplayPreserveConversationSemantics() =
+        let directory = root ()
 
-        let replacement =
-            { WorkspaceDefinitions.Empty with
-                Tools = [] }
+        try
+            let correlation = CorrelationContext.root ()
+            let store = FileConversationStore.create directory
 
-        Assert.IsTrue(registry.TryGet id |> Option.isNone)
-        registry.Register(id, first)
-        registry.Register(id, replacement)
-        Assert.AreSame(replacement, registry.Get id)
-        CollectionAssert.AreEquivalent([| id |], registry.ListKeys() |> List.toArray)
-        Assert.IsTrue(registry.Remove id)
-        Assert.IsFalse(registry.Remove id)
+            store.AppendAsync owner "default" [| message correlation "User" "first" "turn-1" |]
+            |> _.Wait()
 
-        let throwsWhenMissing =
-            try
-                registry.Get id |> ignore
-                false
-            with _ ->
-                true
+            store.AppendAsync owner "default" [| message correlation "Assistant" "second" "turn-1" |]
+            |> _.Wait()
 
-        Assert.IsTrue(throwsWhenMissing)
+            store.AppendAsync owner "default" [||] |> _.Wait()
+
+            let reloaded = FileConversationStore.create directory
+
+            CollectionAssert.AreEqual(
+                [| "first"; "second" |],
+                reloaded.LoadAsync owner "default" |> _.Result |> Array.map _.Content
+            )
+
+            let meta = reloaded.ListConversationsAsync owner |> _.Result |> Array.exactlyOne
+            Assert.AreEqual("default", meta.ConversationName)
+            Assert.AreEqual(2, meta.MessageCount)
+
+            reloaded.SaveAsync owner "default" [| message correlation "Assistant" "replacement" "turn-2" |]
+            |> _.Wait()
+
+            CollectionAssert.AreEqual(
+                [| "replacement" |],
+                (FileConversationStore.create directory).LoadAsync owner "default"
+                |> _.Result
+                |> Array.map _.Content
+            )
+        finally
+            Directory.Delete(directory, true)
+
+    [<TestMethod>]
+    member _.StreamKeyAndV1PayloadContainNoAuthorizationEvidence() =
+        let directory = root ()
+
+        try
+            let store = FileConversationStore.create directory
+
+            store.SaveAsync owner "default" [| message (CorrelationContext.root ()) "User" "hello" "turn" |]
+            |> _.Wait()
+
+            let path = Path.Combine(directory, "conversation", key owner + ".jsonl")
+            Assert.IsTrue(File.Exists path)
+
+            for payload in File.ReadAllLines path do
+                use document = JsonDocument.Parse payload
+                Assert.AreEqual(1, document.RootElement.GetProperty("Version").GetInt32())
+
+                for secret in
+                    [ "tenant"
+                      "user"
+                      "group"
+                      "workspace"
+                      "session"
+                      "private-service"
+                      "private-role"
+                      "private-claim"
+                      "private-value"
+                      "MultiFactor"
+                      "Authorization"
+                      "Owner"
+                      "SessionId" ] do
+                    Assert.IsFalse(payload.Contains secret)
+        finally
+            Directory.Delete(directory, true)
+
+    [<TestMethod>]
+    member _.CorruptForeignScopeDoesNotBlockOwnScope() =
+        let directory = root ()
+
+        try
+            let store = FileConversationStore.create directory
+            let foreign = owners.[1]
+
+            store.SaveAsync foreign "default" [| message (CorrelationContext.root ()) "User" "foreign" "turn" |]
+            |> _.Wait()
+
+            File.AppendAllText(Path.Combine(directory, "conversation", key foreign + ".jsonl"), "{invalid\n")
+
+            store.SaveAsync owner "default" [| message (CorrelationContext.root ()) "User" "own" "turn" |]
+            |> _.Wait()
+
+            Assert.AreEqual(1, store.LoadAsync owner "default" |> _.Result |> Array.length)
+
+            Assert.ThrowsExactly<InvalidDataException>(fun () ->
+                store.LoadAsync foreign "default" |> _.GetAwaiter().GetResult() |> ignore)
+            |> ignore
+        finally
+            Directory.Delete(directory, true)
+
+    [<TestMethod>]
+    member _.UnsupportedVersionsAndFailedAppendsDoNotPublishState() =
+        let unsupportedStore =
+            FileConversationStore.createPersistent (fun _ ->
+                { Append = fun _ -> Assert.Fail("Unsupported stream must not append.")
+                  LoadAll = fun () -> [ """{"Version":99,"Event":"DeleteScope"}""" ] })
+
+        Assert.ThrowsExactly<InvalidDataException>(fun () ->
+            unsupportedStore.LoadAsync owner "default"
+            |> _.GetAwaiter().GetResult()
+            |> ignore)
+        |> ignore
+
+        let lines = ResizeArray<string>()
+        let mutable fail = false
+
+        let eventStore =
+            { Append =
+                fun line ->
+                    if fail then
+                        raise (IOException "failed")
+                    else
+                        lines.Add line
+              LoadAll = fun () -> List.ofSeq lines }
+
+        let store = FileConversationStore.createPersistent (fun _ -> eventStore)
+        let original = message (CorrelationContext.root ()) "User" "original" "turn"
+        store.SaveAsync owner "default" [| original |] |> _.Wait()
+        fail <- true
+
+        Assert.ThrowsExactly<IOException>(fun () ->
+            store.AppendAsync owner "default" [| { original with Content = "new" } |]
+            |> _.GetAwaiter().GetResult())
+        |> ignore
+
+        CollectionAssert.AreEqual([| original |], store.LoadAsync owner "default" |> _.Result)
+
+[<TestClass>]
+type PublishingConversationStoreTests() =
+    [<TestMethod>]
+    member _.PublishesOnlyAfterDurableWrite() =
+        let directory = root ()
+
+        try
+            let bus = InMemoryEventBus.create ()
+            let received = ResizeArray<NaoEvent>()
+
+            EventBus.subscribe
+                (EventConsumer.create (fun event ->
+                    received.Add event
+                    Task.CompletedTask))
+                bus
+
+            let store =
+                FileConversationStore.create directory |> PublishingConversationStore.create bus
+
+            let correlation = CorrelationContext.root ()
+
+            store.AppendAsync owner "default" [| message correlation "User" "hello" "turn" |]
+            |> _.Wait()
+
+            Assert.AreEqual(1, store.LoadAsync owner "default" |> _.Result |> Array.length)
+
+            match List.ofSeq received with
+            | [ ConversationCaptured(eventScope, MessagesAppended("default", messages)) ] ->
+                Assert.AreEqual("user", eventScope.UserId)
+                Assert.AreEqual("session", eventScope.SessionId)
+                Assert.AreEqual("workspace", eventScope.WorkspaceKey)
+                Assert.AreEqual(correlation, messages.Head.Correlation)
+            | events -> Assert.Fail(sprintf "Unexpected events: %A" events)
+        finally
+            Directory.Delete(directory, true)

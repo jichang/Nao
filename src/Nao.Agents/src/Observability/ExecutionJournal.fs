@@ -10,7 +10,6 @@ type ExecutionRecord =
       Failure: ToolFailure option
       IdempotencyKey: IdempotencyKey
       Correlation: CorrelationContext
-      Owner: string
       TurnId: string
       ToolName: string
       ReplaySafety: ToolReplaySafety
@@ -35,7 +34,6 @@ type ToolSideEffectTransition =
     { Id: Guid
       IdempotencyKey: IdempotencyKey
       Correlation: CorrelationContext
-      Owner: string
       TurnId: string
       ToolName: string
       Input: string
@@ -44,9 +42,9 @@ type ToolSideEffectTransition =
       RecordedAt: DateTimeOffset }
 
 type ToolSideEffectJournal =
-    { Save: ToolSideEffectTransition -> Task
-      GetByIdempotencyKey: IdempotencyKey -> Task<ToolSideEffectTransition list>
-      GetByExecution: ExecutionId -> Task<ToolSideEffectTransition list> }
+    { Save: AuthorizationScope -> ToolSideEffectTransition -> Task
+      GetByIdempotencyKey: AuthorizationScope -> IdempotencyKey -> Task<ToolSideEffectTransition list>
+      GetByExecution: AuthorizationScope -> ExecutionId -> Task<ToolSideEffectTransition list> }
 
 /// Stable harness boundary represented by a durable checkpoint.
 [<RequireQualifiedAccess>]
@@ -66,7 +64,6 @@ type HarnessCheckpoint =
     { Id: Guid
       IdempotencyKey: IdempotencyKey
       Correlation: CorrelationContext
-      Owner: string
       TurnId: string
       AgentId: string
       Phase: HarnessCheckpointPhase
@@ -74,9 +71,9 @@ type HarnessCheckpoint =
 
 /// Persistence operations for harness checkpoints.
 type HarnessCheckpointJournal =
-    { Save: HarnessCheckpoint -> Task
-      GetByExecution: ExecutionId -> Task<HarnessCheckpoint list>
-      GetByIdempotencyKey: IdempotencyKey -> Task<HarnessCheckpoint list> }
+    { Save: AuthorizationScope -> HarnessCheckpoint -> Task
+      GetByExecution: AuthorizationScope -> ExecutionId -> Task<HarnessCheckpoint list>
+      GetByIdempotencyKey: AuthorizationScope -> IdempotencyKey -> Task<HarnessCheckpoint list> }
 
 /// Exact recorded provider invocation used for deterministic replay.
 type ProviderReplayFixture =
@@ -116,13 +113,13 @@ module internal RuntimeReplayFixtures =
 
 /// Functional journal operations for tool execution revert/audit support.
 type ExecutionJournal =
-    { RecordAsync: ExecutionRecord -> Task
-      GetHistoryAsync: unit -> Task<ExecutionRecord list>
-      GetByExecutionAsync: ExecutionId -> Task<ExecutionRecord list>
-      GetRevertibleAsync: unit -> Task<ExecutionRecord list>
-      MarkRevertedAsync: Guid -> Task
-      DeleteOwnerAsync: string -> Task<Result<int, PlatformFailure>>
-      DeleteExpiredAsync: string -> DateTimeOffset -> Task<Result<int, PlatformFailure>>
+    { RecordAsync: AuthorizationScope -> ExecutionRecord -> Task
+      GetHistoryAsync: AuthorizationScope -> Task<ExecutionRecord list>
+      GetByExecutionAsync: AuthorizationScope -> ExecutionId -> Task<ExecutionRecord list>
+      GetRevertibleAsync: AuthorizationScope -> Task<ExecutionRecord list>
+      MarkRevertedAsync: AuthorizationScope -> Guid -> Task
+      DeleteScopeAsync: AuthorizationScope -> Task<Result<int, PlatformFailure>>
+      DeleteExpiredAsync: AuthorizationScope -> DateTimeOffset -> Task<Result<int, PlatformFailure>>
       SideEffects: ToolSideEffectJournal
       Checkpoints: HarnessCheckpointJournal }
 
@@ -137,9 +134,13 @@ module ExecutionJournal =
 
     /// Revert all revertible executions in reverse chronological order.
     /// Returns list of (toolName, result) for each attempted revert.
-    let revertAllAsync (journal: ExecutionJournal) (tools: Tool list) : Task<(string * Result<unit, string>) list> =
+    let revertAllAsync
+        (scope: AuthorizationScope)
+        (journal: ExecutionJournal)
+        (tools: Tool list)
+        : Task<(string * Result<unit, string>) list> =
         task {
-            let! revertible = journal.GetRevertibleAsync()
+            let! revertible = journal.GetRevertibleAsync scope
             let results = System.Collections.Generic.List<string * Result<unit, string>>()
 
             for record in revertible do
@@ -156,7 +157,7 @@ module ExecutionJournal =
                     let! result = Tool.revertAsync context tool
 
                     match result with
-                    | Ok() -> do! journal.MarkRevertedAsync record.Id
+                    | Ok() -> do! journal.MarkRevertedAsync scope record.Id
                     | _ -> ()
 
                     results.Add(record.ToolName, result)
@@ -166,9 +167,13 @@ module ExecutionJournal =
         }
 
     /// Revert the most recent execution only.
-    let revertLastAsync (journal: ExecutionJournal) (tools: Tool list) : Task<Result<unit, string>> =
+    let revertLastAsync
+        (scope: AuthorizationScope)
+        (journal: ExecutionJournal)
+        (tools: Tool list)
+        : Task<Result<unit, string>> =
         task {
-            let! revertible = journal.GetRevertibleAsync()
+            let! revertible = journal.GetRevertibleAsync scope
 
             match revertible with
             | [] -> return Error "No revertible executions"
@@ -186,7 +191,7 @@ module ExecutionJournal =
                     let! result = Tool.revertAsync context tool
 
                     match result with
-                    | Ok() -> do! journal.MarkRevertedAsync record.Id
+                    | Ok() -> do! journal.MarkRevertedAsync scope record.Id
                     | _ -> ()
 
                     return result

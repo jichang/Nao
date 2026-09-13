@@ -6,7 +6,7 @@ open System.Collections.Concurrent
 open Nao.Agents
 
 module InMemoryTieredMemory =
-    let create (config: TieredMemoryConfig) (embeddingProvider: EmbeddingProvider option) : TieredMemory =
+    let internal validateConfig (config: TieredMemoryConfig) =
         if config.ShortTermCapacity < 0 then
             invalidArg (nameof config) "Short-term capacity cannot be negative."
 
@@ -16,15 +16,16 @@ module InMemoryTieredMemory =
         if config.MidTermTtl |> Option.exists (fun ttl -> ttl < TimeSpan.Zero) then
             invalidArg (nameof config) "Mid-term TTL cannot be negative."
 
+    let create (config: TieredMemoryConfig) (embeddingProvider: EmbeddingProvider option) : TieredMemory =
+        validateConfig config
+        let sync = obj ()
         let entries = ConcurrentDictionary<string * string, TieredMemoryEntry>()
         let key owner entryKey = owner, entryKey
-
-        let requireOwner owner =
-            if String.IsNullOrWhiteSpace owner then
-                invalidArg (nameof owner) "Tiered-memory owner cannot be blank."
+        let ownerKey = AuthorizationScope.identity >> AuthorizationIdentity.storageKey
 
         let owned owner =
-            entries.Values |> Seq.filter (fun entry -> entry.Owner = owner)
+            entries
+            |> Seq.choose (fun pair -> if fst pair.Key = owner then Some pair.Value else None)
 
         let inTier owner tier =
             owned owner |> Seq.filter (fun entry -> entry.Tier = tier)
@@ -35,8 +36,8 @@ module InMemoryTieredMemory =
             | MemoryTier.MidTerm -> config.MidTermCapacity
             | MemoryTier.LongTerm -> Int32.MaxValue
 
-        let remove entry =
-            entries.TryRemove(key entry.Owner entry.Key) |> ignore
+        let remove owner (entry: TieredMemoryEntry) =
+            entries.TryRemove(key owner entry.Key) |> ignore
 
         let evictOverflow owner tier =
             let tierEntries = inTier owner tier |> Seq.toList
@@ -50,23 +51,23 @@ module InMemoryTieredMemory =
                     |> List.sortBy (fun entry -> entry.AccessCount, entry.Timestamp, entry.Key)
                     |> List.take excess
 
-                victims |> List.iter remove
+                victims |> List.iter (remove owner)
                 victims.Length
 
-        let storeAsync (entry: TieredMemoryEntry) =
-            requireOwner entry.Owner
-            entries.[key entry.Owner entry.Key] <- entry
+        let storeAsync scope (entry: TieredMemoryEntry) =
+            let owner = ownerKey scope
+            entries.[key owner entry.Key] <- entry
 
             if config.AutoEvict then
-                evictOverflow entry.Owner entry.Tier |> ignore
+                evictOverflow owner entry.Tier |> ignore
 
             Task.FromResult()
 
-        let rankAsync owner query maxResults =
-            requireOwner owner
+        let rankAsync scope query maxResults =
+            let owner = ownerKey scope
 
             task {
-                let candidates = owned owner |> Seq.toList
+                let candidates = lock sync (fun () -> owned owner |> Seq.toList)
 
                 match embeddingProvider with
                 | Some provider ->
@@ -103,8 +104,8 @@ module InMemoryTieredMemory =
                         |> List.map fst
             }
 
-        let retrieveFromTierAsync owner tier maxResults =
-            requireOwner owner
+        let retrieveFromTierAsync scope tier maxResults =
+            let owner = ownerKey scope
 
             inTier owner tier
             |> Seq.sortByDescending (fun entry -> entry.Timestamp, entry.Key)
@@ -124,8 +125,8 @@ module InMemoryTieredMemory =
             | MemoryPromotionPolicy.RecencyBased maxAge -> asOf - entry.Timestamp <= maxAge
             | MemoryPromotionPolicy.Manual -> false
 
-        let recordAccessAsync owner entryKeys asOf =
-            requireOwner owner
+        let recordAccessAsync scope entryKeys asOf =
+            let owner = ownerKey scope
 
             for entryKey in entryKeys |> List.distinct do
                 match entries.TryGetValue(key owner entryKey) with
@@ -147,8 +148,8 @@ module InMemoryTieredMemory =
 
             Task.FromResult()
 
-        let promoteAsync owner entryKey targetTier =
-            requireOwner owner
+        let promoteAsync scope entryKey targetTier =
+            let owner = ownerKey scope
 
             match entries.TryGetValue(key owner entryKey) with
             | true, entry ->
@@ -160,8 +161,8 @@ module InMemoryTieredMemory =
 
             Task.FromResult()
 
-        let evictAsync owner asOf =
-            requireOwner owner
+        let evictAsync scope asOf =
+            let owner = ownerKey scope
 
             let expired =
                 match config.MidTermTtl with
@@ -171,7 +172,7 @@ module InMemoryTieredMemory =
                     |> Seq.toArray
                 | None -> Array.empty
 
-            expired |> Array.iter remove
+            expired |> Array.iter (remove owner)
 
             let overflow =
                 evictOverflow owner MemoryTier.ShortTerm
@@ -179,41 +180,29 @@ module InMemoryTieredMemory =
 
             Task.FromResult(expired.Length + overflow)
 
-        let delete predicate =
-            let matches = entries.Values |> Seq.filter predicate |> Seq.toArray
-            matches |> Array.iter remove
+        let delete scope predicate =
+            let owner = ownerKey scope
+            let matches = owned owner |> Seq.filter predicate |> Seq.toArray
+            matches |> Array.iter (remove owner)
             Task.FromResult matches.Length
 
-        let protect owner operation =
+        let deleteOwnerAsync scope =
             task {
-                if String.IsNullOrWhiteSpace owner then
-                    return
-                        Error(
-                            PlatformFailure.create
-                                PlatformErrorCategory.InvalidInput
-                                "Tiered-memory owner cannot be blank."
-                                false
-                                None
-                        )
-                else
-                    try
-                        let! count = operation ()
-                        return Ok count
-                    with error ->
-                        return Error(PlatformFailure.fromException PlatformFailureBoundary.Storage None error)
+                let! count = delete scope (fun _ -> true)
+                return Ok count
             }
 
-        let deleteOwnerAsync owner =
-            protect owner (fun () -> delete (fun entry -> entry.Owner = owner))
+        let deleteExpiredAsync scope before =
+            task {
+                let! count = delete scope (fun entry -> entry.Timestamp < before)
+                return Ok count
+            }
 
-        let deleteExpiredAsync owner before =
-            protect owner (fun () -> delete (fun entry -> entry.Owner = owner && entry.Timestamp < before))
-
-        { StoreAsync = storeAsync
+        { StoreAsync = fun scope entry -> lock sync (fun () -> storeAsync scope entry)
           RetrieveAsync = rankAsync
-          RetrieveFromTierAsync = retrieveFromTierAsync
-          RecordAccessAsync = recordAccessAsync
-          PromoteAsync = promoteAsync
-          EvictAsync = evictAsync
-          DeleteOwnerAsync = deleteOwnerAsync
-          DeleteExpiredAsync = deleteExpiredAsync }
+          RetrieveFromTierAsync = fun scope tier count -> lock sync (fun () -> retrieveFromTierAsync scope tier count)
+          RecordAccessAsync = fun scope keys asOf -> lock sync (fun () -> recordAccessAsync scope keys asOf)
+          PromoteAsync = fun scope key tier -> lock sync (fun () -> promoteAsync scope key tier)
+          EvictAsync = fun scope asOf -> lock sync (fun () -> evictAsync scope asOf)
+          DeleteOwnerAsync = fun scope -> lock sync (fun () -> deleteOwnerAsync scope)
+          DeleteExpiredAsync = fun scope before -> lock sync (fun () -> deleteExpiredAsync scope before) }

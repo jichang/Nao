@@ -1,6 +1,7 @@
 namespace Nao.Eval
 
 open System
+open Nao.Agents
 
 /// Aggregate report of an evaluation run
 type EvalReport =
@@ -8,7 +9,7 @@ type EvalReport =
         /// Stable evaluation-run identity
         Id: Guid
         /// Retention owner
-        Owner: string
+        Owner: AuthorizationIdentity
         /// Dataset revision evaluated by this report
         DatasetId: Guid
         /// Name of the evaluation run

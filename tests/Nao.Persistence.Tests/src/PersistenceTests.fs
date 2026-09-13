@@ -10,6 +10,16 @@ open Nao.Persistence
 
 let private agent = "test-agent"
 
+let private memoryScope session =
+    let principal =
+        SecurityPrincipal.create (TenantId.parse "tenant") (UserId.parse "user") []
+
+    AuthorizationScope.tryCreate principal None (WorkspaceId.parse "workspace") (Some(SessionId.parse session))
+    |> Option.get
+
+let private memoryKey scope =
+    AuthorizationScope.identity scope |> AuthorizationIdentity.storageKey
+
 /// Create a SQLite-backed connection factory over a fresh temp database file.
 let private sqliteFactory () =
     let path =
@@ -34,6 +44,8 @@ let private memEntry key value =
 // ---------------- MemoryStore ----------------
 
 let private runMemoryStoreRoundTrip (store: MemoryStore) =
+    let agent = memoryScope agent
+
     task {
         do! store.SaveAsync agent (memEntry "alpha" "v1")
         do! store.SaveAsync agent (memEntry "beta" "v2")
@@ -65,6 +77,7 @@ let private runMemoryStoreRoundTrip (store: MemoryStore) =
 
 [<TestClass>]
 type MemoryStoreTests() =
+    let agent = memoryScope agent
 
     [<TestMethod>]
     member _.MemoryStorePurgesByOwnerAcrossBackends() =
@@ -76,8 +89,8 @@ type MemoryStoreTests() =
 
         try
             for store in stores do
-                let ownerA = "owner-a"
-                let ownerB = "owner-b"
+                let ownerA = memoryScope "owner-a"
+                let ownerB = memoryScope "owner-b"
                 let cutoff = DateTimeOffset.UtcNow
                 let expiredCount = Random.Shared.Next(1, 5)
                 let retainedCount = Random.Shared.Next(1, 5)
@@ -112,9 +125,7 @@ type MemoryStoreTests() =
                 Assert.AreEqual(0, store.RecallAllAsync ownerA |> _.Result |> List.length)
                 Assert.AreEqual(otherCount, store.RecallAllAsync ownerB |> _.Result |> List.length)
 
-                match store.DeleteExpiredAsync " " cutoff |> _.Result with
-                | Ok _ -> Assert.Fail("Blank memory owner unexpectedly accepted.")
-                | Error failure -> Assert.AreEqual(PlatformErrorCategory.InvalidInput, failure.Category)
+                Assert.AreEqual(Ok 0, store.DeleteOwnerAsync ownerA |> _.Result)
         finally
             if Directory.Exists dir then
                 Directory.Delete(dir, true)
@@ -124,8 +135,12 @@ type MemoryStoreTests() =
 
     [<TestMethod>]
     member _.AdoMemoryStore_RoundTrips() =
-        let factory, _ = sqliteFactory ()
-        (runMemoryStoreRoundTrip (MemoryStores.ado factory)).GetAwaiter().GetResult()
+        let factory, path = sqliteFactory ()
+
+        try
+            (runMemoryStoreRoundTrip (MemoryStores.ado factory)).GetAwaiter().GetResult()
+        finally
+            File.Delete path
 
     [<TestMethod>]
     member _.AdoMemoryStore_RejectsUnversionedTableBeforeMutation() =
@@ -194,7 +209,7 @@ type MemoryStoreTests() =
             StringAssert.Contains(error.Message, "expected 1")
 
             let rows =
-                Ado.query factory "SELECT agent FROM nao_memory" [] (fun reader -> Ado.getString reader "agent")
+                Ado.query factory "SELECT owner_key FROM nao_memory" [] (fun reader -> Ado.getString reader "owner_key")
                 |> _.GetAwaiter().GetResult()
 
             Assert.AreEqual(0, rows.Length)
@@ -212,8 +227,8 @@ type MemoryStoreTests() =
 
             Ado.executeNonQuery
                 factory
-                "INSERT INTO nao_memory (agent, mem_key, mem_value, mem_ts, mem_tags) VALUES ('owner', 'corrupt-key', 'value', 'not-a-time', '[]')"
-                []
+                "INSERT INTO nao_memory (owner_key, mem_key, mem_value, mem_ts, mem_tags) VALUES (@owner, 'corrupt-key', 'value', 'not-a-time', '[]')"
+                [ "@owner", box (memoryKey agent) ]
             |> _.Wait()
 
             let error =
@@ -235,7 +250,11 @@ type MemoryStoreTests() =
     [<TestMethod>]
     member _.FileMemoryStore_RoundTrips() =
         let dir = tempDir ()
-        (runMemoryStoreRoundTrip (MemoryStores.file dir)).GetAwaiter().GetResult()
+
+        try
+            (runMemoryStoreRoundTrip (MemoryStores.file dir)).GetAwaiter().GetResult()
+        finally
+            Directory.Delete(dir, true)
 
     [<TestMethod>]
     member _.FileMemoryStore_RequiresVersionBeforeMutation() =
@@ -243,7 +262,7 @@ type MemoryStoreTests() =
 
         try
             let store = MemoryStores.file dir
-            let path = Path.Combine(dir, agent + ".json")
+            let path = Path.Combine(dir, memoryKey agent + ".json")
             store.SaveAsync agent (memEntry "alpha" "v1") |> _.GetAwaiter().GetResult()
 
             use document = JsonDocument.Parse(File.ReadAllText path)
@@ -271,11 +290,12 @@ type MemoryStoreTests() =
 [<TestClass>]
 type MemoryToolTests() =
 
-    let runTool (tool: Tool) input =
-        match
-            tool.RunAsync (AgentContext.unrestrictedForTests ()) input
-            |> fun task -> task.GetAwaiter().GetResult()
-        with
+    let context owner =
+        { AgentContext.unrestrictedForTests () with
+            Authorization = Some owner }
+
+    let runTool owner (tool: Tool) input =
+        match tool.RunAsync (context owner) input |> fun task -> task.GetAwaiter().GetResult() with
         | Ok output -> output
         | Error failure ->
             Assert.Fail(failure.Message)
@@ -284,18 +304,20 @@ type MemoryToolTests() =
     [<TestMethod>]
     member _.RememberedFactCanBeDeliberatelySearched() =
         let store = InMemoryStore.create ()
-        let owner = "session:user/one"
-        let tools = MemoryTools.create MemoryToolConfig.Default store (fun () -> owner)
+        let owner = memoryScope "one"
+        let tools = MemoryTools.create MemoryToolConfig.Default store
         let remember = tools |> List.find (fun tool -> tool.Name = "memory_remember")
         let search = tools |> List.find (fun tool -> tool.Name = "memory_search")
 
         runTool
+            owner
             remember
             "{\"key\":\"preferred-format\",\"value\":\"Use HTML previews\",\"tags\":[\"preference\",\"documents\"]}"
         |> ignore
 
         let result =
             runTool
+                owner
                 search
                 "{\"query\":\"HTML format\",\"intent\":\"Recall the user's document preference\",\"tags\":[\"preference\"]}"
 
@@ -308,8 +330,8 @@ type MemoryToolTests() =
     [<TestMethod>]
     member _.SearchIsBoundedAndOwnerScoped() =
         let store = InMemoryStore.create ()
-        let owner = "session:user/active"
-        let otherOwner = "session:user/other"
+        let owner = memoryScope "active"
+        let otherOwner = memoryScope "other"
         let itemCount = Random.Shared.Next(3, 8)
         let maxResults = Random.Shared.Next(1, itemCount)
 
@@ -325,11 +347,12 @@ type MemoryToolTests() =
                 MaxSearchResults = maxResults }
 
         let search =
-            MemoryTools.create config store (fun () -> owner)
+            MemoryTools.create config store
             |> List.find (fun tool -> tool.Name = "memory_search")
 
         let result =
             runTool
+                owner
                 search
                 "{\"query\":\"project decision\",\"intent\":\"Find earlier project decisions\",\"limit\":999}"
 
@@ -342,11 +365,10 @@ type MemoryToolTests() =
     [<TestMethod>]
     member _.ForgetRequiresPolicyAndExplicitConfirmation() =
         let store = InMemoryStore.create ()
-        let owner = "session:user/forget"
+        let owner = memoryScope "forget"
         (store.SaveAsync owner (memEntry "obsolete-decision" "Use the old format")).GetAwaiter().GetResult()
 
-        let defaultTools =
-            MemoryTools.create MemoryToolConfig.Default store (fun () -> owner)
+        let defaultTools = MemoryTools.create MemoryToolConfig.Default store
 
         Assert.IsFalse(defaultTools |> List.exists (fun tool -> tool.Name = "memory_forget"))
 
@@ -355,12 +377,12 @@ type MemoryToolTests() =
                 ForgetEnabled = true }
 
         let forget =
-            MemoryTools.create config store (fun () -> owner)
+            MemoryTools.create config store
             |> List.find (fun tool -> tool.Name = "memory_forget")
 
         match
             forget.RunAsync
-                (AgentContext.unrestrictedForTests ())
+                (context owner)
                 "{\"key\":\"obsolete-decision\",\"reason\":\"Replace old decision\",\"confirmedByUser\":false}"
             |> fun task -> task.GetAwaiter().GetResult()
         with
@@ -368,6 +390,7 @@ type MemoryToolTests() =
         | Error failure -> Assert.AreEqual(ToolFailureKind.InputContract, failure.Kind)
 
         runTool
+            owner
             forget
             "{\"key\":\"obsolete-decision\",\"reason\":\"User explicitly asked to forget it\",\"confirmedByUser\":true}"
         |> ignore
@@ -385,7 +408,6 @@ let private execRecord (tool: string) (at: DateTimeOffset) : ExecutionRecord =
         IdempotencyKey.forExecution correlation.ExecutionId
         |> IdempotencyKey.operation "tool" 1
       Correlation = correlation
-      Owner = "session:test"
       TurnId = "turn:test"
       ToolName = tool
       ReplaySafety = ToolReplaySafety.ExternallySideEffecting
@@ -396,17 +418,16 @@ let private execRecord (tool: string) (at: DateTimeOffset) : ExecutionRecord =
       Reverted = false
       Metadata = Map.ofList [ "m", "1" ] }
 
-let private checkpointRecord correlation owner turnId recordedAt : HarnessCheckpoint =
+let private checkpointRecord (correlation: CorrelationContext) turnId recordedAt : HarnessCheckpoint =
     { Id = Guid.NewGuid()
       IdempotencyKey = IdempotencyKey.forExecution correlation.ExecutionId
       Correlation = correlation
-      Owner = owner
       TurnId = turnId
       AgentId = "checkpoint-agent"
       Phase = HarnessCheckpointPhase.Succeeded
       RecordedAt = recordedAt }
 
-let private runJournalRoundTrip (journal: ExecutionJournal) =
+let private runJournalRoundTrip scope (journal: ExecutionJournal) =
     task {
         let t0 = DateTimeOffset.UtcNow
         let r1 = execRecord "tool-a" (t0.AddSeconds 1.0)
@@ -422,11 +443,11 @@ let private runJournalRoundTrip (journal: ExecutionJournal) =
                 Output = ""
                 Failure = Some failure }
 
-        do! journal.RecordAsync r1
-        do! journal.RecordAsync r2
-        do! journal.RecordAsync failed
+        do! journal.RecordAsync scope r1
+        do! journal.RecordAsync scope r2
+        do! journal.RecordAsync scope failed
 
-        let! history = journal.GetHistoryAsync()
+        let! history = journal.GetHistoryAsync scope
         Assert.AreEqual(3, history.Length)
         // Most recent first
         Assert.AreEqual("tool-failed", history.Head.ToolName)
@@ -434,27 +455,25 @@ let private runJournalRoundTrip (journal: ExecutionJournal) =
         Assert.AreEqual(failed.Correlation, history.Head.Correlation)
         Assert.AreEqual(Some failure, history.Head.Failure)
 
-        let! forExecution = journal.GetByExecutionAsync r2.Correlation.ExecutionId
+        let! forExecution = journal.GetByExecutionAsync scope r2.Correlation.ExecutionId
         Assert.AreEqual([ r2 ], forExecution)
 
-        let! unknownExecution = journal.GetByExecutionAsync(ExecutionId.generate ())
+        let! unknownExecution = journal.GetByExecutionAsync scope (ExecutionId.generate ())
         Assert.IsTrue(unknownExecution.IsEmpty)
 
-        let checkpoint =
-            checkpointRecord r2.Correlation r2.Owner r2.TurnId (t0.AddSeconds 3.0)
+        let checkpoint = checkpointRecord r2.Correlation r2.TurnId (t0.AddSeconds 3.0)
 
-        do! journal.Checkpoints.Save checkpoint
-        let! checkpoints = journal.Checkpoints.GetByExecution checkpoint.Correlation.ExecutionId
+        do! journal.Checkpoints.Save scope checkpoint
+        let! checkpoints = journal.Checkpoints.GetByExecution scope checkpoint.Correlation.ExecutionId
         Assert.AreEqual([ checkpoint ], checkpoints)
 
-        let! logicalCheckpoints = journal.Checkpoints.GetByIdempotencyKey checkpoint.IdempotencyKey
+        let! logicalCheckpoints = journal.Checkpoints.GetByIdempotencyKey scope checkpoint.IdempotencyKey
         Assert.AreEqual([ checkpoint ], logicalCheckpoints)
 
         let transition: ToolSideEffectTransition =
             { Id = Guid.NewGuid()
               IdempotencyKey = r2.IdempotencyKey
               Correlation = r2.Correlation
-              Owner = r2.Owner
               TurnId = r2.TurnId
               ToolName = r2.ToolName
               Input = r2.Input
@@ -462,7 +481,7 @@ let private runJournalRoundTrip (journal: ExecutionJournal) =
               Detail = None
               RecordedAt = t0.AddSeconds 4.0 }
 
-        do! journal.SideEffects.Save transition
+        do! journal.SideEffects.Save scope transition
 
         let compensation =
             { transition with
@@ -470,11 +489,11 @@ let private runJournalRoundTrip (journal: ExecutionJournal) =
                 Phase = ToolSideEffectPhase.CompensationSucceeded
                 RecordedAt = t0.AddSeconds 5.0 }
 
-        do! journal.SideEffects.Save compensation
-        let! transitions = journal.SideEffects.GetByIdempotencyKey transition.IdempotencyKey
+        do! journal.SideEffects.Save scope compensation
+        let! transitions = journal.SideEffects.GetByIdempotencyKey scope transition.IdempotencyKey
         Assert.AreEqual([ transition; compensation ], transitions)
 
-        let! executionTransitions = journal.SideEffects.GetByExecution transition.Correlation.ExecutionId
+        let! executionTransitions = journal.SideEffects.GetByExecution scope transition.Correlation.ExecutionId
         Assert.AreEqual([ transition; compensation ], executionTransitions)
 
         let quarantine =
@@ -486,20 +505,20 @@ let private runJournalRoundTrip (journal: ExecutionJournal) =
                 Phase = ToolSideEffectPhase.Quarantined
                 RecordedAt = t0.AddSeconds 6.0 }
 
-        do! journal.SideEffects.Save quarantine
+        do! journal.SideEffects.Save scope quarantine
 
-        let! revertible = journal.GetRevertibleAsync()
+        let! revertible = journal.GetRevertibleAsync scope
         Assert.AreEqual([ r2 ], revertible)
 
-        do! journal.MarkRevertedAsync r2.Id
-        let! afterRevert = journal.GetRevertibleAsync()
+        do! journal.MarkRevertedAsync scope r2.Id
+        let! afterRevert = journal.GetRevertibleAsync scope
         Assert.IsTrue(afterRevert.IsEmpty)
 
-        match! journal.DeleteOwnerAsync r2.Owner with
+        match! journal.DeleteScopeAsync scope with
         | Error failure -> Assert.Fail(failure.Message)
         | Ok deleted -> Assert.AreEqual(7, deleted)
 
-        let! deletedTransitions = journal.SideEffects.GetByIdempotencyKey transition.IdempotencyKey
+        let! deletedTransitions = journal.SideEffects.GetByIdempotencyKey scope transition.IdempotencyKey
         Assert.IsTrue(deletedTransitions.IsEmpty)
     }
 
@@ -507,7 +526,7 @@ let private runJournalRoundTrip (journal: ExecutionJournal) =
 type ExecutionJournalTests() =
 
     [<TestMethod>]
-    member _.ExecutionJournalPurgesByOwnerAcrossBackends() =
+    member _.ExecutionJournalPurgesByScopeAcrossBackends() =
         let dir = tempDir ()
         let factory, databasePath = sqliteFactory ()
         let inMemory = InMemoryExecutionJournal.create ()
@@ -519,70 +538,43 @@ type ExecutionJournalTests() =
 
         try
             for make in journals do
-                let ownerA = "session:user/a"
-                let ownerB = "session:user/b"
+                let ownerA = memoryScope "journal-a"
+                let ownerB = memoryScope "journal-b"
                 let cutoff = DateTimeOffset.UtcNow
                 let expiredCount = Random.Shared.Next(1, 5)
                 let retainedCount = Random.Shared.Next(1, 5)
                 let otherCount = Random.Shared.Next(1, 5)
 
-                let record owner timestamp =
+                let record timestamp =
                     { execRecord (Guid.NewGuid().ToString("N")) timestamp with
-                        Owner = owner
                         Metadata = Map.empty }
 
                 let journal = make ()
 
                 for _ in 1..expiredCount do
-                    journal.RecordAsync(record ownerA (cutoff.AddMinutes(-1.0))) |> _.Wait()
+                    journal.RecordAsync ownerA (record (cutoff.AddMinutes(-1.0))) |> _.Wait()
 
                 for _ in 1..retainedCount do
-                    journal.RecordAsync(record ownerA cutoff) |> _.Wait()
+                    journal.RecordAsync ownerA (record cutoff) |> _.Wait()
 
                 for _ in 1..otherCount do
-                    journal.RecordAsync(record ownerB (cutoff.AddMinutes(-1.0))) |> _.Wait()
+                    journal.RecordAsync ownerB (record (cutoff.AddMinutes(-1.0))) |> _.Wait()
 
                 match journal.DeleteExpiredAsync ownerA cutoff |> _.Result with
                 | Error failure -> Assert.Fail(failure.Message)
                 | Ok deleted -> Assert.AreEqual(expiredCount, deleted)
 
                 let reloaded = make ()
-                let afterExpiry = reloaded.GetHistoryAsync() |> _.Result
+                Assert.AreEqual(retainedCount, reloaded.GetHistoryAsync ownerA |> _.Result |> List.length)
+                Assert.AreEqual(otherCount, reloaded.GetHistoryAsync ownerB |> _.Result |> List.length)
 
-                Assert.AreEqual(
-                    retainedCount,
-                    afterExpiry |> List.filter (fun entry -> entry.Owner = ownerA) |> List.length
-                )
-
-                Assert.AreEqual(
-                    otherCount,
-                    afterExpiry |> List.filter (fun entry -> entry.Owner = ownerB) |> List.length
-                )
-
-                match reloaded.DeleteOwnerAsync ownerA |> _.Result with
+                match reloaded.DeleteScopeAsync ownerA |> _.Result with
                 | Error failure -> Assert.Fail(failure.Message)
                 | Ok deleted -> Assert.AreEqual(retainedCount, deleted)
 
                 let reloadedAgain = make ()
-                let afterOwnerDeletion = reloadedAgain.GetHistoryAsync() |> _.Result
-
-                Assert.AreEqual(
-                    0,
-                    afterOwnerDeletion
-                    |> List.filter (fun entry -> entry.Owner = ownerA)
-                    |> List.length
-                )
-
-                Assert.AreEqual(
-                    otherCount,
-                    afterOwnerDeletion
-                    |> List.filter (fun entry -> entry.Owner = ownerB)
-                    |> List.length
-                )
-
-                match reloadedAgain.DeleteOwnerAsync " " |> _.Result with
-                | Ok _ -> Assert.Fail("Blank execution journal owner unexpectedly accepted.")
-                | Error failure -> Assert.AreEqual(PlatformErrorCategory.InvalidInput, failure.Category)
+                Assert.AreEqual(0, reloadedAgain.GetHistoryAsync ownerA |> _.Result |> List.length)
+                Assert.AreEqual(otherCount, reloadedAgain.GetHistoryAsync ownerB |> _.Result |> List.length)
         finally
             if Directory.Exists dir then
                 Directory.Delete(dir, true)
@@ -593,30 +585,33 @@ type ExecutionJournalTests() =
     [<TestMethod>]
     member _.AdoExecutionJournal_RoundTrips() =
         let factory, _ = sqliteFactory ()
-        (runJournalRoundTrip (ExecutionJournals.ado factory)).GetAwaiter().GetResult()
+        (runJournalRoundTrip (memoryScope "journal-ado") (ExecutionJournals.ado factory)).GetAwaiter().GetResult()
 
     [<TestMethod>]
     member _.InMemoryExecutionJournal_RoundTrips() =
-        (runJournalRoundTrip (InMemoryExecutionJournal.create ())).GetAwaiter().GetResult()
+        (runJournalRoundTrip (memoryScope "journal-memory") (InMemoryExecutionJournal.create ()))
+            .GetAwaiter()
+            .GetResult()
 
     [<TestMethod>]
     member _.FileExecutionJournal_RoundTrips() =
         let dir = tempDir ()
-        (runJournalRoundTrip (ExecutionJournals.file dir)).GetAwaiter().GetResult()
+        (runJournalRoundTrip (memoryScope "journal-file") (ExecutionJournals.file dir)).GetAwaiter().GetResult()
 
     [<TestMethod>]
     member _.FileExecutionJournal_RejectsCorruptDocumentBeforeMutation() =
         let dir = tempDir ()
 
         try
-            let path = Path.Combine(dir, "execution-journal.json")
-            File.WriteAllText(path, "{invalid")
+            let scope = memoryScope "journal-corrupt"
+            let path = Path.Combine(dir, "execution-journal", memoryKey scope + ".jsonl")
+            Directory.CreateDirectory(Path.GetDirectoryName path) |> ignore
+            File.WriteAllText(path, "{invalid" + Environment.NewLine)
             let before = File.ReadAllBytes path
             let journal = ExecutionJournals.file dir
 
             let record =
                 { execRecord "tool" DateTimeOffset.UtcNow with
-                    Owner = agent
                     TurnId = "turn"
                     Input = "input"
                     Output = "output"
@@ -624,83 +619,10 @@ type ExecutionJournalTests() =
 
             let error =
                 Assert.ThrowsExactly<InvalidDataException>(fun () ->
-                    journal.RecordAsync record |> _.GetAwaiter().GetResult())
+                    journal.RecordAsync scope record |> _.GetAwaiter().GetResult())
 
-            StringAssert.Contains(error.Message, path)
+            StringAssert.Contains(error.Message, "execution-journal/" + memoryKey scope)
             StringAssert.Contains(error.Message, "docs/migrations")
-            CollectionAssert.AreEqual(before, File.ReadAllBytes path)
-        finally
-            Directory.Delete(dir, true)
-
-    [<TestMethod>]
-    member _.FileExecutionJournal_RejectsInvalidCheckpointBeforeMutation() =
-        let dir = tempDir ()
-
-        try
-            let checkpoint =
-                checkpointRecord (CorrelationContext.root ()) "owner" "turn" DateTimeOffset.UtcNow
-
-            let invalid =
-                { HarnessCheckpointSerialization.toDto checkpoint with
-                    Phase = "unknown" }
-
-            let path = Path.Combine(dir, "harness-checkpoints.json")
-
-            let document: FileExecutionJournal.CheckpointDocument =
-                { SchemaVersion = 1
-                  Checkpoints = [ invalid ] }
-
-            File.WriteAllText(path, JsonSerializer.Serialize document)
-
-            let before = File.ReadAllBytes path
-            let journal = ExecutionJournals.file dir
-
-            let error =
-                Assert.ThrowsExactly<InvalidDataException>(fun () ->
-                    journal.Checkpoints.Save checkpoint |> _.GetAwaiter().GetResult())
-
-            StringAssert.Contains(error.Message, path)
-            CollectionAssert.AreEqual(before, File.ReadAllBytes path)
-        finally
-            Directory.Delete(dir, true)
-
-    [<TestMethod>]
-    member _.FileExecutionJournal_RejectsInvalidSideEffectBeforeMutation() =
-        let dir = tempDir ()
-
-        try
-            let record = execRecord "external" DateTimeOffset.UtcNow
-
-            let transition: ToolSideEffectTransition =
-                { Id = Guid.NewGuid()
-                  IdempotencyKey = record.IdempotencyKey
-                  Correlation = record.Correlation
-                  Owner = record.Owner
-                  TurnId = record.TurnId
-                  ToolName = record.ToolName
-                  Input = record.Input
-                  Phase = ToolSideEffectPhase.IntentRecorded
-                  Detail = None
-                  RecordedAt = DateTimeOffset.UtcNow }
-
-            let invalid =
-                { ToolSideEffectSerialization.toDto transition with
-                    Phase = "unknown" }
-
-            let document: ToolSideEffectSerialization.Document =
-                { SchemaVersion = 1
-                  Transitions = [ invalid ] }
-
-            let path = Path.Combine(dir, "tool-side-effects.json")
-            File.WriteAllText(path, JsonSerializer.Serialize document)
-            let before = File.ReadAllBytes path
-            let journal = ExecutionJournals.file dir
-
-            let error =
-                Assert.ThrowsExactly<InvalidDataException>(fun () ->
-                    journal.SideEffects.Save transition |> _.GetAwaiter().GetResult())
-
-            StringAssert.Contains(error.Message, path)
             CollectionAssert.AreEqual(before, File.ReadAllBytes path)
         finally
             Directory.Delete(dir, true)
@@ -708,6 +630,8 @@ type ExecutionJournalTests() =
 // ---------------- SemanticMemory ----------------
 
 let private runSemanticRoundTrip (memory: SemanticMemory) =
+    let agent = memoryScope agent
+
     task {
         do! memory.StoreAsync agent "doc1" "the quick brown fox"
         do! memory.StoreAsync agent "doc2" "lazy dog sleeps"
@@ -722,6 +646,7 @@ let private runSemanticRoundTrip (memory: SemanticMemory) =
 
 [<TestClass>]
 type SemanticMemoryTests() =
+    let agent = memoryScope agent
 
     [<TestMethod>]
     member _.SemanticMemoryPurgesByOwnerAcrossBackends() =
@@ -736,8 +661,8 @@ type SemanticMemoryTests() =
 
         try
             for memory in backends do
-                let ownerA = "owner-a"
-                let ownerB = "owner-b"
+                let ownerA = memoryScope "semantic-owner-a"
+                let ownerB = memoryScope "semantic-owner-b"
                 let expiredCount = Random.Shared.Next(1, 5)
                 let retainedCount = Random.Shared.Next(1, 5)
                 let otherCount = Random.Shared.Next(1, 5)
@@ -769,9 +694,7 @@ type SemanticMemoryTests() =
                 Assert.AreEqual(0, memory.RetrieveAsync ownerA "owner" 100 |> _.Result |> List.length)
                 Assert.AreEqual(otherCount, memory.RetrieveAsync ownerB "owner" 100 |> _.Result |> List.length)
 
-                match memory.DeleteOwnerAsync " " |> _.Result with
-                | Ok _ -> Assert.Fail("Blank semantic memory owner unexpectedly accepted.")
-                | Error failure -> Assert.AreEqual(PlatformErrorCategory.InvalidInput, failure.Category)
+                Assert.AreEqual(Ok 0, memory.DeleteOwnerAsync ownerA |> _.Result)
         finally
             if Directory.Exists dir then
                 Directory.Delete(dir, true)
@@ -798,7 +721,7 @@ type SemanticMemoryTests() =
         try
             let provider = SimpleEmbeddingProvider.create ()
             let memory = SemanticMemories.file provider dir
-            let path = Path.Combine(dir, agent + ".json")
+            let path = Path.Combine(dir, memoryKey agent + ".json")
             File.WriteAllText(path, "{invalid")
             let before = File.ReadAllBytes path
 
@@ -828,24 +751,24 @@ let private auditEntry permitted execId : AuditEntry =
       ExecutionId = execId
       Metadata = Map.ofList [ "src", "test" ] }
 
-let private runAuditRoundTrip (log: AuditLog) =
+let private runAuditRoundTrip (scope: AuthorizationScope) (log: AuditLog) =
     task {
         let exec = ExecutionId.generate ()
         let since = DateTimeOffset.UtcNow.AddMinutes -1.0
-        do! log.RecordAsync(auditEntry true (Some exec))
-        do! log.RecordAsync(auditEntry false (Some exec))
+        do! log.RecordAsync scope (auditEntry true (Some exec))
+        do! log.RecordAsync scope (auditEntry false (Some exec))
 
-        let! entries = log.QueryAsync agent since
+        let! entries = log.QueryAsync scope agent since
         Assert.AreEqual(2, entries.Length)
 
         match entries.Head.Action with
         | AuditAction.ToolInvocation t -> Assert.AreEqual("search", t)
         | other -> Assert.Fail(sprintf "Unexpected action: %A" other)
 
-        let! byExec = log.QueryByExecutionAsync exec
+        let! byExec = log.QueryByExecutionAsync scope exec
         Assert.AreEqual(2, byExec.Length)
 
-        let! denied = log.GetDeniedCountAsync agent since
+        let! denied = log.GetDeniedCountAsync scope agent since
         Assert.AreEqual(1, denied)
     }
 
@@ -853,52 +776,59 @@ let private runAuditRoundTrip (log: AuditLog) =
 type AuditLogTests() =
 
     [<TestMethod>]
-    member _.AuditLogPurgesByOwnerAcrossBackends() =
+    member _.AuditLogPurgesByScopeAcrossBackends() =
         let dir = tempDir ()
         let factory, databasePath = sqliteFactory ()
         let backends = [ AuditLogs.inMemory (); AuditLogs.file dir; AuditLogs.ado factory ]
+        let ownerA = memoryScope "audit-a"
+        let ownerB = memoryScope "audit-b"
 
         try
             for log in backends do
-                let ownerA = "owner-a"
-                let ownerB = "owner-b"
                 let cutoff = DateTimeOffset.UtcNow
                 let expiredCount = Random.Shared.Next(1, 5)
                 let retainedCount = Random.Shared.Next(1, 5)
                 let otherCount = Random.Shared.Next(1, 5)
 
-                let entry owner timestamp =
+                let entry actor timestamp =
                     { auditEntry true None with
                         Id = Guid.NewGuid()
-                        AgentId = owner
+                        AgentId = actor
                         Timestamp = timestamp }
 
                 for _ in 1..expiredCount do
-                    log.RecordAsync(entry ownerA (cutoff.AddMinutes(-1.0))) |> _.Wait()
+                    log.RecordAsync ownerA (entry agent (cutoff.AddMinutes(-1.0))) |> _.Wait()
 
                 for _ in 1..retainedCount do
-                    log.RecordAsync(entry ownerA (cutoff.AddMinutes(1.0))) |> _.Wait()
+                    log.RecordAsync ownerA (entry agent (cutoff.AddMinutes(1.0))) |> _.Wait()
 
                 for _ in 1..otherCount do
-                    log.RecordAsync(entry ownerB (cutoff.AddMinutes(-1.0))) |> _.Wait()
+                    log.RecordAsync ownerB (entry agent (cutoff.AddMinutes(-1.0))) |> _.Wait()
 
                 match log.DeleteExpiredAsync ownerA cutoff |> _.Result with
                 | Error failure -> Assert.Fail(failure.Message)
                 | Ok deleted -> Assert.AreEqual(expiredCount, deleted)
 
-                Assert.AreEqual(retainedCount, log.QueryAsync ownerA DateTimeOffset.MinValue |> _.Result |> List.length)
-                Assert.AreEqual(otherCount, log.QueryAsync ownerB DateTimeOffset.MinValue |> _.Result |> List.length)
+                Assert.AreEqual(
+                    retainedCount,
+                    log.QueryAsync ownerA agent DateTimeOffset.MinValue |> _.Result |> List.length
+                )
 
-                match log.DeleteOwnerAsync ownerA |> _.Result with
+                Assert.AreEqual(
+                    otherCount,
+                    log.QueryAsync ownerB agent DateTimeOffset.MinValue |> _.Result |> List.length
+                )
+
+                match log.DeleteScopeAsync ownerA |> _.Result with
                 | Error failure -> Assert.Fail(failure.Message)
                 | Ok deleted -> Assert.AreEqual(retainedCount, deleted)
 
-                Assert.AreEqual(0, log.QueryAsync ownerA DateTimeOffset.MinValue |> _.Result |> List.length)
-                Assert.AreEqual(otherCount, log.QueryAsync ownerB DateTimeOffset.MinValue |> _.Result |> List.length)
+                Assert.AreEqual(0, log.QueryAsync ownerA agent DateTimeOffset.MinValue |> _.Result |> List.length)
 
-                match log.DeleteOwnerAsync " " |> _.Result with
-                | Ok _ -> Assert.Fail("Blank audit owner unexpectedly accepted.")
-                | Error failure -> Assert.AreEqual(PlatformErrorCategory.InvalidInput, failure.Category)
+                Assert.AreEqual(
+                    otherCount,
+                    log.QueryAsync ownerB agent DateTimeOffset.MinValue |> _.Result |> List.length
+                )
         finally
             if Directory.Exists dir then
                 Directory.Delete(dir, true)
@@ -909,45 +839,12 @@ type AuditLogTests() =
     [<TestMethod>]
     member _.AdoAuditLog_RoundTrips() =
         let factory, _ = sqliteFactory ()
-        (runAuditRoundTrip (AuditLogs.ado factory)).GetAwaiter().GetResult()
-
-    [<TestMethod>]
-    member _.AdoAuditLog_RejectsInvalidActionBeforeMutation() =
-        let factory, databasePath = sqliteFactory ()
-
-        try
-            let log = AuditLogs.ado factory
-            log.QueryAsync agent DateTimeOffset.MinValue |> _.Wait()
-            let corruptId = Guid.NewGuid().ToString("D")
-
-            Ado.executeNonQuery
-                factory
-                "INSERT INTO nao_audit (audit_id, audit_ts, agent_name, agent_desc, action_json, audit_input, audit_output, permitted, permission_level, violations, execution_id, metadata) VALUES (@id, @ts, @agent, '', '{\"Kind\":\"Unknown\",\"A\":null,\"B\":null}', NULL, NULL, 1, 'Allow', '[]', NULL, '{}')"
-                [ "@id", box corruptId
-                  "@ts", box (Time.toIso DateTimeOffset.UtcNow)
-                  "@agent", box agent ]
-            |> _.Wait()
-
-            let error =
-                Assert.ThrowsExactly<InvalidDataException>(fun () ->
-                    log.RecordAsync(auditEntry true None) |> _.GetAwaiter().GetResult())
-
-            StringAssert.Contains(error.Message, corruptId)
-            StringAssert.Contains(error.Message, "docs/migrations")
-
-            let rows =
-                Ado.query factory "SELECT audit_id FROM nao_audit" [] (fun reader -> Ado.getString reader "audit_id")
-                |> _.GetAwaiter().GetResult()
-
-            CollectionAssert.AreEqual([| corruptId |], rows |> List.toArray)
-        finally
-            if File.Exists databasePath then
-                File.Delete databasePath
+        (runAuditRoundTrip (memoryScope "ado-audit") (AuditLogs.ado factory)).GetAwaiter().GetResult()
 
     [<TestMethod>]
     member _.FileAuditLog_RoundTrips() =
         let dir = tempDir ()
-        (runAuditRoundTrip (AuditLogs.file dir)).GetAwaiter().GetResult()
+        (runAuditRoundTrip (memoryScope "file-audit") (AuditLogs.file dir)).GetAwaiter().GetResult()
 
     [<TestMethod>]
     member _.FileAuditLog_RequiresVersionBeforeMutation() =
@@ -955,20 +852,21 @@ type AuditLogTests() =
 
         try
             let log = AuditLogs.file dir
-            let path = Path.Combine(dir, "audit-log.json")
-            log.RecordAsync(auditEntry true None) |> _.GetAwaiter().GetResult()
+            let scope = memoryScope "version"
+            let path = Path.Combine(dir, "audit", memoryKey scope + ".jsonl")
+            log.RecordAsync scope (auditEntry true None) |> _.GetAwaiter().GetResult()
 
-            use document = JsonDocument.Parse(File.ReadAllText path)
-            Assert.AreEqual(1, document.RootElement.GetProperty("schemaVersion").GetInt32())
+            use document = JsonDocument.Parse(File.ReadAllText(path).Trim())
+            Assert.AreEqual(1, document.RootElement.GetProperty("Version").GetInt32())
 
-            File.WriteAllText(path, "[]")
+            File.WriteAllText(path, """{"Version":99,"Event":{"Case":"DeleteScope"}}""" + Environment.NewLine)
             let before = File.ReadAllBytes path
 
             let error =
                 Assert.ThrowsExactly<InvalidDataException>(fun () ->
-                    log.RecordAsync(auditEntry false None) |> _.GetAwaiter().GetResult())
+                    log.RecordAsync scope (auditEntry false None) |> _.GetAwaiter().GetResult())
 
-            StringAssert.Contains(error.Message, path)
+            StringAssert.Contains(error.Message, "audit/" + memoryKey scope)
             StringAssert.Contains(error.Message, "docs/migrations")
             CollectionAssert.AreEqual(before, File.ReadAllBytes path)
         finally

@@ -153,7 +153,10 @@ or runtime launch, it must accept the exact digest-pinned reference and return n
 claims. The `container.image` artifact records those claims with verifier and policy identity.
 Hosts own scanner or attestation tooling, trust roots, policy content, and key lifecycle.
 
-Protocol v4 transports remaining logical allowances and host-authorized secret handles. Worker
+Protocol v1 transports remaining logical allowances, host-authorized secret handles, and the
+scope-bound security principal. Worker handlers access identity through `request.Principal`,
+separately from model input. Protected execution rejects missing identity; deploy matching v1
+host and worker binaries/images together. Worker
 handlers consume `WorkerExecutionBudget` and `WorkerSecrets`; structured overages cross the
 protocol, reported usage merges into the host context, and undeclared secrets fail closed
 without provider access. Process memory and CPU checks remain reactive rather than hard

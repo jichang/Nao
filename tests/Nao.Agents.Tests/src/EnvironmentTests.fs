@@ -825,8 +825,86 @@ type ExecutionEnvironmentTests() =
                 |> _.Wait()
 
                 Assert.AreEqual(3, releasedEgressLeases)
+
+                let principal =
+                    SecurityPrincipal.createAuthenticated
+                        (TenantId.parse "container-tenant")
+                        (UserId.parse "container-user")
+                        (Some(ServiceId.parse "container-api"))
+                        []
+                        [ "reader" ]
+                        (Map.ofList [ "region", "private-container-region" ])
+                        AuthenticationStrength.MultiFactor
+
+                let principalAgent =
+                    Agent.createWorker
+                        "principal"
+                        "principal"
+                        "principal propagation probe"
+                        0
+                        []
+                        AgentContract.Text
+                        (WorkerAgentReference.create "process-principal-hash")
+
+                let principalExecution = ExecutionContext.Create sandbox
+
+                let principalAuthorization =
+                    AuthorizationScope.tryCreate principal None (WorkspaceId.parse "container-workspace") None
+                    |> Option.map (
+                        AuthorizationScope.startAgent principalAgent.Metadata.Id principalExecution.ExecutionId
+                    )
+
+                let principalContext =
+                    { agentContext with
+                        ExecutionBoundary = ExecutionBoundary.HarnessRequired
+                        Authorization = principalAuthorization }
+
+                let expectedHash =
+                    sprintf "%A" (Some principal)
+                    |> Text.Encoding.UTF8.GetBytes
+                    |> Security.Cryptography.SHA256.HashData
+                    |> Convert.ToHexString
+
+                let principalResult =
+                    failingEnvironment.ExecuteAsync principalExecution principalContext principalAgent "model input"
+                    |> _.GetAwaiter().GetResult()
+
+                Assert.AreEqual(Ok expectedHash, principalResult)
+                Assert.IsFalse(IO.File.ReadAllText(argumentsPath).Contains("private-container-region"))
+
+                Assert.IsFalse(
+                    artifacts
+                    |> Seq.exists (fun artifact -> artifact.Payload.Contains("private-container-region"))
+                )
+
+                IO.File.Delete argumentsPath
+
+                Assert.ThrowsExactlyAsync<UnauthorizedAccessException>(fun () ->
+                    failingEnvironment.ExecuteAsync
+                        (ExecutionContext.Create sandbox)
+                        { principalContext with
+                            Authorization = None }
+                        principalAgent
+                        "model input"
+                    :> Task)
+                |> _.Wait()
+
+                Assert.IsFalse(IO.File.Exists argumentsPath)
             finally
                 IO.Directory.Delete(directory, true)
+
+    [<TestMethod>]
+    member _.ProtectedProcessExecutionRejectsMissingPrincipalBeforeWorkerLaunch() =
+        let environment = processEnvironment WorkerProtocol.CurrentVersion []
+
+        let context =
+            { AgentContext.unrestrictedForTests () with
+                ExecutionBoundary = ExecutionBoundary.HarnessRequired }
+
+        Assert.ThrowsExactlyAsync<UnauthorizedAccessException>(fun () ->
+            environment.ExecuteAsync (ExecutionContext.Create SandboxConfig.Default) context workerAgent "payload"
+            :> Task)
+        |> _.Wait()
 
     [<TestMethod>]
     member _.ProcessEnvironmentExecutesWorkerAgentInChildProcess() =
@@ -860,6 +938,30 @@ type ExecutionEnvironmentTests() =
             | Some unshareExecutable ->
                 let userId = uint32 (Random.Shared.Next(60000, 65000))
                 let groupId = uint32 (Random.Shared.Next(60000, 65000))
+
+                let probeStartInfo = Diagnostics.ProcessStartInfo()
+                probeStartInfo.FileName <- unshareExecutable
+                probeStartInfo.UseShellExecute <- false
+                probeStartInfo.CreateNoWindow <- true
+                probeStartInfo.Environment.Clear()
+
+                for argument in
+                    [ "--user"
+                      sprintf "--map-user=%d" userId
+                      sprintf "--map-group=%d" groupId
+                      "--"
+                      "/bin/true" ] do
+                    probeStartInfo.ArgumentList.Add argument
+
+                use probe = new Diagnostics.Process(StartInfo = probeStartInfo)
+                let supported = probe.Start() && probe.WaitForExit(5000) && probe.ExitCode = 0
+
+                if not probe.HasExited then
+                    probe.Kill(true)
+                    probe.WaitForExit()
+
+                if not supported then
+                    Assert.Inconclusive("This host does not permit the configured Linux user-namespace mapping.")
 
                 let agent =
                     Agent.createWorker

@@ -20,15 +20,22 @@ type WorkerSecrets = { Resolve: string -> string }
 
 /// Serializable execution request sent to a process worker.
 type WorkerExecutionRequest =
-    { AgentId: string
-      Input: string
-      ExecutionId: string
-      CorrelationId: string
-      Attempt: int
-      EnforceFileSystemPolicy: bool
-      AllowedPaths: string list
-      Secrets: WorkerSecrets
-      Budget: WorkerExecutionBudget }
+    {
+        AgentId: string
+        AuthorityAgentId: string
+        Input: string
+        ExecutionId: string
+        CorrelationId: string
+        Attempt: int
+        /// Host authorization metadata, never appended to model input.
+        Principal: SecurityPrincipal option
+        /// Ordered agent executions acting under the original principal.
+        AgentLineage: AgentAuthority list
+        EnforceFileSystemPolicy: bool
+        AllowedPaths: string list
+        Secrets: WorkerSecrets
+        Budget: WorkerExecutionBudget
+    }
 
 /// Function resolved by a worker for one stable agent identity.
 type WorkerAgentHandler = WorkerExecutionRequest -> Task<Result<string, string>>
@@ -38,12 +45,16 @@ type internal WorkerMessage() =
     member val ProtocolVersion = 0 with get, set
     member val Kind = "" with get, set
     member val AgentId = "" with get, set
+    member val AuthorityAgentId = "" with get, set
     member val Input = "" with get, set
     member val Output = "" with get, set
     member val Error = "" with get, set
     member val ExecutionId = "" with get, set
     member val CorrelationId = "" with get, set
     member val Attempt = 0 with get, set
+    member val Principal: SecurityPrincipal option = None with get, set
+    member val AgentLineage: AgentAuthority array = Array.empty with get, set
+    member val RequirePrincipal = false with get, set
     member val ProcessId = 0 with get, set
     member val EnforceFileSystemPolicy = false with get, set
     member val AllowedPaths: string array = Array.empty with get, set
@@ -61,7 +72,7 @@ type internal WorkerMessage() =
 [<RequireQualifiedAccess>]
 module WorkerProtocol =
     [<Literal>]
-    let CurrentVersion = 4
+    let CurrentVersion = 1
 
     [<Literal>]
     let Hello = "hello"
@@ -81,17 +92,155 @@ module WorkerProtocol =
     let private options =
         JsonSerializerOptions(PropertyNamingPolicy = JsonNamingPolicy.CamelCase)
 
+    let private serializePrincipal principal =
+        let fields = Dictionary<string, obj>()
+        fields.Add("tenantId", box (SecurityPrincipal.tenantId principal |> TenantId.value))
+        fields.Add("subjectId", box (SecurityPrincipal.subjectId principal |> UserId.value))
+
+        fields.Add(
+            "impersonatedUserId",
+            box (
+                SecurityPrincipal.impersonation principal
+                |> Option.map (_.EffectiveUserId >> UserId.value)
+                |> Option.toObj
+            )
+        )
+
+        fields.Add(
+            "impersonationReason",
+            box (SecurityPrincipal.impersonation principal |> Option.map _.Reason |> Option.toObj)
+        )
+
+        fields.Add(
+            "serviceId",
+            box (
+                SecurityPrincipal.serviceId principal
+                |> Option.map ServiceId.value
+                |> Option.toObj
+            )
+        )
+
+        fields.Add(
+            "serviceDelegations",
+            box (
+                SecurityPrincipal.serviceLineage principal
+                |> List.skip (
+                    if SecurityPrincipal.serviceId principal |> Option.isSome then
+                        1
+                    else
+                        0
+                )
+                |> List.map ServiceId.value
+                |> List.toArray
+            )
+        )
+
+        fields.Add("groupIds", box (SecurityPrincipal.groupIds principal |> Seq.map GroupId.value |> Seq.toArray))
+        fields.Add("roles", box (SecurityPrincipal.roles principal |> Set.toArray))
+        fields.Add("claims", box (SecurityPrincipal.claims principal))
+        fields.Add("authenticationStrength", box (string (SecurityPrincipal.authenticationStrength principal)))
+        fields
+
+    let private serializeAuthority (authority: AgentAuthority) =
+        let fields = Dictionary<string, obj>()
+        fields.Add("agentId", box authority.AgentId)
+        fields.Add("executionId", box (ExecutionId.serialize authority.ExecutionId))
+        fields
+
+    let private rejectDuplicateProperties (element: JsonElement) =
+        let names = HashSet<string>(StringComparer.Ordinal)
+
+        for property in element.EnumerateObject() do
+            if not (names.Add property.Name) then
+                raise (JsonException "Duplicate worker identity property.")
+
+    let private deserializePrincipal (element: JsonElement) =
+        rejectDuplicateProperties element
+        let tenantId = element.GetProperty("tenantId").GetString() |> TenantId.parse
+        let subjectId = element.GetProperty("subjectId").GetString() |> UserId.parse
+        let impersonatedUser = element.GetProperty("impersonatedUserId")
+        let impersonationReason = element.GetProperty("impersonationReason")
+        let service = element.GetProperty("serviceId")
+
+        let serviceId =
+            if service.ValueKind = JsonValueKind.Null then
+                None
+            else
+                Some(service.GetString() |> ServiceId.parse)
+
+        let serviceDelegations =
+            element.GetProperty("serviceDelegations").EnumerateArray()
+            |> Seq.map (fun delegated -> delegated.GetString() |> ServiceId.parse)
+            |> Seq.toList
+
+        let groupIds =
+            element.GetProperty("groupIds").EnumerateArray()
+            |> Seq.map (fun group -> group.GetString() |> GroupId.parse)
+            |> Seq.toList
+
+        let roles =
+            element.GetProperty("roles").EnumerateArray()
+            |> Seq.map _.GetString()
+            |> Seq.toList
+
+        let claimFields = element.GetProperty("claims")
+        rejectDuplicateProperties claimFields
+
+        let claims =
+            claimFields.EnumerateObject()
+            |> Seq.map (fun claim -> claim.Name, claim.Value.GetString())
+            |> Map.ofSeq
+
+        let strength =
+            match element.GetProperty("authenticationStrength").GetString() with
+            | "Unspecified" -> AuthenticationStrength.Unspecified
+            | "SingleFactor" -> AuthenticationStrength.SingleFactor
+            | "MultiFactor" -> AuthenticationStrength.MultiFactor
+            | "PhishingResistant" -> AuthenticationStrength.PhishingResistant
+            | _ -> raise (JsonException "Invalid worker authentication strength.")
+
+        let principal =
+            match impersonatedUser.ValueKind, impersonationReason.ValueKind, serviceId with
+            | JsonValueKind.Null, JsonValueKind.Null, _ ->
+                SecurityPrincipal.createAuthenticated tenantId subjectId serviceId groupIds roles claims strength
+            | JsonValueKind.String, JsonValueKind.String, None ->
+                SecurityPrincipal.createImpersonated
+                    tenantId
+                    subjectId
+                    (impersonatedUser.GetString() |> UserId.parse)
+                    (impersonationReason.GetString())
+                    groupIds
+                    roles
+                    claims
+                    strength
+            | _ -> raise (JsonException "Invalid worker impersonation authority.")
+
+        serviceDelegations
+        |> List.fold
+            (fun delegated delegatedService ->
+                let current =
+                    SecurityPrincipal.currentService delegated
+                    |> Option.defaultWith (fun () ->
+                        raise (JsonException "Service delegation requires an authenticated service."))
+
+                SecurityPrincipal.delegateService current delegatedService delegated)
+            principal
+
     let internal serialize (message: WorkerMessage) =
         let fields = Dictionary<string, obj>()
         fields.Add("protocolVersion", box message.ProtocolVersion)
         fields.Add("kind", box message.Kind)
         fields.Add("agentId", box message.AgentId)
+        fields.Add("authorityAgentId", box message.AuthorityAgentId)
         fields.Add("input", box message.Input)
         fields.Add("output", box message.Output)
         fields.Add("error", box message.Error)
         fields.Add("executionId", box message.ExecutionId)
         fields.Add("correlationId", box message.CorrelationId)
         fields.Add("attempt", box message.Attempt)
+        fields.Add("principal", message.Principal |> Option.map (serializePrincipal >> box) |> Option.toObj)
+        fields.Add("agentLineage", box (message.AgentLineage |> Array.map serializeAuthority))
+        fields.Add("requirePrincipal", box message.RequirePrincipal)
         fields.Add("processId", box message.ProcessId)
         fields.Add("enforceFileSystemPolicy", box message.EnforceFileSystemPolicy)
         fields.Add("allowedPaths", box message.AllowedPaths)
@@ -111,16 +260,62 @@ module WorkerProtocol =
         try
             use document = JsonDocument.Parse value
             let root = document.RootElement
+            rejectDuplicateProperties root
             let message = WorkerMessage()
             message.ProtocolVersion <- root.GetProperty("protocolVersion").GetInt32()
             message.Kind <- root.GetProperty("kind").GetString()
             message.AgentId <- root.GetProperty("agentId").GetString()
+            message.AuthorityAgentId <- root.GetProperty("authorityAgentId").GetString()
             message.Input <- root.GetProperty("input").GetString()
             message.Output <- root.GetProperty("output").GetString()
             message.Error <- root.GetProperty("error").GetString()
             message.ExecutionId <- root.GetProperty("executionId").GetString()
             message.CorrelationId <- root.GetProperty("correlationId").GetString()
             message.Attempt <- root.GetProperty("attempt").GetInt32()
+
+            if message.Kind = Execute then
+                message.RequirePrincipal <- root.GetProperty("requirePrincipal").GetBoolean()
+                let principal = root.GetProperty("principal")
+
+                message.Principal <-
+                    if principal.ValueKind = JsonValueKind.Null then
+                        None
+                    else
+                        Some(deserializePrincipal principal)
+
+                if message.RequirePrincipal && message.Principal.IsNone then
+                    raise (JsonException "Protected worker execution requires a principal.")
+
+                message.AgentLineage <-
+                    root.GetProperty("agentLineage").EnumerateArray()
+                    |> Seq.map (fun authority ->
+                        rejectDuplicateProperties authority
+
+                        let agentId = authority.GetProperty("agentId").GetString()
+
+                        if String.IsNullOrWhiteSpace agentId || agentId <> agentId.Trim() then
+                            raise (JsonException "Worker agent authority must have a canonical agent identity.")
+
+                        { AgentId = agentId
+                          ExecutionId = authority.GetProperty("executionId").GetString() |> ExecutionId.parse })
+                    |> Seq.toArray
+
+                if
+                    message.AgentLineage |> Seq.map _.ExecutionId |> Seq.distinct |> Seq.length
+                    <> message.AgentLineage.Length
+                then
+                    raise (JsonException "Worker agent authority execution identities must be unique.")
+
+                if message.RequirePrincipal then
+                    match Array.tryLast message.AgentLineage with
+                    | Some authority when
+                        authority.AgentId = message.AuthorityAgentId
+                        && ExecutionId.serialize authority.ExecutionId = message.ExecutionId
+                        ->
+                        ()
+                    | _ ->
+                        raise (JsonException "Protected worker execution requires matching delegated agent authority.")
+
             message.ProcessId <- root.GetProperty("processId").GetInt32()
             message.EnforceFileSystemPolicy <- root.GetProperty("enforceFileSystemPolicy").GetBoolean()
 
@@ -147,8 +342,14 @@ module WorkerProtocol =
             message.ToolCalls <- root.GetProperty("toolCalls").GetInt32()
 
             Ok message
-        with error ->
-            Error(sprintf "Worker protocol message was invalid JSON: %s" error.Message)
+        with
+        | :? JsonException
+        | :? KeyNotFoundException
+        | :? InvalidOperationException
+        | :? ArgumentException
+        | :? FormatException
+        | :? OverflowException
+        | :? UnauthorizedAccessException -> Error "Worker protocol message was invalid."
 
     let internal message kind version =
         let value = WorkerMessage()
@@ -161,6 +362,7 @@ module WorkerProtocol =
         version
         agentId
         (context: Nao.Agents.ExecutionContext)
+        (agentContext: AgentContext)
         enforceFileSystemPolicy
         allowedPaths
         secrets
@@ -168,10 +370,25 @@ module WorkerProtocol =
         =
         let value = message Execute version
         value.AgentId <- agentId
+
+        value.AuthorityAgentId <-
+            agentContext.Authorization
+            |> Option.bind AuthorizationScope.currentAgent
+            |> Option.map _.AgentId
+            |> Option.defaultValue ""
+
         value.Input <- input
         value.ExecutionId <- ExecutionId.serialize context.ExecutionId
         value.CorrelationId <- context.Correlation.CorrelationId |> CorrelationId.value |> string
         value.Attempt <- context.Correlation.Attempt
+        value.Principal <- agentContext.Authorization |> Option.map AuthorizationScope.principal
+
+        value.AgentLineage <-
+            agentContext.Authorization
+            |> Option.map (AuthorizationScope.agentLineage >> List.toArray)
+            |> Option.defaultValue Array.empty
+
+        value.RequirePrincipal <- agentContext.ExecutionBoundary = ExecutionBoundary.HarnessRequired
         value.EnforceFileSystemPolicy <- enforceFileSystemPolicy
         value.AllowedPaths <- allowedPaths |> List.toArray
 
@@ -268,10 +485,13 @@ module WorkerProtocol =
 
         let request =
             { AgentId = message.AgentId
+              AuthorityAgentId = message.AuthorityAgentId
               Input = message.Input
               ExecutionId = message.ExecutionId
               CorrelationId = message.CorrelationId
               Attempt = message.Attempt
+              Principal = message.Principal
+              AgentLineage = message.AgentLineage |> List.ofArray
               EnforceFileSystemPolicy = message.EnforceFileSystemPolicy
               AllowedPaths = message.AllowedPaths |> List.ofArray
               Secrets = secrets

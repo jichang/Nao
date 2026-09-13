@@ -2,25 +2,25 @@
 
 ## Scope
 
-- First incompatible version: next unreleased Nao package version.
+- Current unreleased format: version 1.
 - Affected packages and APIs: `Nao.Agents.ToolSideEffectPhase`, the ETCLOVG harness, and Nao persistence observability adapters.
-- Affected files, streams, tables, or Orleans state: `tool-side-effects.json` and `nao_tool_side_effects` rows.
+- Affected files and streams: identity-partitioned `execution-journal/<identity-sha256>` version-1 streams.
 
 ## Breaking changes
 
 `ToolSideEffectPhase` adds `Quarantined`, serialized as `quarantined`. Externally side-effecting operations are quarantined when interruption or a transient dependency failure cannot prove whether the effect committed. An incomplete execution with a durable successful side effect is also quarantined during recovery because replay could duplicate it.
 
-Quarantine forces an indeterminate harness result, survives repeated recovery without duplicate transitions, and excludes the operation from automatic compensation. Older readers reject the new phase value.
+Quarantine forces an indeterminate harness result, survives repeated recovery without duplicate transitions, and excludes the operation from automatic compensation.
 
 ## Before upgrade
 
 1. Stop writers.
-2. Back up execution-journal files and databases.
-3. Validate that the backup can be restored.
+2. Delete unreleased execution-journal development data.
+3. Deploy the identity-partitioned implementation.
 
 ## Migration
 
-No transformation is required for existing transition rows. Upgrade every process sharing the side-effect journal before writers emit quarantine phases. Delete development journal data instead when retention is unnecessary. Do not convert historical interrupted operations to safe outcomes without external evidence.
+Nao is unreleased, so there is no compatibility reader or retained-data migration. Do not convert historical interrupted operations to safe outcomes without external evidence.
 
 ## Validation
 
@@ -28,4 +28,4 @@ Run harness restart, network ambiguity, compensation, and execution-journal back
 
 ## Rollback
 
-Rollback is not possible after quarantine phases are written because older binaries reject them. Stop writers and restore the pre-upgrade backup before deploying an older version.
+Rollback is unsupported for this unreleased breaking redesign.

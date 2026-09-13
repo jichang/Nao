@@ -4,11 +4,11 @@
 
 - First incompatible version: `0.2.0` development schema after FND-05 file-memory versioning.
 - Affected APIs: `MemoryStores.file` and `SemanticMemories.file` persisted representations.
-- Affected files: owner JSON files beneath configured key/value and semantic-memory directories.
+- Affected files: SHA-256 authorization-identity JSON files beneath configured key/value and semantic-memory directories.
 
 ## Breaking changes
 
-Memory files are version-1 documents containing `schemaVersion` and `value`. Earlier raw JSON arrays and empty files are rejected before save, removal, expiry deletion, or owner deletion. Nao does not include a legacy reader or in-process converter.
+Memory files are version-1 documents containing `schemaVersion` and `value`. File names use the complete claim-free authorization identity's SHA-256 key, so tenant, user, selected group, workspace, and session boundaries cannot collide through lossy sanitization. Earlier raw JSON arrays and empty files are rejected before save, removal, expiry deletion, or scope deletion. Nao does not include a legacy reader or in-process converter.
 
 ## Before upgrade
 
@@ -18,7 +18,7 @@ Memory files are version-1 documents containing `schemaVersion` and `value`. Ear
 
 ## Migration
 
-Delete old development memory when retention is unnecessary. For retained data, externally wrap each old JSON array as `{ "schemaVersion": 1, "value": <old-array> }` without inferring owner, identity, timestamps, tags, or embeddings. Deploy and validate owner-scoped recall, save, and deletion.
+Delete old development memory when retention is unnecessary. For retained data, externally wrap each old JSON array as `{ "schemaVersion": 1, "value": <old-array> }` and move it to the known authorization identity's SHA-256 filename without inferring missing identity, timestamps, tags, or embeddings. Deploy and validate scope-bound recall, save, and deletion.
 
 ## Rollback
 

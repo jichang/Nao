@@ -8,18 +8,33 @@ open System.Threading.Tasks
 open Nao.Agents
 
 module private TracerState =
-    let create (persist: Span -> unit) (initial: Span seq) : Tracer =
-        let spans = System.Collections.Concurrent.ConcurrentDictionary<SpanId, Span>()
+    let create (persist: AuthorizationScope -> Span -> unit) (initial: (AuthorizationScope * Span) seq) : Tracer =
+        let spans =
+            System.Collections.Concurrent.ConcurrentDictionary<string * SpanId, Span>()
 
-        for span in initial do
-            spans.[span.Id] <- span
+        let ownerKey = AuthorizationScope.identity >> AuthorizationIdentity.storageKey
 
-        let upsert (span: Span) =
-            persist span
-            spans.[span.Id] <- span
+        for scope, span in initial do
+            spans.[(ownerKey scope, span.Id)] <- span
+
+        let owned scope =
+            let owner = ownerKey scope
+
+            spans
+            |> Seq.choose (fun pair -> if fst pair.Key = owner then Some pair.Value else None)
+
+        let current scope (span: Span) =
+            match spans.TryGetValue((ownerKey scope, span.Id)) with
+            | true, stored -> stored
+            | false, _ ->
+                raise (UnauthorizedAccessException "The span does not belong to the supplied authorization scope.")
+
+        let upsert scope (span: Span) =
+            persist scope span
+            spans.[(ownerKey scope, span.Id)] <- span
 
         { StartTrace =
-            fun correlation operationName ->
+            fun scope correlation operationName ->
                 let span =
                     { Id = SpanId(Guid.NewGuid())
                       Correlation = correlation
@@ -32,10 +47,12 @@ module private TracerState =
                       Attributes = Map.empty
                       Events = [] }
 
-                upsert span
+                upsert scope span
                 span
           StartSpan =
-            fun parent operationName ->
+            fun scope parent operationName ->
+                let parent = current scope parent
+
                 let span =
                     { Id = SpanId(Guid.NewGuid())
                       Correlation = parent.Correlation
@@ -48,17 +65,23 @@ module private TracerState =
                       Attributes = Map.empty
                       Events = [] }
 
-                upsert span
+                upsert scope span
                 span
           EndSpan =
-            fun span status ->
+            fun scope span status ->
+                let span = current scope span
+
                 upsert
+                    scope
                     { span with
                         EndTime = Some DateTimeOffset.UtcNow
                         Status = status }
           AddEvent =
-            fun span name attributes ->
+            fun scope span name attributes ->
+                let span = current scope span
+
                 upsert
+                    scope
                     { span with
                         Events =
                             span.Events
@@ -66,41 +89,45 @@ module private TracerState =
                                   Timestamp = DateTimeOffset.UtcNow
                                   Attributes = attributes } ] }
           SetAttributes =
-            fun span attributes ->
+            fun scope span attributes ->
+                let span = current scope span
+
                 upsert
+                    scope
                     { span with
                         Attributes =
                             Map.fold (fun state key value -> Map.add key value state) span.Attributes attributes }
-          GetTrace = fun traceId -> spans.Values |> Seq.filter (fun span -> span.TraceId = traceId) |> Seq.toList
+          GetTrace = fun scope traceId -> owned scope |> Seq.filter (fun span -> span.TraceId = traceId) |> Seq.toList
           GetByExecution =
-            fun executionId ->
-                spans.Values
+            fun scope executionId ->
+                owned scope
                 |> Seq.filter (fun span -> span.Correlation.ExecutionId = executionId)
                 |> Seq.sortBy _.StartTime
                 |> Seq.toList }
 
 module InMemoryTracer =
-    let create () = TracerState.create ignore Seq.empty
+    let create () =
+        TracerState.create (fun _ _ -> ()) Seq.empty
 
 module InMemoryMetricsCollector =
     let create () : MetricsCollector =
         let records =
-            System.Collections.Concurrent.ConcurrentDictionary<Guid, MetricRecord>()
+            System.Collections.Concurrent.ConcurrentDictionary<string * Guid, MetricRecord>()
 
-        let validateOwner owner =
-            if String.IsNullOrWhiteSpace owner then
-                invalidArg (nameof owner) "Metric owner cannot be blank."
+        let ownerKey = AuthorizationScope.identity >> AuthorizationIdentity.storageKey
 
-        let record (metric: MetricRecord) =
-            validateOwner metric.Owner
-            records.[metric.Id] <- metric
+        let record scope (metric: MetricRecord) =
+            records.[(ownerKey scope, metric.Id)] <- metric
 
-        let owned owner =
-            records.Values |> Seq.filter (fun metric -> metric.Owner = owner) |> Seq.toArray
+        let owned scope =
+            let owner = ownerKey scope
 
-        let metrics owner =
-            validateOwner owner
-            let retained = owned owner
+            records
+            |> Seq.choose (fun pair -> if fst pair.Key = owner then Some pair.Value else None)
+            |> Seq.toArray
+
+        let metrics scope =
+            let retained = owned scope
 
             let llmCalls =
                 retained
@@ -160,45 +187,36 @@ module InMemoryMetricsCollector =
               LlmWaitTime = TimeSpan.FromMilliseconds(float llmWait)
               ToolExecutionTime = TimeSpan.FromMilliseconds(float toolTime) }
 
-        let delete owner (predicate: MetricRecord -> bool) =
+        let delete scope (predicate: MetricRecord -> bool) =
             task {
-                if String.IsNullOrWhiteSpace owner then
-                    return
-                        Error(
-                            PlatformFailure.create
-                                PlatformErrorCategory.InvalidInput
-                                "Metric owner cannot be blank."
-                                false
-                                None
-                        )
-                else
-                    let mutable deleted = 0
+                let owner = ownerKey scope
+                let mutable deleted = 0
 
-                    for metric in records.Values do
-                        if metric.Owner = owner && predicate metric then
-                            match records.TryRemove metric.Id with
-                            | true, _ -> deleted <- deleted + 1
-                            | false, _ -> ()
+                for pair in records do
+                    if fst pair.Key = owner && predicate pair.Value then
+                        match records.TryRemove pair.Key with
+                        | true, _ -> deleted <- deleted + 1
+                        | false, _ -> ()
 
-                    return Ok deleted
+                return Ok deleted
             }
 
         { Record = record
           GetMetrics = metrics
           GetByExecution =
-            fun executionId ->
-                records.Values
+            fun scope executionId ->
+                owned scope
                 |> Seq.filter (fun metric -> metric.Correlation.ExecutionId = executionId)
                 |> Seq.sortBy (fun metric -> metric.Timestamp)
                 |> Seq.toList
           EstimateCost =
-            fun owner model ->
-                let aggregate = metrics owner
+            fun scope model ->
+                let aggregate = metrics scope
 
                 decimal aggregate.TotalInputTokens / 1000m * model.InputCostPer1K
                 + decimal aggregate.TotalOutputTokens / 1000m * model.OutputCostPer1K
-          DeleteOwnerAsync = fun owner -> delete owner (fun _ -> true)
-          DeleteExpiredAsync = fun owner before -> delete owner (fun metric -> metric.Timestamp < before) }
+          DeleteScopeAsync = fun scope -> delete scope (fun _ -> true)
+          DeleteExpiredAsync = fun scope before -> delete scope (fun metric -> metric.Timestamp < before) }
 
 module private TraceOperations =
     let failure = PlatformFailure.fromException PlatformFailureBoundary.Storage None
@@ -225,57 +243,71 @@ module private TraceOperations =
 module InMemoryTraceStore =
     let create () : TraceStore =
         let traces =
-            System.Collections.Concurrent.ConcurrentDictionary<Guid, ExecutionTrace>()
+            System.Collections.Concurrent.ConcurrentDictionary<string * Guid, ExecutionTrace>()
 
-        let delete (predicate: ExecutionTrace -> bool) =
+        let ownerKey = AuthorizationScope.identity >> AuthorizationIdentity.storageKey
+
+        let owned scope =
+            let owner = ownerKey scope
+
+            traces
+            |> Seq.choose (fun pair -> if fst pair.Key = owner then Some pair.Value else None)
+
+        let delete scope (predicate: ExecutionTrace -> bool) =
+            let owner = ownerKey scope
             let mutable deleted = 0
 
-            for trace in traces.Values do
-                if predicate trace then
-                    match traces.TryRemove trace.Id with
+            for pair in traces do
+                if fst pair.Key = owner && predicate pair.Value then
+                    match traces.TryRemove pair.Key with
                     | true, _ -> deleted <- deleted + 1
                     | false, _ -> ()
 
             Task.FromResult deleted
 
-        let saveAsync (trace: ExecutionTrace) =
-            traces.[trace.Id] <- trace
+        let saveAsync scope (trace: ExecutionTrace) =
+            traces.[(ownerKey scope, trace.Id)] <- trace
             Task.FromResult()
 
-        let getBaselineAsync (agentId: string) (_: string) =
-            traces.Values
+        let getBaselineAsync scope (agentId: string) (_: string) =
+            owned scope
             |> Seq.filter (fun trace -> trace.AgentId = agentId && trace.Success)
             |> Seq.sortByDescending (fun trace -> trace.StartedAt)
             |> Seq.tryHead
             |> Task.FromResult
 
-        let getTracesAsync (agentId: string) limit =
-            traces.Values
+        let getTracesAsync scope (agentId: string) limit =
+            owned scope
             |> Seq.filter (fun trace -> trace.AgentId = agentId)
             |> Seq.sortByDescending (fun trace -> trace.StartedAt)
             |> Seq.truncate limit
             |> Seq.toList
             |> Task.FromResult
 
-        let getByExecutionAsync executionId =
-            traces.Values
+        let getByExecutionAsync scope executionId =
+            owned scope
             |> Seq.filter (fun trace -> trace.Correlation.ExecutionId = executionId)
             |> Seq.sortByDescending (fun trace -> trace.StartedAt)
             |> Seq.toList
             |> Task.FromResult
 
-        let deleteOwnerAsync (owner: string) =
-            TraceOperations.protect owner (fun () -> delete (fun trace -> trace.AgentId = owner))
+        let deleteScopeAsync scope =
+            task {
+                let! count = delete scope (fun _ -> true)
+                return Ok count
+            }
 
-        let deleteExpiredAsync (owner: string) before =
-            TraceOperations.protect owner (fun () ->
-                delete (fun trace -> trace.AgentId = owner && trace.StartedAt < before)) in
+        let deleteExpiredAsync scope before =
+            task {
+                let! count = delete scope (fun trace -> trace.StartedAt < before)
+                return Ok count
+            }
 
         { SaveAsync = saveAsync
           GetBaselineAsync = getBaselineAsync
           GetTracesAsync = getTracesAsync
           GetByExecutionAsync = getByExecutionAsync
-          DeleteOwnerAsync = deleteOwnerAsync
+          DeleteScopeAsync = deleteScopeAsync
           DeleteExpiredAsync = deleteExpiredAsync }
 
 type TracerDocument =
@@ -307,34 +339,52 @@ module PersistentTracer =
                 )
             )
 
-    let create context (store: EventStore) =
-        let loadSpans () =
-            store.LoadAll() |> List.mapi (fun index line -> decode context (index + 1) line)
+    /// The host supplies a separate stream for each claim-free authorization partition key.
+    let create (openStore: string -> EventStore) =
+        let sync = obj ()
 
-        let persist span =
-            loadSpans () |> ignore
+        let load scope =
+            let key = AuthorizationScope.identity scope |> AuthorizationIdentity.storageKey
+            let context = "tracer/" + key
+            let store = openStore key
 
-            store.Append(
-                FSharpJson.serialize
-                    { SchemaVersion = CurrentSchemaVersion
-                      Value = span }
-            )
+            let spans =
+                store.LoadAll() |> List.mapi (fun index line -> decode context (index + 1) line)
 
-        loadSpans () |> TracerState.create persist
+            let persist _ span =
+                store.Append(
+                    FSharpJson.serialize
+                        { SchemaVersion = CurrentSchemaVersion
+                          Value = span }
+                )
+
+            TracerState.create persist (spans |> Seq.map (fun span -> scope, span))
+
+        { StartTrace =
+            fun scope correlation operationName ->
+                lock sync (fun () -> (load scope).StartTrace scope correlation operationName)
+          StartSpan =
+            fun scope parent operationName -> lock sync (fun () -> (load scope).StartSpan scope parent operationName)
+          EndSpan = fun scope span status -> lock sync (fun () -> (load scope).EndSpan scope span status)
+          AddEvent =
+            fun scope span name attributes -> lock sync (fun () -> (load scope).AddEvent scope span name attributes)
+          SetAttributes =
+            fun scope span attributes -> lock sync (fun () -> (load scope).SetAttributes scope span attributes)
+          GetTrace = fun scope traceId -> lock sync (fun () -> (load scope).GetTrace scope traceId)
+          GetByExecution = fun scope executionId -> lock sync (fun () -> (load scope).GetByExecution scope executionId) }
 
 module Tracers =
     let ado factory =
-        PersistentTracer.create "tracer" (EventStore.db factory "tracer")
+        PersistentTracer.create (fun key -> EventStore.db factory ("tracer/" + key))
 
     let file baseDir =
-        let path = System.IO.Path.Combine(baseDir, "tracer.jsonl")
-        PersistentTracer.create path (EventStore.file path)
+        PersistentTracer.create (fun key -> EventStore.file (System.IO.Path.Combine(baseDir, "tracer", key + ".jsonl")))
 
 [<RequireQualifiedAccess>]
 type MetricsEvent =
     | Accepted of MetricRecord
-    | DeleteOwner of string
-    | DeleteExpired of string * DateTimeOffset
+    | DeleteScope
+    | DeleteExpired of DateTimeOffset
 
 type MetricsDocument = { Version: int; Event: MetricsEvent }
 
@@ -358,65 +408,92 @@ module PersistentMetricsCollector =
                 )
             )
 
-    let create context (store: EventStore) : MetricsCollector =
-        let inner = InMemoryMetricsCollector.create ()
+    /// The host supplies a separate stream for each claim-free authorization partition key.
+    let create (openStore: string -> EventStore) : MetricsCollector =
+        let sync = obj ()
 
-        let loadEvents () =
-            store.LoadAll() |> List.mapi (fun index line -> decode context (index + 1) line)
+        let load scope =
+            let key = AuthorizationScope.identity scope |> AuthorizationIdentity.storageKey
+            let context = "metrics/" + key
+            let store = openStore key
+            let inner = InMemoryMetricsCollector.create ()
 
-        for event in loadEvents () do
-            match event with
-            | MetricsEvent.Accepted metric -> inner.Record metric
-            | MetricsEvent.DeleteOwner owner -> inner.DeleteOwnerAsync(owner).GetAwaiter().GetResult() |> ignore
-            | MetricsEvent.DeleteExpired(owner, before) ->
-                inner.DeleteExpiredAsync owner before
-                |> fun operation -> operation.GetAwaiter().GetResult() |> ignore
+            let events =
+                store.LoadAll() |> List.mapi (fun index line -> decode context (index + 1) line)
 
-        let append event =
-            store.Append(FSharpJson.serialize { Version = 1; Event = event })
+            for event in events do
+                match event with
+                | MetricsEvent.Accepted metric -> inner.Record scope metric
+                | MetricsEvent.DeleteScope -> inner.DeleteScopeAsync scope |> _.GetAwaiter().GetResult() |> ignore
+                | MetricsEvent.DeleteExpired before ->
+                    inner.DeleteExpiredAsync scope before |> _.GetAwaiter().GetResult() |> ignore
 
-        let persist event operation =
+            store, inner
+
+        let read scope operation =
+            lock sync (fun () ->
+                let _, inner = load scope
+                operation inner)
+
+        let mutate scope operation event =
+            lock sync (fun () ->
+                let store, inner = load scope
+                let result = operation inner
+                store.Append(FSharpJson.serialize { Version = 1; Event = event })
+                result)
+
+        let protect operation =
             task {
-                loadEvents () |> ignore
-                let! result = operation ()
-
-                match result with
-                | Error failure -> return Error failure
-                | Ok count ->
-                    try
-                        append event
-                        return Ok count
-                    with ex ->
-                        return Error(TraceOperations.failure ex)
+                try
+                    return operation () |> Ok
+                with
+                | :? IOException as error -> return Error(TraceOperations.failure error)
+                | :? InvalidDataException as error -> return Error(TraceOperations.failure error)
+                | :? System.Data.Common.DbException as error -> return Error(TraceOperations.failure error)
+                | :? UnauthorizedAccessException as error -> return Error(TraceOperations.failure error)
             }
 
+        let valueOrRaise =
+            function
+            | Ok value -> value
+            | Error failure -> PlatformFailure.raiseException failure
+
         { Record =
-            fun metric ->
-                loadEvents () |> ignore
-                inner.Record metric
-                append (MetricsEvent.Accepted metric)
-          GetMetrics = inner.GetMetrics
-          GetByExecution = inner.GetByExecution
-          EstimateCost = inner.EstimateCost
-          DeleteOwnerAsync =
-            fun owner -> persist (MetricsEvent.DeleteOwner owner) (fun () -> inner.DeleteOwnerAsync owner)
+            fun scope metric -> mutate scope (fun inner -> inner.Record scope metric) (MetricsEvent.Accepted metric)
+          GetMetrics = fun scope -> read scope (fun inner -> inner.GetMetrics scope)
+          GetByExecution = fun scope executionId -> read scope (fun inner -> inner.GetByExecution scope executionId)
+          EstimateCost = fun scope model -> read scope (fun inner -> inner.EstimateCost scope model)
+          DeleteScopeAsync =
+            fun scope ->
+                protect (fun () ->
+                    mutate
+                        scope
+                        (fun inner -> inner.DeleteScopeAsync scope |> _.GetAwaiter().GetResult() |> valueOrRaise)
+                        MetricsEvent.DeleteScope)
           DeleteExpiredAsync =
-            fun owner before ->
-                persist (MetricsEvent.DeleteExpired(owner, before)) (fun () -> inner.DeleteExpiredAsync owner before) }
+            fun scope before ->
+                protect (fun () ->
+                    mutate
+                        scope
+                        (fun inner ->
+                            inner.DeleteExpiredAsync scope before
+                            |> _.GetAwaiter().GetResult()
+                            |> valueOrRaise)
+                        (MetricsEvent.DeleteExpired before)) }
 
 module MetricsCollectors =
     let ado factory =
-        PersistentMetricsCollector.create "metrics" (EventStore.db factory "metrics")
+        PersistentMetricsCollector.create (fun key -> EventStore.db factory ("metrics/" + key))
 
     let file baseDir =
-        let path = System.IO.Path.Combine(baseDir, "metrics.jsonl")
-        PersistentMetricsCollector.create path (EventStore.file path)
+        PersistentMetricsCollector.create (fun key ->
+            EventStore.file (System.IO.Path.Combine(baseDir, "metrics", key + ".jsonl")))
 
 [<RequireQualifiedAccess>]
 type TraceStoreEvent =
     | Save of ExecutionTrace
-    | DeleteOwner of string
-    | DeleteExpired of string * DateTimeOffset
+    | DeleteScope
+    | DeleteExpired of DateTimeOffset
 
 type TraceStoreDocument =
     { [<JsonPropertyName("schemaVersion")>]
@@ -447,66 +524,101 @@ module PersistentTraceStore =
                 )
             )
 
-    let create context (store: EventStore) : TraceStore =
-        let inner = InMemoryTraceStore.create ()
+    /// The host supplies a separate stream for each claim-free authorization partition key.
+    let create (openStore: string -> EventStore) : TraceStore =
+        let sync = obj ()
 
-        let loadEvents () =
-            store.LoadAll() |> List.mapi (fun index line -> decode context (index + 1) line)
+        let load scope =
+            let key = AuthorizationScope.identity scope |> AuthorizationIdentity.storageKey
+            let context = "trace-store/" + key
+            let store = openStore key
+            let inner = InMemoryTraceStore.create ()
 
-        let append event =
-            store.Append(
-                FSharpJson.serialize
-                    { SchemaVersion = CurrentSchemaVersion
-                      Event = event }
-            )
+            let events =
+                store.LoadAll() |> List.mapi (fun index line -> decode context (index + 1) line)
 
-        for event in loadEvents () do
-            match event with
-            | TraceStoreEvent.Save trace -> inner.SaveAsync(trace).GetAwaiter().GetResult()
-            | TraceStoreEvent.DeleteOwner owner -> inner.DeleteOwnerAsync(owner).GetAwaiter().GetResult() |> ignore
-            | TraceStoreEvent.DeleteExpired(owner, before) ->
-                inner.DeleteExpiredAsync owner before
-                |> fun operation -> operation.GetAwaiter().GetResult() |> ignore
+            for event in events do
+                match event with
+                | TraceStoreEvent.Save trace -> inner.SaveAsync scope trace |> _.GetAwaiter().GetResult()
+                | TraceStoreEvent.DeleteScope -> inner.DeleteScopeAsync scope |> _.GetAwaiter().GetResult() |> ignore
+                | TraceStoreEvent.DeleteExpired before ->
+                    inner.DeleteExpiredAsync scope before |> _.GetAwaiter().GetResult() |> ignore
 
-        let persist event operation =
+            store, inner
+
+        let read scope operation =
+            lock sync (fun () ->
+                let _, inner = load scope
+                operation inner)
+
+        let mutate scope operation event =
+            lock sync (fun () ->
+                let store, inner = load scope
+                let result = operation inner
+
+                store.Append(
+                    FSharpJson.serialize
+                        { SchemaVersion = CurrentSchemaVersion
+                          Event = event }
+                )
+
+                result)
+
+        let protect operation =
             task {
-                loadEvents () |> ignore
-                let! result = operation
-
-                match result with
-                | Error failure -> return Error failure
-                | Ok count ->
-                    try
-                        append event
-                        return Ok count
-                    with ex ->
-                        return Error(TraceOperations.failure ex)
+                try
+                    return operation () |> Ok
+                with
+                | :? IOException as error -> return Error(TraceOperations.failure error)
+                | :? InvalidDataException as error -> return Error(TraceOperations.failure error)
+                | :? System.Data.Common.DbException as error -> return Error(TraceOperations.failure error)
+                | :? UnauthorizedAccessException as error -> return Error(TraceOperations.failure error)
             }
 
-        let saveAsync trace =
-            task {
-                loadEvents () |> ignore
-                do! inner.SaveAsync trace
-                append (TraceStoreEvent.Save trace)
-            }
+        let valueOrRaise =
+            function
+            | Ok value -> value
+            | Error failure -> PlatformFailure.raiseException failure
 
-        let deleteOwnerAsync owner =
-            persist (TraceStoreEvent.DeleteOwner owner) (inner.DeleteOwnerAsync owner)
-
-        let deleteExpiredAsync owner before =
-            persist (TraceStoreEvent.DeleteExpired(owner, before)) (inner.DeleteExpiredAsync owner before) in
-
-        { SaveAsync = saveAsync
-          GetBaselineAsync = inner.GetBaselineAsync
-          GetTracesAsync = inner.GetTracesAsync
-          GetByExecutionAsync = inner.GetByExecutionAsync
-          DeleteOwnerAsync = deleteOwnerAsync
-          DeleteExpiredAsync = deleteExpiredAsync }
+        { SaveAsync =
+            fun scope trace ->
+                task {
+                    mutate
+                        scope
+                        (fun inner -> inner.SaveAsync scope trace |> _.GetAwaiter().GetResult())
+                        (TraceStoreEvent.Save trace)
+                }
+          GetBaselineAsync =
+            fun scope agentId pattern ->
+                task { return read scope (fun inner -> inner.GetBaselineAsync scope agentId pattern |> _.Result) }
+          GetTracesAsync =
+            fun scope agentId limit ->
+                task { return read scope (fun inner -> inner.GetTracesAsync scope agentId limit |> _.Result) }
+          GetByExecutionAsync =
+            fun scope executionId ->
+                task { return read scope (fun inner -> inner.GetByExecutionAsync scope executionId |> _.Result) }
+          DeleteScopeAsync =
+            fun scope ->
+                protect (fun () ->
+                    mutate
+                        scope
+                        (fun inner -> inner.DeleteScopeAsync scope |> _.GetAwaiter().GetResult() |> valueOrRaise)
+                        TraceStoreEvent.DeleteScope)
+          DeleteExpiredAsync =
+            fun scope before ->
+                protect (fun () ->
+                    mutate
+                        scope
+                        (fun inner ->
+                            inner.DeleteExpiredAsync scope before
+                            |> _.GetAwaiter().GetResult()
+                            |> valueOrRaise)
+                        (TraceStoreEvent.DeleteExpired before)) }
 
 module TraceStores =
     let ado factory =
-        PersistentTraceStore.create "trace-store" (EventStore.db factory "trace-store")
+        PersistentTraceStore.create (fun key -> EventStore.db factory ("trace-store/" + key))
 
     let file baseDir =
-        let path = System.IO.Path.Combine(baseDir, "trace-store.jsonl")
-        PersistentTraceStore.create path (EventStore.file path)
+        PersistentTraceStore.create (fun key ->
+            EventStore.file (System.IO.Path.Combine(baseDir, "trace-store", key + ".jsonl")))

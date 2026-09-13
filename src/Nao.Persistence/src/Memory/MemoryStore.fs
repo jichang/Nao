@@ -7,106 +7,109 @@ open System.Threading.Tasks
 open Nao.Agents
 
 module private MemoryOperations =
-    let private failure =
-        PlatformFailure.fromException PlatformFailureBoundary.Storage None
+    let ownerKey = AuthorizationScope.identity >> AuthorizationIdentity.storageKey
 
-    let protect owner operation =
+    let private failure (error: exn) =
+        PlatformFailure.fromException PlatformFailureBoundary.Storage None error
+
+    let protect operation =
         task {
-            if String.IsNullOrWhiteSpace owner then
-                return
-                    Error(
-                        PlatformFailure.create
-                            PlatformErrorCategory.InvalidInput
-                            "Memory owner cannot be blank."
-                            false
-                            None
-                    )
-            else
-                try
-                    let! count = operation ()
-                    return Ok count
-                with ex ->
-                    return Error(failure ex)
+            try
+                let! count = operation ()
+                return Ok count
+            with
+            | :? IOException as error -> return Error(failure error)
+            | :? InvalidDataException as error -> return Error(failure error)
+            | :? DbException as error -> return Error(failure error)
+            | :? UnauthorizedAccessException as error -> return Error(failure error)
         }
 
 /// In-memory memory store for testing and simple scenarios.
 module InMemoryStore =
     let create () : MemoryStore =
-        let store =
-            System.Collections.Concurrent.ConcurrentDictionary<string, MemoryEntry list>()
+        let store = System.Collections.Generic.Dictionary<string, MemoryEntry list>()
+        let sync = obj ()
 
-        let agentKey (agentId: string) = agentId
+        let entries key =
+            match store.TryGetValue key with
+            | true, entries -> entries
+            | false, _ -> []
 
         { SaveAsync =
-            fun (agentId: string) (entry: MemoryEntry) ->
-                let key = agentKey agentId
+            fun scope (entry: MemoryEntry) ->
+                let key = MemoryOperations.ownerKey scope
 
-                store.AddOrUpdate(
-                    key,
-                    [ entry ],
-                    fun _ existing ->
-                        let filtered = existing |> List.filter (fun e -> e.Key <> entry.Key)
-                        entry :: filtered
-                )
-                |> ignore
+                lock sync (fun () -> store.[key] <- entry :: (entries key |> List.filter (fun e -> e.Key <> entry.Key)))
 
                 task { return () }
           RecallAsync =
-            fun (agentId: string) (queryKey: string) ->
-                let key = agentKey agentId
-
-                match store.TryGetValue(key) with
-                | true, entries ->
-                    entries
-                    |> List.filter (fun e -> e.Key.Contains(queryKey, StringComparison.OrdinalIgnoreCase))
-                    |> Task.FromResult
-                | false, _ -> Task.FromResult([])
+            fun scope (queryKey: string) ->
+                lock sync (fun () ->
+                    entries (MemoryOperations.ownerKey scope)
+                    |> List.filter (fun e -> e.Key.Contains(queryKey, StringComparison.OrdinalIgnoreCase)))
+                |> Task.FromResult
           RecallAllAsync =
-            fun (agentId: string) ->
-                let key = agentKey agentId
-
-                match store.TryGetValue(key) with
-                | true, entries -> Task.FromResult(entries)
-                | false, _ -> Task.FromResult([])
+            fun scope ->
+                lock sync (fun () -> entries (MemoryOperations.ownerKey scope))
+                |> Task.FromResult
           ForgetAsync =
-            fun (agentId: string) (entryKey: string) ->
-                let key = agentKey agentId
+            fun scope (entryKey: string) ->
+                let key = MemoryOperations.ownerKey scope
 
-                match store.TryGetValue(key) with
-                | true, entries ->
-                    let filtered = entries |> List.filter (fun e -> e.Key <> entryKey)
-                    store.[key] <- filtered
-                | false, _ -> ()
+                lock sync (fun () -> store.[key] <- entries key |> List.filter (fun e -> e.Key <> entryKey))
 
                 task { return () }
           DeleteOwnerAsync =
-            fun owner ->
-                MemoryOperations.protect owner (fun () ->
-                    match store.TryRemove(agentKey owner) with
-                    | true, entries -> Task.FromResult entries.Length
-                    | false, _ -> Task.FromResult 0)
+            fun scope ->
+                MemoryOperations.protect (fun () ->
+                    lock sync (fun () ->
+                        let key = MemoryOperations.ownerKey scope
+                        let count = (entries key).Length
+                        store.Remove key |> ignore
+                        count)
+                    |> Task.FromResult)
           DeleteExpiredAsync =
-            fun owner before ->
-                MemoryOperations.protect owner (fun () ->
-                    let key = agentKey owner
-
-                    match store.TryGetValue key with
-                    | true, entries ->
-                        let retained = entries |> List.filter (fun entry -> entry.Timestamp >= before)
+            fun scope before ->
+                MemoryOperations.protect (fun () ->
+                    lock sync (fun () ->
+                        let key = MemoryOperations.ownerKey scope
+                        let existing = entries key
+                        let retained = existing |> List.filter (fun entry -> entry.Timestamp >= before)
                         store.[key] <- retained
-                        Task.FromResult(entries.Length - retained.Length)
-                    | false, _ -> Task.FromResult 0) }
+                        existing.Length - retained.Length)
+                    |> Task.FromResult) }
 
 /// ADO.NET-backed memory store. Provider-agnostic: works with any database
 /// reachable through a DbConnectionFactory.
 module AdoMemoryStore =
     let create (factory: DbConnectionFactory) : MemoryStore =
         let ensureAsync () =
-            AdoSchema.ensureVersionedTable
-                factory
-                "memory"
-                "nao_memory"
-                "CREATE TABLE IF NOT EXISTS nao_memory (agent TEXT NOT NULL, mem_key TEXT NOT NULL, mem_value TEXT NOT NULL, mem_ts TEXT NOT NULL, mem_tags TEXT NOT NULL, PRIMARY KEY (agent, mem_key))"
+            task {
+                do!
+                    AdoSchema.ensureVersionedTable
+                        factory
+                        "memory"
+                        "nao_memory"
+                        "CREATE TABLE IF NOT EXISTS nao_memory (owner_key TEXT NOT NULL, mem_key TEXT NOT NULL, mem_value TEXT NOT NULL, mem_ts TEXT NOT NULL, mem_tags TEXT NOT NULL, PRIMARY KEY (owner_key, mem_key))"
+
+                try
+                    let! _ =
+                        Ado.query
+                            factory
+                            "SELECT owner_key, mem_key, mem_value, mem_ts, mem_tags FROM nao_memory WHERE 1 = 0"
+                            []
+                            ignore
+
+                    return ()
+                with :? DbException as ex ->
+                    return
+                        raise (
+                            InvalidDataException(
+                                "Memory table has an incompatible shape. Follow docs/migrations before accessing or mutating this database.",
+                                ex
+                            )
+                        )
+            }
 
         let mapEntry (r: DbDataReader) : MemoryEntry =
             let key = Ado.getString r "mem_key"
@@ -124,92 +127,94 @@ module AdoMemoryStore =
                     )
                 )
 
-        let loadAll (agent: string) : Task<MemoryEntry list> =
+        let loadAll scope : Task<MemoryEntry list> =
             Ado.query
                 factory
-                "SELECT mem_key, mem_value, mem_ts, mem_tags FROM nao_memory WHERE agent = @a ORDER BY mem_ts DESC"
-                [ "@a", box agent ]
+                "SELECT mem_key, mem_value, mem_ts, mem_tags FROM nao_memory WHERE owner_key = @a ORDER BY mem_ts DESC"
+                [ "@a", box (MemoryOperations.ownerKey scope) ]
                 mapEntry
 
-        let validateAsync () =
+        let validateAsync scope =
             task {
                 do! ensureAsync ()
-
-                let! _ = Ado.query factory "SELECT mem_key, mem_value, mem_ts, mem_tags FROM nao_memory" [] mapEntry
-
+                let! _ = loadAll scope
                 return ()
             }
 
-        let forgetAsync agentId key =
+        let forgetAsync scope key =
             task {
-                do! validateAsync ()
+                do! validateAsync scope
 
                 let! _ =
                     Ado.executeNonQuery
                         factory
-                        "DELETE FROM nao_memory WHERE agent = @a AND mem_key = @k"
-                        [ "@a", box agentId; "@k", box key ]
+                        "DELETE FROM nao_memory WHERE owner_key = @a AND mem_key = @k"
+                        [ "@a", box (MemoryOperations.ownerKey scope); "@k", box key ]
 
                 return ()
             }
 
         { SaveAsync =
-            fun (agentId: string) (entry: MemoryEntry) ->
+            fun scope (entry: MemoryEntry) ->
                 task {
-                    do! validateAsync ()
+                    do! validateAsync scope
 
                     do!
                         Ado.executeTransaction
                             factory
-                            [ "DELETE FROM nao_memory WHERE agent = @a AND mem_key = @k",
-                              [ "@a", box agentId; "@k", box entry.Key ]
-                              "INSERT INTO nao_memory (agent, mem_key, mem_value, mem_ts, mem_tags) VALUES (@a, @k, @v, @t, @g)",
-                              [ "@a", box agentId
+                            [ "DELETE FROM nao_memory WHERE owner_key = @a AND mem_key = @k",
+                              [ "@a", box (MemoryOperations.ownerKey scope); "@k", box entry.Key ]
+                              "INSERT INTO nao_memory (owner_key, mem_key, mem_value, mem_ts, mem_tags) VALUES (@a, @k, @v, @t, @g)",
+                              [ "@a", box (MemoryOperations.ownerKey scope)
                                 "@k", box entry.Key
                                 "@v", box entry.Value
                                 "@t", box (Time.toIso entry.Timestamp)
                                 "@g", box (Json.tagsToJson entry.Tags) ] ]
                 }
           RecallAsync =
-            fun agentId query ->
+            fun scope query ->
                 task {
                     do! ensureAsync ()
-                    let! all = loadAll agentId
+                    let! all = loadAll scope
 
                     return
                         all
                         |> List.filter (fun e -> e.Key.Contains(query, StringComparison.OrdinalIgnoreCase))
                 }
           RecallAllAsync =
-            fun agentId ->
+            fun scope ->
                 task {
                     do! ensureAsync ()
-                    return! loadAll agentId
+                    return! loadAll scope
                 }
           ForgetAsync = forgetAsync
           DeleteOwnerAsync =
             fun owner ->
-                MemoryOperations.protect owner (fun () ->
+                MemoryOperations.protect (fun () ->
                     task {
-                        do! validateAsync ()
-
-                        return!
-                            Ado.executeNonQuery factory "DELETE FROM nao_memory WHERE agent = @a" [ "@a", box owner ]
-                    })
-          DeleteExpiredAsync =
-            fun owner before ->
-                MemoryOperations.protect owner (fun () ->
-                    task {
-                        do! validateAsync ()
+                        do! validateAsync owner
 
                         return!
                             Ado.executeNonQuery
                                 factory
-                                "DELETE FROM nao_memory WHERE agent = @a AND mem_ts < @before"
-                                [ "@a", box owner; "@before", box (Time.toIso before) ]
+                                "DELETE FROM nao_memory WHERE owner_key = @a"
+                                [ "@a", box (MemoryOperations.ownerKey owner) ]
+                    })
+          DeleteExpiredAsync =
+            fun owner before ->
+                MemoryOperations.protect (fun () ->
+                    task {
+                        do! validateAsync owner
+
+                        return!
+                            Ado.executeNonQuery
+                                factory
+                                "DELETE FROM nao_memory WHERE owner_key = @a AND mem_ts < @before"
+                                [ "@a", box (MemoryOperations.ownerKey owner)
+                                  "@before", box (Time.toIso before) ]
                     }) }
 
-/// FileSystem-backed memory store. One JSON document per agent under {baseDir}.
+/// FileSystem-backed memory store. One JSON document per authorization identity under {baseDir}.
 module FileMemoryStore =
     [<Literal>]
     let private CurrentSchemaVersion = 1
@@ -217,49 +222,45 @@ module FileMemoryStore =
     let create (baseDir: string) : MemoryStore =
         let sync = obj ()
 
-        let agentFile agentId =
-            Path.Combine(baseDir, sprintf "%s.json" (Sanitize.id agentId))
+        let scopeFile scope =
+            Path.Combine(baseDir, sprintf "%s.json" (MemoryOperations.ownerKey scope))
 
-        let load agentId : Dto.MemoryEntryDto list =
-            VersionedFileJson.read<Dto.MemoryEntryDto list>
-                "Memory document"
-                CurrentSchemaVersion
-                (agentFile agentId)
-                []
+        let load scope : Dto.MemoryEntryDto list =
+            VersionedFileJson.read<Dto.MemoryEntryDto list> "Memory document" CurrentSchemaVersion (scopeFile scope) []
 
-        let save agentId entries =
-            VersionedFileJson.write CurrentSchemaVersion (agentFile agentId) entries
+        let save scope entries =
+            VersionedFileJson.write CurrentSchemaVersion (scopeFile scope) entries
 
         { SaveAsync =
-            fun (agentId: string) (entry: MemoryEntry) ->
+            fun scope (entry: MemoryEntry) ->
                 task {
                     lock sync (fun () ->
                         save
-                            agentId
+                            scope
                             (Dto.toMemoryDto entry
-                             :: (load agentId |> List.filter (fun e -> e.Key <> entry.Key))))
+                             :: (load scope |> List.filter (fun e -> e.Key <> entry.Key))))
                 }
           RecallAsync =
-            fun agentId query ->
+            fun scope query ->
                 task {
                     return
                         lock sync (fun () ->
-                            load agentId
+                            load scope
                             |> List.map Dto.ofMemoryDto
                             |> List.filter (fun e -> e.Key.Contains(query, StringComparison.OrdinalIgnoreCase)))
                 }
-          RecallAllAsync = fun agentId -> task { return lock sync (fun () -> load agentId |> List.map Dto.ofMemoryDto) }
+          RecallAllAsync = fun scope -> task { return lock sync (fun () -> load scope |> List.map Dto.ofMemoryDto) }
           ForgetAsync =
-            fun agentId key ->
-                task { lock sync (fun () -> save agentId (load agentId |> List.filter (fun e -> e.Key <> key))) }
+            fun scope key ->
+                task { lock sync (fun () -> save scope (load scope |> List.filter (fun e -> e.Key <> key))) }
           DeleteOwnerAsync =
             fun owner ->
-                MemoryOperations.protect owner (fun () ->
+                MemoryOperations.protect (fun () ->
                     task {
                         return
                             lock sync (fun () ->
                                 let entries = load owner
-                                let file = agentFile owner
+                                let file = scopeFile owner
 
                                 if File.Exists file then
                                     File.Delete file
@@ -268,7 +269,7 @@ module FileMemoryStore =
                     })
           DeleteExpiredAsync =
             fun owner before ->
-                MemoryOperations.protect owner (fun () ->
+                MemoryOperations.protect (fun () ->
                     task {
                         return
                             lock sync (fun () ->

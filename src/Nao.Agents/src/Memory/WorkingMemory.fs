@@ -6,7 +6,6 @@ open System.Threading.Tasks
 /// A scratchpad item in working memory with priority/attention weight
 type WorkingMemoryItem =
     {
-        ExecutionId: ExecutionId
         Key: string
         Content: string
         /// Priority/attention weight — higher means more relevant to current task
@@ -20,6 +19,20 @@ type WorkingMemoryItem =
         /// Whether this is pinned (immune to eviction)
         Pinned: bool
     }
+
+/// Authenticated ownership plus one host-issued execution identifier.
+type WorkingMemoryAddress =
+    private
+        { Authorization: AuthorizationScope
+          ExecutionId: ExecutionId }
+
+module WorkingMemoryAddress =
+    let create authorization executionId =
+        { Authorization = authorization
+          ExecutionId = executionId }
+
+    let authorization address = address.Authorization
+    let executionId address = address.ExecutionId
 
 /// Configuration for working memory
 type WorkingMemoryConfig =
@@ -42,15 +55,15 @@ type WorkingMemoryConfig =
 
 /// Functional task-scoped working-memory (scratchpad) operations.
 type WorkingMemory =
-    { SetAsync: WorkingMemoryItem -> Task<unit>
-      GetAsync: ExecutionId -> string -> Task<WorkingMemoryItem option>
-      GetAllAsync: ExecutionId -> Task<WorkingMemoryItem list>
-      GetActiveAsync: ExecutionId -> float -> Task<WorkingMemoryItem list>
-      FocusAsync: ExecutionId -> string -> float -> Task<unit>
-      DecayAsync: ExecutionId -> DateTimeOffset -> Task<int>
-      PinAsync: ExecutionId -> string -> Task<unit>
-      UnpinAsync: ExecutionId -> string -> DateTimeOffset -> Task<unit>
-      RemoveAsync: ExecutionId -> string -> Task<unit>
-      DeleteOwnerAsync: ExecutionId -> Task<Result<int, PlatformFailure>>
-      DeleteExpiredAsync: ExecutionId -> DateTimeOffset -> Task<Result<int, PlatformFailure>>
-      RenderContextAsync: ExecutionId -> int -> Task<string> }
+    { SetAsync: WorkingMemoryAddress -> WorkingMemoryItem -> Task<unit>
+      GetAsync: WorkingMemoryAddress -> string -> Task<WorkingMemoryItem option>
+      GetAllAsync: WorkingMemoryAddress -> Task<WorkingMemoryItem list>
+      GetActiveAsync: WorkingMemoryAddress -> float -> Task<WorkingMemoryItem list>
+      FocusAsync: WorkingMemoryAddress -> string -> float -> Task<unit>
+      DecayAsync: WorkingMemoryAddress -> DateTimeOffset -> Task<int>
+      PinAsync: WorkingMemoryAddress -> string -> Task<unit>
+      UnpinAsync: WorkingMemoryAddress -> string -> DateTimeOffset -> Task<unit>
+      RemoveAsync: WorkingMemoryAddress -> string -> Task<unit>
+      DeleteOwnerAsync: WorkingMemoryAddress -> Task<Result<int, PlatformFailure>>
+      DeleteExpiredAsync: WorkingMemoryAddress -> DateTimeOffset -> Task<Result<int, PlatformFailure>>
+      RenderContextAsync: WorkingMemoryAddress -> int -> Task<string> }

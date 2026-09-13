@@ -7,7 +7,14 @@ open Nao.Persistence
 [<TestClass>]
 type SemanticMemoryTests() =
 
-    let agentId = "semantic-agent"
+    let authorization session =
+        let principal =
+            SecurityPrincipal.create (TenantId.parse "tenant") (UserId.parse "user") []
+
+        AuthorizationScope.tryCreate principal None (WorkspaceId.parse "workspace") (Some(SessionId.parse session))
+        |> Option.get
+
+    let agentId = authorization "semantic-agent"
     let embeddingProvider = SimpleEmbeddingProvider.create ()
 
     [<TestMethod>]
@@ -64,8 +71,8 @@ type SemanticMemoryTests() =
     [<TestMethod>]
     member _.IsolatesBetweenAgents() =
         let memory = InMemorySemanticMemory.create embeddingProvider
-        let agent1 = "agent-1"
-        let agent2 = "agent-2"
+        let agent1 = authorization "agent-1"
+        let agent2 = authorization "agent-2"
 
         (memory.StoreAsync agent1 "secret" "agent 1 secret data").Result
         (memory.StoreAsync agent2 "secret" "agent 2 secret data").Result

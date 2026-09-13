@@ -269,6 +269,14 @@ module StandardWorkerHandlers =
         |> Ok
         |> Task.FromResult
 
+    let processPrincipalHash (request: WorkerExecutionRequest) =
+        sprintf "%A" request.Principal
+        |> Text.Encoding.UTF8.GetBytes
+        |> SHA256.HashData
+        |> Convert.ToHexString
+        |> Ok
+        |> Task.FromResult
+
     let processWorkingDirectory (_request: WorkerExecutionRequest) =
         Environment.CurrentDirectory |> Ok |> Task.FromResult
 
@@ -335,6 +343,7 @@ module StandardWorkerHandlers =
               ("process-environment", processEnvironment)
               ("process-filesystem-probe", processFileSystemProbe)
               ("process-identity", processIdentity)
+              ("process-principal-hash", processPrincipalHash)
               ("process-output", processOutput)
               ("process-read-file", processReadFile)
               ("process-secret-hash", processSecretHash)
