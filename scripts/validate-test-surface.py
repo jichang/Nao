@@ -12,6 +12,7 @@ TEST_CATEGORIES = {
     Path("tests/Nao.Agents.Tests/Nao.Agents.Tests.fsproj"): "unit",
     Path("tests/Nao.E2E.Tests/Nao.E2E.Tests.fsproj"): "end-to-end",
     Path("tests/Nao.Eval.Tests/Nao.Eval.Tests.fsproj"): "evaluation",
+    Path("tests/Nao.Identity.Oidc.Tests/Nao.Identity.Oidc.Tests.fsproj"): "integration",
     Path("tests/Nao.Persistence.Tests/Nao.Persistence.Tests.fsproj"): "integration",
     Path("tests/Nao.Protocols.Tests/Nao.Protocols.Tests.fsproj"): "unit",
     Path("tests/Nao.Providers.Tests/Nao.Providers.Tests.fsproj"): "integration",

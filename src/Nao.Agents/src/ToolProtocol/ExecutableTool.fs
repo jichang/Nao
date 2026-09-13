@@ -7,10 +7,7 @@ open System.Threading.Tasks
 [<RequireQualifiedAccess>]
 module PermissionDenied =
     let private kindAndResource access =
-        match access with
-        | ResourceAccess.Web(_, url) -> "web", url
-        | ResourceAccess.File(_, path) -> "file", path
-        | ResourceAccess.ToolCall name -> "tool", name
+        ResourceAccess.kind access, ResourceAccess.resource access
 
     let format access hint =
         let kind, resource = kindAndResource access

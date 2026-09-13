@@ -118,18 +118,18 @@ Worker protocol v1 carries impersonation, service, principal, and agent authorit
 
 ## GOV-01 — Permission enforcement
 
-- [ ] Define canonical resources and actions for files, web, tools, memory, knowledge, models, artifacts, and administration.
+- [x] Define canonical resources and actions for files, web, tools, memory, knowledge, models, artifacts, and administration.
 - [ ] Connect `PermissionGate` to a host-owned approval broker contract.
 - [ ] Implement approve-once, session, workspace, and durable grant scopes.
 - [ ] Implement expiry and revocation.
-- [ ] Make deny precedence and wildcard matching explicit and tested.
+- [x] Make deny precedence and wildcard matching explicit and tested.
 - [ ] Enforce permissions through local tools, MCP tools, delegated agents, and retrieval adapters.
 - [ ] Ensure prompts cannot grant permissions.
 - [ ] Record the exact policy and grant versions used for each decision.
 
 **Acceptance criteria**
 
-- [ ] Unmatched protected access fails closed.
+- [x] Unmatched protected access fails closed.
 - [ ] Approval timeout or unavailable broker results in denial.
 - [ ] Revoked grants cannot be reused from caches or persisted sessions.
 

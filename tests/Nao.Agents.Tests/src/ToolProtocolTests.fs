@@ -163,7 +163,7 @@ type ToolProtocolTests() =
     [<TestMethod>]
     member _.InvokeAsyncUsesProvidedPermissionContext() =
         let ran = ref false
-        let permission = ResourceAccess.File("write", "/tmp/protocol.txt")
+        let permission = ResourceAccess.file FileAction.Write "/tmp/protocol.txt"
 
         let permissionedTool =
             Tool.create

@@ -124,7 +124,7 @@ The supported solution uses these primary test categories:
 | Category | Projects | Purpose |
 |---|---|---|
 | Unit | `Nao.Agents.Tests`, `Nao.Protocols.Tests` | In-process contract and behavior checks |
-| Integration | `Nao.Persistence.Tests`, `Nao.Providers.Tests`, `Nao.Runtime.Orleans.Tests` | Deterministic adapter, storage, and runtime checks |
+| Integration | `Nao.Identity.Oidc.Tests`, `Nao.Persistence.Tests`, `Nao.Providers.Tests`, `Nao.Runtime.Orleans.Tests` | Deterministic identity-adapter, storage, provider-adapter, and runtime checks |
 | End-to-end | `Nao.E2E.Tests` | Full harness and orchestration flows using local fakes |
 | Evaluation | `Nao.Eval.Tests` | Evaluation runner, metric, and report behavior |
 | Security | MSTest `Security` category within an owning project | Permission, policy, isolation, and tenant-boundary checks |

@@ -2,132 +2,294 @@ namespace Nao.Agents
 
 open System
 
-/// Pure evaluation of resource-access requests against a set of granted rules. No IO — the
-/// persistence and enforcement layers live in the server; this module is the testable core.
+/// Pure evaluation of canonical resource-access requests against permission rules.
 [<RequireQualifiedAccess>]
 module ResourcePermission =
-
-    /// Match a glob pattern ('*' = any run of chars, '?' = exactly one) against text,
-    /// case-insensitively. Used for both path and host patterns.
+    /// Match an explicit glob pattern ('*' = any run of chars, '?' = exactly one).
+    /// Resource identifiers remain case-sensitive; web hosts are normalized before matching.
     let glob (pattern: string) (text: string) : bool =
-        let p = pattern
-        let t = text
-        let pl = p.Length
-        let tl = t.Length
-        // Classic two-row dynamic-programming wildcard match.
+        let pl = pattern.Length
+        let tl = text.Length
         let dp = Array2D.create (pl + 1) (tl + 1) false
         dp.[0, 0] <- true
 
         for i in 1..pl do
-            if p.[i - 1] = '*' then
+            if pattern.[i - 1] = '*' then
                 dp.[i, 0] <- dp.[i - 1, 0]
 
         for i in 1..pl do
             for j in 1..tl do
-                match p.[i - 1] with
+                match pattern.[i - 1] with
                 | '*' -> dp.[i, j] <- dp.[i - 1, j] || dp.[i, j - 1]
                 | '?' -> dp.[i, j] <- dp.[i - 1, j - 1]
-                | c -> dp.[i, j] <- dp.[i - 1, j - 1] && (Char.ToLowerInvariant c = Char.ToLowerInvariant t.[j - 1])
+                | character -> dp.[i, j] <- dp.[i - 1, j - 1] && character = text.[j - 1]
 
         dp.[pl, tl]
 
-    let private normHost (h: string) =
-        h.Trim().TrimEnd('.').ToLowerInvariant()
+    let originOf (url: string) : string option =
+        match Uri.TryCreate(url, UriKind.Absolute) with
+        | true, uri when
+            (uri.Scheme = Uri.UriSchemeHttp || uri.Scheme = Uri.UriSchemeHttps)
+            && not (String.IsNullOrEmpty uri.Host)
+            ->
+            let port = if uri.IsDefaultPort then "" else ":" + string uri.Port
 
-    /// Best-effort extraction of the host from a URL string. Accepts both fully-qualified
-    /// URLs ("https://a.example.com/x") and bare host forms ("a.example.com/x").
-    let hostOf (url: string) : string option =
-        let raw = url.Trim()
+            Some(sprintf "%s://%s%s" (uri.Scheme.ToLowerInvariant()) (uri.IdnHost.ToLowerInvariant()) port)
+        | _ -> None
 
-        let tryParse (s: string) =
-            match Uri.TryCreate(s, UriKind.Absolute) with
-            | true, u when not (String.IsNullOrEmpty u.Host) -> Some(normHost u.Host)
+    let private wildcardOrigin (pattern: string) =
+        let separator = "://*."
+        let index = pattern.IndexOf(separator, StringComparison.Ordinal)
+
+        if index <= 0 then
+            None
+        else
+            let scheme = pattern.Substring(0, index).ToLowerInvariant()
+            let hostSuffix = pattern.Substring(index + separator.Length).ToLowerInvariant()
+
+            if
+                (scheme = Uri.UriSchemeHttp || scheme = Uri.UriSchemeHttps)
+                && not (String.IsNullOrWhiteSpace hostSuffix)
+                && not (hostSuffix.Contains('/'))
+                && not (hostSuffix.Contains(':'))
+                && not (hostSuffix.Contains('*'))
+                && not (hostSuffix.Contains('?'))
+                && hostSuffix = hostSuffix.Trim().TrimEnd('.')
+            then
+                Some(scheme, hostSuffix)
+            else
+                None
+
+    let private canonicalOriginPattern pattern =
+        if pattern = "*" then
+            Some pattern
+        else
+            match wildcardOrigin pattern with
+            | Some _ -> Some pattern
+            | None ->
+                match Uri.TryCreate(pattern, UriKind.Absolute) with
+                | true, uri when
+                    (uri.Scheme = Uri.UriSchemeHttp || uri.Scheme = Uri.UriSchemeHttps)
+                    && uri.AbsolutePath = "/"
+                    && String.IsNullOrEmpty uri.Query
+                    && String.IsNullOrEmpty uri.Fragment
+                    && String.IsNullOrEmpty uri.UserInfo
+                    ->
+                    originOf pattern
+                | _ -> None
+
+    /// Web rules match an exact scheme/host/port origin, `*`, or `scheme://*.domain`.
+    let originMatches (pattern: string) (url: string) : bool =
+        if String.IsNullOrWhiteSpace pattern || String.IsNullOrWhiteSpace url then
+            false
+        elif pattern = "*" then
+            true
+        else
+            match wildcardOrigin pattern, originOf url with
+            | Some(scheme, hostSuffix), Some requestedOrigin ->
+                let requested = Uri requestedOrigin
+
+                requested.Scheme.Equals(scheme, StringComparison.OrdinalIgnoreCase)
+                && requested.IsDefaultPort
+                && requested.IdnHost.EndsWith("." + hostSuffix, StringComparison.OrdinalIgnoreCase)
+            | None, Some requestedOrigin ->
+                canonicalOriginPattern pattern
+                |> Option.exists (fun configured ->
+                    configured.Equals(requestedOrigin, StringComparison.OrdinalIgnoreCase))
+            | _ -> false
+
+    /// "*" matches every path. A plain path matches itself and descendants;
+    /// wildcard syntax is matched against slash-normalized paths.
+    let pathMatches (pattern: string) (path: string) : bool =
+        if String.IsNullOrWhiteSpace pattern || String.IsNullOrWhiteSpace path then
+            false
+        elif pattern = "*" then
+            true
+        else
+            let normalize (value: string) = value.Replace('\\', '/').TrimEnd('/')
+            let pattern = normalize pattern
+            let path = normalize path
+
+            if pattern.Contains('*') || pattern.Contains('?') then
+                glob pattern path
+            else
+                path = pattern || path.StartsWith(pattern + "/", StringComparison.Ordinal)
+
+    let private nameMatches pattern name =
+        not (String.IsNullOrWhiteSpace pattern)
+        && not (String.IsNullOrWhiteSpace name)
+        && (pattern = "*" || glob pattern name)
+
+    let private actionsCover broader narrower =
+        PermissionActions.covers broader narrower
+
+    let tryTarget kind action pattern =
+        if String.IsNullOrWhiteSpace pattern || pattern <> pattern.Trim() then
+            None
+        else
+            match kind, action with
+            | "file", "read" -> Some(PermissionTarget.File(pattern, PermissionActions.only [ FileAction.Read ]))
+            | "file", "write" -> Some(PermissionTarget.File(pattern, PermissionActions.only [ FileAction.Write ]))
+            | "file", "delete" -> Some(PermissionTarget.File(pattern, PermissionActions.only [ FileAction.Delete ]))
+            | "file", "list" -> Some(PermissionTarget.File(pattern, PermissionActions.only [ FileAction.List ]))
+            | "web", "get" when canonicalOriginPattern pattern |> Option.isSome ->
+                Some(PermissionTarget.Web(pattern, PermissionActions.only [ WebAction.Get ]))
+            | "web", "head" when canonicalOriginPattern pattern |> Option.isSome ->
+                Some(PermissionTarget.Web(pattern, PermissionActions.only [ WebAction.Head ]))
+            | "web", "post" when canonicalOriginPattern pattern |> Option.isSome ->
+                Some(PermissionTarget.Web(pattern, PermissionActions.only [ WebAction.Post ]))
+            | "web", "put" when canonicalOriginPattern pattern |> Option.isSome ->
+                Some(PermissionTarget.Web(pattern, PermissionActions.only [ WebAction.Put ]))
+            | "web", "patch" when canonicalOriginPattern pattern |> Option.isSome ->
+                Some(PermissionTarget.Web(pattern, PermissionActions.only [ WebAction.Patch ]))
+            | "web", "delete" when canonicalOriginPattern pattern |> Option.isSome ->
+                Some(PermissionTarget.Web(pattern, PermissionActions.only [ WebAction.Delete ]))
+            | "web", "options" when canonicalOriginPattern pattern |> Option.isSome ->
+                Some(PermissionTarget.Web(pattern, PermissionActions.only [ WebAction.Options ]))
+            | "web", "connect" when canonicalOriginPattern pattern |> Option.isSome ->
+                Some(PermissionTarget.Web(pattern, PermissionActions.only [ WebAction.Connect ]))
+            | "tool", "invoke" -> Some(PermissionTarget.Tool pattern)
+            | "memory", "read" -> Some(PermissionTarget.Memory(pattern, PermissionActions.only [ MemoryAction.Read ]))
+            | "memory", "write" -> Some(PermissionTarget.Memory(pattern, PermissionActions.only [ MemoryAction.Write ]))
+            | "memory", "delete" ->
+                Some(PermissionTarget.Memory(pattern, PermissionActions.only [ MemoryAction.Delete ]))
+            | "knowledge", "retrieve" ->
+                Some(PermissionTarget.Knowledge(pattern, PermissionActions.only [ KnowledgeAction.Retrieve ]))
+            | "knowledge", "index" ->
+                Some(PermissionTarget.Knowledge(pattern, PermissionActions.only [ KnowledgeAction.Index ]))
+            | "knowledge", "delete" ->
+                Some(PermissionTarget.Knowledge(pattern, PermissionActions.only [ KnowledgeAction.Delete ]))
+            | "model", "invoke" -> Some(PermissionTarget.Model pattern)
+            | "artifact", "read" ->
+                Some(PermissionTarget.Artifact(pattern, PermissionActions.only [ ArtifactAction.Read ]))
+            | "artifact", "publish" ->
+                Some(PermissionTarget.Artifact(pattern, PermissionActions.only [ ArtifactAction.Publish ]))
+            | "artifact", "delete" ->
+                Some(PermissionTarget.Artifact(pattern, PermissionActions.only [ ArtifactAction.Delete ]))
+            | "administration", "read" ->
+                Some(PermissionTarget.Administration(pattern, PermissionActions.only [ AdministrationAction.Read ]))
+            | "administration", "manage" ->
+                Some(PermissionTarget.Administration(pattern, PermissionActions.only [ AdministrationAction.Manage ]))
             | _ -> None
 
-        match tryParse raw with
-        | Some h -> Some h
-        | None -> tryParse ("http://" + raw)
+    let targetKind =
+        function
+        | PermissionTarget.File _ -> "file"
+        | PermissionTarget.Web _ -> "web"
+        | PermissionTarget.Tool _ -> "tool"
+        | PermissionTarget.Memory _ -> "memory"
+        | PermissionTarget.Knowledge _ -> "knowledge"
+        | PermissionTarget.Model _ -> "model"
+        | PermissionTarget.Artifact _ -> "artifact"
+        | PermissionTarget.Administration _ -> "administration"
 
-    /// Does a host match a web pattern? "*" = any; "example.com" matches that host and any
-    /// subdomain; otherwise a glob over the host.
-    let hostMatches (pattern: string) (host: string) : bool =
-        let p = normHost pattern
-        let h = normHost host
-
-        if p = "*" || p = "" then
-            true
-        else
-            h = p || h.EndsWith("." + p, StringComparison.Ordinal) || glob p h
-
-    /// Does a path match a file pattern? "*" = any; otherwise the pattern matches the path
-    /// itself, anything beneath it (prefix), or a glob.
-    let pathMatches (pattern: string) (path: string) : bool =
-        if pattern = "*" then
-            true
-        else
-            let norm (s: string) = s.Replace('\\', '/').TrimEnd('/')
-            let p = norm pattern
-            let x = norm path
-            x = p || x.StartsWith(p + "/", StringComparison.Ordinal) || glob pattern path
-
-    let private opMatches operations (op: string) =
-        match operations with
-        | [] -> true
-        | ops -> ops |> List.contains (op.Trim().ToLowerInvariant())
+    let targetResource =
+        function
+        | PermissionTarget.File(pattern, _)
+        | PermissionTarget.Web(pattern, _)
+        | PermissionTarget.Memory(pattern, _)
+        | PermissionTarget.Knowledge(pattern, _)
+        | PermissionTarget.Artifact(pattern, _)
+        | PermissionTarget.Administration(pattern, _)
+        | PermissionTarget.Tool pattern
+        | PermissionTarget.Model pattern -> pattern
 
     /// Returns whether one rule target covers another target of the same resource class.
     let targetCovers broader narrower =
         match broader, narrower with
-        | PermissionTarget.File(broaderPath, _), PermissionTarget.File(narrowerPath, _) ->
-            pathMatches broaderPath narrowerPath
-        | PermissionTarget.Web(broaderHost, _), PermissionTarget.Web(narrowerHost, _) ->
-            hostMatches broaderHost narrowerHost
-        | PermissionTarget.Tool broaderName, PermissionTarget.Tool narrowerName ->
-            broaderName = "*" || glob broaderName narrowerName
+        | PermissionTarget.File(broaderPath, broaderActions), PermissionTarget.File(narrowerPath, narrowerActions) ->
+            actionsCover broaderActions narrowerActions
+            && pathMatches broaderPath narrowerPath
+        | PermissionTarget.Web(broaderHost, broaderActions), PermissionTarget.Web(narrowerHost, narrowerActions) ->
+            actionsCover broaderActions narrowerActions
+            && if narrowerHost.Contains('*') then
+                   broaderHost = "*" || broaderHost = narrowerHost
+               else
+                   originMatches broaderHost narrowerHost
+        | PermissionTarget.Tool broaderName, PermissionTarget.Tool narrowerName -> nameMatches broaderName narrowerName
+        | PermissionTarget.Memory(broaderName, broaderActions), PermissionTarget.Memory(narrowerName, narrowerActions) ->
+            actionsCover broaderActions narrowerActions
+            && nameMatches broaderName narrowerName
+        | PermissionTarget.Knowledge(broaderName, broaderActions),
+          PermissionTarget.Knowledge(narrowerName, narrowerActions) ->
+            actionsCover broaderActions narrowerActions
+            && nameMatches broaderName narrowerName
+        | PermissionTarget.Model broaderName, PermissionTarget.Model narrowerName ->
+            nameMatches broaderName narrowerName
+        | PermissionTarget.Artifact(broaderName, broaderActions),
+          PermissionTarget.Artifact(narrowerName, narrowerActions) ->
+            actionsCover broaderActions narrowerActions
+            && nameMatches broaderName narrowerName
+        | PermissionTarget.Administration(broaderName, broaderActions),
+          PermissionTarget.Administration(narrowerName, narrowerActions) ->
+            actionsCover broaderActions narrowerActions
+            && nameMatches broaderName narrowerName
         | _ -> false
 
-    /// Does a rule match an access request? (Scope is filtered by the caller via `applicable`.)
+    let targetForAccess =
+        function
+        | ResourceAccess.File(action, path) -> PermissionTarget.File(path, PermissionActions.only [ action ])
+        | ResourceAccess.Web(action, url) ->
+            let origin =
+                originOf url
+                |> Option.defaultWith (fun () -> invalidArg (nameof url) "Web access must contain a valid origin.")
+
+            PermissionTarget.Web(origin, PermissionActions.only [ action ])
+        | ResourceAccess.Tool name -> PermissionTarget.Tool name
+        | ResourceAccess.Memory(action, name) -> PermissionTarget.Memory(name, PermissionActions.only [ action ])
+        | ResourceAccess.Knowledge(action, name) -> PermissionTarget.Knowledge(name, PermissionActions.only [ action ])
+        | ResourceAccess.Model name -> PermissionTarget.Model name
+        | ResourceAccess.Artifact(action, name) -> PermissionTarget.Artifact(name, PermissionActions.only [ action ])
+        | ResourceAccess.Administration(action, name) ->
+            PermissionTarget.Administration(name, PermissionActions.only [ action ])
+
     let ruleMatches (access: ResourceAccess) (rule: PermissionRule) : bool =
-        match rule.AppliesTo, access with
-        | PermissionTarget.File(pattern, operations), ResourceAccess.File(op, path) ->
-            opMatches operations op && pathMatches pattern path
-        | PermissionTarget.Web(pattern, operations), ResourceAccess.Web(op, url) ->
-            opMatches operations op
-            && (match hostOf url with
-                | Some h -> hostMatches pattern h
-                | None -> pattern = "*")
-        | PermissionTarget.Tool pattern, ResourceAccess.ToolCall name -> pattern = "*" || glob pattern name
-        | _ -> false
+        ResourceAccess.isCanonical access
+        && match rule.AppliesTo, access with
+           | PermissionTarget.File(pattern, actions), ResourceAccess.File(action, path) ->
+               PermissionActions.contains action actions && pathMatches pattern path
+           | PermissionTarget.Web(pattern, actions), ResourceAccess.Web(action, url) ->
+               PermissionActions.contains action actions && originMatches pattern url
+           | PermissionTarget.Tool pattern, ResourceAccess.Tool name -> nameMatches pattern name
+           | PermissionTarget.Memory(pattern, actions), ResourceAccess.Memory(action, name) ->
+               PermissionActions.contains action actions && nameMatches pattern name
+           | PermissionTarget.Knowledge(pattern, actions), ResourceAccess.Knowledge(action, name) ->
+               PermissionActions.contains action actions && nameMatches pattern name
+           | PermissionTarget.Model pattern, ResourceAccess.Model name -> nameMatches pattern name
+           | PermissionTarget.Artifact(pattern, actions), ResourceAccess.Artifact(action, name) ->
+               PermissionActions.contains action actions && nameMatches pattern name
+           | PermissionTarget.Administration(pattern, actions), ResourceAccess.Administration(action, name) ->
+               PermissionActions.contains action actions && nameMatches pattern name
+           | _ -> false
 
-    /// Keep only the rules that apply to the given session — every Global rule, plus the
-    /// Session rules whose key matches.
     let applicable (sessionKey: string) (rules: PermissionRule list) : PermissionRule list =
         rules
-        |> List.filter (fun r ->
-            match r.Scope with
+        |> List.filter (fun rule ->
+            match rule.Scope with
             | RuleScope.Global -> true
-            | RuleScope.Session k -> k = sessionKey)
+            | RuleScope.Session key -> key = sessionKey)
 
-    /// Evaluate an access request against rules, using `defaultDecision` when nothing
-    /// matches. Precedence among matching rules: an explicit Deny always wins, then Allow,
-    /// then Ask. The caller chooses the default per resource class (e.g. Deny for web,
-    /// Allow for unknown tool calls).
-    let evaluateWith
-        (defaultDecision: PermissionDecision)
-        (rules: PermissionRule list)
-        (access: ResourceAccess)
-        : PermissionDecision =
-        let matching = rules |> List.filter (ruleMatches access)
+    /// Explicit deny wins over allow, which wins over ask. No matching rule uses the caller's
+    /// declared default; protected callers should use `evaluate`, whose default is deny.
+    let evaluateWith defaultDecision rules access =
+        let canonical = ResourceAccess.isCanonical access
 
-        if matching |> List.exists (fun r -> r.Decision = PermissionDecision.Deny) then
+        let matching =
+            if canonical then
+                rules |> List.filter (ruleMatches access)
+            else
+                []
+
+        if not canonical then
             PermissionDecision.Deny
-        elif matching |> List.exists (fun r -> r.Decision = PermissionDecision.Allow) then
+        elif matching |> List.exists (fun rule -> rule.Decision = PermissionDecision.Deny) then
+            PermissionDecision.Deny
+        elif matching |> List.exists (fun rule -> rule.Decision = PermissionDecision.Allow) then
             PermissionDecision.Allow
-        elif matching |> List.exists (fun r -> r.Decision = PermissionDecision.Ask) then
+        elif matching |> List.exists (fun rule -> rule.Decision = PermissionDecision.Ask) then
             PermissionDecision.Ask
         else
             defaultDecision
 
-    /// Evaluate with a strict allowlist default (Deny when nothing matches).
-    let evaluate (rules: PermissionRule list) (access: ResourceAccess) : PermissionDecision =
+    let evaluate rules access =
         evaluateWith PermissionDecision.Deny rules access

@@ -54,7 +54,7 @@ type ToolPermissionTests() =
         let ran = ref false
 
         let tool =
-            createTool "writer" "writes" [ ResourceAccess.File("write", "/tmp/a.txt") ] (fun _ctx input ->
+            createTool "writer" "writes" [ ResourceAccess.file FileAction.Write "/tmp/a.txt" ] (fun _ctx input ->
                 task {
                     ran.Value <- true
                     return "ok:" + input
@@ -71,7 +71,7 @@ type ToolPermissionTests() =
         let ran = ref false
 
         let tool =
-            createTool "fetcher" "fetches" [ ResourceAccess.Web("GET", "https://example.com") ] (fun _ctx _ ->
+            createTool "fetcher" "fetches" [ ResourceAccess.web WebAction.Get "https://example.com" ] (fun _ctx _ ->
                 task {
                     ran.Value <- true
                     return "ran"
@@ -90,7 +90,7 @@ type ToolPermissionTests() =
         use doc = JsonDocument.Parse result
         Assert.AreEqual("permission_denied", doc.RootElement.GetProperty("error").GetString())
         Assert.AreEqual("web", doc.RootElement.GetProperty("kind").GetString())
-        Assert.AreEqual("https://example.com", doc.RootElement.GetProperty("resource").GetString())
+        Assert.AreEqual("https://example.com/", doc.RootElement.GetProperty("resource").GetString())
 
     [<TestMethod>]
     member _.InvokeAsyncStopsAtFirstDeniedPermission() =
@@ -109,7 +109,8 @@ type ToolPermissionTests() =
             createTool
                 "multi"
                 "multi"
-                [ ResourceAccess.File("read", "/a"); ResourceAccess.File("write", "/b") ]
+                [ ResourceAccess.file FileAction.Read "/a"
+                  ResourceAccess.file FileAction.Write "/b" ]
                 (fun _ _ -> task { return "ran" })
 
         run tool ctx "x" |> ignore
@@ -136,7 +137,7 @@ type ToolPermissionTests() =
         let tool =
             createTool "dyn" "dynamic" [] (fun ctx input ->
                 task {
-                    let! ok = ctx.RequestPermission (ResourceAccess.File("write", input)) "save" false
+                    let! ok = ctx.RequestPermission (ResourceAccess.file FileAction.Write input) "save" false
                     return (if ok then "wrote" else "blocked")
                 })
 
@@ -148,7 +149,7 @@ type ToolPermissionTests() =
     [<TestMethod>]
     member _.AllowAllContextPermitsEverything() =
         let tool =
-            createTool "w" "w" [ ResourceAccess.Web("GET", "https://x.com") ] (fun _ _ -> task { return "done" })
+            createTool "w" "w" [ ResourceAccess.web WebAction.Get "https://x.com" ] (fun _ _ -> task { return "done" })
 
         Assert.AreEqual("done", run tool (AgentContext.unrestrictedForTests ()) "x" |> outputOf)
 
@@ -161,7 +162,7 @@ type ToolPermissionTests() =
     [<TestMethod>]
     member _.PermissionDeniedFormatIncludesHintWhenProvided() =
         let payload =
-            PermissionDenied.format (ResourceAccess.File("write", "/etc/x")) (Some "do this")
+            PermissionDenied.format (ResourceAccess.file FileAction.Write "/etc/x") (Some "do this")
 
         use doc = JsonDocument.Parse payload
         Assert.AreEqual("permission_denied", doc.RootElement.GetProperty("error").GetString())
@@ -170,7 +171,7 @@ type ToolPermissionTests() =
 
     [<TestMethod>]
     member _.PermissionDeniedFormatOmitsHintWhenNone() =
-        let payload = PermissionDenied.format (ResourceAccess.ToolCall "danger") None
+        let payload = PermissionDenied.format (ResourceAccess.tool "danger") None
         use doc = JsonDocument.Parse payload
         let mutable hint = Unchecked.defaultof<JsonElement>
         Assert.IsFalse(doc.RootElement.TryGetProperty("hint", &hint))

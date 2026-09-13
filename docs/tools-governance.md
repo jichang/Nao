@@ -68,7 +68,7 @@ let saveTool =
         SaveContract.input
         SaveContract.output
         (ToolOperation.create (fun context input -> task {
-            let access = ResourceAccess.File("write", input.Path)
+            let access = ResourceAccess.file FileAction.Write input.Path
             let! allowed =
                 context.RequestPermission access "Save the report." false
 
@@ -89,9 +89,25 @@ Prompts cannot grant permissions. The host constructs `AgentContext` and owns th
 - `Deny`
 - `Ask`
 
+Resources and actions are closed, typed sets rather than free-form strings. Current resource
+classes are file, web, tool, memory, knowledge, model, artifact, and administration. Each class
+has only its applicable actions; for example, file access uses `Read`, `Write`, `Delete`, or
+`List`, while model and tool access are invocation-only. File requests canonicalize absolute
+paths, web requests require absolute HTTP(S) URLs, and named resources reject blank or
+whitespace-padded identifiers.
+
+Rule actions use `PermissionActions.All` or a non-empty `PermissionActions.Only` set. An empty
+list never means wildcard access. Matching is case-sensitive for paths and named resources.
+Web rules use exact scheme/host/port origins; subdomains require an explicit
+`https://*.example.com` pattern, and `*` is the only all-origin wildcard. Deny always wins over
+allow and ask. Malformed requests fail closed even if a caller supplies an allow default.
+
 `PermissionGate` is the host integration point for interactive decisions. A production host should fail closed when no client, broker, or timely answer is available.
 
-Grant scopes may include one operation, one session, workspace, or durable policy. Durable grants require expiry, revocation, tenant ownership, and audit semantics; these are tracked in the [governance roadmap](roadmap/01-harness-security-governance.md).
+Remembered session grants persist the canonical resource kind, action, and pattern. Approving a
+read therefore cannot authorize a later write to the same resource. Workspace and durable grant
+scopes, expiry, revocation, tenant ownership, and audit semantics remain tracked in the
+[governance roadmap](roadmap/01-harness-security-governance.md).
 
 ## Policy engine
 

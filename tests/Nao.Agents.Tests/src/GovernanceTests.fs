@@ -12,7 +12,7 @@ type PermissionGateTests() =
     [<TestMethod>]
     member _.MissingPromptDeniesAccess() =
         let outcome =
-            PermissionGate.resolveWith None "session" (ResourceAccess.ToolCall "dangerous") "required" false
+            PermissionGate.resolveWith None "session" (ResourceAccess.tool "dangerous") "required" false
             |> _.Result
 
         Assert.AreEqual(PermissionDecision.Deny, outcome.Decision)
@@ -26,7 +26,7 @@ type PermissionGateTests() =
                   RememberForSession = true }
 
         let outcome =
-            PermissionGate.resolveWith (Some prompt) "session" (ResourceAccess.ToolCall "approved") "required" true
+            PermissionGate.resolveWith (Some prompt) "session" (ResourceAccess.tool "approved") "required" true
             |> _.Result
 
         Assert.AreEqual(PermissionDecision.Allow, outcome.Decision)

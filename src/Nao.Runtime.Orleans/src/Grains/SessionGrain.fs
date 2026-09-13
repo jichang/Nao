@@ -82,12 +82,16 @@ type ConversationContext() =
 /// and never re-prompts for something it already approved.
 [<GenerateSerializer>]
 type PermissionGrantRecord() =
-    /// Resource class: "file", "web", or "tool".
+    /// Canonical resource kind.
     [<Id(0u)>]
     member val Kind: string = "" with get, set
 
-    /// Match pattern: a file path, a web host, or a tool name.
+    /// Canonical action for the resource kind.
     [<Id(1u)>]
+    member val Action: string = "" with get, set
+
+    /// Match pattern: a path, host, or named resource.
+    [<Id(2u)>]
     member val Pattern: string = "" with get, set
 
 /// Persistent state for a session grain
@@ -592,17 +596,16 @@ type SessionGrain
                     // state so the session never re-prompts for it.
                     let grants = persistentState.State.GrantedPermissions
 
-                    let targetOf kind pattern =
-                        match kind with
-                        | "file" -> PermissionTarget.File(pattern, [])
-                        | "web" -> PermissionTarget.Web(pattern, [])
-                        | _ -> PermissionTarget.Tool pattern
+                    let targetOf kind action pattern =
+                        ResourcePermission.tryTarget kind action pattern
+                        |> Option.defaultWith (fun () ->
+                            invalidOp "Persisted permission grant has an invalid canonical resource or action.")
 
                     let grantRules () : PermissionRule list =
                         grants
                         |> Seq.map (fun g ->
                             { Id = ""
-                              AppliesTo = targetOf g.Kind g.Pattern
+                              AppliesTo = targetOf g.Kind g.Action g.Pattern
                               Decision = PermissionDecision.Allow
                               Scope = RuleScope.Session sessionKey
                               CreatedAt = DateTimeOffset.UtcNow })
@@ -610,28 +613,38 @@ type SessionGrain
                     // Does a stored grant pattern of this kind cover a resource pattern? Uses the
                     // same matching the evaluator does, so redundant or overlapping grants (e.g.
                     // granting "/a" then "/a/b") collapse instead of letting the list grow unbounded.
-                    let covers kind broader narrower =
-                        ResourcePermission.targetCovers (targetOf kind broader) (targetOf kind narrower)
+                    let covers kind action broader narrower =
+                        ResourcePermission.targetCovers (targetOf kind action broader) (targetOf kind action narrower)
 
                     let recordGrant (access: ResourceAccess) =
-                        let kind, pattern =
-                            match access with
-                            | ResourceAccess.File(_, path) -> "file", path
-                            | ResourceAccess.Web(_, url) ->
-                                "web", (ResourcePermission.hostOf url |> Option.defaultValue url)
-                            | ResourceAccess.ToolCall name -> "tool", name
+                        let target = ResourcePermission.targetForAccess access
+                        let kind = ResourceAccess.kind access
+                        let action = ResourceAccess.action access
+                        let pattern = ResourcePermission.targetResource target
+
                         // Skip when a broader (or equal) existing grant already covers this resource.
-                        if not (grants |> Seq.exists (fun g -> g.Kind = kind && covers kind g.Pattern pattern)) then
+                        if
+                            not (
+                                grants
+                                |> Seq.exists (fun grant ->
+                                    grant.Kind = kind
+                                    && grant.Action = action
+                                    && covers kind action grant.Pattern pattern)
+                            )
+                        then
                             // Drop any narrower existing grants this broader one subsumes, then add it.
                             let subsumed =
                                 grants
-                                |> Seq.filter (fun g -> g.Kind = kind && covers kind pattern g.Pattern)
+                                |> Seq.filter (fun grant ->
+                                    grant.Kind = kind
+                                    && grant.Action = action
+                                    && covers kind action pattern grant.Pattern)
                                 |> Seq.toList
 
-                            for g in subsumed do
-                                grants.Remove g |> ignore
+                            for grant in subsumed do
+                                grants.Remove grant |> ignore
 
-                            grants.Add(PermissionGrantRecord(Kind = kind, Pattern = pattern))
+                            grants.Add(PermissionGrantRecord(Kind = kind, Action = action, Pattern = pattern))
 
                     let resolvePermission (access: ResourceAccess) (reason: string) (forceConfirm: bool) : Task<bool> =
                         task {

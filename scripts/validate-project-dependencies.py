@@ -20,6 +20,9 @@ ALLOWED_PROJECT_REFERENCES = {
     Path("src/Nao.Eval/Nao.Eval.fsproj"): {
         Path("src/Nao.Agents/Nao.Agents.fsproj"),
     },
+    Path("src/Nao.Identity.Oidc/Nao.Identity.Oidc.fsproj"): {
+        Path("src/Nao.Agents/Nao.Agents.fsproj"),
+    },
     Path("src/Nao.Persistence/Nao.Persistence.fsproj"): {
         Path("src/Nao.Agents/Nao.Agents.fsproj"),
         Path("src/Nao.Persistence.Feedback/Nao.Persistence.Feedback.fsproj"),
