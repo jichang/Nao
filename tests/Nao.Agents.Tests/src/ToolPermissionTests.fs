@@ -8,7 +8,7 @@ open Nao.Agents
 /// Tests for the permission-aware Tool surface: the static `Permissions` a tool declares are
 /// auto-requested through the `AgentContext` before `Execute` runs, a denied one short-circuits
 /// with the canonical structured refusal, and tools can request access dynamically mid-run.
-[<TestClass>]
+[<TestClass; TestCategory("Security"); TestCategory("FailClosed")>]
 type ToolPermissionTests() =
 
     let createTool name description permissions execute =

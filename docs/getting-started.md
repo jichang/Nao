@@ -58,7 +58,9 @@ Applications own encoding and decoding, allowing JSON, protocol-specific formats
 let! result = Agent.runAsync agentContext encodedInput eligibilityAgent
 ```
 
-The result is `Result<string, PlatformFailure>`. `AgentContext.unrestrictedForTests ()` creates a fresh correlated context for isolated tests. Production hosts must execute through the harness, which installs the governed runtime dispatcher.
+The result is `Result<string, PlatformFailure>`. Nao's test projects compile a shared
+unrestricted context fixture for isolated tests. The production package contains no such
+fixture; hosts must execute through the harness, which installs the governed runtime dispatcher.
 
 ## Map an authenticated OIDC principal
 
@@ -104,16 +106,27 @@ let readinessCheck =
         Task.FromResult ReadinessResult.Ready)
 
 let config =
-    { EtclovgConfig.Default with
-        Tracer = Some(Tracer.inMemory ())
-        Metrics = Some(InMemory.metrics ())
-        Constitution =
-            Some(
-                Constitution.create "safety" "1"
-                |> Constitution.addRule Constitution.noPrivateDataRule)
-        ReadinessChecks = [ readinessCheck ]
-        TraceStore = Some traceStore
-        AuditLog = Some(AuditLog.inMemory ()) }
+    { ToolProtocol = None
+      ProcessEnvironment = None
+      ContainerEnvironment = None
+      ExecutionJournal = Some executionJournal
+      ReplayFixtures = None
+      Lifecycle = []
+      Tracer = Some(Tracer.inMemory ())
+      Metrics = Some(InMemory.metrics ())
+      Resilience = ResilienceConfig.NoResilience
+      ReadinessChecks = [ readinessCheck ]
+      TraceStore = Some traceStore
+      Judge = None
+      Constitution =
+        Some(
+            Constitution.create "safety" "1"
+            |> Constitution.addRule Constitution.noPrivateDataRule)
+      ConstitutionRemediationBroker = ConstitutionRemediationBroker.unavailable
+      AuditLog = Some auditLog
+      PolicyEngine = Some policyEngine
+      PolicyConfirmationBroker = policyConfirmationBroker
+      Bus = eventBus }
 
 let request =
     ExecutionRequest.create

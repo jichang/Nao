@@ -7,7 +7,7 @@ open Microsoft.VisualStudio.TestTools.UnitTesting
 open Nao.Agents
 open Nao.Persistence
 
-[<TestClass>]
+[<TestClass; TestCategory("Security"); TestCategory("FailClosed")>]
 type PermissionGateTests() =
     let authorization =
         SecurityPrincipal.create (TenantId.parse "tenant") (UserId.parse "user") []
@@ -101,7 +101,7 @@ type PermissionGateTests() =
             |> ignore)
         |> ignore
 
-[<TestClass>]
+[<TestClass; TestCategory("Security"); TestCategory("FailClosed")>]
 type PermissionGrantStoreTests() =
     let principal =
         SecurityPrincipal.create (TenantId.parse "tenant") (UserId.parse "user") []
@@ -166,7 +166,7 @@ type PermissionGrantStoreTests() =
             |> _.GetAwaiter().GetResult())
         |> ignore
 
-[<TestClass>]
+[<TestClass; TestCategory("Security"); TestCategory("FailClosed")>]
 type ConstitutionTests() =
     let authorization =
         SecurityPrincipal.create (TenantId.parse "tenant") (UserId.parse "constitution-user") []
@@ -654,7 +654,7 @@ type ConstitutionTests() =
             |> ignore)
         |> ignore
 
-[<TestClass>]
+[<TestClass; TestCategory("Security"); TestCategory("FailClosed")>]
 type AuditLogTests() =
 
     let agentId = "test"
@@ -713,7 +713,7 @@ type AuditLogTests() =
 
         Assert.AreEqual(1, count)
 
-[<TestClass>]
+[<TestClass; TestCategory("Security"); TestCategory("FailClosed")>]
 type PolicyEngineTests() =
 
     let agentId = "test"

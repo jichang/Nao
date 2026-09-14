@@ -716,7 +716,7 @@ type EtclovgVerificationTests() =
 // G: Governance & Security — Permissions, constitution, audit, policies
 // =============================================================================
 
-[<TestClass>]
+[<TestClass; TestCategory("Security"); TestCategory("FailClosed")>]
 type EtclovgGovernanceTests() =
 
     let agentId = "governed-agent"

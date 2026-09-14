@@ -32,8 +32,24 @@ type ProcessIdentityIsolation =
 /// Host-owned resolver for the secret handles authorized for one process environment.
 [<NoEquality; NoComparison>]
 type ProcessSecretResolver =
-    { Handles: string list
-      ResolveAsync: ExecutionContext -> AgentContext -> string -> Task<string option> }
+    { References: SecretReference list
+      ResolveAsync: ExecutionContext -> AgentContext -> SecretReference -> Task<SecretValue option> }
+
+[<RequireQualifiedAccess>]
+module ProcessSecretResolver =
+
+    let fromProvider references provider =
+        { References = references
+          ResolveAsync =
+            fun execution agentContext reference ->
+                task {
+                    let authorization = AgentContext.requireAuthorization agentContext
+
+                    let! resolution =
+                        SecretProvider.resolveAsync authorization reference execution.CancellationToken provider
+
+                    return Some(SecretResolution.value resolution)
+                } }
 
 /// Host-owned command used to start one execution worker process.
 [<NoEquality; NoComparison>]
@@ -341,11 +357,8 @@ module ExecutionEnvironment =
             if isNull (box resolver.ResolveAsync) then
                 invalidArg (nameof config) "Process secret resolver must be provided."
 
-            if resolver.Handles |> List.exists String.IsNullOrWhiteSpace then
-                invalidArg (nameof config) "Process secret handles must be non-blank."
-
-            if resolver.Handles.Length <> (resolver.Handles |> List.distinct).Length then
-                invalidArg (nameof config) "Process secret handles must be unique.")
+            if resolver.References.Length <> (resolver.References |> List.distinct).Length then
+                invalidArg (nameof config) "Process secret references must be unique.")
 
         { ExecuteAsync =
             fun ctx agentContext agent input ->
@@ -601,15 +614,25 @@ module ExecutionEnvironment =
                                     task {
                                         let mutable resolved = Map.empty
 
-                                        for handle in resolver.Handles do
-                                            match! resolver.ResolveAsync ctx agentContext handle with
-                                            | Some secret when not (isNull secret) ->
-                                                resolved <- resolved |> Map.add handle secret
+                                        for reference in resolver.References do
+                                            match! resolver.ResolveAsync ctx agentContext reference with
+                                            | Some secret when SecretValue.reference secret = reference ->
+                                                resolved <-
+                                                    resolved
+                                                    |> Map.add
+                                                        (SecretReference.value reference)
+                                                        (SecretValue.useValue id secret)
+                                            | Some _ ->
+                                                fail (
+                                                    sprintf
+                                                        "Secret resolver returned a value for a different reference than '%s'."
+                                                        (SecretReference.value reference)
+                                                )
                                             | _ ->
                                                 fail (
                                                     sprintf
-                                                        "Authorized secret handle '%s' could not be resolved."
-                                                        handle
+                                                        "Authorized secret reference '%s' could not be resolved."
+                                                        (SecretReference.value reference)
                                                 )
 
                                         return resolved
@@ -624,7 +647,7 @@ module ExecutionEnvironment =
                                     enforceFileSystemPolicy
                                     allowedPaths
                                     secrets
-                                    input
+                                    (SecretRedaction.redact input)
 
                             do! worker.StandardInput.WriteLineAsync(WorkerProtocol.serialize request)
                             do! worker.StandardInput.FlushAsync()
@@ -664,13 +687,14 @@ module ExecutionEnvironment =
                             ctx.RecordWorkerUsage(WorkerProtocol.usage response)
 
                             match response.Kind with
-                            | WorkerProtocol.Succeeded -> return Ok response.Output
+                            | WorkerProtocol.Succeeded -> return Ok(SecretRedaction.redact response.Output)
                             | WorkerProtocol.LimitExceeded ->
                                 match WorkerProtocol.tryParseLimit response.Limit with
                                 | Some limit -> return Error limit
                                 | None -> return fail "Execution worker returned an unknown resource limit."
                             | WorkerProtocol.Failed ->
-                                return fail (sprintf "Execution worker failed: %s" response.Error)
+                                return
+                                    fail (sprintf "Execution worker failed: %s" (SecretRedaction.redact response.Error))
                             | kind -> return fail (sprintf "Execution worker returned unexpected message '%s'." kind)
                         with
                         | ExecutionLimitExceededException LimitExceeded.Memory -> return Error LimitExceeded.Memory

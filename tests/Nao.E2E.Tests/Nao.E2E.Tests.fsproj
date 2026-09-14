@@ -16,6 +16,7 @@
     <Compile Include="src/EtclovgE2ETests.fs" />
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="..\Nao.Testing\Nao.Testing.fsproj" />
     <ProjectReference Include="..\..\src\Nao.Agents\Nao.Agents.fsproj" />
     <ProjectReference Include="..\..\src\Nao.Providers\Nao.Providers.fsproj" />
     <ProjectReference Include="..\..\src\Nao.Runtime.Orleans\Nao.Runtime.Orleans.fsproj" />

@@ -4,7 +4,7 @@ open Microsoft.VisualStudio.TestTools.UnitTesting
 open Nao.Agents
 open Nao.Runtime.Orleans.Grains
 
-[<TestClass>]
+[<TestClass; TestCategory("Security"); TestCategory("FailClosed")>]
 type SessionAuthorizationTests() =
     let tenantId = TenantId.parse "tenant-a"
     let userId = UserId.parse "user-a"

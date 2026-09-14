@@ -168,19 +168,19 @@ Worker protocol v1 carries impersonation, service, principal, and agent authorit
 
 ## SEC-02 — Secret management
 
-- [ ] Define secret references rather than passing raw values through execution contracts.
-- [ ] Add optional secret-provider interfaces and adapters.
-- [ ] Resolve secrets only inside the smallest authorized execution boundary.
-- [ ] Redact secrets from prompts, logs, traces, journals, errors, and artifacts.
-- [ ] Support rotation and revocation without restarting unrelated sessions.
-- [ ] Add canary-secret leakage tests.
+- [x] Define secret references rather than passing raw values through execution contracts.
+- [x] Add optional secret-provider interfaces and adapters.
+- [x] Resolve secrets only inside the smallest authorized execution boundary.
+- [x] Redact secrets from prompts, logs, traces, journals, errors, and artifacts.
+- [x] Support rotation and revocation without restarting unrelated sessions.
+- [x] Add canary-secret leakage tests.
 
 ### Exit criteria for R1
 
 - [x] HAR-01 through HAR-04 are complete for supported environments.
-- [ ] SEC-01, SEC-02, and GOV-01 through GOV-03 are complete.
-- [ ] Security threat models and abuse cases are reviewed.
-- [ ] Fail-closed and isolation tests run in CI.
-- [ ] Production hosts do not rely on permissive development defaults.
+- [x] SEC-01, SEC-02, and GOV-01 through GOV-03 are complete.
+- [x] Security threat models and abuse cases are reviewed in the [R1 security threat model](../security-threat-model.md).
+- [x] Fail-closed and isolation tests run as explicit CI gates.
+- [x] Production hosts cannot access permissive test fixtures and must provide explicit harness and sandbox configuration.
 
 [Back to roadmap](../roadmap.md)

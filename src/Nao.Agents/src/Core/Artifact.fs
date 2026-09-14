@@ -15,7 +15,7 @@ module Artifact =
           IdempotencyKey = idempotencyKey
           Kind = kind
           ContentType = contentType
-          Payload = payload }
+          Payload = SecretRedaction.redact payload }
 
     let create idempotencyKey kind contentType payload =
         restore (ArtifactId.generate ()) idempotencyKey kind contentType payload

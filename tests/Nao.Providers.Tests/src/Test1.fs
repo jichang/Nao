@@ -262,7 +262,7 @@ type AnthropicProviderTests() =
                 TimeoutSeconds = Some 1 }
 
         let provider =
-            AnthropicProvider.createWithHandler config (Some(new WaitingHttpMessageHandler()))
+            AnthropicProvider.createWithHandler config None (Some(new WaitingHttpMessageHandler()))
 
         let result =
             provider.CompleteAsync
@@ -311,10 +311,14 @@ type AnthropicProviderTests() =
 
         let config =
             { AnthropicConfig.Default with
-                ApiKey = "test-key"
+                ApiKeyReference = Some(SecretReference.parse "providers/anthropic/api-key")
                 BaseUrl = "https://anthropic.test/" }
 
-        let provider = AnthropicProvider.createWithHandler config (Some handler)
+        let provider =
+            AnthropicProvider.createWithHandler
+                config
+                (Some(SecretValue.create (SecretReference.parse "providers/anthropic/api-key") "test-key"))
+                (Some handler)
 
         let conversation =
             [ { Role = System
@@ -368,6 +372,7 @@ type AnthropicProviderTests() =
             AnthropicProvider.createWithHandler
                 { AnthropicConfig.Default with
                     BaseUrl = "https://anthropic.test" }
+                None
                 (Some handler)
 
         let chunks = ResizeArray<CompletionChunk>()
@@ -395,7 +400,7 @@ type VllmConfigTests() =
     member _.DefaultUsesLocalhost() =
         let config = VllmConfig.Default
         Assert.AreEqual("http://localhost:8000/v1/chat/completions", config.BaseUrl)
-        Assert.AreEqual(None, config.ApiKey)
+        Assert.AreEqual(None, config.ApiKeyReference)
         Assert.AreEqual(None, config.TimeoutSeconds)
 
 [<TestClass>]

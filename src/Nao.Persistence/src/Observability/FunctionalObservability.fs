@@ -7,6 +7,62 @@ open System.Text.Json.Serialization
 open System.Threading.Tasks
 open Nao.Agents
 
+module private ObservabilityRedaction =
+    let private redact = SecretRedaction.redact
+
+    let spanStatus =
+        function
+        | SpanStatus.Error message -> SpanStatus.Error(redact message)
+        | status -> status
+
+    let span (span: Span) =
+        { span with
+            OperationName = redact span.OperationName
+            Status = spanStatus span.Status
+            Attributes = SecretRedaction.redactMap span.Attributes
+            Events =
+                span.Events
+                |> List.map (fun (event: SpanEvent) ->
+                    { event with
+                        Name = redact event.Name
+                        Attributes = SecretRedaction.redactMap event.Attributes }) }
+
+    let metric (record: MetricRecord) =
+        let payload =
+            match record.Payload with
+            | MetricPayload.ToolCall(toolName, durationMs, success) ->
+                MetricPayload.ToolCall(redact toolName, durationMs, success)
+            | MetricPayload.Custom point ->
+                MetricPayload.Custom
+                    { point with
+                        Name = redact point.Name
+                        Labels = SecretRedaction.redactMap point.Labels }
+            | payload -> payload
+
+        { record with Payload = payload }
+
+    let trace (trace: ExecutionTrace) =
+        let action =
+            function
+            | TraceAction.LlmCall model -> TraceAction.LlmCall(redact model)
+            | TraceAction.ToolInvocation toolName -> TraceAction.ToolInvocation(redact toolName)
+            | TraceAction.AgentDelegation agentName -> TraceAction.AgentDelegation(redact agentName)
+            | TraceAction.MemoryAccess operation -> TraceAction.MemoryAccess(redact operation)
+            | value -> value
+
+        { trace with
+            AgentId = redact trace.AgentId
+            Input = redact trace.Input
+            Output = SecretRedaction.redactOption trace.Output
+            Steps =
+                trace.Steps
+                |> List.map (fun (step: TraceStep) ->
+                    { step with
+                        Action = action step.Action
+                        Input = redact step.Input
+                        Output = redact step.Output })
+            Metadata = SecretRedaction.redactMap trace.Metadata }
+
 module private TracerState =
     let create (persist: AuthorizationScope -> Span -> unit) (initial: (AuthorizationScope * Span) seq) : Tracer =
         let spans =
@@ -30,6 +86,7 @@ module private TracerState =
                 raise (UnauthorizedAccessException "The span does not belong to the supplied authorization scope.")
 
         let upsert scope (span: Span) =
+            let span = ObservabilityRedaction.span span
             persist scope span
             spans.[(ownerKey scope, span.Id)] <- span
 
@@ -117,6 +174,7 @@ module InMemoryMetricsCollector =
         let ownerKey = AuthorizationScope.identity >> AuthorizationIdentity.storageKey
 
         let record scope (metric: MetricRecord) =
+            let metric = ObservabilityRedaction.metric metric
             records.[(ownerKey scope, metric.Id)] <- metric
 
         let owned scope =
@@ -266,6 +324,7 @@ module InMemoryTraceStore =
             Task.FromResult deleted
 
         let saveAsync scope (trace: ExecutionTrace) =
+            let trace = ObservabilityRedaction.trace trace
             traces.[(ownerKey scope, trace.Id)] <- trace
             Task.FromResult()
 
@@ -459,7 +518,9 @@ module PersistentMetricsCollector =
             | Error failure -> PlatformFailure.raiseException failure
 
         { Record =
-            fun scope metric -> mutate scope (fun inner -> inner.Record scope metric) (MetricsEvent.Accepted metric)
+            fun scope metric ->
+                let metric = ObservabilityRedaction.metric metric
+                mutate scope (fun inner -> inner.Record scope metric) (MetricsEvent.Accepted metric)
           GetMetrics = fun scope -> read scope (fun inner -> inner.GetMetrics scope)
           GetByExecution = fun scope executionId -> read scope (fun inner -> inner.GetByExecution scope executionId)
           EstimateCost = fun scope model -> read scope (fun inner -> inner.EstimateCost scope model)
@@ -582,6 +643,8 @@ module PersistentTraceStore =
 
         { SaveAsync =
             fun scope trace ->
+                let trace = ObservabilityRedaction.trace trace
+
                 task {
                     mutate
                         scope

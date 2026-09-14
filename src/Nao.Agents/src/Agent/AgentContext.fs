@@ -37,19 +37,3 @@ module AgentContext =
                 System.UnauthorizedAccessException
                     "Protected operations require a host-authenticated authorization scope."
             ))
-
-    /// Permissive no-op context for isolated tests only. Production hosts must use a harness-required context.
-    let unrestrictedForTests () =
-        { Correlation = CorrelationContext.root ()
-          SessionKey = ""
-          TurnId = ""
-          ExecutionBoundary = ExecutionBoundary.Unrestricted
-          CancellationToken = CancellationToken.None
-          NextToolCallKey = (fun () -> invalidOp "Tool identity requires a governed execution context.")
-          NextArtifactKey = (fun () -> invalidOp "Artifact identity requires a governed execution context.")
-          GetArtifacts = (fun () -> [])
-          GetGrantedResources = (fun () -> [])
-          RequestPermission = (fun _ _ _ -> Task.FromResult true)
-          RequestModelEligibility = (fun _ -> Task.FromResult true)
-          PublishArtifact = (fun _ -> Task.CompletedTask)
-          Authorization = None }

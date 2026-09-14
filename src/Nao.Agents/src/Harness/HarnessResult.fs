@@ -113,3 +113,79 @@ type ExecutionResult =
       Usage: ResourceUsage
       Evidence: ExecutionEvidence
       PolicyDecisions: ExecutionPolicyDecisions }
+
+[<RequireQualifiedAccess>]
+module ExecutionResult =
+    let private redact = SecretRedaction.redact
+
+    let private harnessError =
+        function
+        | HarnessError.PolicyBlocked violations -> HarnessError.PolicyBlocked(List.map redact violations)
+        | HarnessError.NotReady reasons -> HarnessError.NotReady(List.map redact reasons)
+        | HarnessError.InitializationFailed message -> HarnessError.InitializationFailed(redact message)
+        | HarnessError.ExecutionFailed message -> HarnessError.ExecutionFailed(redact message)
+        | error -> error
+
+    let private status =
+        function
+        | ExecutionTerminalStatus.Failed error -> ExecutionTerminalStatus.Failed(harnessError error)
+        | ExecutionTerminalStatus.Denied error -> ExecutionTerminalStatus.Denied(harnessError error)
+        | ExecutionTerminalStatus.Indeterminate message -> ExecutionTerminalStatus.Indeterminate(redact message)
+        | value -> value
+
+    let private artifact (value: Artifact) =
+        { value with
+            Kind = redact value.Kind
+            ContentType = redact value.ContentType
+            Payload = redact value.Payload }
+
+    let private judgement (value: JudgementResult) =
+        let verdict =
+            match value.Verdict with
+            | JudgementVerdict.Inconclusive reason -> JudgementVerdict.Inconclusive(redact reason)
+            | other -> other
+
+        { value with
+            Verdict = verdict
+            Explanation = redact value.Explanation
+            Suggestions = List.map redact value.Suggestions
+            JudgeName = redact value.JudgeName }
+
+    let private regression (value: RegressionResult) =
+        { value with
+            Regressions =
+                value.Regressions
+                |> List.map (fun item ->
+                    { item with
+                        Description = redact item.Description
+                        BaselineValue = redact item.BaselineValue
+                        CurrentValue = redact item.CurrentValue }) }
+
+    let private policyViolation (value: PolicyViolation) =
+        { value with
+            PolicyId = redact value.PolicyId
+            PolicyVersion = redact value.PolicyVersion
+            Description = redact value.Description
+            Message = redact value.Message }
+
+    let private constitutionViolation (value: ConstitutionViolation) =
+        { value with
+            RuleId = redact value.RuleId
+            RuleDescription = redact value.RuleDescription }
+
+    let redactResult result =
+        { result with
+            Status = status result.Status
+            Outputs =
+                { Response = SecretRedaction.redactOption result.Outputs.Response
+                  Artifacts = result.Outputs.Artifacts |> List.map artifact }
+            Evidence =
+                { result.Evidence with
+                    Trace = result.Evidence.Trace |> Option.map Verification.redact
+                    Judgement = result.Evidence.Judgement |> Option.map judgement
+                    Regression = result.Evidence.Regression |> Option.map regression }
+            PolicyDecisions =
+                { result.PolicyDecisions with
+                    PolicyViolations = result.PolicyDecisions.PolicyViolations |> List.map policyViolation
+                    ConstitutionViolations =
+                        result.PolicyDecisions.ConstitutionViolations |> List.map constitutionViolation } }

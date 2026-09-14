@@ -18,11 +18,11 @@ type EvalExecutionConfig =
 [<RequireQualifiedAccess>]
 module EvalExecutionConfig =
 
-    let create authorization createAgentContext =
+    let create authorization createAgentContext harness sandbox =
         { Authorization = authorization
           CreateAgentContext = createAgentContext
-          Harness = EtclovgConfig.Default
-          Sandbox = SandboxConfig.Default
+          Harness = harness
+          Sandbox = sandbox
           PolicyVersions = Map.empty
           DependencyVersions = Map.empty }
 

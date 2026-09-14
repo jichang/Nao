@@ -1,9 +1,11 @@
 namespace Nao.Providers
 
+open Nao.Agents
+
 /// Configuration for DeepSeek's OpenAI-compatible API
 type DeepSeekConfig =
     {
-        ApiKey: string
+        ApiKeyReference: SecretReference option
         Model: string
         BaseUrl: string
         /// Request timeout in seconds. None uses the HttpClient default.
@@ -11,7 +13,7 @@ type DeepSeekConfig =
     }
 
     static member Default =
-        { ApiKey = ""
+        { ApiKeyReference = None
           Model = "deepseek-chat"
           BaseUrl = "https://api.deepseek.com/v1/chat/completions"
           TimeoutSeconds = None }

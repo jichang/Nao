@@ -8,7 +8,7 @@ open Microsoft.VisualStudio.TestTools.UnitTesting
 open Nao.Agents
 open Nao.Persistence
 
-[<TestClass>]
+[<TestClass; TestCategory("Security"); TestCategory("FailClosed")>]
 type TracerAuthorizationTests() =
     let scope tenant user group workspace session =
         let principal =

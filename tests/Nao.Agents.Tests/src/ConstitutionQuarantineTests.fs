@@ -7,7 +7,7 @@ open System.Threading.Tasks
 open Microsoft.VisualStudio.TestTools.UnitTesting
 open Nao.Agents
 
-[<TestClass>]
+[<TestClass; TestCategory("Security"); TestCategory("FailClosed")>]
 type ConstitutionQuarantineTests() =
 
     let scope tenant user =

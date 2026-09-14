@@ -4,7 +4,7 @@ open System
 open Microsoft.VisualStudio.TestTools.UnitTesting
 open Nao.Agents
 
-[<TestClass>]
+[<TestClass; TestCategory("Security"); TestCategory("FailClosed")>]
 type IdentityTests() =
     [<TestMethod>]
     member _.TextIdentitiesRoundTripExactly() =

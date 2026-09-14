@@ -53,7 +53,11 @@ type EvalRunnerTests() =
     let owner = AuthorizationScope.identity authorization
 
     let execution =
-        EvalExecutionConfig.create authorization AgentContext.unrestrictedForTests
+        EvalExecutionConfig.create
+            authorization
+            AgentContext.unrestrictedForTests
+            EtclovgConfig.Default
+            SandboxConfig.Default
 
     let defaultConfig = EvalRunnerConfig.create execution
 

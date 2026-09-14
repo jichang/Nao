@@ -1,11 +1,13 @@
 namespace Nao.Providers
 
+open Nao.Agents
+
 /// Configuration for vLLM-served models (OpenAI-compatible API)
 type VllmConfig =
     {
         BaseUrl: string
         Model: string
-        ApiKey: string option
+        ApiKeyReference: SecretReference option
         /// Request timeout in seconds. None uses the HttpClient default.
         TimeoutSeconds: int option
     }
@@ -13,5 +15,5 @@ type VllmConfig =
     static member Default =
         { BaseUrl = "http://localhost:8000/v1/chat/completions"
           Model = "default"
-          ApiKey = None
+          ApiKeyReference = None
           TimeoutSeconds = None }

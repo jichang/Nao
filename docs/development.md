@@ -84,6 +84,7 @@ Dependencies point inward from runtimes and adapters to core contracts:
 | `Nao.Providers` | Opt-in provider selection and composition | `Nao.Agents`, all provider adapter packages |
 | `Nao.Runtime.Orleans` | Optional distributed runtime | `Nao.Agents` |
 | `Nao.Runtime.Orleans.Codegen` | Runtime build-time code generation | `Nao.Runtime.Orleans` |
+| `Nao.Testing` | Non-packable shared test fixtures | `Nao.Agents`; referenced only by test projects |
 
 Core projects must not reference runtime, persistence, database, ontology, vector-store, or model-vendor packages. Adapter and implementation projects may depend on core projects but never the reverse. Runtime projects compose core and adapters; an adapter must not depend on a runtime. Project-reference cycles are forbidden.
 
@@ -128,11 +129,18 @@ The supported solution uses these primary test categories:
 | End-to-end | `Nao.E2E.Tests` | Full harness and orchestration flows using local fakes |
 | Evaluation | `Nao.Eval.Tests` | Evaluation runner, metric, and report behavior |
 | Security | MSTest `Security` category within an owning project | Permission, policy, isolation, and tenant-boundary checks |
+| Fail closed | MSTest `FailClosed` category within an owning project | Negative-path identity, authorization, governance, secret, provider, and persistence checks that must deny or stop |
+| Isolation | MSTest `Isolation` category in `Nao.Agents.Tests` | Process, container-adapter, worker-protocol, resource-limit, and secret-boundary checks |
 | Performance | MSTest `Performance` category within an owning project | Explicit benchmark or regression-threshold checks |
 
 All currently supported projects are deterministic and run with `dotnet test Nao.slnx`. Tests that require an external database, container, network service, or model must use the corresponding MSTest category (`ExternalDatabase`, `Container`, `Network`, or `ExternalModel`) and an explicit opt-in CI job before entering the supported solution. No such tests currently exist.
 
-The CI workflow validates solution membership, then publishes TRX and Cobertura files under category and project directories. Run the same inventory check locally with:
+The CI workflow validates solution membership and required security categories, runs the
+`FailClosed` and `Isolation` categories as explicit security gates, then runs the complete test
+matrix and publishes TRX and Cobertura files under category and project directories. Container
+escape regressions remain a separate Docker-backed security job. The focused gates use
+`tests/security.runsettings` with one worker so process and environment-boundary tests cannot
+interfere with one another. Run the same inventory check locally with:
 
 ```bash
 python3 scripts/validate-test-surface.py
@@ -171,6 +179,17 @@ Changes involving permissions, identity, tools, execution environments, secrets,
 - Documentation of unsupported guarantees
 
 Configuration objects are not proof of enforcement. Do not describe process or container isolation as supported until the corresponding execution environment and escape-oriented tests exist.
+
+Permissive fixtures exist only in the non-packable `Nao.Testing` project, which is referenced
+only by test projects; they are absent from production packages. Production source must
+construct `AgentContext` through its governed host boundary, populate `EtclovgConfig` explicitly,
+and pass explicit harness and sandbox policy to `EvalExecutionConfig.create`. Dependency policy
+rejects every production reference to `Nao.Testing`, and CI enforces the source boundary with:
+
+```bash
+python3 scripts/validate-production-security.py
+python3 -m unittest scripts/test_validate_production_security.py
+```
 
 ## Roadmap workflow
 

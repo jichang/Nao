@@ -310,13 +310,29 @@ Nao defines `SandboxConfig`, `ResourceLimits`, and functional `ExecutionEnvironm
 - Filesystem allowlists outside explicit Linux Landlock mode
 - Denied-by-default network access
 - Hard aggregate CPU limits
-- Typed secret references and full secret lifecycle controls
+- Production vault adapters and full secret lifecycle controls
 
-Process workers inherit no host environment variables and receive only the explicit `SandboxConfig.EnvironmentVariables` map. A configured working directory is validated and applied before launch, but does not prevent access to paths outside it. Explicit Linux user-namespace identity mode maps only the host caller to a configured worker-visible UID/GID and fails closed when setup is unavailable; it does not change the caller's host filesystem DAC permissions. Explicit `ProcessFileSystemIsolation.LinuxLandlock` mode validates and enforces `SandboxConfig.AllowedPaths` before handler execution; trusted worker/runtime directories receive read-only baseline access, and setup fails closed. Disabled mode and non-Linux platforms do not enforce these controls. Protocol v1 gives worker handlers the remaining call, token, and cost allowances through `WorkerExecutionBudget`; usage reported through this capability is merged into the host budget, while bypass calls are not observable. A host may declare opaque handles through `ProcessSecretResolver`; values resolve after handshake and are available only through `WorkerSecrets`, while undeclared handles fail without resolver invocation. Process execution kills the complete worker process tree when its cancellation token is signalled. Configured memory and CPU limits sample direct-worker working-set and processor-time usage and kill the tree on excess. These reactive checks can overshoot, are not hard operating-system quotas, and CPU accounting excludes descendants. A configured output limit bounds combined stdout/stderr bytes and drains stderr. Optional `ProcessOutputCapture` applies a mandatory host redactor and publishes separately bounded stream artifacts through the governed execution context; capture does not replace the execution output limit. Hosts must propagate graceful shutdown through the cancellation token.
+Process workers inherit no host environment variables and receive only the explicit `SandboxConfig.EnvironmentVariables` map. A configured working directory is validated and applied before launch, but does not prevent access to paths outside it. Explicit Linux user-namespace identity mode maps only the host caller to a configured worker-visible UID/GID and fails closed when setup is unavailable; it does not change the caller's host filesystem DAC permissions. Explicit `ProcessFileSystemIsolation.LinuxLandlock` mode validates and enforces `SandboxConfig.AllowedPaths` before handler execution; trusted worker/runtime directories receive read-only baseline access, and setup fails closed. Disabled mode and non-Linux platforms do not enforce these controls. Protocol v1 gives worker handlers the remaining call, token, and cost allowances through `WorkerExecutionBudget`; usage reported through this capability is merged into the host budget, while bypass calls are not observable. A host declares typed opaque `SecretReference` values through `ProcessSecretResolver`; resolved `SecretValue` material must match the requested reference, becomes available only through typed `WorkerSecrets`, and renders as redacted. Undeclared or mismatched references fail without worker execution. Process execution kills the complete worker process tree when its cancellation token is signalled. Configured memory and CPU limits sample direct-worker working-set and processor-time usage and kill the tree on excess. These reactive checks can overshoot, are not hard operating-system quotas, and CPU accounting excludes descendants. A configured output limit bounds combined stdout/stderr bytes and drains stderr. Optional `ProcessOutputCapture` applies a mandatory host redactor and publishes separately bounded stream artifacts through the governed execution context; capture does not replace the execution output limit. Hosts must propagate graceful shutdown through the cancellation token.
+
+Secret timing is boundary-specific. Process and container values resolve only after a successful
+private worker handshake and exist for that single execution. Provider credentials do not resolve
+during provider activation and are not retained in a shared client's default headers; each
+outbound completion or stream resolves current material and disposes its operation-local client.
+Secret lookups carry an opaque material version and an explicit revoked state. The in-memory
+adapter advances versions atomically with compare-and-swap rotation or revocation; stale and
+cross-owner mutations fail closed. Existing provider activations observe changes on their next
+operation, while process and container workers observe them on their next isolated execution.
+Successful resolution also registers material in an execution-local redactor. Worker input and
+output, provider prompts and responses, artifacts, event payloads, final harness results, traces,
+execution journals, trace stores, audit records, and structured failures redact every registered
+value before crossing their observable or durable boundary. Observability stores enforce
+redaction independently of event publication.
 
 ## Production checklist
 
-- Never use `AgentContext.unrestrictedForTests ()` for protected production operations.
+- The production package does not define `AgentContext.unrestrictedForTests ()`,
+  `EtclovgConfig.Default`, or `HarnessServices.none`; those conveniences exist only in the
+  non-packable `Nao.Testing` project, which production dependency policy rejects.
 - Validate resource identifiers after canonicalization.
 - Enforce authorization inside storage/retrieval boundaries, not only in UI code.
 - Keep secret values out of prompts, traces, logs, and errors.
@@ -324,5 +340,9 @@ Process workers inherit no host environment variables and receive only the expli
 - Apply timeout and cancellation to all external calls.
 - Audit every allow, deny, confirmation, modification, and side effect.
 - Isolate untrusted execution before describing it as sandboxed.
+
+Review the [security threat model](security-threat-model.md) when changing a trust boundary,
+protected capability, identity or secret contract, worker mode, durable store, or output-release
+rule.
 
 See the [harness, security, and governance roadmap](roadmap/01-harness-security-governance.md).

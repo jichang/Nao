@@ -167,7 +167,53 @@ Hosts may explicitly select `ProcessFileSystemIsolation.LinuxLandlock`; the host
 
 The harness applies its wall-clock deadline to worker protocol IO and kills the complete worker process tree when that token is cancelled; caller cancellation remains distinguishable from an elapsed deadline. Hosts propagate graceful shutdown through the same caller token. Protocol v1 sends remaining LLM-call, token, cost, and tool-call allowances and constructs a worker-local `WorkerExecutionBudget`. Worker handlers reserve calls and report usage through that capability; exact overages return a dedicated limit frame, and reported usage merges back into the host execution budget. Calls made outside Nao's worker budget/provider/tool capabilities are not observable and therefore are not metered. When `MaxMemoryBytes` is configured, the process environment samples the worker working set and kills its process tree on excess, returning `LimitExceeded.Memory`. `MaxCpuTime` similarly samples direct-worker processor time and returns `LimitExceeded.Cpu`. Both checks are reactive and can briefly overshoot; memory is not a hard allocation quota, and CPU accounting does not include descendant processor time. `MaxOutputBytes` counts raw stdout and stderr bytes together, drains stderr concurrently, bounds stdout protocol framing before decoding, and kills the tree with `LimitExceeded.Output` on excess.
 
-`ProcessSecretResolver` lets a host declare opaque handles and resolve them for one process environment after the worker completes its version handshake. Protocol v1 carries resolved values over the private stdin channel, and handlers receive only `WorkerSecrets.Resolve`; undeclared handles fail closed without invoking the host resolver. Secret values are not placed in worker arguments, environment variables, request input, stdout, or stderr by the framework. The host resolver receives both execution contexts and remains responsible for authorization and vault access. Typed references, provider adapters, rotation, revocation, comprehensive redaction, and leakage detection remain SEC-02 work.
+`SecretReference` is the canonical opaque identifier used by process and provider configuration;
+raw strings are rejected at those contracts. `SecretValue` binds resolved material to its exact
+reference and renders as `[REDACTED]`. `ProcessSecretResolver` declares references and resolves
+them for one process environment after the worker completes its version handshake. A resolver
+that returns material bound to a different reference fails closed. Protocol v1 carries resolved
+values over the private stdin channel, and handlers receive only typed `WorkerSecrets.Resolve`;
+undeclared references fail closed without invoking the host resolver. Secret values are not
+placed in worker arguments, environment variables, request input, stdout, or stderr by the
+framework. The host resolver receives both execution contexts and remains responsible for
+authorization and vault access. Provider configurations similarly retain only
+`ApiKeyReference`; direct provider construction accepts an explicitly resolved matching
+`SecretValue`.
+
+`SecretProvider` is the host-owned asynchronous resolution capability. Every resolution receives
+the complete authenticated `AuthorizationScope`, exact `SecretReference`, and caller cancellation
+token. Successful resolution returns non-secret evidence containing provider identity/version,
+reference, immutable secret version, and time; missing, revoked, or mismatched material fails
+closed. Providers return explicit `Available`, `Revoked`, or `Missing` lookup states. The core
+in-memory adapter is partitioned by complete claim-free `AuthorizationIdentity` and intended for
+tests or ephemeral hosts. It exposes compare-and-swap rotation and revocation: every mutation
+requires the current `SecretVersion`, advances that version, and returns non-secret
+`SecretMutationEvidence`. Stale updates and cross-owner mutations fail without changing state.
+Revocation leaves a versioned tombstone, and a later rotation may restore the reference only by
+presenting that tombstone version. `ProcessSecretResolver.fromProvider` resolves within the
+authenticated worker launch boundary, after handshake; handshake failure cannot invoke the
+provider. `ProviderFactory.activateAsync` validates provider availability but does not resolve
+credential material. Its returned provider resolves the configured reference immediately before
+each buffered or streaming outbound operation, creates an operation-local provider client, and
+disposes that client when the operation finishes. The same activated provider therefore observes
+rotation or revocation on its next call without restarting or disturbing unrelated sessions.
+Concrete vault SDKs remain optional host/package adapters rather than dependencies of core
+packages.
+
+Every governed harness run owns an asynchronous execution-local secret-redaction scope. Successful
+resolution registers the exact material in that scope without exposing it through public
+contracts. Provider wrappers redact known values from buffered and streaming prompts before
+transport and from chunks, results, and structured failures before returning them. Worker requests
+similarly redact known values from ordinary input after resolution, and worker output is redacted
+before it crosses back into the harness. Artifact construction and event publication are
+redaction-enforcing boundaries. Tracer, execution-journal, trace-store, and audit persistence
+implementations also redact independently before in-memory retention or durable serialization, so
+bypassing event publication cannot bypass storage protection. Final harness responses and
+verification evidence are sanitized before leaving the execution scope. Nested work shares the
+same redactor; concurrent top-level executions remain isolated through `AsyncLocal` context.
+Adversarial tests inject unique canary values through provider, process-worker, event, artifact,
+error, trace, journal, audit, and file-backed persistence paths, then assert that returned,
+emitted, captured, and serialized surfaces contain no raw canary material.
 
 `ExecutionEnvironment.containerWorker` launches the same protocol worker through a Docker-compatible command-line runtime. Construction first runs a bounded structured `info` probe and requires a reachable Linux-container daemon that reports memory and process-count limit support. `detectContainerHost` returns parsed runtime, operating-system, and cgroup evidence; `tryContainerWorker` returns explicit unsupported reasons, while the compatibility constructor raises `ContainerHostUnsupportedException` with the same reasons. Every execution requires a `name@sha256:<digest>` image reference, publishes a `container.image` JSON artifact containing that immutable reference, digest, and host-supplied supply-chain metadata, and uses `run --rm --interactive` with a unique host-generated name and CID file. The launcher always selects numeric UID/GID 65532, a read-only root, all capabilities dropped, and `no-new-privileges`; Docker validation proves the effective UID, zero effective capabilities, no-new-privileges state, denied root writes, and a successful protocol-v1 exchange. Finalization unconditionally issues `rm --force --volumes` for the predeclared name and removes the CID file. This removes the container, anonymous volumes, and its runtime-managed network attachment after success, failure, cancellation, timeout, or resource-limit termination; the adapter creates no named volumes or networks. Sandbox environment variable names are forwarded with `--env` while values remain in the runtime process environment rather than argv. `ContainerNetworkPolicy.Denied` is the host-selected default and adds `--network=none` even when the sandbox permits network requests. Unrestricted access requires both sandbox permission and explicit host policy; a sandbox denial always wins.
 

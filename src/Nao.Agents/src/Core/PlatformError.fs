@@ -42,7 +42,7 @@ type PlatformFailureBoundary =
 module PlatformFailure =
     let create category message retryable correlationId : PlatformFailure =
         { Category = category
-          Message = message
+          Message = SecretRedaction.redact message
           Retryable = retryable
           CorrelationId = correlationId }
 
@@ -71,6 +71,7 @@ module PlatformFailure =
         match error with
         | PlatformFailureException failure ->
             { failure with
+                Message = SecretRedaction.redact failure.Message
                 CorrelationId = correlationId |> Option.orElse failure.CorrelationId }
         | _ ->
             let category, retryable =

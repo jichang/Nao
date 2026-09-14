@@ -5,6 +5,31 @@ open System.IO
 open System.Threading.Tasks
 open Nao.Agents
 
+module private AuditRedaction =
+    let entry (entry: AuditEntry) =
+        let redact = SecretRedaction.redact
+
+        let action =
+            match entry.Action with
+            | AuditAction.LlmCall model -> AuditAction.LlmCall(redact model)
+            | AuditAction.ToolInvocation toolName -> AuditAction.ToolInvocation(redact toolName)
+            | AuditAction.AgentDelegation agentName -> AuditAction.AgentDelegation(redact agentName)
+            | AuditAction.MemoryWrite key -> AuditAction.MemoryWrite(redact key)
+            | AuditAction.MemoryRead key -> AuditAction.MemoryRead(redact key)
+            | AuditAction.ResourceAccess(kind, resource) -> AuditAction.ResourceAccess(redact kind, redact resource)
+            | AuditAction.PermissionCheck capability -> AuditAction.PermissionCheck(redact capability)
+            | AuditAction.PolicyEvaluation policyId -> AuditAction.PolicyEvaluation(redact policyId)
+            | AuditAction.ConstitutionEvaluation ruleId -> AuditAction.ConstitutionEvaluation(redact ruleId)
+            | AuditAction.LifecycleTransition(fromState, toState) ->
+                AuditAction.LifecycleTransition(redact fromState, redact toState)
+
+        { entry with
+            AgentId = redact entry.AgentId
+            Action = action
+            Input = SecretRedaction.redactOption entry.Input
+            Output = SecretRedaction.redactOption entry.Output
+            Metadata = SecretRedaction.redactMap entry.Metadata }
+
 module private AuditState =
     let create (initial: (AuthorizationScope * AuditEntry) seq) : AuditLog =
         let entries =
@@ -38,6 +63,7 @@ module private AuditState =
 
         { RecordAsync =
             fun scope entry ->
+                let entry = AuditRedaction.entry entry
                 entries.[(ownerKey scope, entry.Id)] <- entry
                 Task.FromResult()
           QueryAsync =
@@ -138,6 +164,8 @@ module PersistentAuditLog =
 
         { RecordAsync =
             fun scope entry ->
+                let entry = AuditRedaction.entry entry
+
                 task {
                     mutate
                         scope

@@ -51,7 +51,25 @@ Fallback must preserve mandatory security and capability constraints.
 
 ## Configuration and secrets
 
-Provider configuration should be validated and versioned. Secret references—not raw credentials—flow through configuration. Activation should support health validation, last-known-good rollback, controlled reload, audit, and model allow/deny policies.
+Provider configuration stores an optional typed `ApiKeyReference`, never raw credential text.
+`ProviderFactory.activateAsync` accepts an optional host-owned `SecretProvider`. It resolves only
+the reference declared by the selected configuration and requires resolved material to identify
+that exact reference. Activation itself resolves nothing. Before every buffered or streaming
+request, the wrapper resolves current material, creates an operation-local client, applies the
+authentication header, executes the request, and disposes the client. Missing, mismatched, and
+unexpected credentials fail closed. Resolutions identify both the provider-adapter version and an
+opaque secret version. Explicit revoked lookups fail with `SecretRevokedException`
+before an HTTP client is created. The in-memory adapter supports owner-partitioned,
+compare-and-swap rotation and revocation with non-secret mutation evidence; stale or cross-owner
+updates fail without changing state. Because every operation resolves again, an already activated
+provider observes the next version or revocation without reactivation and unrelated sessions keep
+running. The short-lived `SecretValue` wrapper renders as
+`[REDACTED]`. All factory-created providers, including local providers with no credential
+reference, redact secrets already known to the active execution from prompts before transport and
+from buffered results, streaming chunks, finish reasons, and structured failures before returning
+them. Local providers require no secret provider. Provider activation should additionally support
+health validation, last-known-good rollback, controlled reload, audit, and model allow/deny
+policies.
 
 ## Orleans runtime
 

@@ -41,6 +41,179 @@ let private memEntry key value =
       Timestamp = DateTimeOffset.UtcNow
       Tags = [ "t1"; "t2" ] }
 
+[<TestClass>]
+type SecretRedactionPersistenceTests() =
+    [<TestMethod>]
+    member _.``Observability stores never retain resolved secret material``() =
+        let scope = memoryScope "secret-redaction"
+        let reference = SecretReference.parse "tests/canary"
+        let canary = "persistent-canary-secret"
+        let correlation = CorrelationContext.root ()
+        let idempotencyKey = IdempotencyKey.forExecution correlation.ExecutionId
+        let tracer = InMemoryTracer.create ()
+        let journal = InMemoryExecutionJournal.create ()
+        let audit = InMemoryAuditLog.create ()
+        let traceStore = InMemoryTraceStore.create ()
+
+        let provider =
+            SecretProvider.create "test" "1" (fun _ _ _ ->
+                System.Threading.Tasks.Task.FromResult(
+                    SecretLookup.Available(SecretVersion.initial, SecretValue.create reference canary)
+                ))
+
+        SecretRedaction.runAsync (fun () ->
+            task {
+                let! _ = SecretProvider.resolveAsync scope reference System.Threading.CancellationToken.None provider
+
+                let span = tracer.StartTrace scope correlation $"operation:{canary}"
+                tracer.SetAttributes scope span (Map.ofList [ "value", canary ])
+                tracer.EndSpan scope span (SpanStatus.Error $"error:{canary}")
+
+                do!
+                    journal.RecordAsync
+                        scope
+                        { Id = Guid.NewGuid()
+                          Failure = None
+                          IdempotencyKey = idempotencyKey
+                          Correlation = correlation
+                          TurnId = "turn"
+                          ToolName = "tool"
+                          ReplaySafety = ToolReplaySafety.RetrySafe
+                          Input = $"input:{canary}"
+                          Output = $"output:{canary}"
+                          ExecutedAt = DateTimeOffset.UtcNow
+                          Reverted = false
+                          Metadata = Map.ofList [ "detail", canary ] }
+
+                do!
+                    audit.RecordAsync
+                        scope
+                        (AuditLog.toolInvocation
+                            "agent"
+                            "tool"
+                            $"input:{canary}"
+                            $"output:{canary}"
+                            true
+                            PermissionDecision.Allow
+                            (Some correlation.ExecutionId))
+
+                let trace =
+                    Verification.startTrace correlation "agent" $"trace-input:{canary}"
+                    |> Verification.addStep TraceAction.Thinking canary canary 1L
+                    |> Verification.complete $"trace-output:{canary}"
+
+                do! traceStore.SaveAsync scope trace
+            })
+        |> _.GetAwaiter().GetResult()
+
+        let span = tracer.GetByExecution scope correlation.ExecutionId |> List.exactlyOne
+        Assert.AreEqual("operation:[REDACTED]", span.OperationName)
+        Assert.AreEqual("[REDACTED]", span.Attributes.["value"])
+        Assert.AreEqual(SpanStatus.Error "error:[REDACTED]", span.Status)
+
+        let record =
+            journal.GetByExecutionAsync scope correlation.ExecutionId
+            |> _.Result
+            |> List.exactlyOne
+
+        Assert.AreEqual("input:[REDACTED]", record.Input)
+        Assert.AreEqual("output:[REDACTED]", record.Output)
+        Assert.AreEqual("[REDACTED]", record.Metadata.["detail"])
+
+        let entry =
+            audit.QueryByExecutionAsync scope correlation.ExecutionId
+            |> _.Result
+            |> List.exactlyOne
+
+        Assert.AreEqual(Some "input:[REDACTED]", entry.Input)
+        Assert.AreEqual(Some "output:[REDACTED]", entry.Output)
+
+        let storedTrace =
+            traceStore.GetByExecutionAsync scope correlation.ExecutionId
+            |> _.Result
+            |> List.exactlyOne
+
+        Assert.AreEqual("trace-input:[REDACTED]", storedTrace.Input)
+        Assert.AreEqual(Some "trace-output:[REDACTED]", storedTrace.Output)
+        Assert.AreEqual("[REDACTED]", storedTrace.Steps |> List.exactlyOne |> _.Input)
+
+    [<TestMethod>]
+    member _.``Serialized observability streams contain no canary secret``() =
+        let root = tempDir ()
+
+        try
+            let scope = memoryScope "serialized-secret-redaction"
+            let reference = SecretReference.parse "tests/serialized-canary"
+            let canary = "serialized-canary-" + Guid.NewGuid().ToString("N")
+            let correlation = CorrelationContext.root ()
+            let idempotencyKey = IdempotencyKey.forExecution correlation.ExecutionId
+            let tracer = Tracers.file root
+            let journal = ExecutionJournals.file root
+            let audit = AuditLogs.file root
+            let traceStore = TraceStores.file root
+
+            let provider =
+                SecretProvider.create "test" "1" (fun _ _ _ ->
+                    System.Threading.Tasks.Task.FromResult(
+                        SecretLookup.Available(SecretVersion.initial, SecretValue.create reference canary)
+                    ))
+
+            SecretRedaction.runAsync (fun () ->
+                task {
+                    let! _ =
+                        SecretProvider.resolveAsync scope reference System.Threading.CancellationToken.None provider
+
+                    let span = tracer.StartTrace scope correlation $"operation:{canary}"
+                    tracer.SetAttributes scope span (Map.ofList [ canary, canary ])
+                    tracer.EndSpan scope span (SpanStatus.Error canary)
+
+                    do!
+                        journal.RecordAsync
+                            scope
+                            { Id = Guid.NewGuid()
+                              Failure = None
+                              IdempotencyKey = idempotencyKey
+                              Correlation = correlation
+                              TurnId = "turn"
+                              ToolName = $"tool:{canary}"
+                              ReplaySafety = ToolReplaySafety.RetrySafe
+                              Input = canary
+                              Output = canary
+                              ExecutedAt = DateTimeOffset.UtcNow
+                              Reverted = false
+                              Metadata = Map.ofList [ canary, canary ] }
+
+                    do!
+                        audit.RecordAsync
+                            scope
+                            (AuditLog.toolInvocation
+                                "agent"
+                                $"tool:{canary}"
+                                canary
+                                canary
+                                true
+                                PermissionDecision.Allow
+                                (Some correlation.ExecutionId))
+
+                    let trace =
+                        Verification.startTrace correlation "agent" canary
+                        |> Verification.addStep (TraceAction.ToolInvocation canary) canary canary 1L
+                        |> Verification.complete canary
+
+                    do! traceStore.SaveAsync scope trace
+                })
+            |> _.GetAwaiter().GetResult()
+
+            let serialized =
+                Directory.GetFiles(root, "*", SearchOption.AllDirectories)
+                |> Array.map File.ReadAllText
+                |> String.concat "\n"
+
+            Assert.IsTrue(serialized.Contains "[REDACTED]")
+            Assert.IsFalse(serialized.Contains canary)
+        finally
+            Directory.Delete(root, true)
+
 // ---------------- MemoryStore ----------------
 
 let private runMemoryStoreRoundTrip (store: MemoryStore) =

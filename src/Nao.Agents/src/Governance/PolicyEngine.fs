@@ -104,7 +104,8 @@ module PolicyEvaluationFailure =
         if String.IsNullOrWhiteSpace message || message <> message.Trim() then
             invalidArg (nameof message) "Policy failure messages must be non-blank and have no surrounding whitespace."
 
-        { Code = code; Message = message }
+        { Code = code
+          Message = SecretRedaction.redact message }
 
     let code failure = failure.Code
     let message failure = failure.Message

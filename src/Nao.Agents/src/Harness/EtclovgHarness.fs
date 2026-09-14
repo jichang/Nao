@@ -16,14 +16,6 @@ type HarnessServices =
 /// Helpers for constructing harness-service records.
 module HarnessServices =
 
-    /// Services with nothing configured — every capability disabled.
-    let none: HarnessServices =
-        { Tracer = None
-          Metrics = None
-          ExecutionJournal = None
-          TraceStore = None
-          AuditLog = None }
-
     /// Build services from explicit optional components.
     let create
         (tracer: Tracer option)
@@ -58,31 +50,6 @@ type EtclovgConfig =
       PolicyEngine: PolicyEngine option
       PolicyConfirmationBroker: PolicyConfirmationBroker
       Bus: EventBus }
-
-    static member Default =
-        { ToolProtocol = None
-          ProcessEnvironment = None
-          ContainerEnvironment = None
-          ExecutionJournal = None
-          ReplayFixtures = None
-          Lifecycle = []
-          Tracer = None
-          Metrics = None
-          Resilience = ResilienceConfig.NoResilience
-          ReadinessChecks = []
-          TraceStore = None
-          Judge = None
-          Constitution = None
-          ConstitutionRemediationBroker = ConstitutionRemediationBroker.unavailable
-          AuditLog = None
-          PolicyEngine = None
-          PolicyConfirmationBroker = PolicyConfirmationBroker.unavailable
-          Bus = EventBus.none }
-
-    static member WithObservability (tracer: Tracer) (metrics: MetricsCollector) =
-        { EtclovgConfig.Default with
-            Tracer = Some tracer
-            Metrics = Some metrics }
 
     /// Overlay host-provided pluggable services onto this config. A service that is
     /// `Some` overrides the current value; `None` leaves the existing value intact.
@@ -1478,24 +1445,30 @@ module EtclovgHarness =
         (request: ExecutionRequest)
         cancellationToken
         =
-        task {
-            let! decision = resumeDecision config request
+        SecretRedaction.runAsync (fun () ->
+            task {
+                let! decision = resumeDecision config request
 
-            match decision with
-            | ResumeDecision.Stop message ->
-                let result = indeterminateResult config agent request message
-                do! saveCheckpoint config request HarnessCheckpointPhase.Indeterminate
-                return result
-            | ResumeDecision.Execute ->
-                do! saveCheckpoint config request HarnessCheckpointPhase.Accepted
+                match decision with
+                | ResumeDecision.Stop message ->
+                    let result = indeterminateResult config agent request message
+                    do! saveCheckpoint config request HarnessCheckpointPhase.Indeterminate
+                    return result
+                | ResumeDecision.Execute ->
+                    do! saveCheckpoint config request HarnessCheckpointPhase.Accepted
 
-                use deadline =
-                    new System.Threading.CancellationTokenSource(request.Sandbox.Limits.MaxDuration)
+                    use deadline =
+                        new System.Threading.CancellationTokenSource(request.Sandbox.Limits.MaxDuration)
 
-                use execution =
-                    System.Threading.CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline.Token)
+                    use execution =
+                        System.Threading.CancellationTokenSource.CreateLinkedTokenSource(
+                            cancellationToken,
+                            deadline.Token
+                        )
 
-                let! result = runAgentAsync config agentContext agent request None execution.Token cancellationToken
-                do! saveCheckpoint config request (checkpointPhase result.Status)
-                return result
-        }
+                    let! result =
+                        runAgentAsync config agentContext agent request None execution.Token cancellationToken
+
+                    do! saveCheckpoint config request (checkpointPhase result.Status)
+                    return ExecutionResult.redactResult result
+            })

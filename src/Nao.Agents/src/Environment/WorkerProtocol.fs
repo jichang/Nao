@@ -16,7 +16,8 @@ type WorkerExecutionBudget =
 
 /// Worker-local access to host-authorized secret handles.
 [<NoEquality; NoComparison>]
-type WorkerSecrets = { Resolve: string -> string }
+type WorkerSecrets =
+    { Resolve: SecretReference -> SecretValue }
 
 /// Serializable execution request sent to a process worker.
 type WorkerExecutionRequest =
@@ -477,11 +478,11 @@ module WorkerProtocol =
 
         let secrets =
             { Resolve =
-                fun handle ->
-                    match message.Secrets.TryGetValue handle with
-                    | true, value -> value
+                fun reference ->
+                    match message.Secrets.TryGetValue(SecretReference.value reference) with
+                    | true, value -> SecretValue.create reference value
                     | false, _ ->
-                        raise (UnauthorizedAccessException "Secret handle was not authorized for this worker.") }
+                        raise (UnauthorizedAccessException "Secret reference was not authorized for this worker.") }
 
         let request =
             { AgentId = message.AgentId

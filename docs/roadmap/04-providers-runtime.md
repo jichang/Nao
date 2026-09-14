@@ -84,7 +84,7 @@ This workstream turns individual provider adapters and Orleans grains into a res
 ## PRV-05 — Provider configuration and secrets
 
 - [ ] Define validated, versioned provider configuration.
-- [ ] Store secret references rather than secret values.
+- [x] Store secret references rather than secret values.
 - [ ] Support controlled runtime reload and rollback.
 - [ ] Drain or migrate in-flight work during incompatible changes.
 - [ ] Audit administrative changes without logging credentials.
@@ -94,7 +94,7 @@ This workstream turns individual provider adapters and Orleans grains into a res
 **Acceptance criteria**
 
 - [ ] Invalid configuration cannot replace the last known-good configuration.
-- [ ] Secret rotation does not expose values or require unrelated runtime restart.
+- [x] Secret rotation does not expose values or require unrelated runtime restart.
 - [ ] Configuration changes identify affected executions and sessions.
 
 ## RUN-01 — Runtime tenancy model

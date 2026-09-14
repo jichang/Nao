@@ -99,12 +99,16 @@ module AgentLifecycle =
 
     let startAsync (agentId: string) (input: string) (lc: AgentLifecycle) : Task<AgentLifecycle> =
         task {
-            let event = LifecycleEvent.Started(agentId, input, DateTimeOffset.UtcNow)
+            let event =
+                LifecycleEvent.Started(agentId, SecretRedaction.redact input, DateTimeOffset.UtcNow)
+
             return lc |> transition LifecycleState.Running event
         }
 
     let suspend (agentId: string) (reason: string) (lc: AgentLifecycle) : AgentLifecycle =
-        let event = LifecycleEvent.Suspended(agentId, reason, DateTimeOffset.UtcNow)
+        let event =
+            LifecycleEvent.Suspended(agentId, SecretRedaction.redact reason, DateTimeOffset.UtcNow)
+
         lc |> transition LifecycleState.Suspended event
 
     let resume (agentId: string) (lc: AgentLifecycle) : AgentLifecycle =
@@ -113,6 +117,7 @@ module AgentLifecycle =
 
     let completeAsync (agentId: string) (output: string) (lc: AgentLifecycle) : Task<AgentLifecycle> =
         task {
+            let output = SecretRedaction.redact output
             let event = LifecycleEvent.Completed(agentId, output, DateTimeOffset.UtcNow)
             let updated = lc |> transition LifecycleState.Completed event
 
@@ -124,6 +129,7 @@ module AgentLifecycle =
 
     let failAsync (agentId: string) (error: exn) (lc: AgentLifecycle) : Task<AgentLifecycle> =
         task {
+            let error = exn (SecretRedaction.redact error.Message)
             let event = LifecycleEvent.Failed(agentId, error.Message, DateTimeOffset.UtcNow)
             let updated = lc |> transition (LifecycleState.Failed error.Message) event
 
@@ -134,5 +140,7 @@ module AgentLifecycle =
         }
 
     let terminate (agentId: string) (reason: string) (lc: AgentLifecycle) : AgentLifecycle =
-        let event = LifecycleEvent.Terminated(agentId, reason, DateTimeOffset.UtcNow)
+        let event =
+            LifecycleEvent.Terminated(agentId, SecretRedaction.redact reason, DateTimeOffset.UtcNow)
+
         lc |> transition LifecycleState.Terminated event

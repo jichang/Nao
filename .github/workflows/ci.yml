@@ -42,11 +42,42 @@ jobs:
           python3 scripts/validate-project-dependencies.py
           python3 -m unittest scripts/test_validate_project_dependencies.py
 
+      - name: Validate production security configuration
+        run: |
+          python3 scripts/validate-production-security.py
+          python3 -m unittest scripts/test_validate_production_security.py
+
       - name: Check F# formatting
         run: dotnet fantomas --check .
 
       - name: Build
         run: dotnet build Nao.slnx -c Release
+
+      - name: Run fail-closed security regressions
+        shell: bash
+        run: |
+          projects=(
+            tests/Nao.Agents.Tests/Nao.Agents.Tests.fsproj
+            tests/Nao.E2E.Tests/Nao.E2E.Tests.fsproj
+            tests/Nao.Identity.Oidc.Tests/Nao.Identity.Oidc.Tests.fsproj
+            tests/Nao.Persistence.Tests/Nao.Persistence.Tests.fsproj
+            tests/Nao.Providers.Tests/Nao.Providers.Tests.fsproj
+            tests/Nao.Runtime.Orleans.Tests/Nao.Runtime.Orleans.Tests.fsproj
+          )
+
+          for project in "${projects[@]}"; do
+            dotnet test "$project" -c Release --no-build \
+              --settings tests/security.runsettings \
+              --filter "TestCategory=FailClosed"
+          done
+
+      - name: Run process and protocol isolation regressions
+        run: >
+          dotnet test tests/Nao.Agents.Tests/Nao.Agents.Tests.fsproj
+          -c Release
+          --no-build
+          --settings tests/security.runsettings
+          --filter "TestCategory=Isolation"
 
       - name: Test with coverage
         shell: bash

@@ -6,6 +6,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Include="src/AssemblyInfo.fs" />
     <Compile Include="src/Factory/ProviderType.fs" />
     <Compile Include="src/Factory/ProviderFactory.fs" />
   </ItemGroup>

@@ -7,8 +7,9 @@ Quality, safety, latency, reliability, and cost are runtime properties. Nao's ev
 `Nao.Eval` provides evaluation cases, datasets, functional `Evaluator` records, runners, and reports. Built-in modules construct and compose evaluators without implementation classes.
 
 ```fsharp
-// The host supplies an authenticated authorization scope and scoped agent services.
-let execution = EvalExecutionConfig.create authorization createAgentContext
+// Evaluations use the same explicit harness and sandbox policy as production execution.
+let execution =
+    EvalExecutionConfig.create authorization createAgentContext harnessConfig sandboxConfig
 let config = EvalRunnerConfig.create execution
 
 let dataset =

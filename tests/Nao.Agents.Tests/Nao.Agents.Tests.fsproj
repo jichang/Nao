@@ -17,6 +17,7 @@
     <Compile Include="src/PromptPatchTests.fs" />
     <Compile Include="src/LlmTypeTests.fs" />
     <Compile Include="src/IdentityTests.fs" />
+    <Compile Include="src/SecretTests.fs" />
     <Compile Include="src/ConversationWindowTests.fs" />
     <Compile Include="src/MemoryStoreTests.fs" />
     <Compile Include="src/SummarizerTests.fs" />
@@ -42,6 +43,7 @@
     <Compile Include="src/FeedbackTests.fs" />
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="..\Nao.Testing\Nao.Testing.fsproj" />
     <ProjectReference Include="..\..\src\Nao.Agents\Nao.Agents.fsproj" />
     <ProjectReference Include="..\..\src\Nao.Agents.Worker\Nao.Agents.Worker.fsproj" />
     <ProjectReference Include="..\..\src\Nao.Persistence\Nao.Persistence.fsproj" />

@@ -19,6 +19,35 @@ TEST_CATEGORIES = {
     Path("tests/Nao.Runtime.Orleans.Tests/Nao.Runtime.Orleans.Tests.fsproj"): "integration",
 }
 
+TEST_SUPPORT_PROJECTS = {
+    Path("tests/Nao.Testing/Nao.Testing.fsproj"),
+}
+
+REQUIRED_MSTEST_CATEGORIES = {
+    Path("tests/Nao.Agents.Tests/Nao.Agents.Tests.fsproj"): {
+        "Security",
+        "FailClosed",
+        "Isolation",
+    },
+    Path("tests/Nao.E2E.Tests/Nao.E2E.Tests.fsproj"): {"Security", "FailClosed"},
+    Path("tests/Nao.Identity.Oidc.Tests/Nao.Identity.Oidc.Tests.fsproj"): {
+        "Security",
+        "FailClosed",
+    },
+    Path("tests/Nao.Persistence.Tests/Nao.Persistence.Tests.fsproj"): {
+        "Security",
+        "FailClosed",
+    },
+    Path("tests/Nao.Providers.Tests/Nao.Providers.Tests.fsproj"): {
+        "Security",
+        "FailClosed",
+    },
+    Path("tests/Nao.Runtime.Orleans.Tests/Nao.Runtime.Orleans.Tests.fsproj"): {
+        "Security",
+        "FailClosed",
+    },
+}
+
 
 def project_paths(root: Path, directory: str) -> set[Path]:
     return {
@@ -48,12 +77,25 @@ def validate(root: Path) -> list[str]:
     for project in sorted(declared - discovered):
         errors.append(f"Nao.slnx references a missing project: {project}")
 
-    supported_tests = project_paths(root, "tests") & declared
+    supported_tests = (project_paths(root, "tests") & declared) - TEST_SUPPORT_PROJECTS
     for project in sorted(supported_tests - TEST_CATEGORIES.keys()):
         errors.append(f"supported test project has no category: {project}")
 
     for project in sorted(TEST_CATEGORIES.keys() - supported_tests):
         errors.append(f"test category names an unsupported project: {project}")
+
+    for project in sorted(TEST_SUPPORT_PROJECTS - declared):
+        errors.append(f"test support project is not declared in Nao.slnx: {project}")
+
+    for project, categories in REQUIRED_MSTEST_CATEGORIES.items():
+        source = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in sorted((root / project.parent / "src").glob("*.fs"))
+        )
+
+        for category in sorted(categories):
+            if f'TestCategory("{category}")' not in source:
+                errors.append(f"{project} has no MSTest {category} category")
 
     return errors
 

@@ -10,7 +10,14 @@ open Nao.Agents
 
 /// Functional provider factory for any server that speaks the OpenAI-compatible chat completions API.
 /// The configured URL must be the complete endpoint and is used without modification.
-let createWithHandler name baseUrl model apiKey timeoutSeconds (httpHandler: HttpMessageHandler option) : LlmProvider =
+let createWithHandler
+    name
+    baseUrl
+    model
+    (apiKey: SecretValue option)
+    timeoutSeconds
+    (httpHandler: HttpMessageHandler option)
+    : LlmProvider =
     let chatUrl =
         match Uri.TryCreate(baseUrl, UriKind.Absolute) with
         | true, uri when uri.Scheme = Uri.UriSchemeHttp || uri.Scheme = Uri.UriSchemeHttps -> uri
@@ -24,8 +31,10 @@ let createWithHandler name baseUrl model apiKey timeoutSeconds (httpHandler: Htt
 
     do
         match apiKey with
-        | Some key when not (String.IsNullOrWhiteSpace key) ->
-            client.DefaultRequestHeaders.Authorization <- AuthenticationHeaderValue("Bearer", key)
+        | Some key ->
+            SecretValue.useValue
+                (fun value -> client.DefaultRequestHeaders.Authorization <- AuthenticationHeaderValue("Bearer", value))
+                key
         | _ -> ()
 
     let roleToString (role: Role) =

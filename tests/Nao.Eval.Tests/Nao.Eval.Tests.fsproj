@@ -19,6 +19,7 @@
     <Compile Include="src/EvalArchiveTests.fs" />
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="..\Nao.Testing\Nao.Testing.fsproj" />
     <ProjectReference Include="..\..\src\Nao.Eval\Nao.Eval.fsproj" />
   </ItemGroup>
   <Import Project="..\..\.paket\Paket.Restore.targets" />

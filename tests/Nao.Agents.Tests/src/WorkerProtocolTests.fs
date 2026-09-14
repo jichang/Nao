@@ -7,7 +7,7 @@ open System.Threading.Tasks
 open Microsoft.VisualStudio.TestTools.UnitTesting
 open Nao.Agents
 
-[<TestClass>]
+[<TestClass; TestCategory("Security"); TestCategory("FailClosed"); TestCategory("Isolation")>]
 type WorkerProtocolTests() =
     let principalJson =
         """{"tenantId":"tenant","subjectId":"user","impersonatedUserId":null,"impersonationReason":null,"serviceId":"api","serviceDelegations":[],"groupIds":["engineering"],"roles":["operator"],"claims":{"region":"private-region"},"authenticationStrength":"MultiFactor"}"""

@@ -130,12 +130,34 @@ module Judge =
 /// Captures and manages execution traces for verification
 module Verification =
 
+    let redact (trace: ExecutionTrace) =
+        let redactAction =
+            function
+            | TraceAction.LlmCall model -> TraceAction.LlmCall(SecretRedaction.redact model)
+            | TraceAction.ToolInvocation toolName -> TraceAction.ToolInvocation(SecretRedaction.redact toolName)
+            | TraceAction.AgentDelegation agentName -> TraceAction.AgentDelegation(SecretRedaction.redact agentName)
+            | TraceAction.MemoryAccess operation -> TraceAction.MemoryAccess(SecretRedaction.redact operation)
+            | action -> action
+
+        { trace with
+            AgentId = SecretRedaction.redact trace.AgentId
+            Input = SecretRedaction.redact trace.Input
+            Output = SecretRedaction.redactOption trace.Output
+            Steps =
+                trace.Steps
+                |> List.map (fun step ->
+                    { step with
+                        Action = redactAction step.Action
+                        Input = SecretRedaction.redact step.Input
+                        Output = SecretRedaction.redact step.Output })
+            Metadata = SecretRedaction.redactMap trace.Metadata }
+
     /// Create a new execution trace
     let startTrace (correlation: CorrelationContext) (agentId: string) (input: string) : ExecutionTrace =
         { Id = Guid.NewGuid()
           Correlation = correlation
           AgentId = agentId
-          Input = input
+          Input = SecretRedaction.redact input
           Output = None
           Steps = []
           StartedAt = DateTimeOffset.UtcNow
@@ -154,8 +176,8 @@ module Verification =
         let step =
             { StepNumber = trace.Steps.Length + 1
               Action = action
-              Input = input
-              Output = output
+              Input = SecretRedaction.redact input
+              Output = SecretRedaction.redact output
               DurationMs = durationMs
               Timestamp = DateTimeOffset.UtcNow }
 
@@ -165,14 +187,14 @@ module Verification =
     /// Complete the trace with success
     let complete (output: string) (trace: ExecutionTrace) : ExecutionTrace =
         { trace with
-            Output = Some output
+            Output = Some(SecretRedaction.redact output)
             CompletedAt = Some DateTimeOffset.UtcNow
             Success = true }
 
     /// Complete the trace with failure
     let fail (error: string) (trace: ExecutionTrace) : ExecutionTrace =
         { trace with
-            Output = Some error
+            Output = Some(SecretRedaction.redact error)
             CompletedAt = Some DateTimeOffset.UtcNow
             Success = false }
 

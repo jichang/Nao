@@ -167,7 +167,7 @@ type SandboxTests() =
         Assert.AreEqual(None, child.BeginToolCall())
         Assert.AreEqual(Some LimitExceeded.ToolCalls, parent.BeginToolCall())
 
-[<TestClass>]
+[<TestClass; TestCategory("Security"); TestCategory("FailClosed"); TestCategory("Isolation")>]
 type ExecutionEnvironmentTests() =
 
     let makeAgent (response: string) =
@@ -1024,9 +1024,10 @@ type ExecutionEnvironmentTests() =
 
     [<TestMethod>]
     member _.ProcessEnvironmentResolvesDeclaredSecretInsideWorker() =
-        let handle = "secret-" + Guid.NewGuid().ToString("N")
+        let handle = "secret-" + Guid.NewGuid().ToString("N") |> SecretReference.parse
+
         let secret = Guid.NewGuid().ToString("N")
-        let resolvedHandles = ResizeArray<string>()
+        let resolvedHandles = ResizeArray<SecretReference>()
 
         let agent =
             Agent.createWorker
@@ -1038,6 +1039,26 @@ type ExecutionEnvironmentTests() =
                 AgentContract.Text
                 (WorkerAgentReference.create "process-secret-hash")
 
+        let execution = ExecutionContext.Create SandboxConfig.Default
+
+        let authorization =
+            SecurityPrincipal.create (TenantId.parse "secret-tenant") (UserId.parse "secret-user") []
+            |> fun principal -> AuthorizationScope.tryCreate principal None (WorkspaceId.parse "secret-workspace") None
+            |> Option.map (AuthorizationScope.startAgent agent.Metadata.Id execution.ExecutionId)
+            |> Option.get
+
+        let provider =
+            SecretProvider.create "test-worker-secrets" "1" (fun actualAuthorization requestedHandle _ ->
+                Assert.AreEqual(authorization, actualAuthorization)
+                resolvedHandles.Add requestedHandle
+
+                Task.FromResult(
+                    if requestedHandle = handle then
+                        SecretLookup.Available(SecretVersion.initial, SecretValue.create handle secret)
+                    else
+                        SecretLookup.Missing
+                ))
+
         let environment =
             ExecutionEnvironment.processWorker
                 { FileName = workerExecutable
@@ -1045,21 +1066,16 @@ type ExecutionEnvironmentTests() =
                   ProtocolVersion = WorkerProtocol.CurrentVersion
                   IdentityIsolation = ProcessIdentityIsolation.Disabled
                   FileSystemIsolation = ProcessFileSystemIsolation.Disabled
-                  SecretResolver =
-                    Some
-                        { Handles = [ handle ]
-                          ResolveAsync =
-                            fun _ _ requestedHandle ->
-                                resolvedHandles.Add requestedHandle
-                                Task.FromResult(if requestedHandle = handle then Some secret else None) }
+                  SecretResolver = Some(ProcessSecretResolver.fromProvider [ handle ] provider)
                   OutputCapture = None }
 
+        let agentContext =
+            { AgentContext.unrestrictedForTests () with
+                ExecutionBoundary = ExecutionBoundary.HarnessRequired
+                Authorization = Some authorization }
+
         let result =
-            environment.ExecuteAsync
-                (ExecutionContext.Create SandboxConfig.Default)
-                (AgentContext.unrestrictedForTests ())
-                agent
-                handle
+            environment.ExecuteAsync execution agentContext agent (SecretReference.value handle)
             |> _.Result
 
         let expectedHash =
@@ -1070,6 +1086,75 @@ type ExecutionEnvironmentTests() =
 
         Assert.AreEqual(Ok expectedHash, result)
         CollectionAssert.AreEqual([| handle |], resolvedHandles.ToArray())
+
+    [<TestMethod>]
+    member _.ProcessEnvironmentDoesNotLeakCanarySecretThroughInputOutputOrCapturedStreams() =
+        let handle = SecretReference.parse "worker/canary"
+        let canary = "worker-canary-" + Guid.NewGuid().ToString("N")
+
+        let agent =
+            Agent.createWorker
+                "worker-secret-canary"
+                "worker-secret-canary"
+                "process secret canary test agent"
+                0
+                []
+                AgentContract.Text
+                (WorkerAgentReference.create "process-stderr-text")
+
+        let execution = ExecutionContext.Create SandboxConfig.Default
+
+        let authorization =
+            SecurityPrincipal.create (TenantId.parse "secret-tenant") (UserId.parse "secret-user") []
+            |> fun principal -> AuthorizationScope.tryCreate principal None (WorkspaceId.parse "secret-workspace") None
+            |> Option.map (AuthorizationScope.startAgent agent.Metadata.Id execution.ExecutionId)
+            |> Option.get
+
+        let provider =
+            SecretProvider.create "test-worker-secrets" "1" (fun _ requestedReference _ ->
+                Task.FromResult(
+                    SecretLookup.Available(SecretVersion.initial, SecretValue.create requestedReference canary)
+                ))
+
+        let artifacts = ResizeArray<Artifact>()
+
+        let agentContext =
+            { AgentContext.unrestrictedForTests () with
+                ExecutionBoundary = ExecutionBoundary.HarnessRequired
+                Authorization = Some authorization
+                NextArtifactKey = fun () -> IdempotencyKey.parse ("worker-canary:" + String('c', 64))
+                PublishArtifact =
+                    fun artifact ->
+                        artifacts.Add artifact
+                        Task.CompletedTask }
+
+        let environment =
+            ExecutionEnvironment.processWorker
+                { FileName = workerExecutable
+                  Arguments = []
+                  ProtocolVersion = WorkerProtocol.CurrentVersion
+                  IdentityIsolation = ProcessIdentityIsolation.Disabled
+                  FileSystemIsolation = ProcessFileSystemIsolation.Disabled
+                  SecretResolver = Some(ProcessSecretResolver.fromProvider [ handle ] provider)
+                  OutputCapture =
+                    Some
+                        { MaxBytesPerStream = 4096
+                          Redact = id } }
+
+        let result =
+            SecretRedaction.runAsync (fun () -> environment.ExecuteAsync execution agentContext agent canary)
+            |> _.Result
+
+        Assert.AreEqual(Ok "completed", result)
+        Assert.IsTrue(artifacts.Count > 0)
+
+        for artifact in artifacts do
+            Assert.IsFalse(artifact.Payload.Contains canary)
+
+        let stderr =
+            artifacts |> Seq.find (fun artifact -> artifact.Kind = "process.stderr")
+
+        Assert.AreEqual("[REDACTED]", stderr.Payload)
 
     [<TestMethod>]
     member _.ProcessEnvironmentRejectsUndeclaredSecretWithoutResolvingIt() =
@@ -1094,7 +1179,7 @@ type ExecutionEnvironmentTests() =
                   FileSystemIsolation = ProcessFileSystemIsolation.Disabled
                   SecretResolver =
                     Some
-                        { Handles = []
+                        { References = []
                           ResolveAsync =
                             fun _ _ _ ->
                                 resolverCalled <- true
@@ -1114,7 +1199,7 @@ type ExecutionEnvironmentTests() =
 
     [<TestMethod>]
     member _.ProcessEnvironmentRejectsUnresolvedDeclaredSecret() =
-        let handle = "secret-" + Guid.NewGuid().ToString("N")
+        let handle = "secret-" + Guid.NewGuid().ToString("N") |> SecretReference.parse
 
         let environment =
             ExecutionEnvironment.processWorker
@@ -1125,7 +1210,7 @@ type ExecutionEnvironmentTests() =
                   FileSystemIsolation = ProcessFileSystemIsolation.Disabled
                   SecretResolver =
                     Some
-                        { Handles = [ handle ]
+                        { References = [ handle ]
                           ResolveAsync = fun _ _ _ -> Task.FromResult None }
                   OutputCapture = None }
 
@@ -1142,11 +1227,54 @@ type ExecutionEnvironmentTests() =
         StringAssert.Contains(error.Message, "could not be resolved")
 
     [<TestMethod>]
-    member _.ProcessEnvironmentRejectsProtocolMismatchBeforeExecution() =
+    member _.ProcessEnvironmentRejectsSecretResolvedForDifferentReference() =
+        let requested = SecretReference.parse ("requested-" + Guid.NewGuid().ToString("N"))
+        let returned = SecretReference.parse ("returned-" + Guid.NewGuid().ToString("N"))
+
         let environment =
-            processEnvironment
-                WorkerProtocol.CurrentVersion
-                [ "--protocol-version"; string (WorkerProtocol.CurrentVersion + 1) ]
+            ExecutionEnvironment.processWorker
+                { FileName = workerExecutable
+                  Arguments = []
+                  ProtocolVersion = WorkerProtocol.CurrentVersion
+                  IdentityIsolation = ProcessIdentityIsolation.Disabled
+                  FileSystemIsolation = ProcessFileSystemIsolation.Disabled
+                  SecretResolver =
+                    Some
+                        { References = [ requested ]
+                          ResolveAsync = fun _ _ _ -> Task.FromResult(Some(SecretValue.create returned "wrong-secret")) }
+                  OutputCapture = None }
+
+        let error =
+            Assert.ThrowsExactlyAsync<GovernedExecutionException>(fun () ->
+                environment.ExecuteAsync
+                    (ExecutionContext.Create SandboxConfig.Default)
+                    (AgentContext.unrestrictedForTests ())
+                    workerAgent
+                    "payload"
+                :> Task)
+            |> _.Result
+
+        StringAssert.Contains(error.Message, "different reference")
+
+    [<TestMethod>]
+    member _.ProcessEnvironmentRejectsProtocolMismatchBeforeExecution() =
+        let mutable resolverCalled = false
+
+        let environment =
+            ExecutionEnvironment.processWorker
+                { FileName = workerExecutable
+                  Arguments = [ "--protocol-version"; string (WorkerProtocol.CurrentVersion + 1) ]
+                  ProtocolVersion = WorkerProtocol.CurrentVersion
+                  IdentityIsolation = ProcessIdentityIsolation.Disabled
+                  FileSystemIsolation = ProcessFileSystemIsolation.Disabled
+                  SecretResolver =
+                    Some
+                        { References = [ SecretReference.parse "worker/test" ]
+                          ResolveAsync =
+                            fun _ _ _ ->
+                                resolverCalled <- true
+                                Task.FromResult None }
+                  OutputCapture = None }
 
         let ctx = ExecutionContext.Create SandboxConfig.Default
 
@@ -1156,6 +1284,7 @@ type ExecutionEnvironmentTests() =
             |> _.Result
 
         StringAssert.Contains(error.Message, "protocol mismatch")
+        Assert.IsFalse(resolverCalled, "Secrets must not resolve before a successful worker handshake.")
 
     [<TestMethod>]
     member _.ProcessEnvironmentRejectsLocalOnlyAgentBeforeSpawn() =

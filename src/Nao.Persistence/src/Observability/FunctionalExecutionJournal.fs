@@ -5,6 +5,27 @@ open System.IO
 open System.Threading.Tasks
 open Nao.Agents
 
+module private JournalRedaction =
+    let private redact = SecretRedaction.redact
+
+    let failure (failure: ToolFailure) =
+        { failure with
+            Message = redact failure.Message }
+
+    let record (record: ExecutionRecord) =
+        { record with
+            ToolName = redact record.ToolName
+            Input = redact record.Input
+            Output = redact record.Output
+            Failure = record.Failure |> Option.map failure
+            Metadata = SecretRedaction.redactMap record.Metadata }
+
+    let transition (transition: ToolSideEffectTransition) =
+        { transition with
+            ToolName = redact transition.ToolName
+            Input = redact transition.Input
+            Detail = transition.Detail |> SecretRedaction.redactOption }
+
 module private ExecutionJournalState =
     let create () : ExecutionJournal =
         let records =
@@ -54,6 +75,7 @@ module private ExecutionJournalState =
         let sideEffectJournal: ToolSideEffectJournal =
             { Save =
                 fun scope transition ->
+                    let transition = JournalRedaction.transition transition
                     sideEffects.[(ownerKey scope, transition.Id)] <- transition
                     Task.CompletedTask
               GetByIdempotencyKey =
@@ -93,6 +115,7 @@ module private ExecutionJournalState =
 
         { RecordAsync =
             fun scope record ->
+                let record = JournalRedaction.record record
                 records.[(ownerKey scope, record.Id)] <- record
                 Task.CompletedTask
           GetHistoryAsync =
@@ -243,6 +266,8 @@ module PersistentExecutionJournal =
         let sideEffectJournal: ToolSideEffectJournal =
             { Save =
                 fun scope transition ->
+                    let transition = JournalRedaction.transition transition
+
                     task {
                         mutate
                             scope
@@ -274,6 +299,8 @@ module PersistentExecutionJournal =
 
         { RecordAsync =
             fun scope record ->
+                let record = JournalRedaction.record record
+
                 task {
                     mutate
                         scope

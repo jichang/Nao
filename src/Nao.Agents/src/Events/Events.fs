@@ -252,6 +252,188 @@ type EventBus =
           Add: EventConsumer -> unit
           Remove: EventConsumer -> unit }
 
+module private EventRedaction =
+    let text = SecretRedaction.redact
+    let optionalText = Option.map text
+    let textMap = Map.map (fun _ -> text)
+
+    let artifact (artifact: Artifact) =
+        { artifact with
+            Kind = text artifact.Kind
+            ContentType = text artifact.ContentType
+            Payload = text artifact.Payload }
+
+    let failure (failure: ToolFailure) =
+        { failure with
+            Message = text failure.Message }
+
+    let completion (result: CompletionResult) =
+        { result with
+            Content = text result.Content
+            FinishReason = text result.FinishReason }
+
+    let spanStatus =
+        function
+        | SpanStatus.Error message -> SpanStatus.Error(text message)
+        | status -> status
+
+    let span (span: Span) =
+        { span with
+            OperationName = text span.OperationName
+            Status = spanStatus span.Status
+            Attributes = textMap span.Attributes
+            Events =
+                span.Events
+                |> List.map (fun (event: SpanEvent) ->
+                    { event with
+                        Name = text event.Name
+                        Attributes = textMap event.Attributes }) }
+
+    let executionRecord (record: ExecutionRecord) =
+        { record with
+            ToolName = text record.ToolName
+            Input = text record.Input
+            Output = text record.Output
+            Failure = record.Failure |> Option.map failure
+            Metadata = textMap record.Metadata }
+
+    let trace (trace: ExecutionTrace) =
+        let traceAction =
+            function
+            | TraceAction.LlmCall model -> TraceAction.LlmCall(text model)
+            | TraceAction.ToolInvocation toolName -> TraceAction.ToolInvocation(text toolName)
+            | TraceAction.AgentDelegation agentName -> TraceAction.AgentDelegation(text agentName)
+            | TraceAction.MemoryAccess operation -> TraceAction.MemoryAccess(text operation)
+            | action -> action
+
+        { trace with
+            AgentId = text trace.AgentId
+            Input = text trace.Input
+            Output = optionalText trace.Output
+            Steps =
+                trace.Steps
+                |> List.map (fun (step: TraceStep) ->
+                    { step with
+                        Action = traceAction step.Action
+                        Input = text step.Input
+                        Output = text step.Output })
+            Metadata = textMap trace.Metadata }
+
+    let audit (entry: AuditEntry) =
+        let action =
+            match entry.Action with
+            | AuditAction.LlmCall model -> AuditAction.LlmCall(text model)
+            | AuditAction.ToolInvocation toolName -> AuditAction.ToolInvocation(text toolName)
+            | AuditAction.AgentDelegation agentName -> AuditAction.AgentDelegation(text agentName)
+            | AuditAction.MemoryWrite key -> AuditAction.MemoryWrite(text key)
+            | AuditAction.MemoryRead key -> AuditAction.MemoryRead(text key)
+            | AuditAction.ResourceAccess(kind, resource) -> AuditAction.ResourceAccess(text kind, text resource)
+            | AuditAction.PermissionCheck capability -> AuditAction.PermissionCheck(text capability)
+            | AuditAction.PolicyEvaluation policyId -> AuditAction.PolicyEvaluation(text policyId)
+            | AuditAction.ConstitutionEvaluation ruleId -> AuditAction.ConstitutionEvaluation(text ruleId)
+            | AuditAction.LifecycleTransition(fromState, toState) ->
+                AuditAction.LifecycleTransition(text fromState, text toState)
+
+        { entry with
+            AgentId = text entry.AgentId
+            Action = action
+            Input = optionalText entry.Input
+            Output = optionalText entry.Output
+            Metadata = textMap entry.Metadata }
+
+    let metric (record: MetricRecord) =
+        let payload =
+            match record.Payload with
+            | MetricPayload.ToolCall(toolName, durationMs, success) ->
+                MetricPayload.ToolCall(text toolName, durationMs, success)
+            | MetricPayload.Custom point ->
+                MetricPayload.Custom
+                    { point with
+                        Name = text point.Name
+                        Labels = textMap point.Labels }
+            | payload -> payload
+
+        { record with Payload = payload }
+
+    let turnRecord (record: TurnRecord) =
+        let toolCall (call: ToolCallRecord) =
+            { call with
+                Name = text call.Name
+                Input = text call.Input
+                Output = text call.Output }
+
+        let subAgentCall (call: SubAgentCallRecord) =
+            { call with
+                Name = text call.Name
+                Input = text call.Input
+                Output = text call.Output }
+
+        { record with
+            AgentName = text record.AgentName
+            Input = text record.Input
+            Output = text record.Output
+            ToolCalls = record.ToolCalls |> List.map toolCall
+            SubAgentCalls = record.SubAgentCalls |> List.map subAgentCall
+            Artifacts = record.Artifacts |> List.map artifact }
+
+    let conversationMessage (message: ConversationMessage) =
+        { message with
+            Role = text message.Role
+            Content = text message.Content
+            Steps =
+                message.Steps
+                |> List.map (fun (step: ConversationStep) ->
+                    { step with
+                        Kind = text step.Kind
+                        Title = text step.Title
+                        Input = text step.Input
+                        Output = text step.Output })
+            Attachments = message.Attachments |> List.map text
+            Artifacts = message.Artifacts |> List.map artifact }
+
+    let observability =
+        function
+        | SpanStarted value -> SpanStarted(span value)
+        | SpanEnded(value, status) -> SpanEnded(span value, spanStatus status)
+        | SpanEventAdded(value, name, attributes) -> SpanEventAdded(span value, text name, textMap attributes)
+        | SpanAttributesSet(value, attributes) -> SpanAttributesSet(span value, textMap attributes)
+        | MetricRecorded value -> MetricRecorded(metric value)
+        | ExecutionRecorded value -> ExecutionRecorded(executionRecord value)
+        | TraceSaved value -> TraceSaved(trace value)
+        | AuditRecorded value -> AuditRecorded(audit value)
+        | ExecutionReverted value -> ExecutionReverted value
+
+    let progress =
+        function
+        | ReasoningAdded content -> ReasoningAdded(text content)
+        | ToolInvoked(name, input) -> ToolInvoked(text name, text input)
+        | ToolCompleted(name, result) -> ToolCompleted(text name, text result)
+        | SubAgentInvoked(name, input) -> SubAgentInvoked(text name, text input)
+        | SubAgentCompleted(name, result) -> SubAgentCompleted(text name, text result)
+        | ArtifactPublished value -> ArtifactPublished(artifact value)
+        | AnswerProduced answer -> AnswerProduced(text answer)
+
+    let conversation =
+        function
+        | MessagesAppended(name, messages) -> MessagesAppended(text name, messages |> List.map conversationMessage)
+        | ConversationSaved(name, messages) -> ConversationSaved(text name, messages |> List.map conversationMessage)
+        | ConversationDeleted name -> ConversationDeleted(text name)
+        | SessionConversationsDeleted -> SessionConversationsDeleted
+
+    let llmExchange (exchange: LlmExchange) =
+        { exchange with
+            Provider = text exchange.Provider
+            Messages = exchange.Messages |> List.map (fun (role, content) -> text role, text content)
+            Result = completion exchange.Result }
+
+    let event =
+        function
+        | TurnCompleted(scope, record) -> TurnCompleted(scope, turnRecord record)
+        | ObservabilityCaptured(scope, signal) -> ObservabilityCaptured(scope, observability signal)
+        | ConversationCaptured(scope, signal) -> ConversationCaptured(scope, conversation signal)
+        | TurnProgress(scope, signal) -> TurnProgress(scope, progress signal)
+        | LlmExchangeRecorded(scope, exchange) -> LlmExchangeRecorded(scope, llmExchange exchange)
+
 /// Composable event bus helpers.
 module EventBus =
 
@@ -260,7 +442,7 @@ module EventBus =
           Add = subscribe
           Remove = unsubscribe }
 
-    let publishAsync event bus = bus.Publish event
+    let publishAsync event bus = bus.Publish(EventRedaction.event event)
 
     let subscribe consumer bus = bus.Add consumer
 

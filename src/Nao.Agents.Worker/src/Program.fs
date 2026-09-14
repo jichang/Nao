@@ -262,7 +262,10 @@ module StandardWorkerHandlers =
         |> Task.FromResult
 
     let processSecretHash (request: WorkerExecutionRequest) =
-        request.Secrets.Resolve request.Input
+        request.Input
+        |> SecretReference.parse
+        |> request.Secrets.Resolve
+        |> SecretValue.useValue id
         |> Text.Encoding.UTF8.GetBytes
         |> SHA256.HashData
         |> Convert.ToHexString

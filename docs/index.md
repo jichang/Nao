@@ -23,6 +23,7 @@ The current implementation provides agent, ETCLOVG harness, persistence, provide
 | [Architecture and ETCLOVG](architecture.html) | Harness execution flow, seven concerns, state ownership, extension boundaries, and known gaps |
 | [Agents and orchestration](agents-orchestration.html) | Typed agents, routers, pipelines, collaborative groups, delegation, and orchestrators |
 | [Tools, security, and governance](tools-governance.html) | Typed tools, MCP, permissions, policy, constitutions, audit, compensation, and isolation |
+| [Security threat model](security-threat-model.html) | R1 assets, trust boundaries, threats, abuse cases, controls, and residual host responsibilities |
 | [Memory and knowledge](memory-knowledge.html) | Context, agent memory, semantic/graph memory, knowledge lifecycle, and RAG direction |
 | [Evaluation and observability](evaluation-observability.html) | Evaluators, replay, quality gates, traces, metrics, external telemetry, and drift |
 | [Providers and distributed runtime](providers-runtime.html) | Provider semantics and routing, Orleans sessions, tenancy, workspaces, and cluster operations |

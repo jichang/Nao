@@ -51,6 +51,20 @@ class DependencyPolicyTests(unittest.TestCase):
             VALIDATOR.validate(self.root),
         )
 
+    def test_rejects_production_dependency_on_test_support(self) -> None:
+        project = Path("src/Nao.Agents/Nao.Agents.fsproj")
+        (self.root / project).write_text(
+            '<Project><ItemGroup><ProjectReference Include="..\\..\\tests\\Nao.Testing\\Nao.Testing.fsproj" />'
+            "</ItemGroup></Project>",
+            encoding="utf-8",
+        )
+
+        self.assertIn(
+            "forbidden project dependency: "
+            "src/Nao.Agents/Nao.Agents.fsproj -> tests/Nao.Testing/Nao.Testing.fsproj",
+            VALIDATOR.validate(self.root),
+        )
+
     def test_rejects_vendor_package_in_core(self) -> None:
         references = self.root / "src/Nao.Protocols/paket.references"
         references.write_text("OpenAI\n", encoding="utf-8")

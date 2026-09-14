@@ -8,14 +8,18 @@ open System.Threading.Tasks
 open Nao.Agents
 
 /// Functional provider factory for Anthropic's native Messages API.
-let createWithHandler (config: AnthropicConfig) (httpHandler: HttpMessageHandler option) : LlmProvider =
+let createWithHandler
+    (config: AnthropicConfig)
+    (apiKey: SecretValue option)
+    (httpHandler: HttpMessageHandler option)
+    : LlmProvider =
     let client = new HttpClient(defaultArg httpHandler (new HttpClientHandler()))
 
     do
         client.DefaultRequestHeaders.Add("anthropic-version", "2023-06-01")
 
-        if not (String.IsNullOrWhiteSpace config.ApiKey) then
-            client.DefaultRequestHeaders.Add("x-api-key", config.ApiKey)
+        apiKey
+        |> Option.iter (SecretValue.useValue (fun value -> client.DefaultRequestHeaders.Add("x-api-key", value)))
 
         config.TimeoutSeconds
         |> Option.iter (fun seconds -> client.Timeout <- TimeSpan.FromSeconds(float seconds))
@@ -240,4 +244,4 @@ let createWithHandler (config: AnthropicConfig) (httpHandler: HttpMessageHandler
       StreamAsync = Some streamAsync
       Dispose = client.Dispose }
 
-let create config = createWithHandler config None
+let create config apiKey = createWithHandler config apiKey None

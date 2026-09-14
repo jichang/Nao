@@ -49,8 +49,13 @@ type McpJsonTests() =
         Assert.AreEqual("tool\"name", root.GetProperty("params").GetProperty("name").GetString())
         Assert.AreEqual(2, root.GetProperty("params").GetProperty("arguments").GetProperty("count").GetInt32())
 
-[<TestClass>]
+[<TestClass; TestCategory("Security"); TestCategory("FailClosed")>]
 type ProviderFactoryTests() =
+    let authorization =
+        SecurityPrincipal.create (TenantId.parse "provider-tenant") (UserId.parse "provider-user") []
+        |> fun principal -> AuthorizationScope.tryCreate principal None (WorkspaceId.parse "provider-workspace") None
+        |> Option.get
+
     [<TestMethod>]
     member _.CreatesOpenAIProvider() =
         let provider = ProviderFactory.create (OpenAI OpenAIConfig.Default)
@@ -80,6 +85,199 @@ type ProviderFactoryTests() =
     member _.CreatesLlamaCppProvider() =
         let provider = ProviderFactory.create (LlamaCpp LlamaCppConfig.Default)
         Assert.IsTrue((provider.Name()).StartsWith "llama.cpp")
+
+    [<TestMethod>]
+    member _.RequiresCredentialMatchingConfiguredReference() =
+        let expectedReference = SecretReference.parse "providers/openai/api-key"
+
+        let providerType =
+            OpenAI
+                { OpenAIConfig.Default with
+                    ApiKeyReference = Some expectedReference
+                    BaseUrl = "http://localhost:1" }
+
+        Assert.ThrowsExactly<InvalidOperationException>(fun () -> ProviderFactory.create providerType |> ignore)
+        |> ignore
+
+        let mismatchedProvider =
+            SecretProvider.create "test" "1" (fun _ _ _ ->
+                Task.FromResult(
+                    SecretLookup.Available(
+                        SecretVersion.initial,
+                        SecretValue.create (SecretReference.parse "providers/other/api-key") "wrong-secret"
+                    )
+                ))
+
+        let mismatchedActivation =
+            ProviderFactory.activateAsync (Some mismatchedProvider) authorization providerType CancellationToken.None
+            |> _.Result
+
+        Assert.ThrowsExactly<InvalidOperationException>(fun () ->
+            mismatchedActivation.Provider.CompleteAsync
+                (CorrelationContext.root ())
+                [ { Role = User; Content = "test" } ]
+                CompletionOptions.Default
+            |> _.GetAwaiter().GetResult()
+            |> ignore)
+        |> ignore
+
+        let mutable resolutions = 0
+
+        let secretProvider =
+            SecretProvider.create "test-vault" "2" (fun actualAuthorization reference _ ->
+                Assert.AreEqual(authorization, actualAuthorization)
+                Assert.AreEqual(expectedReference, reference)
+                resolutions <- resolutions + 1
+
+                Task.FromResult(
+                    SecretLookup.Available(
+                        SecretVersion.parse (string resolutions),
+                        SecretValue.create reference $"resolved-secret-{resolutions}"
+                    )
+                ))
+
+        let activation =
+            ProviderFactory.activateAsync (Some secretProvider) authorization providerType CancellationToken.None
+            |> _.Result
+
+        Assert.IsTrue((activation.Provider.Name()).StartsWith "OpenAI")
+        Assert.AreEqual(Some expectedReference, activation.CredentialReference)
+        Assert.AreEqual(0, resolutions, "Provider activation must not resolve credential material.")
+
+        for _ in 1..2 do
+            Assert.ThrowsExactly<PlatformFailureException>(fun () ->
+                activation.Provider.CompleteAsync
+                    (CorrelationContext.root ())
+                    [ { Role = User; Content = "test" } ]
+                    CompletionOptions.Default
+                |> _.GetAwaiter().GetResult()
+                |> ignore)
+            |> ignore
+
+        Assert.AreEqual(2, resolutions, "Each outbound operation must resolve independently.")
+
+    [<TestMethod>]
+    member _.``Credentialed operations redact secrets from prompts streamed chunks results and errors``() =
+        let reference = SecretReference.parse "providers/test/api-key"
+        let canary = "provider-canary-secret"
+
+        let secretProvider =
+            SecretProvider.create "test-vault" "1" (fun _ _ _ ->
+                Task.FromResult(SecretLookup.Available(SecretVersion.initial, SecretValue.create reference canary)))
+
+        let mutable receivedPrompt = ""
+
+        let createProvider (_: SecretValue) =
+            { LlmProvider.create (fun () -> "test") (fun _ conversation _ ->
+                  receivedPrompt <- conversation |> List.exactlyOne |> _.Content
+
+                  Task.FromResult(CompletionResult.create $"result:{canary}" $"finish:{canary}" None None)) with
+                StreamAsync =
+                    Some(fun _ conversation _ onChunk ->
+                        receivedPrompt <- conversation |> List.exactlyOne |> _.Content
+                        onChunk (CompletionChunk.create "result:provider-canary-" None None None)
+                        onChunk (CompletionChunk.create "secret" (Some $"finish:{canary}") None None)
+
+                        Task.FromResult(CompletionResult.create $"result:{canary}" $"finish:{canary}" None None)) }
+
+        let provider =
+            ProviderFactory.operationScopedProviderWith createProvider "test" authorization reference secretProvider
+
+        let chunks = ResizeArray<CompletionChunk>()
+
+        let result =
+            LlmProvider.streamAsync
+                provider
+                (CorrelationContext.root ())
+                [ { Role = User
+                    Content = $"prompt:{canary}" } ]
+                CompletionOptions.Default
+                chunks.Add
+            |> _.Result
+
+        Assert.AreEqual("prompt:[REDACTED]", receivedPrompt)
+        Assert.AreEqual("result:[REDACTED]", result.Content)
+        Assert.AreEqual("finish:[REDACTED]", result.FinishReason)
+        Assert.AreEqual("result:[REDACTED]", chunks |> Seq.map _.Delta |> String.concat "")
+        Assert.IsFalse(chunks |> Seq.exists (fun chunk -> chunk.Delta.Contains canary))
+
+        let failingProvider =
+            ProviderFactory.operationScopedProviderWith
+                (fun (_: SecretValue) ->
+                    LlmProvider.create (fun () -> "failing") (fun _ _ _ ->
+                        Task.FromException<CompletionResult>(InvalidOperationException($"failure:{canary}"))))
+                "failing"
+                authorization
+                reference
+                secretProvider
+
+        let error =
+            Assert.ThrowsExactly<PlatformFailureException>(fun () ->
+                failingProvider.CompleteAsync
+                    (CorrelationContext.root ())
+                    [ { Role = User; Content = "test" } ]
+                    CompletionOptions.Default
+                |> _.GetAwaiter().GetResult()
+                |> ignore)
+
+        match error :> exn with
+        | PlatformFailureException failure -> Assert.AreEqual("failure:[REDACTED]", failure.Message)
+        | _ -> Assert.Fail("Expected a structured provider failure.")
+
+    [<TestMethod>]
+    member _.``Activated provider observes rotation and revocation without reactivation``() =
+        let reference = SecretReference.parse "providers/test/rotating-key"
+
+        let store =
+            SecretProvider.inMemory
+                "test-vault"
+                "1"
+                [ AuthorizationScope.identity authorization, SecretValue.create reference "version-one" ]
+
+        let observed = ResizeArray<string>()
+
+        let createProvider credential =
+            observed.Add(SecretValue.useValue id credential)
+
+            LlmProvider.create (fun () -> "test") (fun _ _ _ ->
+                Task.FromResult(CompletionResult.create "ok" "stop" None None))
+
+        let provider =
+            ProviderFactory.operationScopedProviderWith
+                createProvider
+                "test"
+                authorization
+                reference
+                (SecretManager.provider store)
+
+        let complete () =
+            provider.CompleteAsync
+                (CorrelationContext.root ())
+                [ { Role = User; Content = "test" } ]
+                CompletionOptions.Default
+            |> _.GetAwaiter().GetResult()
+            |> ignore
+
+        complete ()
+
+        let rotated =
+            SecretManager.rotateAsync
+                authorization
+                reference
+                SecretVersion.initial
+                (SecretValue.create reference "version-two")
+                CancellationToken.None
+                store
+            |> _.Result
+
+        complete ()
+
+        SecretManager.revokeAsync authorization reference rotated.Version CancellationToken.None store
+        |> _.GetAwaiter().GetResult()
+        |> ignore
+
+        Assert.ThrowsExactly<SecretRevokedException>(fun () -> complete ()) |> ignore
+        CollectionAssert.AreEqual([| "version-one"; "version-two" |], observed.ToArray())
 
     [<TestMethod>]
     member _.OpenAIProviderRaisesTransientFailureOnUnreachableServer() : Task =
@@ -317,7 +515,7 @@ type AnthropicProviderTests() =
                     TimeoutSeconds = Some 1 }
 
             let provider =
-                AnthropicProvider.createWithHandler config (Some(WaitingHttpMessageHandler()))
+                AnthropicProvider.createWithHandler config None (Some(new WaitingHttpMessageHandler()))
 
             let! failure =
                 ProviderFailure.capture (fun () ->
@@ -368,10 +566,14 @@ type AnthropicProviderTests() =
 
         let config =
             { AnthropicConfig.Default with
-                ApiKey = "test-key"
+                ApiKeyReference = Some(SecretReference.parse "providers/anthropic/api-key")
                 BaseUrl = "https://anthropic.test/" }
 
-        let provider = AnthropicProvider.createWithHandler config (Some handler)
+        let provider =
+            AnthropicProvider.createWithHandler
+                config
+                (Some(SecretValue.create (SecretReference.parse "providers/anthropic/api-key") "test-key"))
+                (Some handler)
 
         let conversation =
             [ { Role = System
@@ -425,6 +627,7 @@ type AnthropicProviderTests() =
             AnthropicProvider.createWithHandler
                 { AnthropicConfig.Default with
                     BaseUrl = "https://anthropic.test" }
+                None
                 (Some handler)
 
         let chunks = ResizeArray<CompletionChunk>()
@@ -451,7 +654,7 @@ type VllmConfigTests() =
     member _.DefaultUsesLocalhost() =
         let config = VllmConfig.Default
         Assert.AreEqual("http://localhost:8000/v1/chat/completions", config.BaseUrl)
-        Assert.AreEqual(None, config.ApiKey)
+        Assert.AreEqual(None, config.ApiKeyReference)
         Assert.AreEqual(None, config.TimeoutSeconds)
 
 [<TestClass>]

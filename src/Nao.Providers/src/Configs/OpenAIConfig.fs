@@ -1,9 +1,11 @@
 ﻿namespace Nao.Providers
 
+open Nao.Agents
+
 /// Configuration for OpenAI-compatible providers
 type OpenAIConfig =
     {
-        ApiKey: string
+        ApiKeyReference: SecretReference option
         Model: string
         BaseUrl: string
         /// Request timeout in seconds. None uses the HttpClient default.
@@ -11,7 +13,7 @@ type OpenAIConfig =
     }
 
     static member Default =
-        { ApiKey = ""
+        { ApiKeyReference = None
           Model = "gpt-4"
           BaseUrl = "https://api.openai.com/v1/chat/completions"
           TimeoutSeconds = None }

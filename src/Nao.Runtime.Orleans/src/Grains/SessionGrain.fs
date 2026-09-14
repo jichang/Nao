@@ -289,13 +289,24 @@ type SessionGrain
             else
                 None
 
-        let baseConfig =
-            { EtclovgConfig.Default with
-                Constitution = constitution
-                ToolProtocol = toolProtocol
-                Bus = eventBus }
-
-        baseConfig.WithServices(services)
+        { ToolProtocol = toolProtocol
+          ProcessEnvironment = None
+          ContainerEnvironment = None
+          ExecutionJournal = services.ExecutionJournal
+          ReplayFixtures = None
+          Lifecycle = []
+          Tracer = services.Tracer
+          Metrics = services.Metrics
+          Resilience = ResilienceConfig.NoResilience
+          ReadinessChecks = []
+          TraceStore = services.TraceStore
+          Judge = None
+          Constitution = constitution
+          ConstitutionRemediationBroker = ConstitutionRemediationBroker.unavailable
+          AuditLog = services.AuditLog
+          PolicyEngine = None
+          PolicyConfirmationBroker = PolicyConfirmationBroker.unavailable
+          Bus = eventBus }
 
     // ─── Key parsing ───
 
