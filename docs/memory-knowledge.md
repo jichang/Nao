@@ -4,6 +4,23 @@ Nao distinguishes conversation context, agent memory, source-backed knowledge, a
 
 The memory layer exposes eight functional capability records rather than interfaces: `MemoryStore`, `EmbeddingProvider`, `SemanticMemory`, `EpisodicMemory`, `GraphMemory`, `TieredMemory`, `WorkingMemory`, and `MemoryConsolidation`. Concrete in-memory, file-system, and ADO.NET behavior lives in `Nao.Persistence.Memory` where applicable. Applications can use that package directly or opt into the aggregate `Nao.Persistence` composition package.
 
+Source-backed records live separately in `Nao.Knowledge`. A `KnowledgeSource` establishes the
+authoritative URI, authorization identity, classification, trust assessment, metadata, and
+lifecycle. Immutable document versions derive stable identifiers from logical document identity,
+version number, and canonical SHA-256 content hash. Parsed content units, chunks, index entries,
+retrieved passages, and citations retain exact document-version and source-location lineage.
+Parser, chunker, embedding, preprocessing, and other derivation components carry explicit
+versions. Confidence is a bounded numeric assessment and is not conflated with source trust.
+Lifecycle records distinguish retention, legal hold, tombstone, and purge state.
+
+`KnowledgeCatalog.inMemory` is the deterministic reference lifecycle adapter. It partitions all
+state by the complete authenticated identity and atomically commits a related source, document
+version, units, chunks, and index entries only after validating their lineage. Retrieval-cache
+entries must reference chunks from the same document version. Source tombstone and purge
+operations update every related document, version, unit, chunk, index entry, and cache entry in
+one locked transition; any legal hold blocks the entire mutation. Production durable and indexed
+adapters remain KNO-02 through KNO-06 work.
+
 ## Data categories
 
 | Category | Purpose | Typical lifetime | Authority |

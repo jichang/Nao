@@ -73,6 +73,7 @@ Dependencies point inward from runtimes and adapters to core contracts:
 | `Nao.Protocols` | Core response contracts | None |
 | `Nao.Agents` | Core agent, tool, memory, governance, and observability contracts and execution | `Nao.Protocols` |
 | `Nao.Eval` | Evaluation implementation | `Nao.Agents` |
+| `Nao.Knowledge` | Source-backed knowledge and retrieval contracts | `Nao.Agents` |
 | `Nao.Persistence.Infrastructure` | Provider-neutral ADO.NET, serialization, events, and backend selection contracts | `Nao.Agents` |
 | `Nao.Persistence.Memory` | Memory storage implementations | `Nao.Agents`, `Nao.Persistence.Infrastructure` |
 | `Nao.Persistence.Observability` | Trace, metric, audit, and journal implementations | `Nao.Agents`, `Nao.Persistence.Infrastructure` |
@@ -125,6 +126,7 @@ The supported solution uses these primary test categories:
 | Category | Projects | Purpose |
 |---|---|---|
 | Unit | `Nao.Agents.Tests`, `Nao.Protocols.Tests` | In-process contract and behavior checks |
+| Knowledge unit | `Nao.Knowledge.Tests` | Source, version, lineage, lifecycle, citation, and retrieval contracts |
 | Integration | `Nao.Identity.Oidc.Tests`, `Nao.Persistence.Tests`, `Nao.Providers.Tests`, `Nao.Runtime.Orleans.Tests` | Deterministic identity-adapter, storage, provider-adapter, and runtime checks |
 | End-to-end | `Nao.E2E.Tests` | Full harness and orchestration flows using local fakes |
 | Evaluation | `Nao.Eval.Tests` | Evaluation runner, metric, and report behavior |

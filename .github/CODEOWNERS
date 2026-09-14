@@ -5,6 +5,7 @@
 /src/Nao.Agents/ @jichang
 /src/Nao.Protocols/ @jichang
 /src/Nao.Eval/ @jichang
+/src/Nao.Knowledge/ @jichang
 /src/Nao.Persistence/ @jichang
 /src/Nao.Persistence.Infrastructure/ @jichang
 /src/Nao.Persistence.Memory/ @jichang

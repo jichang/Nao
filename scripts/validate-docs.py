@@ -65,6 +65,7 @@ REQUIRED_CODEOWNER_PATHS = {
     "/src/Nao.Agents/",
     "/src/Nao.Protocols/",
     "/src/Nao.Eval/",
+    "/src/Nao.Knowledge/",
     "/src/Nao.Persistence/",
     "/src/Nao.Persistence.Infrastructure/",
     "/src/Nao.Persistence.Memory/",

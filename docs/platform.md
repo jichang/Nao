@@ -69,6 +69,7 @@ The current repository primarily implements the lower four layers. Knowledge, re
 | Project | Responsibility |
 |---|---|
 | `Nao.Agents` | Core agent/tool contracts and ETCLOVG harness implementation |
+| `Nao.Knowledge` | Source-backed knowledge, provenance, citation, and retrieval contracts |
 | `Nao.Protocols` | Typed model-response protocols, parsing, diagnostics, and repair |
 | `Nao.Persistence.*` | Independently consumable infrastructure, memory, observability, and feedback implementations plus opt-in composition |
 | `Nao.Providers.*` | Independently consumable hosted and local model-provider adapters plus opt-in composition |

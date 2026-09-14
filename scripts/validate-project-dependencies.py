@@ -23,6 +23,9 @@ ALLOWED_PROJECT_REFERENCES = {
     Path("src/Nao.Identity.Oidc/Nao.Identity.Oidc.fsproj"): {
         Path("src/Nao.Agents/Nao.Agents.fsproj"),
     },
+    Path("src/Nao.Knowledge/Nao.Knowledge.fsproj"): {
+        Path("src/Nao.Agents/Nao.Agents.fsproj"),
+    },
     Path("src/Nao.Persistence/Nao.Persistence.fsproj"): {
         Path("src/Nao.Agents/Nao.Agents.fsproj"),
         Path("src/Nao.Persistence.Feedback/Nao.Persistence.Feedback.fsproj"),
@@ -72,6 +75,7 @@ ALLOWED_PROJECT_REFERENCES = {
 CORE_PROJECTS = {
     Path("src/Nao.Protocols/Nao.Protocols.fsproj"),
     Path("src/Nao.Agents/Nao.Agents.fsproj"),
+    Path("src/Nao.Knowledge/Nao.Knowledge.fsproj"),
 }
 
 FORBIDDEN_CORE_PACKAGE_PREFIXES = (

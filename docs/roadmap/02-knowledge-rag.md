@@ -12,35 +12,35 @@ This workstream creates a reusable knowledge subsystem for ingestion, indexing, 
 - [x] In-memory, file, and ADO.NET semantic-memory implementations exist.
 - [x] Functional `GraphMemory` and graph-query contracts exist.
 - [x] Conversation compaction and tiered agent memory exist.
-- [ ] A source-to-index knowledge lifecycle exists.
+- [x] A source-to-index knowledge lifecycle exists as an authorization-partitioned in-memory reference.
 - [ ] Retrieval has production indexing, authorization, citations, and quality gates.
 
 ## Architecture boundaries
 
-- [ ] Define **knowledge** as versioned content derived from authoritative external sources.
-- [ ] Define **memory** as information learned or retained through agent/user activity.
-- [ ] Define **context** as transient material selected for one model call.
+- [x] Define **knowledge** as versioned content derived from authoritative external sources.
+- [x] Define **memory** as information learned or retained through agent/user activity.
+- [x] Define **context** as transient material selected for one model call.
 - [ ] Define **artifact** as an addressable produced or consumed object with lineage.
-- [ ] Keep source ingestion independent of a particular agent or orchestration pattern.
-- [ ] Keep vector, lexical, graph, parser, and object-storage vendors behind optional adapters.
-- [ ] Permit retrieval without generation and ingestion without an LLM.
+- [x] Keep source ingestion independent of a particular agent or orchestration pattern.
+- [x] Keep vector, lexical, graph, parser, and object-storage vendors behind optional adapters.
+- [x] Permit retrieval without generation and ingestion without an LLM.
 
 ## KNO-01 — Knowledge contracts and records
 
-- [ ] Define source, document, document version, content unit, chunk, index entry, citation, and retrieval-result contracts.
-- [ ] Assign stable IDs and content hashes.
-- [ ] Capture source URI, media type, language, timestamps, ownership, classification, and custom metadata.
-- [ ] Capture derivation lineage from source bytes through parsing, chunking, enrichment, embedding, retrieval, and answer citation.
-- [ ] Represent parser, chunker, embedding-model, and schema versions.
-- [ ] Define confidence and trust metadata separately.
-- [ ] Define tombstones, retention, legal hold, and deletion status.
-- [ ] Version all durable contracts.
+- [x] Define source, document, document version, content unit, chunk, index entry, citation, and retrieval-result contracts.
+- [x] Assign stable IDs and content hashes.
+- [x] Capture source URI, media type, language, timestamps, ownership, classification, and custom metadata.
+- [x] Capture derivation lineage from source bytes through parsing, chunking, enrichment, embedding, retrieval, and answer citation.
+- [x] Represent parser, chunker, embedding-model, and schema versions.
+- [x] Define confidence and trust metadata separately.
+- [x] Define tombstones, retention, legal hold, and deletion status.
+- [x] Version all durable contracts.
 
 **Acceptance criteria**
 
-- [ ] Every retrieved passage can be traced to an immutable source version and location.
-- [ ] Reprocessing creates a new derived version without corrupting previous evidence.
-- [ ] Deletion state propagates to every index and cache.
+- [x] Every retrieved passage can be traced to an immutable source version and location.
+- [x] Reprocessing creates a new derived version without corrupting previous evidence.
+- [x] Deletion state propagates atomically to every index and cache in the reference catalog.
 
 ## KNO-02 — Source connectors
 
