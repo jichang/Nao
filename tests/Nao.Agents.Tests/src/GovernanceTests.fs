@@ -389,6 +389,45 @@ type ConstitutionTests() =
         Assert.IsFalse(judgeInvoked)
 
     [<TestMethod>]
+    member _.DeterministicDecisionIsReproducibleWithPinnedEvidence() =
+        let rule =
+            DeterministicConstitutionRule.create
+                "format"
+                "Reject malformed output"
+                RuleCategory.Format
+                100
+                RuleSeverity.Error
+                PolicyScope.platform
+                ConstitutionRemediation.Reject
+                "schema-validator"
+                "3"
+                (Map [ "json-schema", "2020-12"; "validator-library", "8.4.0" ])
+                (fun output -> output <> """{"valid":true}""")
+            |> ConstitutionRule.Deterministic
+
+        let constitution =
+            Constitution.create "reproducible" "7" |> Constitution.addRule rule
+
+        let first =
+            Constitution.checkDeterministic constitution (context """{"valid":false}""")
+
+        let second =
+            Constitution.checkDeterministic constitution (context """{"valid":false}""")
+
+        let firstEvidence = first.Evaluations.Head
+        let secondEvidence = second.Evaluations.Head
+
+        Assert.AreEqual(first.Passed, second.Passed)
+        Assert.AreEqual(firstEvidence.ConstitutionName, secondEvidence.ConstitutionName)
+        Assert.AreEqual(firstEvidence.ConstitutionVersion, secondEvidence.ConstitutionVersion)
+        Assert.AreEqual(firstEvidence.RuleId, secondEvidence.RuleId)
+        Assert.AreEqual(firstEvidence.EvaluatorId, secondEvidence.EvaluatorId)
+        Assert.AreEqual(firstEvidence.EvaluatorVersion, secondEvidence.EvaluatorVersion)
+        Assert.AreEqual(firstEvidence.Outcome, secondEvidence.Outcome)
+        Assert.AreEqual(firstEvidence.OutputDigest, secondEvidence.OutputDigest)
+        Assert.AreEqual(firstEvidence.Evaluator, secondEvidence.Evaluator)
+
+    [<TestMethod>]
     member _.ProbabilisticJudgementRecordsPinnedDecisionInputs() =
         let rule =
             ProbabilisticConstitutionRule.create

@@ -162,9 +162,9 @@ Worker protocol v1 carries impersonation, service, principal, and agent authorit
 
 **Acceptance criteria**
 
-- [ ] Output policy decisions are reproducible with pinned deterministic dependencies.
-- [ ] Probabilistic decisions identify model, prompt, threshold, and evidence.
-- [ ] Quarantined output is inaccessible without explicit authorized review.
+- [x] Output policy decisions are reproducible with pinned deterministic dependencies.
+- [x] Probabilistic decisions identify model, prompt, threshold, and evidence.
+- [x] Quarantined output is inaccessible without explicit authorized review.
 
 ## SEC-02 — Secret management
 

@@ -275,8 +275,13 @@ effective constitution: hosts must explicitly compose and version a combined def
 than relying on implicit merging that would obscure provenance.
 `ExecutionPolicyDecisions.ConstitutionDisposition` records whether output was released,
 redacted, repaired, rejected, escalated, or quarantined. Quarantined content is passed only to
-the host quarantine callback and is never placed in `ExecutionResult.Outputs`; an authorized
-review/read contract remains planned GOV-03 work.
+the host quarantine callback and is never placed in `ExecutionResult.Outputs`.
+`ConstitutionQuarantineStore` provides a versioned owner-partitioned storage boundary for that
+callback. Its only read path, `reviewAsync`, requests the exact
+`administration/read/constitution-quarantine/{executionId}` resource from a host authorizer,
+requires an allow decision for that resource, and durably audits the decision before reading.
+Denied reviews return no content, authorization in another complete owner identity cannot find
+the record, mismatched authorization evidence fails closed, and audit failure prevents access.
 
 The constitution disposition is the output release gate. Rejected, escalated, quarantined, or
 unsuccessfully transformed output cannot trigger successful lifecycle completion, answer

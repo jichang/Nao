@@ -32,6 +32,7 @@
     <Compile Include="src/ObservabilityTests.fs" />
     <Compile Include="src/VerificationTests.fs" />
     <Compile Include="src/GovernanceTests.fs" />
+    <Compile Include="src/ConstitutionQuarantineTests.fs" />
     <Compile Include="src/ResourcePermissionTests.fs" />
     <Compile Include="src/ToolPermissionTests.fs" />
     <Compile Include="src/EtclovgHarnessTests.fs" />

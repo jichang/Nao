@@ -75,6 +75,7 @@
     <Compile Include="src/Governance/PolicyEngine.fs" />
     <Compile Include="src/Governance/Constitution.fs" />
     <Compile Include="src/Governance/AuditLog.fs" />
+    <Compile Include="src/Governance/ConstitutionQuarantine.fs" />
     <Compile Include="src/Events/TurnRecords.fs" />
     <Compile Include="src/Feedback/FeedbackTypes.fs" />
     <Compile Include="src/Events/Events.fs" />
