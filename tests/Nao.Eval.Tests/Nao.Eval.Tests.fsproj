@@ -13,6 +13,8 @@
   <ItemGroup>
     <Compile Include="src/MSTestSettings.fs" />
     <Compile Include="src/EvaluatorTests.fs" />
+    <Compile Include="src/SafetyDatasetTests.fs" />
+    <Compile Include="src/SafetyMetricsTests.fs" />
     <Compile Include="src/EvalRunnerTests.fs" />
     <Compile Include="src/EvalArchiveTests.fs" />
   </ItemGroup>

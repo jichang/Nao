@@ -31,23 +31,10 @@ module WorkspaceDefinitions =
         match defs.Constitutions with
         | [] -> None
         | [ constitution ] -> Some constitution
-        | first :: rest ->
-            let merged =
-                rest
-                |> List.fold
-                    (fun acc constitution ->
-                        { acc with
-                            Rules =
-                                acc.Rules @ constitution.Rules
-                                |> List.sortByDescending (fun rule -> rule.Priority)
-                            Preamble =
-                                match acc.Preamble, constitution.Preamble with
-                                | Some a, Some b when not (System.String.IsNullOrWhiteSpace b) -> Some(a + "\n" + b)
-                                | None, Some b -> Some b
-                                | existing, _ -> existing })
-                    first
-
-            Some merged
+        | _ ->
+            invalidArg
+                (nameof defs)
+                "A workspace must select exactly one explicitly versioned constitution; implicit constitution merging is not supported."
 
 /// Functional registry that manages multiple workspaces within a single silo.
 type WorkspaceRegistry =

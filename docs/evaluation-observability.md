@@ -48,6 +48,25 @@ Prefer deterministic evaluation whenever the property can be checked directly:
 
 Use LLM judges for genuinely semantic properties. A release-blocking judge should be calibrated against human labels and checked for model-family, order, verbosity, and self-preference bias.
 
+`SafetyDatasets.adversarialMultilingualV1` provides the first repository-owned output-safety
+corpus. Its cases include explicit safe or unsafe human labels, normalized language tags,
+adversarial techniques, and tags for segmentation. The corpus spans benign controls, direct
+requests, instruction overrides, role play, obfuscation, and cross-language transfer in more
+than eight locales. `SafetyDataset` revisions have mandatory versions and deterministic SHA-256
+content hashes; changing any governed case field creates a different corpus identity.
+
+`SafetyDataset.evaluateAsync` runs every candidate output through complete constitution
+evaluation using an authenticated scope. It retains per-rule constitution evidence with each
+classification, so probabilistic evaluators can be calibrated without introducing a separate
+safety execution path. The built-in text is synthetic and contains no production-derived data.
+
+`SafetyMetrics.measure` compares those classifications with the corpus labels. It produces a
+confusion matrix, accuracy, false-positive rate, and false-negative rate for the complete corpus
+and separately by language, adversarial technique, and tag. Measurements retain the dataset
+name, version, and content hash. Missing, duplicated, or unknown case results are rejected rather
+than producing a success-shaped partial report. A rate is `None` when its ground-truth class is
+absent, keeping “not measurable” distinct from a measured zero-error rate.
+
 ## Reproducibility
 
 A reproducible evaluation records:

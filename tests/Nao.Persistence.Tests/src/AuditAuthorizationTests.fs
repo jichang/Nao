@@ -63,7 +63,7 @@ type AuditAuthorizationTests() =
                 PermissionDecision.Deny
           PermissionEvidence = None
           PolicyEvidence = None
-          ConstitutionViolations = []
+          ConstitutionEvidence = None
           ExecutionId = Some executionId
           Metadata = Map.empty }
 
@@ -152,6 +152,54 @@ type AuditAuthorizationTests() =
 
             for secret in [ "tenant"; "user"; "group"; "workspace"; "session"; "raw-sensitive-input" ] do
                 Assert.IsFalse(payload.Contains(secret), $"Policy evidence disclosed '{secret}'."))
+
+    [<TestMethod>]
+    member _.ConstitutionEvaluationEvidenceSurvivesReloadWithoutOutputDisclosure() =
+        withStorage (fun root _ ->
+            let evidence =
+                { Id = Guid.NewGuid()
+                  ConstitutionName = "safety"
+                  ConstitutionVersion = "1.0"
+                  RuleId = "toxicity"
+                  RuleCategory = RuleCategory.Safety
+                  RuleSeverity = RuleSeverity.Critical
+                  Scope = PolicyScopeKind.Workspace
+                  Remediation = ConstitutionRemediation.Quarantine
+                  EvaluatorId = "toxicity-judge"
+                  EvaluatorVersion = "test-v1"
+                  Outcome = ConstitutionEvaluationOutcome.Violated
+                  Evaluator =
+                    ConstitutionEvaluatorEvidence.Probabilistic(
+                        "judge-model",
+                        "prompt-v1",
+                        0.8,
+                        0.95,
+                        String.replicate 64 "c"
+                    )
+                  OutputDigest = String.replicate 64 "a"
+                  EvaluatedAt = timestamp }
+
+            let executionId = ExecutionId.generate ()
+
+            AuditLogs.file root
+            |> fun audit ->
+                audit.RecordAsync owner (AuditLog.constitutionEvaluation "data-agent" evidence (Some executionId))
+            |> _.Wait()
+
+            let reloaded =
+                AuditLogs.file root
+                |> fun audit -> audit.QueryByExecutionAsync owner executionId
+                |> _.Result
+                |> List.exactlyOne
+
+            Assert.AreEqual(Some evidence, reloaded.ConstitutionEvidence)
+            Assert.AreEqual(PermissionDecision.Deny, reloaded.Decision)
+            Assert.AreEqual(None, reloaded.Input)
+            Assert.AreEqual(None, reloaded.Output)
+
+            let payload = File.ReadAllText(Path.Combine(root, "audit", key owner + ".jsonl"))
+            Assert.IsFalse(payload.Contains("raw-sensitive-output"))
+            Assert.IsFalse(payload.Contains("raw-judge-rationale")))
 
     [<TestMethod>]
     member _.CompleteAuthorizationIdentityPartitionsEveryOperation() =

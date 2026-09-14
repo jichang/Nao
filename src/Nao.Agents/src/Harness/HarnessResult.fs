@@ -88,11 +88,22 @@ type ExecutionEvidence =
       Regression: RegressionResult option
       AuditEntries: int }
 
+[<RequireQualifiedAccess>]
+type ConstitutionDisposition =
+    | NotEvaluated
+    | Released
+    | Redacted
+    | Repaired
+    | Rejected
+    | Escalated
+    | Quarantined
+
 /// Governance outcomes applied to an execution.
 type ExecutionPolicyDecisions =
     { PolicyViolations: PolicyViolation list
       PolicyEvaluations: PolicyEvaluationEvidence list
-      ConstitutionViolations: ConstitutionViolation list }
+      ConstitutionViolations: ConstitutionViolation list
+      ConstitutionDisposition: ConstitutionDisposition }
 
 /// Immutable outcome of one governed harness execution.
 type ExecutionResult =

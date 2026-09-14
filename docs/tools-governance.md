@@ -222,18 +222,67 @@ and caller cancellation propagates.
 
 ## Constitutions and output controls
 
-Constitutions evaluate generated output against deterministic or probabilistic rules. Remediation can include repair, redaction, rejection, escalation, or quarantine.
+Constitutions separate deterministic validators from probabilistic judges at the type level.
+`Constitution.checkDeterministic` invokes only reproducible validators, while
+`Constitution.evaluateAsync` runs deterministic validation first and then invokes
+cancellation-aware probabilistic judges. Deterministic rules identify versions for every
+external validator dependency. Probabilistic rules identify their model, prompt version, and
+violation threshold; their result supplies a bounded score and rationale. Invalid thresholds,
+scores, or missing rationales are rejected rather than interpreted as safe.
+Hard deterministic violations short-circuit evaluation before any probabilistic dependency is
+invoked.
+
+Every rule declares a typed severity (`Advisory`, `Warning`, `Error`, or `Critical`), a
+hierarchical `PolicyScope`, and a requested remediation (`Observe`, `Redact`, `Repair`,
+`Reject`, `Escalate`, or `Quarantine`). Constitution scope matching uses the same authenticated
+tenant, selected-group, workspace, agent, and session coordinates as runtime policy evaluation;
+tool scopes do not match final agent-output evaluation. Error and critical violations currently
+must request an enforcing remediation rather than observation.
+
+When multiple rules fail, the harness resolves remediation by restrictive precedence:
+`Quarantine`, `Escalate`, `Reject`, `Repair`, `Redact`, then `Observe`. Reject returns no output.
+Escalation and quarantine invoke distinct host callbacks and return no output. Redaction and
+repair invoke the injected `ConstitutionRemediationBroker`, then send the transformed value
+through `PostOutput`, `PreCommit`, and complete constitution evaluation again. A transformation
+that is rejected by policy or still requires remediation is rejected rather than recursively
+retried. Callback errors and cancellation propagate, so unavailable remediation cannot become
+an implicit allow.
 
 ```fsharp
 let constitution =
-    Constitution.empty "safety"
+    Constitution.create "safety" "2026-09-14"
     |> Constitution.addRule Constitution.noPrivateDataRule
     |> Constitution.addRule Constitution.noHarmRule
 
-let result = Constitution.check constitution output
+let deterministicResult = Constitution.checkDeterministic constitution output
+let! completeResult = Constitution.evaluateAsync constitution output cancellationToken
 ```
 
-Probabilistic judges should identify model, prompt, threshold, and evidence. They must not override deterministic schema, permission, or citation failures.
+Probabilistic judges cannot override deterministic violations. Every matching rule, including a
+pass, produces immutable `ConstitutionEvaluationEvidence` with constitution identity and version,
+rule category, severity, scope kind, requested remediation, outcome, output SHA-256 digest, and
+evaluator-specific evidence. Deterministic evidence contains pinned dependency versions.
+Probabilistic evidence contains model, prompt version, threshold, score, and a rationale digest,
+never the raw output or rationale. The harness writes every evaluation to authenticated audit
+storage before continuing; a missing or failed audit capability prevents governed execution.
+
+Constitution identity and version are mandatory at construction. Every deterministic validator
+and probabilistic judge also declares a distinct evaluator identity and host-managed version;
+both are copied into every evaluation record. Model identity and prompt version remain separate
+from evaluator version because changing orchestration code, thresholds, or parsing can alter a
+judge without changing either model or prompt. Workspace registration accepts at most one
+effective constitution: hosts must explicitly compose and version a combined definition rather
+than relying on implicit merging that would obscure provenance.
+`ExecutionPolicyDecisions.ConstitutionDisposition` records whether output was released,
+redacted, repaired, rejected, escalated, or quarantined. Quarantined content is passed only to
+the host quarantine callback and is never placed in `ExecutionResult.Outputs`; an authorized
+review/read contract remains planned GOV-03 work.
+
+The constitution disposition is the output release gate. Rejected, escalated, quarantined, or
+unsuccessfully transformed output cannot trigger successful lifecycle completion, answer
+publication, trace persistence, the final successful audit record, or a successful harness
+checkpoint. Session persistence already accepts only successful results with a response, so
+these terminal outcomes cannot enter turn records or user-facing conversation history.
 
 ## Audit and execution journal
 

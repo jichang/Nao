@@ -53,6 +53,7 @@ type EtclovgConfig =
       TraceStore: TraceStore option
       Judge: Judge option
       Constitution: Constitution option
+      ConstitutionRemediationBroker: ConstitutionRemediationBroker
       AuditLog: AuditLog option
       PolicyEngine: PolicyEngine option
       PolicyConfirmationBroker: PolicyConfirmationBroker
@@ -72,6 +73,7 @@ type EtclovgConfig =
           TraceStore = None
           Judge = None
           Constitution = None
+          ConstitutionRemediationBroker = ConstitutionRemediationBroker.unavailable
           AuditLog = None
           PolicyEngine = None
           PolicyConfirmationBroker = PolicyConfirmationBroker.unavailable
@@ -184,7 +186,8 @@ module EtclovgHarness =
         let decisions: ExecutionPolicyDecisions =
             { PolicyViolations = policyViolations
               PolicyEvaluations = policyEvaluations
-              ConstitutionViolations = constitutionViolations }
+              ConstitutionViolations = constitutionViolations
+              ConstitutionDisposition = ConstitutionDisposition.NotEvaluated }
 
         { Correlation = correlation
           Status = terminalStatus harnessError
@@ -380,6 +383,7 @@ module EtclovgHarness =
             let mutable policyViolations = []
             let mutable policyEvaluations = []
             let mutable constitutionViolations = []
+            let mutable constitutionDisposition = ConstitutionDisposition.NotEvaluated
             let publishArtifact = agentContext.PublishArtifact
 
             let confirmPolicy context (result: PolicyResult) =
@@ -867,6 +871,12 @@ module EtclovgHarness =
                 task {
                     if request.AgentId <> agent.Metadata.Id then
                         return Some HarnessError.PermissionDenied
+                    elif config.Constitution.IsSome && config.AuditLog.IsNone then
+                        return
+                            Some(
+                                HarnessError.InitializationFailed
+                                    "Constitution evaluation requires an authenticated audit log."
+                            )
                     else
                         match! evaluatePolicyStage PolicyStage.PreInput "execute" None request.PolicyFacts input with
                         | Ok modifiedInput ->
@@ -1192,42 +1202,161 @@ module EtclovgHarness =
 
                         | Ok(Ok response) ->
                             // === G: Constitution — Check output ===
-                            let constitutionBlocked =
-                                match config.Constitution with
-                                | Some constitution ->
-                                    let checkResult = Constitution.check constitution response
-                                    constitutionViolations <- checkResult.Violations
-                                    Constitution.hasHardViolations checkResult
-                                | None -> false
+                            let evaluateConstitution output =
+                                task {
+                                    match config.Constitution, config.AuditLog with
+                                    | Some constitution, Some audit ->
+                                        let context =
+                                            ConstitutionContext.create request.Authorization agent.Metadata.Id output
 
-                            if constitutionBlocked then
+                                        let! result =
+                                            Constitution.evaluateAsync constitution context execCtx.CancellationToken
+
+                                        for evidence in result.Evaluations do
+                                            do!
+                                                audit.RecordAsync
+                                                    request.Authorization
+                                                    (AuditLog.constitutionEvaluation
+                                                        agent.Metadata.Id
+                                                        evidence
+                                                        (Some execCtx.ExecutionId))
+
+                                        return Some result
+                                    | None, _ -> return None
+                                    | Some _, None ->
+                                        return
+                                            invalidOp
+                                                "Constitution audit capability disappeared after preflight validation."
+                                }
+
+                            let! initialCheck = evaluateConstitution response
+                            let mutable governedResponse = response
+
+                            let! shouldRelease =
+                                task {
+                                    match initialCheck with
+                                    | None -> return true
+                                    | Some checkResult ->
+                                        constitutionViolations <- checkResult.Violations
+
+                                        let remediationRequest =
+                                            { Authorization = request.Authorization
+                                              ExecutionId = execCtx.ExecutionId
+                                              AgentId = agent.Metadata.Id
+                                              Output = response
+                                              Violations = checkResult.Violations
+                                              RequestedAt = DateTimeOffset.UtcNow }
+
+                                        match Constitution.requiredRemediation checkResult.Violations with
+                                        | ConstitutionRemediation.Observe ->
+                                            constitutionDisposition <- ConstitutionDisposition.Released
+                                            return true
+                                        | ConstitutionRemediation.Redact
+                                        | ConstitutionRemediation.Repair as remediation ->
+                                            let! transformed =
+                                                match remediation with
+                                                | ConstitutionRemediation.Redact ->
+                                                    ConstitutionRemediationBroker.redactAsync
+                                                        remediationRequest
+                                                        execCtx.CancellationToken
+                                                        config.ConstitutionRemediationBroker
+                                                | _ ->
+                                                    ConstitutionRemediationBroker.repairAsync
+                                                        remediationRequest
+                                                        execCtx.CancellationToken
+                                                        config.ConstitutionRemediationBroker
+
+                                            let! governedTransformation =
+                                                task {
+                                                    match!
+                                                        evaluatePolicyStage
+                                                            PolicyStage.PostOutput
+                                                            "response.output"
+                                                            None
+                                                            request.PolicyFacts
+                                                            transformed
+                                                    with
+                                                    | Error _ -> return None
+                                                    | Ok postOutput ->
+                                                        match!
+                                                            evaluatePolicyStage
+                                                                PolicyStage.PreCommit
+                                                                "response.commit"
+                                                                None
+                                                                request.PolicyFacts
+                                                                postOutput
+                                                        with
+                                                        | Error _ -> return None
+                                                        | Ok preCommit -> return Some preCommit
+                                                }
+
+                                            match governedTransformation with
+                                            | None ->
+                                                constitutionDisposition <- ConstitutionDisposition.Rejected
+                                                return false
+                                            | Some transformedOutput ->
+                                                let! transformedCheck = evaluateConstitution transformedOutput
+
+                                                match transformedCheck with
+                                                | Some result ->
+                                                    constitutionViolations <- constitutionViolations @ result.Violations
+
+                                                    if
+                                                        Constitution.requiredRemediation result.Violations = ConstitutionRemediation.Observe
+                                                    then
+                                                        governedResponse <- transformedOutput
+
+                                                        constitutionDisposition <-
+                                                            if remediation = ConstitutionRemediation.Redact then
+                                                                ConstitutionDisposition.Redacted
+                                                            else
+                                                                ConstitutionDisposition.Repaired
+
+                                                        return true
+                                                    else
+                                                        constitutionDisposition <- ConstitutionDisposition.Rejected
+                                                        return false
+                                                | None ->
+                                                    return
+                                                        invalidOp
+                                                            "Constitution configuration disappeared during remediation."
+                                        | ConstitutionRemediation.Reject ->
+                                            constitutionDisposition <- ConstitutionDisposition.Rejected
+                                            return false
+                                        | ConstitutionRemediation.Escalate ->
+                                            do!
+                                                ConstitutionRemediationBroker.escalateAsync
+                                                    remediationRequest
+                                                    execCtx.CancellationToken
+                                                    config.ConstitutionRemediationBroker
+
+                                            constitutionDisposition <- ConstitutionDisposition.Escalated
+                                            return false
+                                        | ConstitutionRemediation.Quarantine ->
+                                            do!
+                                                ConstitutionRemediationBroker.quarantineAsync
+                                                    remediationRequest
+                                                    execCtx.CancellationToken
+                                                    config.ConstitutionRemediationBroker
+
+                                            constitutionDisposition <- ConstitutionDisposition.Quarantined
+                                            return false
+                                }
+
+                            if not shouldRelease then
                                 do! compensateReversibleExecutions ()
-
-                                // Audit the violation
-                                match config.AuditLog with
-                                | Some audit ->
-                                    let violationNames = constitutionViolations |> List.map (fun v -> v.RuleId)
-
-                                    do!
-                                        audit.RecordAsync
-                                            request.Authorization
-                                            (AuditLog.constitutionCheck
-                                                agent.Metadata.Id
-                                                violationNames
-                                                (Some execCtx.ExecutionId))
-                                | None -> ()
 
                                 let! _ =
                                     AgentLifecycle.failAsync agent.Metadata.Id (exn "Constitution violation") _startedLc
-                                // End root span on constitution violation
+
                                 match rootSpan, config.Tracer with
                                 | Some s, Some tracer ->
                                     tracer.EndSpan request.Authorization s (SpanStatus.Error "Constitution violation")
                                 | _ -> ()
 
-                                let violationIds = constitutionViolations |> List.map (fun v -> v.RuleId)
+                                let violationIds = constitutionViolations |> List.map _.RuleId
 
-                                return
+                                let failed =
                                     failResult
                                         (HarnessError.ConstitutionViolation violationIds)
                                         request.Correlation
@@ -1240,7 +1369,14 @@ module EtclovgHarness =
                                         request.Authorization
                                         config.Metrics
                                         1
+
+                                return
+                                    { failed with
+                                        PolicyDecisions =
+                                            { failed.PolicyDecisions with
+                                                ConstitutionDisposition = constitutionDisposition } }
                             else
+                                let response = governedResponse
 
                                 // === L: Lifecycle — Complete ===
                                 let! _ = AgentLifecycle.completeAsync agent.Metadata.Id response _startedLc
@@ -1318,7 +1454,8 @@ module EtclovgHarness =
                                 let decisions: ExecutionPolicyDecisions =
                                     { PolicyViolations = policyViolations
                                       PolicyEvaluations = policyEvaluations
-                                      ConstitutionViolations = constitutionViolations }
+                                      ConstitutionViolations = constitutionViolations
+                                      ConstitutionDisposition = constitutionDisposition }
 
                                 return
                                     successResult

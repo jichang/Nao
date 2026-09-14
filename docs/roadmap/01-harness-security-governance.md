@@ -152,13 +152,13 @@ Worker protocol v1 carries impersonation, service, principal, and agent authorit
 
 ## GOV-03 — Output safety and constitutions
 
-- [ ] Separate deterministic validation from probabilistic judge rules.
-- [ ] Define rule severity, scope, remediation, and evidence.
-- [ ] Add configurable redact, repair, reject, escalate, and quarantine outcomes.
-- [ ] Prevent rejected output from being committed to downstream systems.
-- [ ] Version constitutions and evaluators.
-- [ ] Add adversarial and multilingual safety datasets.
-- [ ] Measure false-positive and false-negative rates.
+- [x] Separate deterministic validation from probabilistic judge rules.
+- [x] Define rule severity, scope, remediation, and evidence.
+- [x] Add configurable redact, repair, reject, escalate, and quarantine outcomes.
+- [x] Prevent rejected output from being committed to downstream systems.
+- [x] Version constitutions and evaluators.
+- [x] Add adversarial and multilingual safety datasets.
+- [x] Measure false-positive and false-negative rates.
 
 **Acceptance criteria**
 

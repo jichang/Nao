@@ -69,6 +69,27 @@ module PolicyScope =
         | PolicyScope.Tool _ -> PolicyScopeKind.Tool
         | PolicyScope.Session _ -> PolicyScopeKind.Session
 
+    let internal matches authorization agentId toolName =
+        function
+        | PolicyScope.Platform -> true
+        | PolicyScope.Tenant tenantId -> AuthorizationScope.tenantId authorization = tenantId
+        | PolicyScope.Workspace(tenantId, groupId, workspaceId) ->
+            AuthorizationScope.tenantId authorization = tenantId
+            && AuthorizationScope.groupId authorization = groupId
+            && AuthorizationScope.workspaceId authorization = workspaceId
+        | PolicyScope.Agent(tenantId, groupId, workspaceId, scopedAgentId) ->
+            AuthorizationScope.tenantId authorization = tenantId
+            && AuthorizationScope.groupId authorization = groupId
+            && AuthorizationScope.workspaceId authorization = workspaceId
+            && agentId = scopedAgentId
+        | PolicyScope.Tool(tenantId, groupId, workspaceId, scopedAgentId, scopedToolName) ->
+            AuthorizationScope.tenantId authorization = tenantId
+            && AuthorizationScope.groupId authorization = groupId
+            && AuthorizationScope.workspaceId authorization = workspaceId
+            && agentId = scopedAgentId
+            && toolName = Some scopedToolName
+        | PolicyScope.Session identity -> AuthorizationScope.identity authorization = identity
+
 type PolicyEvaluationFailure =
     private
         { Code: string
@@ -274,27 +295,6 @@ module PolicyEngine =
         | PolicyScope.Tool _ -> 4
         | PolicyScope.Session _ -> 5
 
-    let private scopeMatches (context: PolicyContext) =
-        function
-        | PolicyScope.Platform -> true
-        | PolicyScope.Tenant tenantId -> AuthorizationScope.tenantId context.Authorization = tenantId
-        | PolicyScope.Workspace(tenantId, groupId, workspaceId) ->
-            AuthorizationScope.tenantId context.Authorization = tenantId
-            && AuthorizationScope.groupId context.Authorization = groupId
-            && AuthorizationScope.workspaceId context.Authorization = workspaceId
-        | PolicyScope.Agent(tenantId, groupId, workspaceId, agentId) ->
-            AuthorizationScope.tenantId context.Authorization = tenantId
-            && AuthorizationScope.groupId context.Authorization = groupId
-            && AuthorizationScope.workspaceId context.Authorization = workspaceId
-            && context.AgentId = agentId
-        | PolicyScope.Tool(tenantId, groupId, workspaceId, agentId, toolName) ->
-            AuthorizationScope.tenantId context.Authorization = tenantId
-            && AuthorizationScope.groupId context.Authorization = groupId
-            && AuthorizationScope.workspaceId context.Authorization = workspaceId
-            && context.AgentId = agentId
-            && context.ToolName = Some toolName
-        | PolicyScope.Session identity -> AuthorizationScope.identity context.Authorization = identity
-
     let private result proceed violations evaluations modifiedInput warnings requiresConfirmation : PolicyResult =
         { Proceed = proceed
           Violations = violations
@@ -358,7 +358,10 @@ module PolicyEngine =
                     let mutable effectiveInput = context.Input
                     let mutable inputModified = false
 
-                    for policy in orderedPolicies |> List.filter (fun policy -> scopeMatches context policy.Scope) do
+                    for policy in
+                        (orderedPolicies
+                         |> List.filter (fun policy ->
+                             PolicyScope.matches context.Authorization context.AgentId context.ToolName policy.Scope)) do
                         let effectiveContext = { context with Input = effectiveInput }
                         let inputDigest = digest effectiveInput
 

@@ -1,10 +1,12 @@
 namespace Nao.Runtime.Orleans.Tests
 
+open System
 open System.Collections.Generic
 open System.Threading.Tasks
 open Microsoft.VisualStudio.TestTools.UnitTesting
 open Nao.Agents
 open Nao.Persistence
+open Nao.Runtime.Orleans
 
 module private EtclovgHarness =
     let runAsync config context agent request =
@@ -509,3 +511,17 @@ type OrchestratorObservabilityTests() =
         Assert.AreEqual(ExecutionTerminalStatus.Succeeded, result.Status)
         Assert.AreEqual(Some "parent done", result.Outputs.Response)
         Assert.IsFalse(childExecuted)
+
+[<TestClass>]
+type WorkspaceConstitutionVersionTests() =
+
+    [<TestMethod>]
+    member _.MultipleConstitutionsRequireExplicitHostComposition() =
+        let definitions =
+            WorkspaceDefinitions.create
+                []
+                []
+                [ Constitution.create "platform" "v1"; Constitution.create "workspace" "v2" ]
+
+        Assert.ThrowsExactly<ArgumentException>(fun () -> WorkspaceDefinitions.mergedConstitution definitions |> ignore)
+        |> ignore

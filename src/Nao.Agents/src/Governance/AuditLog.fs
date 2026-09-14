@@ -26,8 +26,8 @@ type AuditEntry =
         PermissionEvidence: PermissionDecisionEvidence option
         /// Exact policy version and outcome for a runtime policy evaluation, when this entry records one.
         PolicyEvidence: PolicyEvaluationEvidence option
-        /// Any constitution violations
-        ConstitutionViolations: string list
+        /// Exact constitution rule evaluation, when this entry records one.
+        ConstitutionEvidence: ConstitutionEvaluationEvidence option
         /// Execution context identifier
         ExecutionId: ExecutionId option
         /// Additional metadata
@@ -44,7 +44,7 @@ and [<RequireQualifiedAccess>] AuditAction =
     | ResourceAccess of resourceType: string * resource: string
     | PermissionCheck of capability: string
     | PolicyEvaluation of policyId: string
-    | ConstitutionCheck
+    | ConstitutionEvaluation of ruleId: string
     | LifecycleTransition of fromState: string * toState: string
 
 /// Functional audit logging operations.
@@ -86,7 +86,7 @@ module AuditLog =
           Decision = decision
           PermissionEvidence = None
           PolicyEvidence = None
-          ConstitutionViolations = []
+          ConstitutionEvidence = None
           ExecutionId = execId
           Metadata = Map.empty }
 
@@ -102,27 +102,32 @@ module AuditLog =
           Decision = PermissionDecision.Allow
           PermissionEvidence = None
           PolicyEvidence = None
-          ConstitutionViolations = []
+          ConstitutionEvidence = None
           ExecutionId = execId
           Metadata = Map.empty }
 
-    /// Create an audit entry for a constitution check
-    let constitutionCheck (agentId: string) (violations: string list) (execId: ExecutionId option) : AuditEntry =
-        { Id = Guid.NewGuid()
-          Timestamp = DateTimeOffset.UtcNow
+    /// Create an audit entry for one constitution rule evaluation.
+    let constitutionEvaluation agentId (evidence: ConstitutionEvaluationEvidence) execId =
+        let permitted =
+            evidence.Outcome = ConstitutionEvaluationOutcome.Passed
+            || evidence.RuleSeverity = RuleSeverity.Advisory
+            || evidence.RuleSeverity = RuleSeverity.Warning
+
+        { Id = evidence.Id
+          Timestamp = evidence.EvaluatedAt
           AgentId = agentId
-          Action = AuditAction.ConstitutionCheck
+          Action = AuditAction.ConstitutionEvaluation evidence.RuleId
           Input = None
           Output = None
-          Permitted = violations.IsEmpty
+          Permitted = permitted
           Decision =
-            if violations.IsEmpty then
+            if permitted then
                 PermissionDecision.Allow
             else
                 PermissionDecision.Deny
           PermissionEvidence = None
           PolicyEvidence = None
-          ConstitutionViolations = violations
+          ConstitutionEvidence = Some evidence
           ExecutionId = execId
           Metadata = Map.empty }
 
@@ -138,13 +143,14 @@ module AuditLog =
           Decision = evidence.Decision
           PermissionEvidence = Some evidence
           PolicyEvidence = None
-          ConstitutionViolations = []
+          ConstitutionEvidence = None
           ExecutionId = execId
           Metadata = Map.empty }
 
     let policyEvaluation (evidence: PolicyEvaluationEvidence) execId =
         let permitted =
             evidence.Outcome <> PolicyEvaluationOutcome.Blocked
+            && evidence.Outcome <> PolicyEvaluationOutcome.Failed
             && evidence.Confirmation <> Some PolicyConfirmation.Denied
 
         { Id = evidence.Id
@@ -161,6 +167,6 @@ module AuditLog =
                 PermissionDecision.Deny
           PermissionEvidence = None
           PolicyEvidence = Some evidence
-          ConstitutionViolations = []
+          ConstitutionEvidence = None
           ExecutionId = execId
           Metadata = Map.empty }

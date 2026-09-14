@@ -168,98 +168,452 @@ type PermissionGrantStoreTests() =
 
 [<TestClass>]
 type ConstitutionTests() =
+    let authorization =
+        SecurityPrincipal.create (TenantId.parse "tenant") (UserId.parse "constitution-user") []
+        |> fun principal ->
+            AuthorizationScope.tryCreate principal None (WorkspaceId.parse "workspace") None
+            |> Option.get
+
+    let context output =
+        ConstitutionContext.create authorization "constitution-agent" output
 
     [<TestMethod>]
     member _.EmptyConstitutionPassesAll() =
-        let constitution = Constitution.empty "test"
-        let result = Constitution.check constitution "any content"
+        let constitution = Constitution.create "test" "test-v1"
+        let result = Constitution.checkDeterministic constitution (context "any content")
         Assert.IsTrue(result.Passed)
         Assert.AreEqual(0, result.Violations.Length)
 
     [<TestMethod>]
     member _.AddRuleEnforcesCheck() =
         let rule =
-            { Id = "no-profanity"
-              Description = "No bad words"
-              Category = RuleCategory.Safety
-              Priority = 50
-              IsHardConstraint = true
-              Check = fun content -> content.Contains("badword") }
+            DeterministicConstitutionRule.create
+                "no-profanity"
+                "No bad words"
+                RuleCategory.Safety
+                50
+                RuleSeverity.Error
+                PolicyScope.platform
+                ConstitutionRemediation.Reject
+                "test-validator"
+                "test-v1"
+                Map.empty
+                (fun content -> content.Contains("badword"))
+            |> ConstitutionRule.Deterministic
 
-        let constitution = Constitution.empty "test" |> Constitution.addRule rule
-        let resultClean = Constitution.check constitution "this is fine"
+        let constitution = Constitution.create "test" "test-v1" |> Constitution.addRule rule
+
+        let resultClean =
+            Constitution.checkDeterministic constitution (context "this is fine")
+
         Assert.IsTrue(resultClean.Passed)
-        let resultBad = Constitution.check constitution "this has badword in it"
+
+        let resultBad =
+            Constitution.checkDeterministic constitution (context "this has badword in it")
+
         Assert.IsFalse(resultBad.Passed)
         Assert.AreEqual(1, resultBad.Violations.Length)
         Assert.AreEqual("no-profanity", resultBad.Violations.[0].RuleId)
+        Assert.AreEqual(RuleSeverity.Error, resultBad.Violations.[0].Severity)
+        Assert.AreEqual(ConstitutionRemediation.Reject, resultBad.Violations.[0].Remediation)
+
+        let evidence = resultBad.Evaluations |> List.exactlyOne
+        Assert.AreEqual(ConstitutionEvaluationOutcome.Violated, evidence.Outcome)
+        Assert.AreEqual(PolicyScopeKind.Platform, evidence.Scope)
+        Assert.AreEqual(RuleSeverity.Error, evidence.RuleSeverity)
+        Assert.AreEqual(ConstitutionRemediation.Reject, evidence.Remediation)
+        Assert.AreEqual("test-v1", evidence.ConstitutionVersion)
+        Assert.AreEqual("test-validator", evidence.EvaluatorId)
+        Assert.AreEqual("test-v1", evidence.EvaluatorVersion)
+        Assert.AreEqual(64, evidence.OutputDigest.Length)
 
     [<TestMethod>]
-    member _.HasHardViolationsDetectsHardConstraints() =
+    member _.ErrorSeverityRequiresBlocking() =
         let hardRule =
-            { Id = "hard"
-              Description = "Hard"
-              Category = RuleCategory.Safety
-              Priority = 100
-              IsHardConstraint = true
-              Check = fun _ -> true }
+            DeterministicConstitutionRule.create
+                "hard"
+                "Hard"
+                RuleCategory.Safety
+                100
+                RuleSeverity.Error
+                PolicyScope.platform
+                ConstitutionRemediation.Reject
+                "test-validator"
+                "test-v1"
+                Map.empty
+                (fun _ -> true)
+            |> ConstitutionRule.Deterministic
 
-        let constitution = Constitution.empty "test" |> Constitution.addRule hardRule
-        let result = Constitution.check constitution "anything"
-        Assert.IsTrue(Constitution.hasHardViolations result)
+        let constitution =
+            Constitution.create "test" "test-v1" |> Constitution.addRule hardRule
+
+        let result = Constitution.checkDeterministic constitution (context "anything")
+        Assert.IsTrue(Constitution.hasBlockingViolations result)
 
     [<TestMethod>]
     member _.SoftViolationDoesNotBlockHard() =
         let softRule =
-            { Id = "soft"
-              Description = "Soft"
-              Category = RuleCategory.Behavioral
-              Priority = 10
-              IsHardConstraint = false
-              Check = fun _ -> true }
+            DeterministicConstitutionRule.create
+                "soft"
+                "Soft"
+                RuleCategory.Behavioral
+                10
+                RuleSeverity.Warning
+                PolicyScope.platform
+                ConstitutionRemediation.Observe
+                "test-validator"
+                "test-v1"
+                Map.empty
+                (fun _ -> true)
+            |> ConstitutionRule.Deterministic
 
-        let constitution = Constitution.empty "test" |> Constitution.addRule softRule
-        let result = Constitution.check constitution "anything"
+        let constitution =
+            Constitution.create "test" "test-v1" |> Constitution.addRule softRule
+
+        let result = Constitution.checkDeterministic constitution (context "anything")
         Assert.IsFalse(result.Passed) // has violations
-        Assert.IsFalse(Constitution.hasHardViolations result) // but not hard
+        Assert.IsFalse(Constitution.hasBlockingViolations result)
 
     [<TestMethod>]
     member _.NoPrivateDataRuleDetectsEmail() =
         let constitution =
-            Constitution.empty "test" |> Constitution.addRule Constitution.noPrivateDataRule
+            Constitution.create "test" "test-v1"
+            |> Constitution.addRule Constitution.noPrivateDataRule
 
         let resultWithEmail =
-            Constitution.check constitution "Contact me at user@example.com"
+            Constitution.checkDeterministic constitution (context "Contact me at user@example.com")
 
         Assert.IsFalse(resultWithEmail.Passed)
 
     [<TestMethod>]
     member _.NoPrivateDataRuleDetectsPhone() =
         let constitution =
-            Constitution.empty "test" |> Constitution.addRule Constitution.noPrivateDataRule
+            Constitution.create "test" "test-v1"
+            |> Constitution.addRule Constitution.noPrivateDataRule
 
-        let resultWithPhone = Constitution.check constitution "Call me at 555-123-4567"
+        let resultWithPhone =
+            Constitution.checkDeterministic constitution (context "Call me at 555-123-4567")
+
         Assert.IsFalse(resultWithPhone.Passed)
 
     [<TestMethod>]
     member _.RenderForPromptIncludesRules() =
         let rule =
-            { Id = "r1"
-              Description = "Be polite"
-              Category = RuleCategory.Behavioral
-              Priority = 50
-              IsHardConstraint = false
-              Check = fun _ -> false }
+            DeterministicConstitutionRule.create
+                "r1"
+                "Be polite"
+                RuleCategory.Behavioral
+                50
+                RuleSeverity.Warning
+                PolicyScope.platform
+                ConstitutionRemediation.Observe
+                "test-validator"
+                "test-v1"
+                Map.empty
+                (fun _ -> false)
+            |> ConstitutionRule.Deterministic
 
         let constitution =
-            { Constitution.empty "Politeness" with
-                Preamble = Some "Always be kind" }
+            Constitution.create "Politeness" "test-v1"
+            |> Constitution.withPreamble "Always be kind"
             |> Constitution.addRule rule
 
         let rendered = Constitution.renderForPrompt constitution
         Assert.IsTrue(rendered.Contains("Politeness"))
         Assert.IsTrue(rendered.Contains("Always be kind"))
-        Assert.IsTrue(rendered.Contains("[SHOULD] Be polite"))
+        Assert.IsTrue(rendered.Contains("[Warning/Observe] Be polite"))
+
+    [<TestMethod>]
+    member _.DeterministicValidationNeverInvokesProbabilisticJudges() =
+        let mutable judgeInvoked = false
+
+        let deterministic =
+            DeterministicConstitutionRule.create
+                "deterministic"
+                "Pinned deterministic check"
+                RuleCategory.Format
+                100
+                RuleSeverity.Error
+                PolicyScope.platform
+                ConstitutionRemediation.Reject
+                "test-validator"
+                "test-v1"
+                (Map [ "validator", "2.1.0" ])
+                (fun content -> content <> "valid")
+            |> ConstitutionRule.Deterministic
+
+        let probabilistic =
+            ProbabilisticConstitutionRule.create
+                "probabilistic"
+                "Model judge"
+                RuleCategory.Safety
+                90
+                RuleSeverity.Error
+                PolicyScope.platform
+                ConstitutionRemediation.Reject
+                "test-judge"
+                "test-v1"
+                "safety-judge"
+                "prompt-v3"
+                0.8
+                (fun _ _ ->
+                    judgeInvoked <- true
+
+                    Task.FromResult { Score = 1.0; Rationale = "unsafe" })
+            |> ConstitutionRule.Probabilistic
+
+        let result =
+            Constitution.create "separated" "test-v1"
+            |> Constitution.addRule probabilistic
+            |> Constitution.addRule deterministic
+            |> fun constitution -> Constitution.checkDeterministic constitution (context "invalid")
+
+        Assert.IsFalse(result.Passed)
+        Assert.IsFalse(judgeInvoked)
+        Assert.AreEqual([ "deterministic" ], result.Violations |> List.map _.RuleId)
+
+        match result.Evaluations.Head.Evaluator with
+        | ConstitutionEvaluatorEvidence.Deterministic dependencies ->
+            Assert.AreEqual(Some "2.1.0", dependencies |> Map.tryFind "validator")
+        | evidence -> Assert.Fail($"Expected deterministic evidence, got {evidence}.")
+
+        let completeResult =
+            Constitution.create "separated" "test-v1"
+            |> Constitution.addRule probabilistic
+            |> Constitution.addRule deterministic
+            |> fun constitution ->
+                Constitution.evaluateAsync constitution (context "invalid") CancellationToken.None
+                |> _.Result
+
+        Assert.IsFalse(completeResult.Passed)
+        Assert.IsFalse(judgeInvoked)
+
+    [<TestMethod>]
+    member _.ProbabilisticJudgementRecordsPinnedDecisionInputs() =
+        let rule =
+            ProbabilisticConstitutionRule.create
+                "toxicity"
+                "Detect toxic content"
+                RuleCategory.Safety
+                100
+                RuleSeverity.Error
+                PolicyScope.platform
+                ConstitutionRemediation.Reject
+                "test-judge"
+                "test-v1"
+                "judge-model-v2"
+                "toxicity-prompt-v4"
+                0.75
+                (fun content _ ->
+                    Assert.AreEqual("unsafe output", content)
+
+                    Task.FromResult
+                        { Score = 0.9
+                          Rationale = "Threatening language detected." })
+            |> ConstitutionRule.Probabilistic
+
+        let result =
+            Constitution.create "judged" "test-v1"
+            |> Constitution.addRule rule
+            |> fun constitution ->
+                Constitution.evaluateAsync constitution (context "unsafe output") CancellationToken.None
+                |> _.Result
+
+        Assert.IsFalse(result.Passed)
+
+        match result.Evaluations.Head.Evaluator with
+        | ConstitutionEvaluatorEvidence.Probabilistic(model, promptVersion, threshold, score, rationaleDigest) ->
+            Assert.AreEqual("judge-model-v2", model)
+            Assert.AreEqual("toxicity-prompt-v4", promptVersion)
+            Assert.AreEqual(0.75, threshold)
+            Assert.AreEqual(0.9, score)
+            Assert.AreEqual(64, rationaleDigest.Length)
+        | evidence -> Assert.Fail($"Expected probabilistic evidence, got {evidence}.")
+
+    [<TestMethod>]
+    member _.ProbabilisticJudgementPropagatesCallerCancellation() =
+        let rule =
+            ProbabilisticConstitutionRule.create
+                "slow-judge"
+                "Waits for cancellation"
+                RuleCategory.Safety
+                100
+                RuleSeverity.Error
+                PolicyScope.platform
+                ConstitutionRemediation.Reject
+                "test-judge"
+                "test-v1"
+                "judge-model"
+                "prompt-v1"
+                0.5
+                (fun _ cancellationToken ->
+                    task {
+                        do! Task.Delay(TimeSpan.FromSeconds 5.0, cancellationToken)
+
+                        return { Score = 0.0; Rationale = "safe" }
+                    })
+            |> ConstitutionRule.Probabilistic
+
+        let constitution =
+            Constitution.create "cancelled" "test-v1" |> Constitution.addRule rule
+
+        use cancellation = new CancellationTokenSource()
+        cancellation.Cancel()
+
+        Assert.ThrowsExactly<TaskCanceledException>(fun () ->
+            Constitution.evaluateAsync constitution (context "output") cancellation.Token
+            |> _.GetAwaiter().GetResult()
+            |> ignore)
+        |> ignore
+
+    [<TestMethod>]
+    member _.ProbabilisticRuleRejectsInvalidThresholdAndScore() =
+        let create threshold score =
+            ProbabilisticConstitutionRule.create
+                "judge"
+                "Judge"
+                RuleCategory.Safety
+                100
+                RuleSeverity.Error
+                PolicyScope.platform
+                ConstitutionRemediation.Reject
+                "test-judge"
+                "test-v1"
+                "model"
+                "prompt-v1"
+                threshold
+                (fun _ _ ->
+                    Task.FromResult
+                        { Score = score
+                          Rationale = "evidence" })
+            |> ConstitutionRule.Probabilistic
+
+        Assert.ThrowsExactly<ArgumentException>(fun () -> create 1.1 0.0 |> ignore)
+        |> ignore
+
+        let constitution =
+            Constitution.create "invalid-score" "test-v1"
+            |> Constitution.addRule (create 0.5 -0.1)
+
+        Assert.ThrowsExactly<InvalidOperationException>(fun () ->
+            Constitution.evaluateAsync constitution (context "output") CancellationToken.None
+            |> _.GetAwaiter().GetResult()
+            |> ignore)
+        |> ignore
+
+    [<TestMethod>]
+    member _.OnlyRulesMatchingAuthenticatedScopeAreEvaluated() =
+        let mutable foreignEvaluated = false
+        let tenantId = AuthorizationScope.tenantId authorization
+        let workspaceId = AuthorizationScope.workspaceId authorization
+
+        let rule id scope onEvaluate =
+            DeterministicConstitutionRule.create
+                id
+                id
+                RuleCategory.Safety
+                100
+                RuleSeverity.Error
+                scope
+                ConstitutionRemediation.Reject
+                "test-validator"
+                "test-v1"
+                Map.empty
+                (fun _ ->
+                    onEvaluate ()
+                    true)
+            |> ConstitutionRule.Deterministic
+
+        let constitution =
+            Constitution.create "scoped" "test-v1"
+            |> Constitution.addRule (
+                rule "matching" (PolicyScope.agent tenantId None workspaceId "constitution-agent") ignore
+            )
+            |> Constitution.addRule (
+                rule "foreign" (PolicyScope.tenant (TenantId.parse "foreign-tenant")) (fun () ->
+                    foreignEvaluated <- true)
+            )
+
+        let result = Constitution.checkDeterministic constitution (context "output")
+
+        Assert.AreEqual([ "matching" ], result.Violations |> List.map _.RuleId)
+        Assert.AreEqual([ "matching" ], result.Evaluations |> List.map _.RuleId)
+        Assert.IsFalse(foreignEvaluated)
+
+    [<TestMethod>]
+    member _.RemediationResolutionUsesMostRestrictiveOutcome() =
+        let violation remediation =
+            let evidence =
+                { Id = Guid.NewGuid()
+                  ConstitutionName = "test"
+                  ConstitutionVersion = "1.0"
+                  RuleId = string remediation
+                  RuleCategory = RuleCategory.Safety
+                  RuleSeverity = RuleSeverity.Error
+                  Scope = PolicyScopeKind.Platform
+                  Remediation = remediation
+                  EvaluatorId = "test-validator"
+                  EvaluatorVersion = "test-v1"
+                  Outcome = ConstitutionEvaluationOutcome.Violated
+                  Evaluator = ConstitutionEvaluatorEvidence.Deterministic Map.empty
+                  OutputDigest = String.replicate 64 "a"
+                  EvaluatedAt = DateTimeOffset.UtcNow }
+
+            { RuleId = evidence.RuleId
+              RuleDescription = evidence.RuleId
+              Severity = evidence.RuleSeverity
+              Remediation = remediation
+              Evidence = evidence }
+
+        let selected =
+            [ ConstitutionRemediation.Redact
+              ConstitutionRemediation.Repair
+              ConstitutionRemediation.Reject
+              ConstitutionRemediation.Escalate
+              ConstitutionRemediation.Quarantine ]
+            |> List.map violation
+            |> Constitution.requiredRemediation
+
+        Assert.AreEqual(ConstitutionRemediation.Quarantine, selected)
+
+    [<TestMethod>]
+    member _.BlockingSeverityCannotUseObserveRemediation() =
+        Assert.ThrowsExactly<ArgumentException>(fun () ->
+            DeterministicConstitutionRule.create
+                "invalid"
+                "invalid"
+                RuleCategory.Safety
+                1
+                RuleSeverity.Critical
+                PolicyScope.platform
+                ConstitutionRemediation.Observe
+                "test-validator"
+                "test-v1"
+                Map.empty
+                (fun _ -> false)
+            |> ignore)
+        |> ignore
+
+    [<TestMethod>]
+    member _.ConstitutionAndEvaluatorVersionsAreMandatory() =
+        Assert.ThrowsExactly<ArgumentException>(fun () -> Constitution.create "safety" " " |> ignore)
+        |> ignore
+
+        Assert.ThrowsExactly<ArgumentException>(fun () ->
+            DeterministicConstitutionRule.create
+                "rule"
+                "rule"
+                RuleCategory.Safety
+                1
+                RuleSeverity.Error
+                PolicyScope.platform
+                ConstitutionRemediation.Reject
+                "validator"
+                " "
+                Map.empty
+                (fun _ -> false)
+            |> ignore)
+        |> ignore
 
 [<TestClass>]
 type AuditLogTests() =

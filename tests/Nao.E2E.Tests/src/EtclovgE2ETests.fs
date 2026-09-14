@@ -720,41 +720,64 @@ type EtclovgVerificationTests() =
 type EtclovgGovernanceTests() =
 
     let agentId = "governed-agent"
+    let authorization = EtclovgHarness.telemetryScope "governed-constitution"
+
+    let constitutionContext output =
+        ConstitutionContext.create authorization agentId output
 
     [<TestMethod>]
     member _.ConstitutionEnforcesOutputSafety() =
         let constitution =
-            Constitution.empty "corporate-safety"
+            Constitution.create "corporate-safety" "test-v1"
             |> Constitution.addRule Constitution.noPrivateDataRule
-            |> Constitution.addRule
-                { Id = "no-financial-advice"
-                  Description = "Do not provide specific buy/sell recommendations"
-                  Category = RuleCategory.Domain "finance"
-                  Priority = 80
-                  IsHardConstraint = true
-                  Check = fun content -> content.Contains("you should buy") || content.Contains("sell immediately") }
-            |> Constitution.addRule
-                { Id = "professional-tone"
-                  Description = "Maintain professional tone in all communications"
-                  Category = RuleCategory.Behavioral
-                  Priority = 30
-                  IsHardConstraint = false
-                  Check = fun content -> content.Contains("lol") || content.Contains("lmao") }
+            |> Constitution.addRule (
+                DeterministicConstitutionRule.create
+                    "no-financial-advice"
+                    "Do not provide specific buy/sell recommendations"
+                    (RuleCategory.Domain "finance")
+                    80
+                    RuleSeverity.Error
+                    PolicyScope.platform
+                    ConstitutionRemediation.Reject
+                    "finance-validator"
+                    "test-v1"
+                    Map.empty
+                    (fun content -> content.Contains("you should buy") || content.Contains("sell immediately"))
+                |> ConstitutionRule.Deterministic
+            )
+            |> Constitution.addRule (
+                DeterministicConstitutionRule.create
+                    "professional-tone"
+                    "Maintain professional tone in all communications"
+                    RuleCategory.Behavioral
+                    30
+                    RuleSeverity.Warning
+                    PolicyScope.platform
+                    ConstitutionRemediation.Observe
+                    "tone-validator"
+                    "test-v1"
+                    Map.empty
+                    (fun content -> content.Contains("lol") || content.Contains("lmao"))
+                |> ConstitutionRule.Deterministic
+            )
 
         // Safe output passes
         let safeResult =
-            Constitution.check
+            Constitution.checkDeterministic
                 constitution
-                "The current price of AAPL is $189.45. Past performance does not guarantee future results."
+                (constitutionContext
+                    "The current price of AAPL is $189.45. Past performance does not guarantee future results.")
 
         Assert.IsTrue(safeResult.Passed)
 
         // Financial advice blocked
         let adviceResult =
-            Constitution.check constitution "Based on the trend, you should buy AAPL immediately."
+            Constitution.checkDeterministic
+                constitution
+                (constitutionContext "Based on the trend, you should buy AAPL immediately.")
 
         Assert.IsFalse(adviceResult.Passed)
-        Assert.IsTrue(Constitution.hasHardViolations adviceResult)
+        Assert.IsTrue(Constitution.hasBlockingViolations adviceResult)
 
         Assert.IsTrue(
             adviceResult.Violations
@@ -763,15 +786,17 @@ type EtclovgGovernanceTests() =
 
         // PII blocked
         let piiResult =
-            Constitution.check constitution "The user's email is alice@company.com"
+            Constitution.checkDeterministic constitution (constitutionContext "The user's email is alice@company.com")
 
         Assert.IsFalse(piiResult.Passed)
-        Assert.IsTrue(Constitution.hasHardViolations piiResult)
+        Assert.IsTrue(Constitution.hasBlockingViolations piiResult)
 
         // Informal tone is soft violation (doesn't block)
-        let informalResult = Constitution.check constitution "lol that's a good price"
+        let informalResult =
+            Constitution.checkDeterministic constitution (constitutionContext "lol that's a good price")
+
         Assert.IsFalse(informalResult.Passed)
-        Assert.IsFalse(Constitution.hasHardViolations informalResult) // soft constraint
+        Assert.IsFalse(Constitution.hasBlockingViolations informalResult)
 
     [<TestMethod>]
     member _.AuditLogTracksAllActions() =
@@ -931,7 +956,7 @@ type EtclovgFullIntegrationTests() =
 
         // G: Governance
         let constitution =
-            Constitution.empty "safety"
+            Constitution.create "safety" "test-v1"
             |> Constitution.addRule Constitution.noPrivateDataRule
 
         let audit = InMemory.auditLog ()
@@ -1013,7 +1038,7 @@ type EtclovgFullIntegrationTests() =
             { EtclovgConfig.Default with
                 Constitution =
                     Some(
-                        Constitution.empty "safety"
+                        Constitution.create "safety" "test-v1"
                         |> Constitution.addRule Constitution.noPrivateDataRule
                     )
                 AuditLog = Some(InMemory.auditLog ())
@@ -1124,7 +1149,11 @@ type EtclovgFullIntegrationTests() =
                 Metrics = Some metrics
                 TraceStore = Some traceStore
                 AuditLog = Some audit
-                Constitution = Some(Constitution.empty "basic" |> Constitution.addRule Constitution.noHarmRule)
+                Constitution =
+                    Some(
+                        Constitution.create "basic" "test-v1"
+                        |> Constitution.addRule Constitution.noHarmRule
+                    )
                 PolicyEngine =
                     Some(
                         PolicyEngine.create

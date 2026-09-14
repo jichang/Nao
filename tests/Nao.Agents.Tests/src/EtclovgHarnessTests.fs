@@ -2826,12 +2826,13 @@ type EtclovgHarnessTests() =
         let agent = makeAgent "contact user@evil.com for info"
 
         let constitution =
-            Constitution.empty "safety"
+            Constitution.create "safety" "test-v1"
             |> Constitution.addRule Constitution.noPrivateDataRule
 
         let config =
             { EtclovgConfig.Default with
-                Constitution = Some constitution }
+                Constitution = Some constitution
+                AuditLog = Some(InMemory.auditLog ()) }
 
         let context = AgentContext.unrestrictedForTests ()
 
@@ -2843,6 +2844,378 @@ type EtclovgHarnessTests() =
         | status -> Assert.Fail(sprintf "Expected constitution denial, got %A" status)
 
         Assert.IsTrue(result.PolicyDecisions.ConstitutionViolations.Length > 0)
+        Assert.AreEqual(ConstitutionDisposition.Rejected, result.PolicyDecisions.ConstitutionDisposition)
+
+    [<TestMethod>]
+    member _.RejectedOutputNeverReachesDownstreamCommitSurfaces() =
+        let mutable completed = false
+        let mutable failed = false
+        let events = ResizeArray<NaoEvent>()
+        let store = InMemoryTraceStore.create ()
+        let audit = InMemory.auditLog ()
+        let journal = InMemory.executionJournal ()
+
+        let lifecycle =
+            { LifecycleHook.passthrough with
+                OnCompleted =
+                    fun _ _ ->
+                        completed <- true
+                        Task.FromResult()
+                OnFailed =
+                    fun _ _ ->
+                        failed <- true
+                        Task.FromResult() }
+
+        let bus =
+            EventBus.create
+                (fun event ->
+                    events.Add event
+                    Task.CompletedTask)
+                ignore
+                ignore
+
+        let config =
+            { EtclovgConfig.Default with
+                Constitution =
+                    Some(
+                        Constitution.create "reject" "test-v1"
+                        |> Constitution.addRule Constitution.noPrivateDataRule
+                    )
+                AuditLog = Some audit
+                ExecutionJournal = Some journal
+                TraceStore = Some store
+                Lifecycle = [ lifecycle ]
+                Bus = bus }
+
+        let context = AgentContext.unrestrictedForTests ()
+        let agent = makeAgent "contact rejected@example.com"
+        let executionRequest = request context agent "test"
+        let result = (EtclovgHarness.runAsync config context agent executionRequest).Result
+
+        Assert.AreEqual(None, result.Outputs.Response)
+        Assert.AreEqual(ConstitutionDisposition.Rejected, result.PolicyDecisions.ConstitutionDisposition)
+        Assert.IsFalse(completed)
+        Assert.IsTrue(failed)
+
+        Assert.IsFalse(
+            events
+            |> Seq.exists (function
+                | NaoEvent.TurnProgress(_, ProgressSignal.AnswerProduced _) -> true
+                | _ -> false)
+        )
+
+        Assert.AreEqual(
+            0,
+            store.GetTracesAsync executionRequest.Authorization agent.Metadata.Id 10
+            |> _.Result
+            |> List.length
+        )
+
+        let auditEntries =
+            audit.QueryByExecutionAsync executionRequest.Authorization executionRequest.Correlation.ExecutionId
+            |> _.Result
+
+        Assert.IsTrue(auditEntries |> List.exists _.ConstitutionEvidence.IsSome)
+
+        Assert.IsFalse(
+            auditEntries
+            |> List.exists (fun entry ->
+                match entry.Action with
+                | AuditAction.LlmCall _ -> true
+                | _ -> false)
+        )
+
+        let checkpoints =
+            journal.Checkpoints.GetByExecution executionRequest.Authorization executionRequest.Correlation.ExecutionId
+            |> _.Result
+
+        Assert.AreEqual(HarnessCheckpointPhase.Denied, checkpoints |> List.last |> _.Phase)
+
+    [<TestMethod>]
+    member _.ProbabilisticConstitutionViolationBlocksOutputWithDecisionEvidence() =
+        let agent = makeAgent "ambiguous output"
+        let audit = InMemory.auditLog ()
+
+        let rule =
+            ProbabilisticConstitutionRule.create
+                "safety-judge"
+                "Judge output safety"
+                RuleCategory.Safety
+                100
+                RuleSeverity.Error
+                PolicyScope.platform
+                ConstitutionRemediation.Reject
+                "test-judge"
+                "test-v1"
+                "judge-model-v2"
+                "safety-prompt-v3"
+                0.8
+                (fun content cancellationToken ->
+                    cancellationToken.ThrowIfCancellationRequested()
+                    Assert.AreEqual("ambiguous output", content)
+
+                    Task.FromResult
+                        { Score = 0.95
+                          Rationale = "Unsafe according to the pinned rubric." })
+            |> ConstitutionRule.Probabilistic
+
+        let config =
+            { EtclovgConfig.Default with
+                Constitution = Some(Constitution.create "probabilistic" "test-v1" |> Constitution.addRule rule)
+                AuditLog = Some audit }
+
+        let context = AgentContext.unrestrictedForTests ()
+        let executionRequest = request context agent "test"
+
+        let result = (EtclovgHarness.runAsync config context agent executionRequest).Result
+
+        match result.Status with
+        | ExecutionTerminalStatus.Denied(HarnessError.ConstitutionViolation [ "safety-judge" ]) -> ()
+        | status -> Assert.Fail(sprintf "Expected probabilistic constitution denial, got %A" status)
+
+        match result.PolicyDecisions.ConstitutionViolations.Head.Evidence.Evaluator with
+        | ConstitutionEvaluatorEvidence.Probabilistic(model, promptVersion, threshold, score, _) ->
+            Assert.AreEqual("judge-model-v2", model)
+            Assert.AreEqual("safety-prompt-v3", promptVersion)
+            Assert.AreEqual(0.8, threshold)
+            Assert.AreEqual(0.95, score)
+        | evidence -> Assert.Fail($"Expected probabilistic evidence, got {evidence}.")
+
+        let persisted =
+            audit.QueryByExecutionAsync executionRequest.Authorization executionRequest.Correlation.ExecutionId
+            |> _.Result
+            |> List.choose _.ConstitutionEvidence
+            |> List.exactlyOne
+
+        Assert.AreEqual(result.PolicyDecisions.ConstitutionViolations.Head.Evidence, persisted)
+
+    [<TestMethod>]
+    member _.ConfiguredConstitutionWithoutAuditFailsBeforeAgentExecution() =
+        let mutable executed = false
+
+        let agent =
+            Agent.create "constitution-audit" "constitution-audit" "test" 0 [] AgentContract.Text (fun _ _ ->
+                executed <- true
+                Task.FromResult "unexpected")
+
+        let config =
+            { EtclovgConfig.Default with
+                Constitution = Some(Constitution.create "requires-audit" "test-v1") }
+
+        let context = AgentContext.unrestrictedForTests ()
+
+        let result =
+            (EtclovgHarness.runAsync config context agent (request context agent "test")).Result
+
+        Assert.IsFalse(executed)
+
+        match result.Status with
+        | ExecutionTerminalStatus.Failed(HarnessError.InitializationFailed message) ->
+            Assert.AreEqual("Constitution evaluation requires an authenticated audit log.", message)
+        | status -> Assert.Fail(sprintf "Expected missing-audit initialization failure, got %A" status)
+
+    [<TestMethod>]
+    member _.RedactionIsReevaluatedAndBecomesReleasedOutput() =
+        let agent = makeAgent "secret value"
+        let audit = InMemory.auditLog ()
+
+        let rule =
+            DeterministicConstitutionRule.create
+                "redact-secret"
+                "Redact secrets"
+                RuleCategory.Privacy
+                100
+                RuleSeverity.Warning
+                PolicyScope.platform
+                ConstitutionRemediation.Redact
+                "test-validator"
+                "test-v1"
+                Map.empty
+                (fun output -> output.Contains("secret"))
+            |> ConstitutionRule.Deterministic
+
+        let mutable observed = None
+
+        let broker =
+            ConstitutionRemediationBroker.create
+                (fun request _ ->
+                    observed <- Some request
+                    Task.FromResult(request.Output.Replace("secret", "[redacted]")))
+                (fun _ _ -> Task.FromResult "unused")
+                (fun _ _ -> Task.CompletedTask)
+                (fun _ _ -> Task.CompletedTask)
+
+        let config =
+            { EtclovgConfig.Default with
+                Constitution = Some(Constitution.create "redaction" "test-v1" |> Constitution.addRule rule)
+                ConstitutionRemediationBroker = broker
+                AuditLog = Some audit }
+
+        let context = AgentContext.unrestrictedForTests ()
+        let executionRequest = request context agent "test"
+        let result = (EtclovgHarness.runAsync config context agent executionRequest).Result
+
+        Assert.AreEqual(ExecutionTerminalStatus.Succeeded, result.Status)
+        Assert.AreEqual(Some "[redacted] value", result.Outputs.Response)
+        Assert.AreEqual(ConstitutionDisposition.Redacted, result.PolicyDecisions.ConstitutionDisposition)
+        Assert.AreEqual("secret value", observed.Value.Output)
+
+        Assert.AreEqual(
+            AuthorizationScope.identity executionRequest.Authorization,
+            AuthorizationScope.identity observed.Value.Authorization
+        )
+
+        Assert.AreEqual(
+            [ agent.Metadata.Id ],
+            observed.Value.Authorization
+            |> AuthorizationScope.agentLineage
+            |> List.map _.AgentId
+        )
+
+        Assert.AreEqual(executionRequest.Correlation.ExecutionId, observed.Value.ExecutionId)
+
+        let evidence =
+            audit.QueryByExecutionAsync executionRequest.Authorization executionRequest.Correlation.ExecutionId
+            |> _.Result
+            |> List.choose _.ConstitutionEvidence
+
+        Assert.AreEqual(2, evidence.Length)
+        Assert.AreEqual(ConstitutionEvaluationOutcome.Violated, evidence.Head.Outcome)
+        Assert.AreEqual(ConstitutionEvaluationOutcome.Passed, evidence.Tail.Head.Outcome)
+
+    [<TestMethod>]
+    member _.RepairThatStillViolatesIsRejected() =
+        let agent = makeAgent "invalid"
+
+        let rule =
+            DeterministicConstitutionRule.create
+                "repair-output"
+                "Repair invalid output"
+                RuleCategory.Format
+                100
+                RuleSeverity.Warning
+                PolicyScope.platform
+                ConstitutionRemediation.Repair
+                "test-validator"
+                "test-v1"
+                Map.empty
+                (fun output -> output <> "valid")
+            |> ConstitutionRule.Deterministic
+
+        let broker =
+            ConstitutionRemediationBroker.create
+                (fun _ _ -> Task.FromResult "unused")
+                (fun _ _ -> Task.FromResult "still invalid")
+                (fun _ _ -> Task.CompletedTask)
+                (fun _ _ -> Task.CompletedTask)
+
+        let config =
+            { EtclovgConfig.Default with
+                Constitution = Some(Constitution.create "repair" "test-v1" |> Constitution.addRule rule)
+                ConstitutionRemediationBroker = broker
+                AuditLog = Some(InMemory.auditLog ()) }
+
+        let context = AgentContext.unrestrictedForTests ()
+
+        let result =
+            (EtclovgHarness.runAsync config context agent (request context agent "test")).Result
+
+        Assert.AreEqual(ConstitutionDisposition.Rejected, result.PolicyDecisions.ConstitutionDisposition)
+        Assert.AreEqual(None, result.Outputs.Response)
+
+    [<TestMethod>]
+    member _.SuccessfulRepairBecomesReleasedOutput() =
+        let agent = makeAgent "invalid"
+
+        let rule =
+            DeterministicConstitutionRule.create
+                "repair-output"
+                "Repair invalid output"
+                RuleCategory.Format
+                100
+                RuleSeverity.Warning
+                PolicyScope.platform
+                ConstitutionRemediation.Repair
+                "test-validator"
+                "test-v1"
+                Map.empty
+                (fun output -> output <> "valid")
+            |> ConstitutionRule.Deterministic
+
+        let broker =
+            ConstitutionRemediationBroker.create
+                (fun _ _ -> Task.FromResult "unused")
+                (fun _ _ -> Task.FromResult "valid")
+                (fun _ _ -> Task.CompletedTask)
+                (fun _ _ -> Task.CompletedTask)
+
+        let config =
+            { EtclovgConfig.Default with
+                Constitution = Some(Constitution.create "repair" "test-v1" |> Constitution.addRule rule)
+                ConstitutionRemediationBroker = broker
+                AuditLog = Some(InMemory.auditLog ()) }
+
+        let context = AgentContext.unrestrictedForTests ()
+
+        let result =
+            (EtclovgHarness.runAsync config context agent (request context agent "test")).Result
+
+        Assert.AreEqual(ExecutionTerminalStatus.Succeeded, result.Status)
+        Assert.AreEqual(Some "valid", result.Outputs.Response)
+        Assert.AreEqual(ConstitutionDisposition.Repaired, result.PolicyDecisions.ConstitutionDisposition)
+
+    [<TestMethod>]
+    member _.EscalationAndQuarantineInvokeOnlySelectedHostOutcome() =
+        for remediation, expectedDisposition in
+            [ ConstitutionRemediation.Escalate, ConstitutionDisposition.Escalated
+              ConstitutionRemediation.Quarantine, ConstitutionDisposition.Quarantined ] do
+            let mutable escalated = false
+            let mutable quarantined = false
+            let agent = makeAgent "unsafe"
+
+            let rule =
+                DeterministicConstitutionRule.create
+                    (string remediation)
+                    (string remediation)
+                    RuleCategory.Safety
+                    100
+                    RuleSeverity.Critical
+                    PolicyScope.platform
+                    remediation
+                    "test-validator"
+                    "test-v1"
+                    Map.empty
+                    (fun _ -> true)
+                |> ConstitutionRule.Deterministic
+
+            let broker =
+                ConstitutionRemediationBroker.create
+                    (fun _ _ -> Task.FromResult "unused")
+                    (fun _ _ -> Task.FromResult "unused")
+                    (fun _ _ ->
+                        escalated <- true
+                        Task.CompletedTask)
+                    (fun _ _ ->
+                        quarantined <- true
+                        Task.CompletedTask)
+
+            let config =
+                { EtclovgConfig.Default with
+                    Constitution = Some(Constitution.create "terminal" "test-v1" |> Constitution.addRule rule)
+                    ConstitutionRemediationBroker = broker
+                    AuditLog = Some(InMemory.auditLog ()) }
+
+            let context = AgentContext.unrestrictedForTests ()
+
+            let result =
+                (EtclovgHarness.runAsync config context agent (request context agent "test")).Result
+
+            Assert.AreEqual(expectedDisposition, result.PolicyDecisions.ConstitutionDisposition)
+            Assert.AreEqual(None, result.Outputs.Response)
+            let expectedEscalation = remediation = ConstitutionRemediation.Escalate
+            let expectedQuarantine = remediation = ConstitutionRemediation.Quarantine
+            Assert.AreEqual(expectedEscalation, escalated)
+            Assert.AreEqual(expectedQuarantine, quarantined)
 
     [<TestMethod>]
     member _.DeterministicAgentDoesNotRecordLlmCall() =
@@ -2921,7 +3294,8 @@ type EtclovgHarnessTests() =
         let audit = InMemory.auditLog ()
 
         let constitution =
-            Constitution.empty "basic" |> Constitution.addRule Constitution.noHarmRule
+            Constitution.create "basic" "test-v1"
+            |> Constitution.addRule Constitution.noHarmRule
 
         let passCheck =
             ReadinessCheck.create "ready" (fun _ _ -> Task.FromResult ReadinessResult.Ready)

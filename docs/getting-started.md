@@ -109,7 +109,7 @@ let config =
         Metrics = Some(InMemory.metrics ())
         Constitution =
             Some(
-                Constitution.empty "safety"
+                Constitution.create "safety" "1"
                 |> Constitution.addRule Constitution.noPrivateDataRule)
         ReadinessChecks = [ readinessCheck ]
         TraceStore = Some traceStore
