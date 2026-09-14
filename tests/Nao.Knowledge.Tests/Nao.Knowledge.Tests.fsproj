@@ -10,6 +10,10 @@
   <ItemGroup>
     <Compile Include="src/MSTestSettings.fs" />
     <Compile Include="src/KnowledgeContractTests.fs" />
+    <Compile Include="src/SourceConnectorTests.fs" />
+    <Compile Include="src/HttpSourceConnectorTests.fs" />
+    <Compile Include="src/GitSourceConnectorTests.fs" />
+    <Compile Include="src/SourceSynchronizationRunnerTests.fs" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\Nao.Knowledge\Nao.Knowledge.fsproj" />

@@ -19,7 +19,48 @@ version, units, chunks, and index entries only after validating their lineage. R
 entries must reference chunks from the same document version. Source tombstone and purge
 operations update every related document, version, unit, chunk, index entry, and cache entry in
 one locked transition; any legal hold blocks the entire mutation. Production durable and indexed
-adapters remain KNO-02 through KNO-06 work.
+adapters remain KNO-03 through KNO-06 work.
+
+Source acquisition uses vendor-neutral pull, push, snapshot, and change-feed contracts.
+`FilesystemSourceConnector` is the local reference pull/snapshot implementation. It binds opaque,
+content-hashed checkpoints to its connector identity, reads raw bytes without a parser or LLM,
+and applies source-owner, knowledge-index, directory-list, and per-file read authorization before
+the corresponding operation. Recursive enumeration excludes reparse points, supports canonical
+include/exclude globs, and fails the whole synchronization rather than truncating when the item
+limit is exceeded. Per-item access, I/O, and content-size failures are reported independently;
+the prior checkpoint state for a failed known item is retained so a transient failure cannot
+become a false deletion. Unique-content renames retain stable item identity, while ambiguous
+renames converge as independent deletion and addition.
+
+`HttpSourceConnector` provides HTTP(S) pull/snapshot acquisition through host-injected transport
+and robots capabilities. Every initial and redirected URI is independently checked against the
+authenticated web-read permission, path-aware network allowlist, and robots decision before the
+transport is invoked. The transport receives the same network policy and byte limit so the host
+can enforce DNS, resolved-address, socket, and streaming limits at the actual network boundary;
+the connector validates declared and received sizes again. Redirect count, HTTP status,
+media type, credentials, fragments, and conditional ETag/Last-Modified checkpoints fail closed.
+
+`GitSourceConnector` acquires immutable commit snapshots from a host-injected repository
+capability. It supports local file repositories and allowlisted HTTPS repositories, pins every
+checkpoint and content item to a canonical SHA-1 or SHA-256 commit identity, filters canonical
+repository-relative paths, excludes `.git` metadata, bounds item and blob sizes, and reuses the
+same deterministic move/delete reconciliation as filesystem ingestion. Local repositories
+require list authorization before repository access and read authorization for every selected
+file; remote readers receive the network policy for enforcement at clone/fetch boundaries.
+Duplicate paths, path traversal, mismatched unchanged commits, and changed content under an
+immutable commit identity fail closed.
+
+`SourceSynchronizationRunner` composes operational resilience around any pull connector without
+embedding scheduling behavior in connector implementations. Fixed and bounded exponential retry
+policies retry only failures classified as retryable by the platform taxonomy. Batch submission
+rejects work above an explicit backlog bound and uses a semaphore to cap active synchronization.
+Successful batches persist every isolated item failure as a v1 `QuarantinedSourceItem`; exhausted
+or non-retryable whole-run failures persist a v1 `DeadLetteredSourceSync` and return an explicit
+dead-letter outcome. Caller cancellation and failure-store errors propagate rather than being
+retried or converted into success. Records contain redacted messages, opaque IDs, authenticated
+ownership, connector/source identity, attempt counts, and timestamps. The owner-partitioned
+in-memory failure store is the reference implementation; production durable storage remains
+adapter-owned.
 
 ## Data categories
 

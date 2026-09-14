@@ -7,6 +7,20 @@
   <ItemGroup>
     <Compile Include="src/KnowledgeContracts.fs" />
     <Compile Include="src/KnowledgeCatalog.fs" />
+    <Compile Include="src/SourceConnector.fs" />
+    <Compile Include="src/SourcePath.fs" />
+    <Compile Include="src/SourceChanges.fs" />
+    <Compile Include="src/FilesystemSourceCheckpoint.fs" />
+    <Compile Include="src/FilesystemSourceConnector.fs" />
+    <Compile Include="src/HttpSourceContracts.fs" />
+    <Compile Include="src/HttpSourceCheckpoint.fs" />
+    <Compile Include="src/HttpSourceConnector.fs" />
+    <Compile Include="src/GitSourceContracts.fs" />
+    <Compile Include="src/GitSourceCheckpoint.fs" />
+    <Compile Include="src/GitSourceConnector.fs" />
+    <Compile Include="src/SourceResilienceContracts.fs" />
+    <Compile Include="src/SourceFailureStore.fs" />
+    <Compile Include="src/SourceSynchronizationRunner.fs" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Nao.Agents\Nao.Agents.fsproj" />

@@ -44,21 +44,21 @@ This workstream creates a reusable knowledge subsystem for ingestion, indexing, 
 
 ## KNO-02 — Source connectors
 
-- [ ] Define pull, push, snapshot, and change-feed connector contracts.
-- [ ] Support filesystem/directory ingestion as the reference connector.
-- [ ] Add HTTP/web ingestion with robots, redirect, size, and media-type policies.
-- [ ] Add Git repository ingestion with commit identity and path filters.
-- [ ] Define database and object-storage connector extension points.
-- [ ] Support include/exclude filters and maximum-content limits.
-- [ ] Capture connector checkpoints for incremental synchronization.
-- [ ] Implement retries, backpressure, quarantine, and dead-letter records.
-- [ ] Apply identity, tenant, and network policy to connector execution.
+- [x] Define pull, push, snapshot, and change-feed connector contracts.
+- [x] Support filesystem/directory ingestion as the reference connector.
+- [x] Add HTTP/web ingestion with robots, redirect, size, and media-type policies.
+- [x] Add Git repository ingestion with commit identity and path filters.
+- [x] Define database and object-storage connector extension points.
+- [x] Support include/exclude filters and maximum-content limits.
+- [x] Capture connector checkpoints for incremental synchronization.
+- [x] Implement retries, backpressure, quarantine, and dead-letter records.
+- [x] Apply identity, tenant, and network policy to connector execution.
 
 **Acceptance criteria**
 
-- [ ] Re-running an unchanged source does not duplicate documents or chunks.
-- [ ] Changed, moved, and deleted sources converge correctly.
-- [ ] One failed item does not corrupt a complete ingestion run.
+- [x] Re-running an unchanged source does not duplicate documents or chunks.
+- [x] Changed, moved, and deleted sources converge correctly.
+- [x] One failed item does not corrupt a complete ingestion run.
 
 ## KNO-03 — Parsing and normalization
 
