@@ -91,6 +91,7 @@ type ExecutionEvidence =
 /// Governance outcomes applied to an execution.
 type ExecutionPolicyDecisions =
     { PolicyViolations: PolicyViolation list
+      PolicyEvaluations: PolicyEvaluationEvidence list
       ConstitutionViolations: ConstitutionViolation list }
 
 /// Immutable outcome of one governed harness execution.

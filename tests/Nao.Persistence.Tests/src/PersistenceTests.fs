@@ -748,6 +748,7 @@ let private auditEntry permitted execId : AuditEntry =
       Permitted = permitted
       Decision = PermissionDecision.Allow
       PermissionEvidence = None
+      PolicyEvidence = None
       ConstitutionViolations = [ "none" ]
       ExecutionId = execId
       Metadata = Map.ofList [ "src", "test" ] }

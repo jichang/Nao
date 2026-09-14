@@ -55,6 +55,7 @@ type EtclovgConfig =
       Constitution: Constitution option
       AuditLog: AuditLog option
       PolicyEngine: PolicyEngine option
+      PolicyConfirmationBroker: PolicyConfirmationBroker
       Bus: EventBus }
 
     static member Default =
@@ -73,6 +74,7 @@ type EtclovgConfig =
           Constitution = None
           AuditLog = None
           PolicyEngine = None
+          PolicyConfirmationBroker = PolicyConfirmationBroker.unavailable
           Bus = EventBus.none }
 
     static member WithObservability (tracer: Tracer) (metrics: MetricsCollector) =
@@ -162,6 +164,7 @@ module EtclovgHarness =
         (usage: ResourceUsage)
         (trace: ExecutionTrace)
         (policyViolations: PolicyViolation list)
+        (policyEvaluations: PolicyEvaluationEvidence list)
         (constitutionViolations: ConstitutionViolation list)
         (metricsScope: AuthorizationScope)
         (metrics: MetricsCollector option)
@@ -180,6 +183,7 @@ module EtclovgHarness =
 
         let decisions: ExecutionPolicyDecisions =
             { PolicyViolations = policyViolations
+              PolicyEvaluations = policyEvaluations
               ConstitutionViolations = constitutionViolations }
 
         { Correlation = correlation
@@ -208,7 +212,17 @@ module EtclovgHarness =
           Evidence = evidence
           PolicyDecisions = decisions }
 
-    let private stoppedResult status correlation artifacts usage trace policyViolations authorization metrics =
+    let private stoppedResult
+        status
+        correlation
+        artifacts
+        usage
+        trace
+        policyViolations
+        policyEvaluations
+        authorization
+        metrics
+        =
         let result =
             failResult
                 (HarnessError.ExecutionFailed(status.ToString()))
@@ -217,6 +231,7 @@ module EtclovgHarness =
                 usage
                 trace
                 policyViolations
+                policyEvaluations
                 []
                 authorization
                 metrics
@@ -315,6 +330,7 @@ module EtclovgHarness =
             ResourceUsage.Zero
             trace
             []
+            []
             request.Authorization
             config.Metrics
 
@@ -361,7 +377,88 @@ module EtclovgHarness =
                         request.IdempotencyKey
                         executionCancellation
 
+            let mutable policyViolations = []
+            let mutable policyEvaluations = []
+            let mutable constitutionViolations = []
             let publishArtifact = agentContext.PublishArtifact
+
+            let confirmPolicy context (result: PolicyResult) =
+                task {
+                    if not result.RequiresConfirmation then
+                        return None
+                    else
+                        let request =
+                            { Authorization = request.Authorization
+                              Correlation = request.Correlation
+                              Context = context
+                              Violations =
+                                result.Violations
+                                |> List.filter (fun violation ->
+                                    match violation.Enforcement with
+                                    | PolicyEnforcement.Confirm -> true
+                                    | _ -> false)
+                              EffectiveInput = result.ModifiedInput |> Option.orElse context.Input
+                              RequestedAt = DateTimeOffset.UtcNow }
+
+                        let! confirmation =
+                            PolicyConfirmationBroker.resolve
+                                config.PolicyConfirmationBroker
+                                request
+                                execCtx.CancellationToken
+
+                        return Some confirmation
+                }
+
+            let evaluatePolicyStage stage action toolName facts input =
+                task {
+                    match config.PolicyEngine, config.AuditLog with
+                    | None, _ -> return Ok input
+                    | Some _, None -> return Error [ "Policy evaluation requires an authenticated audit log." ]
+                    | Some engine, Some audit ->
+                        let context =
+                            PolicyContext.FromExecutionContext
+                                request.Authorization
+                                agent.Metadata.Id
+                                stage
+                                action
+                                toolName
+                                (Some input)
+                                facts
+                                execCtx
+
+                        let! result = engine.EvaluateAsync(context, execCtx.CancellationToken)
+                        policyViolations <- policyViolations @ result.Violations
+
+                        let! confirmation =
+                            if result.Proceed then
+                                confirmPolicy context result
+                            else
+                                Task.FromResult None
+
+                        let evaluations =
+                            result.Evaluations
+                            |> List.map (fun evidence ->
+                                if evidence.Outcome = PolicyEvaluationOutcome.ConfirmationRequired then
+                                    { evidence with
+                                        Confirmation = confirmation }
+                                else
+                                    evidence)
+
+                        policyEvaluations <- policyEvaluations @ evaluations
+
+                        for evidence in evaluations do
+                            do!
+                                audit.RecordAsync
+                                    request.Authorization
+                                    (AuditLog.policyEvaluation evidence (Some execCtx.ExecutionId))
+
+                        if not result.Proceed then
+                            return Error(result.Violations |> List.map _.Message)
+                        elif confirmation = Some PolicyConfirmation.Denied then
+                            return Error [ "Policy confirmation was denied." ]
+                        else
+                            return Ok(result.ModifiedInput |> Option.defaultValue input)
+                }
 
             let executeChild childContext (child: Agent) (childInput: string) =
                 task {
@@ -385,6 +482,7 @@ module EtclovgHarness =
                             request.PolicyVersions
                             request.DependencyVersions
                             childCorrelation
+                        |> ExecutionRequest.withPolicyFacts request.PolicyFacts
 
                     let! result =
                         runAgentAsync
@@ -499,203 +597,226 @@ module EtclovgHarness =
                         { toolContext with
                             Authorization = Some request.Authorization }
 
-                    let policyResult =
-                        config.PolicyEngine
-                        |> Option.map (fun engine ->
-                            PolicyContext.FromExecutionContext
-                                agent.Metadata.Id
-                                (sprintf "tool.execute:%s" tool.Name)
-                                (Some toolInput)
-                                execCtx
-                            |> engine.Evaluate)
-
-                    match policyResult with
-                    | Some result when not result.Proceed ->
-                        let message = result.Violations |> List.map _.Message |> String.concat "; "
-
+                    match!
+                        evaluatePolicyStage
+                            PolicyStage.PreAction
+                            (sprintf "tool.execute:%s" tool.Name)
+                            (Some tool.Name)
+                            (PolicyFacts.combine request.PolicyFacts (PolicyFacts.ofResourceAccess tool.Permissions))
+                            toolInput
+                    with
+                    | Error messages ->
                         return
                             Error(
                                 PlatformFailure.create
                                     PlatformErrorCategory.PermissionDenied
-                                    (sprintf "Blocked by policy: %s" message)
+                                    (sprintf "Blocked by policy: %s" (String.concat "; " messages))
                                     false
                                     (request.Correlation.ExecutionId |> ExecutionId.serialize |> Some)
                             )
-                    | result ->
-                        let effectiveToolInput =
-                            result |> Option.bind _.ModifiedInput |> Option.defaultValue toolInput
+                    | Ok actionInput ->
+                        let! sideEffectPolicy =
+                            if
+                                tool.ReplaySafety = ToolReplaySafety.ExternallySideEffecting
+                                || Tool.canRevert tool
+                            then
+                                evaluatePolicyStage
+                                    PolicyStage.PreSideEffect
+                                    (sprintf "tool.side-effect:%s" tool.Name)
+                                    (Some tool.Name)
+                                    (PolicyFacts.combine
+                                        request.PolicyFacts
+                                        (PolicyFacts.ofResourceAccess tool.Permissions))
+                                    actionInput
+                            else
+                                Task.FromResult(Ok actionInput)
 
-                        let correlationId = request.Correlation.ExecutionId |> ExecutionId.serialize |> Some
+                        match sideEffectPolicy with
+                        | Error messages ->
+                            return
+                                Error(
+                                    PlatformFailure.create
+                                        PlatformErrorCategory.PermissionDenied
+                                        (sprintf "Blocked by policy: %s" (String.concat "; " messages))
+                                        false
+                                        (request.Correlation.ExecutionId |> ExecutionId.serialize |> Some)
+                                )
+                        | Ok effectiveToolInput ->
+                            let correlationId = request.Correlation.ExecutionId |> ExecutionId.serialize |> Some
 
-                        let replayFixture =
-                            config.ReplayFixtures
-                            |> Option.map (fun fixtures ->
-                                match fixtures.Tools |> Map.tryFind idempotencyKey with
-                                | Some(ReplayFixture.Recorded fixture) when
-                                    fixture.ToolName = tool.Name
-                                    && fixture.Input = effectiveToolInput
-                                    && fixture.Result.IdempotencyKey = idempotencyKey
-                                    && fixture.Result.ReplaySafety = tool.ReplaySafety
-                                    ->
-                                    fixture
-                                | Some(ReplayFixture.Recorded _) ->
-                                    raise (
-                                        GovernedExecutionException(
-                                            sprintf
-                                                "Tool replay fixture '%s' does not match the governed invocation."
-                                                (IdempotencyKey.value idempotencyKey)
-                                        )
-                                    )
-                                | Some(ReplayFixture.NonReplayable reason) ->
-                                    raise (
-                                        GovernedExecutionException(
-                                            sprintf
-                                                "Tool dependency '%s' is explicitly non-replayable: %s"
-                                                (IdempotencyKey.value idempotencyKey)
-                                                reason
-                                        )
-                                    )
-                                | None ->
-                                    raise (
-                                        GovernedExecutionException(
-                                            sprintf
-                                                "Tool replay fixture '%s' is missing; live tool access is disabled."
-                                                (IdempotencyKey.value idempotencyKey)
-                                        )
-                                    ))
-
-                        match execCtx.BeginToolCall() with
-                        | Some limit -> return raise (ExecutionLimitExceededException limit)
-                        | None ->
-                            match replayFixture with
-                            | Some fixture when fixture.Result.Success -> return Ok fixture.Result.Output
-                            | Some fixture ->
-                                return
-                                    fixture.Result.Failure
-                                    |> Option.map (fun failure -> failure.ToPlatformFailure correlationId)
-                                    |> Option.defaultWith (fun () ->
-                                        PlatformFailure.create
-                                            PlatformErrorCategory.PermanentDependency
-                                            (fixture.Result.Error |> Option.defaultValue "Recorded tool failure.")
-                                            false
-                                            correlationId)
-                                    |> Error
-                            | None ->
-                                let journal = config.ExecutionJournal
-
-                                if Tool.canRevert tool && journal.IsNone then
-                                    raise (
-                                        GovernedExecutionException
-                                            "Reversible tools require a durable execution journal."
-                                    )
-
-                                let saveSideEffect phase detail =
-                                    if tool.ReplaySafety = ToolReplaySafety.RetrySafe && not (Tool.canRevert tool) then
-                                        Task.CompletedTask
-                                    else
-                                        match journal with
-                                        | Some value ->
-                                            value.SideEffects.Save
-                                                request.Authorization
-                                                { Id = Guid.NewGuid()
-                                                  IdempotencyKey = idempotencyKey
-                                                  Correlation = request.Correlation
-                                                  TurnId = toolContext.TurnId
-                                                  ToolName = tool.Name
-                                                  Input = effectiveToolInput
-                                                  Phase = phase
-                                                  Detail = detail
-                                                  RecordedAt = DateTimeOffset.UtcNow }
-                                        | None ->
-                                            raise (
-                                                GovernedExecutionException
-                                                    "Externally side-effecting tools require a durable execution journal."
+                            let replayFixture =
+                                config.ReplayFixtures
+                                |> Option.map (fun fixtures ->
+                                    match fixtures.Tools |> Map.tryFind idempotencyKey with
+                                    | Some(ReplayFixture.Recorded fixture) when
+                                        fixture.ToolName = tool.Name
+                                        && fixture.Input = effectiveToolInput
+                                        && fixture.Result.IdempotencyKey = idempotencyKey
+                                        && fixture.Result.ReplaySafety = tool.ReplaySafety
+                                        ->
+                                        fixture
+                                    | Some(ReplayFixture.Recorded _) ->
+                                        raise (
+                                            GovernedExecutionException(
+                                                sprintf
+                                                    "Tool replay fixture '%s' does not match the governed invocation."
+                                                    (IdempotencyKey.value idempotencyKey)
                                             )
+                                        )
+                                    | Some(ReplayFixture.NonReplayable reason) ->
+                                        raise (
+                                            GovernedExecutionException(
+                                                sprintf
+                                                    "Tool dependency '%s' is explicitly non-replayable: %s"
+                                                    (IdempotencyKey.value idempotencyKey)
+                                                    reason
+                                            )
+                                        )
+                                    | None ->
+                                        raise (
+                                            GovernedExecutionException(
+                                                sprintf
+                                                    "Tool replay fixture '%s' is missing; live tool access is disabled."
+                                                    (IdempotencyKey.value idempotencyKey)
+                                            )
+                                        ))
 
-                                do! saveSideEffect ToolSideEffectPhase.IntentRecorded None
-                                let started = Stopwatch.StartNew()
+                            match execCtx.BeginToolCall() with
+                            | Some limit -> return raise (ExecutionLimitExceededException limit)
+                            | None ->
+                                match replayFixture with
+                                | Some fixture when fixture.Result.Success -> return Ok fixture.Result.Output
+                                | Some fixture ->
+                                    return
+                                        fixture.Result.Failure
+                                        |> Option.map (fun failure -> failure.ToPlatformFailure correlationId)
+                                        |> Option.defaultWith (fun () ->
+                                            PlatformFailure.create
+                                                PlatformErrorCategory.PermanentDependency
+                                                (fixture.Result.Error |> Option.defaultValue "Recorded tool failure.")
+                                                false
+                                                correlationId)
+                                        |> Error
+                                | None ->
+                                    let journal = config.ExecutionJournal
 
-                                try
-                                    let! result =
-                                        (tool.RunAsync toolContext effectiveToolInput)
-                                            .WaitAsync(execCtx.CancellationToken)
+                                    if Tool.canRevert tool && journal.IsNone then
+                                        raise (
+                                            GovernedExecutionException
+                                                "Reversible tools require a durable execution journal."
+                                        )
 
-                                    started.Stop()
-
-                                    match result with
-                                    | Ok output ->
-                                        do! saveSideEffect ToolSideEffectPhase.Succeeded None
-
-                                        match journal with
-                                        | Some value ->
-                                            let record =
-                                                successfulToolRecord
-                                                    toolContext
-                                                    idempotencyKey
-                                                    tool
-                                                    effectiveToolInput
-                                                    output
-                                                    started.ElapsedMilliseconds
-
-                                            do! value.RecordAsync request.Authorization record
-
-                                            if Tool.canRevert tool then
-                                                reversibleExecutions.Add(record, tool)
-                                        | None -> ()
-
-                                        return Ok output
-                                    | Error failure ->
-                                        do! saveSideEffect ToolSideEffectPhase.Failed (Some failure.Message)
-
+                                    let saveSideEffect phase detail =
                                         if
-                                            tool.ReplaySafety = ToolReplaySafety.ExternallySideEffecting
-                                            && failure.Category = PlatformErrorCategory.TransientDependency
+                                            tool.ReplaySafety = ToolReplaySafety.RetrySafe && not (Tool.canRevert tool)
                                         then
-                                            ambiguousOutcome <-
-                                                Some
-                                                    "An external dependency failure left the side-effect outcome ambiguous; the operation was quarantined."
-
-                                            do!
-                                                saveSideEffect
-                                                    ToolSideEffectPhase.Quarantined
-                                                    (Some
-                                                        "The dependency failure did not confirm whether the side effect committed.")
-
-                                        match journal with
-                                        | Some value ->
-                                            do!
-                                                value.RecordAsync
+                                            Task.CompletedTask
+                                        else
+                                            match journal with
+                                            | Some value ->
+                                                value.SideEffects.Save
                                                     request.Authorization
                                                     { Id = Guid.NewGuid()
                                                       IdempotencyKey = idempotencyKey
                                                       Correlation = request.Correlation
                                                       TurnId = toolContext.TurnId
                                                       ToolName = tool.Name
-                                                      ReplaySafety = tool.ReplaySafety
                                                       Input = effectiveToolInput
-                                                      Output = ""
-                                                      Failure = Some failure
-                                                      ExecutedAt = DateTimeOffset.UtcNow
-                                                      Reverted = false
-                                                      Metadata =
-                                                        Map.ofList [ "duration.ms", string started.ElapsedMilliseconds ] }
-                                        | None -> ()
+                                                      Phase = phase
+                                                      Detail = detail
+                                                      RecordedAt = DateTimeOffset.UtcNow }
+                                            | None ->
+                                                raise (
+                                                    GovernedExecutionException
+                                                        "Externally side-effecting tools require a durable execution journal."
+                                                )
 
-                                        return Error(failure.ToPlatformFailure correlationId)
-                                with error ->
-                                    do! saveSideEffect ToolSideEffectPhase.Interrupted (Some error.Message)
+                                    do! saveSideEffect ToolSideEffectPhase.IntentRecorded None
+                                    let started = Stopwatch.StartNew()
 
-                                    if tool.ReplaySafety = ToolReplaySafety.ExternallySideEffecting then
-                                        ambiguousOutcome <-
-                                            Some
-                                                "An interrupted external operation left the side-effect outcome ambiguous; the operation was quarantined."
+                                    try
+                                        let! result =
+                                            (tool.RunAsync toolContext effectiveToolInput)
+                                                .WaitAsync(execCtx.CancellationToken)
 
-                                        do!
-                                            saveSideEffect
-                                                ToolSideEffectPhase.Quarantined
-                                                (Some "Execution was interrupted after side-effect intent was recorded.")
+                                        started.Stop()
 
-                                    return raise error
+                                        match result with
+                                        | Ok output ->
+                                            do! saveSideEffect ToolSideEffectPhase.Succeeded None
+
+                                            match journal with
+                                            | Some value ->
+                                                let record =
+                                                    successfulToolRecord
+                                                        toolContext
+                                                        idempotencyKey
+                                                        tool
+                                                        effectiveToolInput
+                                                        output
+                                                        started.ElapsedMilliseconds
+
+                                                do! value.RecordAsync request.Authorization record
+
+                                                if Tool.canRevert tool then
+                                                    reversibleExecutions.Add(record, tool)
+                                            | None -> ()
+
+                                            return Ok output
+                                        | Error failure ->
+                                            do! saveSideEffect ToolSideEffectPhase.Failed (Some failure.Message)
+
+                                            if
+                                                tool.ReplaySafety = ToolReplaySafety.ExternallySideEffecting
+                                                && failure.Category = PlatformErrorCategory.TransientDependency
+                                            then
+                                                ambiguousOutcome <-
+                                                    Some
+                                                        "An external dependency failure left the side-effect outcome ambiguous; the operation was quarantined."
+
+                                                do!
+                                                    saveSideEffect
+                                                        ToolSideEffectPhase.Quarantined
+                                                        (Some
+                                                            "The dependency failure did not confirm whether the side effect committed.")
+
+                                            match journal with
+                                            | Some value ->
+                                                do!
+                                                    value.RecordAsync
+                                                        request.Authorization
+                                                        { Id = Guid.NewGuid()
+                                                          IdempotencyKey = idempotencyKey
+                                                          Correlation = request.Correlation
+                                                          TurnId = toolContext.TurnId
+                                                          ToolName = tool.Name
+                                                          ReplaySafety = tool.ReplaySafety
+                                                          Input = effectiveToolInput
+                                                          Output = ""
+                                                          Failure = Some failure
+                                                          ExecutedAt = DateTimeOffset.UtcNow
+                                                          Reverted = false
+                                                          Metadata =
+                                                            Map.ofList
+                                                                [ "duration.ms", string started.ElapsedMilliseconds ] }
+                                            | None -> ()
+
+                                            return Error(failure.ToPlatformFailure correlationId)
+                                    with error ->
+                                        do! saveSideEffect ToolSideEffectPhase.Interrupted (Some error.Message)
+
+                                        if tool.ReplaySafety = ToolReplaySafety.ExternallySideEffecting then
+                                            ambiguousOutcome <-
+                                                Some
+                                                    "An interrupted external operation left the side-effect outcome ambiguous; the operation was quarantined."
+
+                                            do!
+                                                saveSideEffect
+                                                    ToolSideEffectPhase.Quarantined
+                                                    (Some
+                                                        "Execution was interrupted after side-effect intent was recorded.")
+
+                                        return raise error
                 }
 
             let publishCapturedArtifact artifact : Task =
@@ -715,38 +836,44 @@ module EtclovgHarness =
                     NextToolCallKey = execCtx.NextToolCallKey
                     NextArtifactKey = execCtx.NextArtifactKey
                     PublishArtifact = publishCapturedArtifact
+                    RequestModelEligibility =
+                        fun model ->
+                            task {
+                                let modelFacts =
+                                    PolicyFacts.create Seq.empty Seq.empty [ model ]
+                                    |> PolicyFacts.combine request.PolicyFacts
+
+                                match!
+                                    evaluatePolicyStage
+                                        PolicyStage.PreAction
+                                        (sprintf "model.invoke:%s" model)
+                                        None
+                                        modelFacts
+                                        ""
+                                with
+                                | Ok _ -> return true
+                                | Error _ -> return false
+                            }
                     Authorization = Some request.Authorization }
 
             let dispatcher =
                 { RunAgent = executeChild
                   RunTool = executeTool }
 
-            let mutable policyViolations = []
-            let mutable constitutionViolations = []
             let mutable effectiveInput = input
 
             // === G: Identity and policy pre-checks ===
-            let preflightError =
-                if request.AgentId <> agent.Metadata.Id then
-                    Some HarnessError.PermissionDenied
-                else
-                    match config.PolicyEngine with
-                    | Some engine ->
-                        let ctx =
-                            PolicyContext.FromExecutionContext agent.Metadata.Id "execute" (Some input) execCtx
-
-                        let result = engine.Evaluate(ctx)
-                        policyViolations <- result.Violations
-                        effectiveInput <- result.ModifiedInput |> Option.defaultValue input
-
-                        if not result.Proceed then
-                            result.Violations
-                            |> List.map (fun violation -> violation.Message)
-                            |> HarnessError.PolicyBlocked
-                            |> Some
-                        else
-                            None
-                    | None -> None
+            let! preflightError =
+                task {
+                    if request.AgentId <> agent.Metadata.Id then
+                        return Some HarnessError.PermissionDenied
+                    else
+                        match! evaluatePolicyStage PolicyStage.PreInput "execute" None request.PolicyFacts input with
+                        | Ok modifiedInput ->
+                            effectiveInput <- modifiedInput
+                            return None
+                        | Error messages -> return Some(HarnessError.PolicyBlocked messages)
+                }
 
             let mutable trace =
                 Verification.startTrace execCtx.Correlation agent.Metadata.Id effectiveInput
@@ -761,6 +888,7 @@ module EtclovgHarness =
                         execCtx.Usage
                         trace
                         policyViolations
+                        policyEvaluations
                         []
                         request.Authorization
                         None
@@ -784,6 +912,7 @@ module EtclovgHarness =
                             execCtx.Usage
                             trace
                             policyViolations
+                            policyEvaluations
                             []
                             request.Authorization
                             None
@@ -806,6 +935,7 @@ module EtclovgHarness =
                                 execCtx.Usage
                                 trace
                                 policyViolations
+                                policyEvaluations
                                 []
                                 request.Authorization
                                 None
@@ -941,6 +1071,39 @@ module EtclovgHarness =
                             | Some message -> Error(ExecutionTerminalStatus.Indeterminate message)
                             | None -> normalizedExecutionOutcome
 
+                        let! executionOutcome =
+                            match executionOutcome with
+                            | Ok(Ok response) ->
+                                task {
+                                    match!
+                                        evaluatePolicyStage
+                                            PolicyStage.PostOutput
+                                            "response.output"
+                                            None
+                                            request.PolicyFacts
+                                            response
+                                    with
+                                    | Error messages ->
+                                        return
+                                            Error(ExecutionTerminalStatus.Denied(HarnessError.PolicyBlocked messages))
+                                    | Ok output ->
+                                        match!
+                                            evaluatePolicyStage
+                                                PolicyStage.PreCommit
+                                                "response.commit"
+                                                None
+                                                request.PolicyFacts
+                                                output
+                                        with
+                                        | Error messages ->
+                                            return
+                                                Error(
+                                                    ExecutionTerminalStatus.Denied(HarnessError.PolicyBlocked messages)
+                                                )
+                                        | Ok committedOutput -> return Ok(Ok committedOutput)
+                                }
+                            | outcome -> Task.FromResult outcome
+
                         // === O: End execution span ===
                         match execSpan, config.Tracer with
                         | Some s, Some tracer ->
@@ -986,6 +1149,7 @@ module EtclovgHarness =
                                     execCtx.Usage
                                     trace
                                     policyViolations
+                                    policyEvaluations
                                     request.Authorization
                                     config.Metrics
 
@@ -1020,6 +1184,7 @@ module EtclovgHarness =
                                     execCtx.Usage
                                     trace
                                     policyViolations
+                                    policyEvaluations
                                     []
                                     request.Authorization
                                     config.Metrics
@@ -1070,6 +1235,7 @@ module EtclovgHarness =
                                         execCtx.Usage
                                         trace
                                         policyViolations
+                                        policyEvaluations
                                         constitutionViolations
                                         request.Authorization
                                         config.Metrics
@@ -1151,6 +1317,7 @@ module EtclovgHarness =
 
                                 let decisions: ExecutionPolicyDecisions =
                                     { PolicyViolations = policyViolations
+                                      PolicyEvaluations = policyEvaluations
                                       ConstitutionViolations = constitutionViolations }
 
                                 return

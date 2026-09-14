@@ -24,6 +24,8 @@ type AuditEntry =
         Decision: PermissionDecision
         /// Exact policy and grant versions used for a permission check, when this entry records one.
         PermissionEvidence: PermissionDecisionEvidence option
+        /// Exact policy version and outcome for a runtime policy evaluation, when this entry records one.
+        PolicyEvidence: PolicyEvaluationEvidence option
         /// Any constitution violations
         ConstitutionViolations: string list
         /// Execution context identifier
@@ -41,6 +43,7 @@ and [<RequireQualifiedAccess>] AuditAction =
     | MemoryRead of key: string
     | ResourceAccess of resourceType: string * resource: string
     | PermissionCheck of capability: string
+    | PolicyEvaluation of policyId: string
     | ConstitutionCheck
     | LifecycleTransition of fromState: string * toState: string
 
@@ -82,6 +85,7 @@ module AuditLog =
           Permitted = permitted
           Decision = decision
           PermissionEvidence = None
+          PolicyEvidence = None
           ConstitutionViolations = []
           ExecutionId = execId
           Metadata = Map.empty }
@@ -97,6 +101,7 @@ module AuditLog =
           Permitted = true
           Decision = PermissionDecision.Allow
           PermissionEvidence = None
+          PolicyEvidence = None
           ConstitutionViolations = []
           ExecutionId = execId
           Metadata = Map.empty }
@@ -116,11 +121,12 @@ module AuditLog =
             else
                 PermissionDecision.Deny
           PermissionEvidence = None
+          PolicyEvidence = None
           ConstitutionViolations = violations
           ExecutionId = execId
           Metadata = Map.empty }
 
-    let permissionDecision agentId evidence execId =
+    let permissionDecision agentId (evidence: PermissionDecisionEvidence) execId =
         { Id = Guid.NewGuid()
           Timestamp = evidence.EvaluatedAt
           AgentId = agentId
@@ -131,6 +137,30 @@ module AuditLog =
           Permitted = evidence.Decision = PermissionDecision.Allow
           Decision = evidence.Decision
           PermissionEvidence = Some evidence
+          PolicyEvidence = None
+          ConstitutionViolations = []
+          ExecutionId = execId
+          Metadata = Map.empty }
+
+    let policyEvaluation (evidence: PolicyEvaluationEvidence) execId =
+        let permitted =
+            evidence.Outcome <> PolicyEvaluationOutcome.Blocked
+            && evidence.Confirmation <> Some PolicyConfirmation.Denied
+
+        { Id = evidence.Id
+          Timestamp = evidence.EvaluatedAt
+          AgentId = evidence.AgentId
+          Action = AuditAction.PolicyEvaluation evidence.PolicyId
+          Input = None
+          Output = None
+          Permitted = permitted
+          Decision =
+            if permitted then
+                PermissionDecision.Allow
+            else
+                PermissionDecision.Deny
+          PermissionEvidence = None
+          PolicyEvidence = Some evidence
           ConstitutionViolations = []
           ExecutionId = execId
           Metadata = Map.empty }

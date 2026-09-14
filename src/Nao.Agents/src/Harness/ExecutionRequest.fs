@@ -11,6 +11,7 @@ type ExecutionRequest =
       AgentId: string
       Input: string
       Sandbox: SandboxConfig
+      PolicyFacts: PolicyFacts
       PolicyVersions: Map<string, string>
       DependencyVersions: Map<string, string>
       Correlation: CorrelationContext }
@@ -42,8 +43,11 @@ module ExecutionRequest =
               AgentId = agentId
               Input = input
               Sandbox = sandbox
+              PolicyFacts = PolicyFacts.empty
               PolicyVersions = policyVersions
               DependencyVersions = dependencyVersions
               Correlation = correlation }
 
         request
+
+    let withPolicyFacts facts request = { request with PolicyFacts = facts }

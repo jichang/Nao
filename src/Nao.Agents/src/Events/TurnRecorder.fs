@@ -64,6 +64,7 @@ module TurnRecorder =
                   SubAgentCalls = List.ofSeq subAgentCalls
                   Artifacts = List.ofSeq artifacts
                   PermissionDecisions = []
+                  PolicyEvaluations = []
                   CreatedAt = DateTimeOffset.UtcNow })
 
         let consumer =

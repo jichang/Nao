@@ -435,18 +435,21 @@ type OrchestratorObservabilityTests() =
 
         let denyChild =
             { Id = "deny-child"
+              Version = "test-v1"
               Description = "Blocks only the child agent"
+              Scope = PolicyScope.platform
               Enforcement = PolicyEnforcement.Block
-              Evaluate =
-                fun policyContext ->
+              EvaluateAsync =
+                Policy.evaluateSynchronously (fun policyContext ->
                     if policyContext.AgentId = child.Metadata.Id then
                         Some "child execution denied"
                     else
-                        None }
+                        None) }
 
         let harnessConfig =
             { EtclovgConfig.Default with
-                PolicyEngine = Some(PolicyEngine.create [ denyChild ])
+                PolicyEngine = Some(PolicyEngine.create (System.TimeSpan.FromSeconds 1.0) [ denyChild ])
+                AuditLog = Some(InMemory.auditLog ())
                 ExecutionJournal = Some(InMemory.executionJournal ()) }
 
         let context = AgentContext.unrestrictedForTests ()
@@ -481,18 +484,21 @@ type OrchestratorObservabilityTests() =
 
         let denyChild =
             { Id = "deny-delegate"
+              Version = "test-v1"
               Description = "Blocks only the delegated agent"
+              Scope = PolicyScope.platform
               Enforcement = PolicyEnforcement.Block
-              Evaluate =
-                fun policyContext ->
+              EvaluateAsync =
+                Policy.evaluateSynchronously (fun policyContext ->
                     if policyContext.AgentId = child.Metadata.Id then
                         Some "delegation denied"
                     else
-                        None }
+                        None) }
 
         let harnessConfig =
             { EtclovgConfig.Default with
-                PolicyEngine = Some(PolicyEngine.create [ denyChild ]) }
+                PolicyEngine = Some(PolicyEngine.create (System.TimeSpan.FromSeconds 1.0) [ denyChild ])
+                AuditLog = Some(InMemory.auditLog ()) }
 
         let context = AgentContext.unrestrictedForTests ()
 

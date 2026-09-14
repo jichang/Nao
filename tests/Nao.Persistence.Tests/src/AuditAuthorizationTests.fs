@@ -62,6 +62,7 @@ type AuditAuthorizationTests() =
             else
                 PermissionDecision.Deny
           PermissionEvidence = None
+          PolicyEvidence = None
           ConstitutionViolations = []
           ExecutionId = Some executionId
           Metadata = Map.empty }
@@ -109,6 +110,48 @@ type AuditAuthorizationTests() =
 
             Assert.AreEqual(Some evidence, reloaded.PermissionEvidence)
             Assert.AreEqual(PermissionDecision.Allow, reloaded.Decision))
+
+    [<TestMethod>]
+    member _.PolicyEvaluationEvidenceSurvivesReloadWithoutScopeOrInputDisclosure() =
+        withStorage (fun root _ ->
+            let evidence =
+                { Id = Guid.NewGuid()
+                  PolicyId = "data-boundary"
+                  PolicyVersion = "2026-09-13"
+                  Scope = PolicyScopeKind.Workspace
+                  Stage = PolicyStage.PreAction
+                  AgentId = "data-agent"
+                  ToolName = Some "search"
+                  Action = "invoke"
+                  Outcome = PolicyEvaluationOutcome.Modified
+                  FailureCode = None
+                  MessageDigest = Some(String.replicate 64 "c")
+                  InputDigest = Some(String.replicate 64 "a")
+                  EffectiveInputDigest = Some(String.replicate 64 "b")
+                  Confirmation = None
+                  EvaluatedAt = timestamp }
+
+            let executionId = ExecutionId.generate ()
+
+            AuditLogs.file root
+            |> fun audit -> audit.RecordAsync owner (AuditLog.policyEvaluation evidence (Some executionId))
+            |> _.Wait()
+
+            let reloaded =
+                AuditLogs.file root
+                |> fun audit -> audit.QueryByExecutionAsync owner executionId
+                |> _.Result
+                |> List.exactlyOne
+
+            Assert.AreEqual(Some evidence, reloaded.PolicyEvidence)
+            Assert.AreEqual(PermissionDecision.Allow, reloaded.Decision)
+            Assert.AreEqual(None, reloaded.Input)
+            Assert.AreEqual(None, reloaded.Output)
+
+            let payload = File.ReadAllText(Path.Combine(root, "audit", key owner + ".jsonl"))
+
+            for secret in [ "tenant"; "user"; "group"; "workspace"; "session"; "raw-sensitive-input" ] do
+                Assert.IsFalse(payload.Contains(secret), $"Policy evidence disclosed '{secret}'."))
 
     [<TestMethod>]
     member _.CompleteAuthorizationIdentityPartitionsEveryOperation() =

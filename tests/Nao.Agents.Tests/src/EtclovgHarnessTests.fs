@@ -1125,30 +1125,21 @@ type EtclovgHarnessTests() =
     [<TestMethod>]
     member _.PolicyViolationBlocksExecution() =
         let agent = makeAgent "response"
-        let policy = PolicyEngine.costBudgetPolicy 0.0m // zero budget
-        let engine = PolicyEngine.create [ policy ]
 
-        let usage =
-            { ResourceUsage.Zero with
-                EstimatedCostUsd = 1.0m }
-        // Need to set initial usage on the execution context
-        let config =
-            { EtclovgConfig.Default with
-                PolicyEngine = Some engine }
-        // With zero budget and usage > 0, it should block
-        // Actually with zero cost model the initial usage is 0, so it won't block
-        // Let's use a different approach - use a policy that always blocks
         let alwaysBlock =
             { Id = "always-block"
+              Version = "test-v1"
               Description = "Blocks everything"
+              Scope = PolicyScope.platform
               Enforcement = PolicyEnforcement.Block
-              Evaluate = fun _ -> Some "no execution allowed" }
+              EvaluateAsync = Policy.evaluateSynchronously (fun _ -> Some "no execution allowed") }
 
-        let blockEngine = PolicyEngine.create [ alwaysBlock ]
+        let blockEngine = PolicyEngine.create (TimeSpan.FromSeconds 1.0) [ alwaysBlock ]
 
         let blockConfig =
             { EtclovgConfig.Default with
-                PolicyEngine = Some blockEngine }
+                PolicyEngine = Some blockEngine
+                AuditLog = Some(InMemory.auditLog ()) }
 
         let context = AgentContext.unrestrictedForTests ()
 
@@ -1173,13 +1164,16 @@ type EtclovgHarnessTests() =
 
         let modify =
             { Id = "redact"
+              Version = "test-v1"
               Description = "Redacts input"
+              Scope = PolicyScope.platform
               Enforcement = PolicyEnforcement.Modify(fun _ -> "redacted")
-              Evaluate = fun _ -> Some "sensitive input" }
+              EvaluateAsync = Policy.evaluateSynchronously (fun _ -> Some "sensitive input") }
 
         let config =
             { EtclovgConfig.Default with
-                PolicyEngine = Some(PolicyEngine.create [ modify ]) }
+                PolicyEngine = Some(PolicyEngine.create (TimeSpan.FromSeconds 1.0) [ modify ])
+                AuditLog = Some(InMemory.auditLog ()) }
 
         let context = AgentContext.unrestrictedForTests ()
 
@@ -1189,6 +1183,90 @@ type EtclovgHarnessTests() =
         Assert.AreEqual(ExecutionTerminalStatus.Succeeded, result.Status)
         Assert.AreEqual("redacted", executedInput)
         Assert.AreEqual(Some "redacted", result.Outputs.Response)
+
+    [<TestMethod>]
+    member _.PolicyConfirmationUsesModifiedInputAndHostDecision() =
+        let mutable executedInput = ""
+        let mutable observed = None
+
+        let agent =
+            Agent.create "confirmed-agent" "confirmed-agent" "test" 0 [] AgentContract.Text (fun _ input ->
+                executedInput <- input
+                Task.FromResult input)
+
+        let modify =
+            { Id = "normalize"
+              Version = "test-v1"
+              Description = "Normalizes input"
+              Scope = PolicyScope.platform
+              Enforcement = PolicyEnforcement.Modify(fun _ -> "normalized")
+              EvaluateAsync =
+                Policy.evaluateSynchronously (fun context ->
+                    if context.Stage = PolicyStage.PreInput then
+                        Some "normalize"
+                    else
+                        None) }
+
+        let confirm =
+            { Id = "confirm"
+              Version = "test-v1"
+              Description = "Requires confirmation"
+              Scope = PolicyScope.platform
+              Enforcement = PolicyEnforcement.Confirm
+              EvaluateAsync =
+                Policy.evaluateSynchronously (fun context ->
+                    if context.Stage = PolicyStage.PreInput then
+                        Some "confirm"
+                    else
+                        None) }
+
+        let broker =
+            PolicyConfirmationBroker.create (TimeSpan.FromSeconds 1.0) (fun request _ ->
+                observed <- Some request
+                Task.FromResult PolicyConfirmation.Approved)
+
+        let config =
+            { EtclovgConfig.Default with
+                PolicyEngine = Some(PolicyEngine.create (TimeSpan.FromSeconds 1.0) [ modify; confirm ])
+                AuditLog = Some(InMemory.auditLog ())
+                PolicyConfirmationBroker = broker }
+
+        let context = AgentContext.unrestrictedForTests ()
+
+        let result =
+            (EtclovgHarness.runAsync config context agent (request context agent "raw")).Result
+
+        Assert.AreEqual(ExecutionTerminalStatus.Succeeded, result.Status)
+        Assert.AreEqual("normalized", executedInput)
+        Assert.AreEqual(Some "normalized", observed.Value.EffectiveInput)
+        Assert.AreEqual(PolicyStage.PreInput, observed.Value.Context.Stage)
+        Assert.AreEqual([ "confirm" ], observed.Value.Violations |> List.map _.PolicyId)
+
+        let approvedEvidence =
+            result.PolicyDecisions.PolicyEvaluations
+            |> List.find (fun evidence ->
+                evidence.PolicyId = "confirm"
+                && evidence.Outcome = PolicyEvaluationOutcome.ConfirmationRequired)
+
+        Assert.AreEqual(Some PolicyConfirmation.Approved, approvedEvidence.Confirmation)
+
+        let deniedConfig =
+            { config with
+                PolicyConfirmationBroker = PolicyConfirmationBroker.unavailable }
+
+        let denied =
+            (EtclovgHarness.runAsync deniedConfig context agent (request context agent "raw")).Result
+
+        match denied.Status with
+        | ExecutionTerminalStatus.Denied(HarnessError.PolicyBlocked _) ->
+            let deniedEvidence =
+                denied.PolicyDecisions.PolicyEvaluations
+                |> List.find (fun evidence ->
+                    evidence.PolicyId = "confirm"
+                    && evidence.Outcome = PolicyEvaluationOutcome.ConfirmationRequired)
+
+            Assert.AreEqual(Some PolicyConfirmation.Denied, deniedEvidence.Confirmation)
+        | status -> Assert.Fail($"Expected denied confirmation, got {status}.")
 
     [<TestMethod>]
     member _.ToolPolicyModifiedInputIsExecuted() =
@@ -1217,18 +1295,21 @@ type EtclovgHarnessTests() =
 
         let modifyTool =
             { Id = "normalize-tool"
+              Version = "test-v1"
               Description = "Normalizes tool input"
+              Scope = PolicyScope.platform
               Enforcement = PolicyEnforcement.Modify(fun _ -> "normalized")
-              Evaluate =
-                fun policyContext ->
+              EvaluateAsync =
+                Policy.evaluateSynchronously (fun policyContext ->
                     if policyContext.Action = "tool.execute:modified-tool" then
                         Some "normalize"
                     else
-                        None }
+                        None) }
 
         let config =
             { EtclovgConfig.Default with
-                PolicyEngine = Some(PolicyEngine.create [ modifyTool ]) }
+                PolicyEngine = Some(PolicyEngine.create (TimeSpan.FromSeconds 1.0) [ modifyTool ])
+                AuditLog = Some(InMemory.auditLog ()) }
 
         let context = AgentContext.unrestrictedForTests ()
 
@@ -1238,6 +1319,295 @@ type EtclovgHarnessTests() =
         Assert.AreEqual(ExecutionTerminalStatus.Succeeded, result.Status)
         Assert.AreEqual("normalized", executedInput)
         Assert.AreEqual(Some "normalized", result.Outputs.Response)
+
+    [<TestMethod>]
+    member _.TypedPolicyFactsReachAgentAndToolBoundaries() =
+        let mutable agentExecuted = false
+
+        let directAgent =
+            Agent.create "classified-agent" "classified-agent" "test" 0 [] AgentContract.Text (fun _ input ->
+                agentExecuted <- true
+                Task.FromResult input)
+
+        let classificationPolicy =
+            PolicyEngine.dataClassificationPolicy
+                "classification"
+                "test-v1"
+                PolicyScope.platform
+                DataClassification.Internal
+
+        let audit = InMemory.auditLog ()
+
+        let classificationConfig =
+            { EtclovgConfig.Default with
+                PolicyEngine = Some(PolicyEngine.create (TimeSpan.FromSeconds 1.0) [ classificationPolicy ])
+                AuditLog = Some audit }
+
+        let context = AgentContext.unrestrictedForTests ()
+
+        let classifiedRequest =
+            request context directAgent "restricted"
+            |> ExecutionRequest.withPolicyFacts (
+                PolicyFacts.create [ DataClassification.Restricted ] Seq.empty Seq.empty
+            )
+
+        let classifiedResult =
+            (EtclovgHarness.runAsync classificationConfig context directAgent classifiedRequest).Result
+
+        Assert.IsFalse(agentExecuted)
+
+        match classifiedResult.Status with
+        | ExecutionTerminalStatus.Denied(HarnessError.PolicyBlocked _) -> ()
+        | status -> Assert.Fail($"Expected classification denial, got {status}.")
+
+        let mutable toolExecuted = false
+
+        let tool =
+            Tool.create
+                "external-model-tool"
+                "test"
+                0
+                [ ResourceAccess.web WebAction.Get "https://blocked.example/path"
+                  ResourceAccess.model "unapproved-model" ]
+                ToolCodec.text
+                ToolCodec.text
+                (ToolOperation.create ToolReplaySafety.RetrySafe (fun _ input ->
+                    toolExecuted <- true
+                    Task.FromResult(Ok input)))
+
+        let protocol = ToolProtocol.fromTools [ tool ]
+
+        let toolAgent =
+            Agent.create "tool-agent" "tool-agent" "test" 0 [] AgentContract.Text (fun toolContext input ->
+                task {
+                    let! result = protocol.InvokeAsync toolContext (toolContext.NextToolCallKey()) tool.Name input
+
+                    return result.Output
+                })
+
+        let policies =
+            [ PolicyEngine.destinationPolicy
+                  "destination"
+                  "test-v1"
+                  PolicyScope.platform
+                  [ Uri "https://allowed.example/" ]
+              PolicyEngine.modelEligibilityPolicy "model" "test-v1" PolicyScope.platform [ "approved-model" ] ]
+
+        let toolConfig =
+            { EtclovgConfig.Default with
+                PolicyEngine = Some(PolicyEngine.create (TimeSpan.FromSeconds 1.0) policies)
+                AuditLog = Some audit }
+
+        let toolResult =
+            (EtclovgHarness.runAsync toolConfig context toolAgent (request context toolAgent "input")).Result
+
+        Assert.IsFalse(toolExecuted)
+
+        CollectionAssert.AreEquivalent(
+            [| "destination"; "model" |],
+            toolResult.PolicyDecisions.PolicyViolations
+            |> List.map _.PolicyId
+            |> List.toArray
+        )
+
+    [<TestMethod>]
+    member _.SideEffectOutputAndCommitStagesApplyInOrder() =
+        let mutable executedToolInput = ""
+        let observedStages = ResizeArray<PolicyStage>()
+        let audit = InMemory.auditLog ()
+
+        let tool =
+            Tool.create
+                "staged-tool"
+                "test"
+                0
+                []
+                ToolCodec.text
+                ToolCodec.text
+                (ToolOperation.create ToolReplaySafety.ExternallySideEffecting (fun _ input ->
+                    executedToolInput <- input
+                    Task.FromResult(Ok input)))
+
+        let protocol = ToolProtocol.fromTools [ tool ]
+
+        let agent =
+            Agent.create "staged-agent" "staged-agent" "test" 0 [] AgentContract.Text (fun context input ->
+                task {
+                    let! result = protocol.InvokeAsync context (context.NextToolCallKey()) tool.Name input
+                    return result.Output
+                })
+
+        let policy =
+            { Id = "stage-transform"
+              Version = "test-v1"
+              Description = "Transforms each governed stage"
+              Scope = PolicyScope.platform
+              Enforcement =
+                PolicyEnforcement.Modify(fun input ->
+                    match observedStages |> Seq.last with
+                    | PolicyStage.PreAction -> input + "-action"
+                    | PolicyStage.PreSideEffect -> input + "-side-effect"
+                    | PolicyStage.PostOutput -> input + "-output"
+                    | PolicyStage.PreCommit -> input + "-commit"
+                    | PolicyStage.PreInput -> input)
+              EvaluateAsync =
+                Policy.evaluateSynchronously (fun context ->
+                    observedStages.Add context.Stage
+
+                    match context.Stage with
+                    | PolicyStage.PreInput -> None
+                    | _ -> Some "transform") }
+
+        let config =
+            { EtclovgConfig.Default with
+                PolicyEngine = Some(PolicyEngine.create (TimeSpan.FromSeconds 1.0) [ policy ])
+                AuditLog = Some audit
+                ExecutionJournal = Some(InMemory.executionJournal ()) }
+
+        let context = AgentContext.unrestrictedForTests ()
+        let executionRequest = request context agent "raw"
+
+        let result = (EtclovgHarness.runAsync config context agent executionRequest).Result
+
+        Assert.AreEqual(ExecutionTerminalStatus.Succeeded, result.Status)
+        Assert.AreEqual("raw-action-side-effect", executedToolInput)
+        Assert.AreEqual(Some "raw-action-side-effect-output-commit", result.Outputs.Response)
+
+        CollectionAssert.AreEqual(
+            [| PolicyStage.PreInput
+               PolicyStage.PreAction
+               PolicyStage.PreSideEffect
+               PolicyStage.PostOutput
+               PolicyStage.PreCommit |],
+            observedStages.ToArray()
+        )
+
+        Assert.AreEqual(5, result.PolicyDecisions.PolicyEvaluations.Length)
+
+        let persisted =
+            audit.QueryByExecutionAsync executionRequest.Authorization executionRequest.Correlation.ExecutionId
+            |> _.Result
+            |> List.choose _.PolicyEvidence
+
+        CollectionAssert.AreEqual(
+            result.PolicyDecisions.PolicyEvaluations |> List.map _.Id |> List.toArray,
+            persisted |> List.map _.Id |> List.toArray
+        )
+
+        Assert.IsTrue(persisted |> List.forall (fun evidence -> evidence.PolicyVersion = "test-v1"))
+        Assert.AreEqual(PolicyEvaluationOutcome.Passed, persisted.Head.Outcome)
+        Assert.AreEqual(PolicyEvaluationOutcome.Modified, persisted.Tail.Head.Outcome)
+
+    [<TestMethod>]
+    member _.ConfiguredPolicyEngineWithoutAuditFailsClosed() =
+        let policy =
+            { Id = "allow"
+              Version = "test-v1"
+              Description = "Passes"
+              Scope = PolicyScope.platform
+              Enforcement = PolicyEnforcement.Block
+              EvaluateAsync = Policy.evaluateSynchronously (fun _ -> None) }
+
+        let config =
+            { EtclovgConfig.Default with
+                PolicyEngine = Some(PolicyEngine.create (TimeSpan.FromSeconds 1.0) [ policy ]) }
+
+        let context = AgentContext.unrestrictedForTests ()
+        let agent = makeAgent "should not execute"
+
+        let result =
+            (EtclovgHarness.runAsync config context agent (request context agent "raw")).Result
+
+        match result.Status with
+        | ExecutionTerminalStatus.Denied(HarnessError.PolicyBlocked messages) ->
+            CollectionAssert.Contains(
+                messages |> List.toArray,
+                "Policy evaluation requires an authenticated audit log."
+            )
+        | status -> Assert.Fail($"Expected fail-closed policy denial, got {status}.")
+
+    [<TestMethod>]
+    member _.PolicyFailureIsAuditedBeforeExecutionIsDenied() =
+        let mutable executed = false
+        let audit = InMemory.auditLog ()
+
+        let agent =
+            Agent.create "failure-audit" "failure-audit" "test" 0 [] AgentContract.Text (fun _ _ ->
+                executed <- true
+                Task.FromResult "unexpected")
+
+        let policy =
+            { Id = "unavailable-policy"
+              Version = "test-v1"
+              Description = "Depends on an unavailable backend"
+              Scope = PolicyScope.platform
+              Enforcement = PolicyEnforcement.Warn
+              EvaluateAsync =
+                fun _ _ ->
+                    Task.FromResult(
+                        Error(PolicyEvaluationFailure.create "backend_unavailable" "Policy backend unavailable.")
+                    ) }
+
+        let config =
+            { EtclovgConfig.Default with
+                PolicyEngine = Some(PolicyEngine.create (TimeSpan.FromSeconds 1.0) [ policy ])
+                AuditLog = Some audit }
+
+        let context = AgentContext.unrestrictedForTests ()
+        let executionRequest = request context agent "raw"
+        let result = (EtclovgHarness.runAsync config context agent executionRequest).Result
+
+        Assert.IsFalse(executed)
+
+        match result.Status with
+        | ExecutionTerminalStatus.Denied(HarnessError.PolicyBlocked _) -> ()
+        | status -> Assert.Fail($"Expected fail-closed policy denial, got {status}.")
+
+        let persisted =
+            audit.QueryByExecutionAsync executionRequest.Authorization executionRequest.Correlation.ExecutionId
+            |> _.Result
+            |> List.choose _.PolicyEvidence
+            |> List.exactlyOne
+
+        Assert.AreEqual(PolicyEvaluationOutcome.Failed, persisted.Outcome)
+        Assert.AreEqual(Some "backend_unavailable", persisted.FailureCode)
+
+    [<TestMethod>]
+    member _.PolicyAuditWriteFailurePreventsExecution() =
+        let mutable executed = false
+        let innerAudit = InMemory.auditLog ()
+
+        let audit =
+            { innerAudit with
+                RecordAsync = fun _ _ -> Task.FromException<unit>(InvalidOperationException("audit unavailable")) }
+
+        let agent =
+            Agent.create "audit-failure" "audit-failure" "test" 0 [] AgentContract.Text (fun _ _ ->
+                executed <- true
+                Task.FromResult "unexpected")
+
+        let policy =
+            { Id = "passing-policy"
+              Version = "test-v1"
+              Description = "Passes but must still be audited"
+              Scope = PolicyScope.platform
+              Enforcement = PolicyEnforcement.Block
+              EvaluateAsync = Policy.evaluateSynchronously (fun _ -> None) }
+
+        let config =
+            { EtclovgConfig.Default with
+                PolicyEngine = Some(PolicyEngine.create (TimeSpan.FromSeconds 1.0) [ policy ])
+                AuditLog = Some audit }
+
+        let context = AgentContext.unrestrictedForTests ()
+
+        Assert.ThrowsExactly<InvalidOperationException>(fun () ->
+            EtclovgHarness.runAsync config context agent (request context agent "raw")
+            |> _.GetAwaiter().GetResult()
+            |> ignore)
+        |> ignore
+
+        Assert.IsFalse(executed)
 
     [<TestMethod>]
     member _.ExecutionGraphNodesReenterHarnessPolicy() =
@@ -1263,18 +1633,21 @@ type EtclovgHarnessTests() =
 
         let denyNode =
             { Id = "deny-node"
+              Version = "test-v1"
               Description = "Blocks only the graph node"
+              Scope = PolicyScope.platform
               Enforcement = PolicyEnforcement.Block
-              Evaluate =
-                fun policyContext ->
+              EvaluateAsync =
+                Policy.evaluateSynchronously (fun policyContext ->
                     if policyContext.AgentId = nodeAgent.Metadata.Id then
                         Some "graph node denied"
                     else
-                        None }
+                        None) }
 
         let config =
             { EtclovgConfig.Default with
-                PolicyEngine = Some(PolicyEngine.create [ denyNode ]) }
+                PolicyEngine = Some(PolicyEngine.create (TimeSpan.FromSeconds 1.0) [ denyNode ])
+                AuditLog = Some(InMemory.auditLog ()) }
 
         let context = AgentContext.unrestrictedForTests ()
 
@@ -1304,18 +1677,21 @@ type EtclovgHarnessTests() =
 
         let denyMember =
             { Id = "deny-group-member"
+              Version = "test-v1"
               Description = "Blocks only the group member"
+              Scope = PolicyScope.platform
               Enforcement = PolicyEnforcement.Block
-              Evaluate =
-                fun policyContext ->
+              EvaluateAsync =
+                Policy.evaluateSynchronously (fun policyContext ->
                     if policyContext.AgentId = memberAgent.Metadata.Id then
                         Some "group member denied"
                     else
-                        None }
+                        None) }
 
         let config =
             { EtclovgConfig.Default with
-                PolicyEngine = Some(PolicyEngine.create [ denyMember ]) }
+                PolicyEngine = Some(PolicyEngine.create (TimeSpan.FromSeconds 1.0) [ denyMember ])
+                AuditLog = Some(InMemory.auditLog ()) }
 
         let context = AgentContext.unrestrictedForTests ()
 
@@ -1362,18 +1738,21 @@ type EtclovgHarnessTests() =
 
         let denyTool =
             { Id = "deny-tool"
+              Version = "test-v1"
               Description = "Blocks one tool invocation"
+              Scope = PolicyScope.platform
               Enforcement = PolicyEnforcement.Block
-              Evaluate =
-                fun policyContext ->
+              EvaluateAsync =
+                Policy.evaluateSynchronously (fun policyContext ->
                     if policyContext.Action = "tool.execute:blocked-tool" then
                         Some "tool execution denied"
                     else
-                        None }
+                        None) }
 
         let config =
             { EtclovgConfig.Default with
-                PolicyEngine = Some(PolicyEngine.create [ denyTool ]) }
+                PolicyEngine = Some(PolicyEngine.create (TimeSpan.FromSeconds 1.0) [ denyTool ])
+                AuditLog = Some(InMemory.auditLog ()) }
 
         let context = AgentContext.unrestrictedForTests ()
 
@@ -1537,6 +1916,56 @@ type EtclovgHarnessTests() =
         Assert.AreEqual(ExecutionTerminalStatus.LimitExceeded LimitExceeded.LlmCalls, result.Status)
         Assert.AreEqual(0, providerCalls)
         Assert.AreEqual(0, result.Usage.LlmCalls)
+
+    [<TestMethod>]
+    member _.ModelEligibilityUsesActuallyInvokedProvider() =
+        let mutable providerCalls = 0
+
+        let provider =
+            LlmProvider.create (fun () -> "blocked-model") (fun _ _ _ ->
+                providerCalls <- providerCalls + 1
+                Task.FromResult(CompletionResult.create "unexpected" "stop" None None))
+
+        let orchestrator =
+            Orchestrator.create
+                { Id = "model-policy"
+                  Name = "Model policy"
+                  Description = "Tests model eligibility enforcement"
+                  Priority = 0
+                  Responsibilities = []
+                  Contract = AgentContract.Text
+                  Provider = provider
+                  Tools = []
+                  SubAgents = []
+                  Prompt = Prompt.Empty
+                  Options = CompletionOptions.Default
+                  MaxRounds = 1
+                  Bus = EventBus.none
+                  Scope = EventScope.CreateEmpty() }
+                { OrchestratorDefinition.create Task.FromResult with
+                    ParseActions = fun response -> [ Respond response ] }
+
+        let policy =
+            PolicyEngine.modelEligibilityPolicy "model" "test-v1" PolicyScope.platform [ "approved-model" ]
+
+        let config =
+            { EtclovgConfig.Default with
+                PolicyEngine = Some(PolicyEngine.create (TimeSpan.FromSeconds 1.0) [ policy ])
+                AuditLog = Some(InMemory.auditLog ()) }
+
+        let context = AgentContext.unrestrictedForTests ()
+
+        let result =
+            (EtclovgHarness.runAsync config context orchestrator (request context orchestrator "input")).Result
+
+        Assert.AreEqual(ExecutionTerminalStatus.Denied HarnessError.PermissionDenied, result.Status)
+        Assert.AreEqual(0, providerCalls)
+        Assert.AreEqual(0, result.Usage.LlmCalls)
+
+        Assert.IsTrue(
+            result.PolicyDecisions.PolicyViolations
+            |> List.exists (fun violation -> violation.PolicyId = "model")
+        )
 
     [<TestMethod>]
     member _.HarnessAccountsProviderTokensAgainstBudget() =
@@ -1869,19 +2298,22 @@ type EtclovgHarnessTests() =
 
         let normalize =
             { Id = "normalize-replay-input"
+              Version = "test-v1"
               Description = "Normalizes replay input"
+              Scope = PolicyScope.platform
               Enforcement = PolicyEnforcement.Modify(fun _ -> "normalized")
-              Evaluate =
-                fun policyContext ->
+              EvaluateAsync =
+                Policy.evaluateSynchronously (fun policyContext ->
                     if policyContext.Action = "tool.execute:normalized-tool" then
                         Some "normalize"
                     else
-                        None }
+                        None) }
 
         let config =
             { EtclovgConfig.Default with
                 ReplayFixtures = Some fixtures
-                PolicyEngine = Some(PolicyEngine.create [ normalize ]) }
+                PolicyEngine = Some(PolicyEngine.create (TimeSpan.FromSeconds 1.0) [ normalize ])
+                AuditLog = Some(InMemory.auditLog ()) }
 
         let result = (EtclovgHarness.runAsync config context agent executionRequest).Result
 
@@ -2321,18 +2753,21 @@ type EtclovgHarnessTests() =
 
         let denyAgent =
             { Id = "deny-router-agent"
+              Version = "test-v1"
               Description = "Blocks one router agent"
+              Scope = PolicyScope.platform
               Enforcement = PolicyEnforcement.Block
-              Evaluate =
-                fun policyContext ->
+              EvaluateAsync =
+                Policy.evaluateSynchronously (fun policyContext ->
                     if policyContext.AgentId = deniedAgentId then
                         Some "router agent denied"
                     else
-                        None }
+                        None) }
 
         let config =
             { EtclovgConfig.Default with
-                PolicyEngine = Some(PolicyEngine.create [ denyAgent ]) }
+                PolicyEngine = Some(PolicyEngine.create (TimeSpan.FromSeconds 1.0) [ denyAgent ])
+                AuditLog = Some(InMemory.auditLog ()) }
 
         let context = AgentContext.unrestrictedForTests ()
 

@@ -15,7 +15,8 @@
      <Compile Include="src/Llm/LlmProvider.fs" />
      <!-- Core agent and tool contracts -->
     <Compile Include="src/Core/Permission.fs" />
-          <Compile Include="src/Core/PlatformError.fs" />
+     <Compile Include="src/Governance/PolicyFacts.fs" />
+           <Compile Include="src/Core/PlatformError.fs" />
      <Compile Include="src/Agent/AgentContext.fs" />
      <Compile Include="src/ToolProtocol/ToolSchema.fs" />
      <Compile Include="src/ToolProtocol/ToolCodec.fs" />
@@ -71,9 +72,9 @@
     <!-- G: Governance & Security -->
     <Compile Include="src/Governance/ResourcePermission.fs" />
     <Compile Include="src/Governance/PermissionGate.fs" />
+    <Compile Include="src/Governance/PolicyEngine.fs" />
     <Compile Include="src/Governance/AuditLog.fs" />
     <Compile Include="src/Governance/Constitution.fs" />
-    <Compile Include="src/Governance/PolicyEngine.fs" />
     <Compile Include="src/Events/TurnRecords.fs" />
     <Compile Include="src/Feedback/FeedbackTypes.fs" />
     <Compile Include="src/Events/Events.fs" />

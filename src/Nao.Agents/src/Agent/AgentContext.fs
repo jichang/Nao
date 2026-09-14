@@ -24,6 +24,7 @@ type AgentContext =
       GetArtifacts: unit -> Artifact list
       GetGrantedResources: unit -> ResourceAccess list
       RequestPermission: ResourceAccess -> string -> bool -> Task<bool>
+      RequestModelEligibility: string -> Task<bool>
       PublishArtifact: Artifact -> Task
       Authorization: AuthorizationScope option }
 
@@ -49,5 +50,6 @@ module AgentContext =
           GetArtifacts = (fun () -> [])
           GetGrantedResources = (fun () -> [])
           RequestPermission = (fun _ _ _ -> Task.FromResult true)
+          RequestModelEligibility = (fun _ -> Task.FromResult true)
           PublishArtifact = (fun _ -> Task.CompletedTask)
           Authorization = None }

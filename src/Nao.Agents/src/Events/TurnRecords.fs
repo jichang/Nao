@@ -61,6 +61,8 @@ type TurnRecord =
         Artifacts: Artifact list
         /// Exact permission policy and grant versions used by access decisions during this turn.
         PermissionDecisions: PermissionDecisionEvidence list
+        /// Exact policy definitions and outcomes evaluated during this turn.
+        PolicyEvaluations: PolicyEvaluationEvidence list
         /// When the turn completed.
         CreatedAt: DateTimeOffset
     }
@@ -76,4 +78,5 @@ module TurnRecord =
           SubAgentCalls = []
           Artifacts = []
           PermissionDecisions = []
+          PolicyEvaluations = []
           CreatedAt = DateTimeOffset.MinValue }

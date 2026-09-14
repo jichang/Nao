@@ -135,20 +135,20 @@ Worker protocol v1 carries impersonation, service, principal, and agent authorit
 
 ## GOV-02 — Policy execution
 
-- [ ] Apply modified inputs returned by policy evaluation to the actual operation.
-- [ ] Implement confirmation callbacks instead of treating confirmation as an unconditional block.
-- [ ] Define pre-input, pre-action, pre-side-effect, post-output, and pre-commit policy stages.
-- [ ] Add hierarchical policy scopes for platform, tenant, workspace, agent, tool, and session.
-- [ ] Define conflict resolution and deny precedence.
-- [ ] Version policies and retain evaluation evidence.
-- [ ] Add policies for rate, token, cost, data classification, destination, and model eligibility.
-- [ ] Prevent policy failures from silently allowing execution.
+- [x] Apply modified inputs returned by policy evaluation to the actual operation.
+- [x] Implement confirmation callbacks instead of treating confirmation as an unconditional block.
+- [x] Define pre-input, pre-action, pre-side-effect, post-output, and pre-commit policy stages.
+- [x] Add hierarchical policy scopes for platform, tenant, workspace, agent, tool, and session.
+- [x] Define conflict resolution and deny precedence.
+- [x] Version policies and retain evaluation evidence.
+- [x] Add policies for rate, token, cost, data classification, destination, and model eligibility.
+- [x] Prevent policy failures from silently allowing execution.
 
 **Acceptance criteria**
 
-- [ ] Modified input is observable in the executed operation and audit evidence.
-- [ ] Every allow, warning, modification, confirmation, and block is queryable.
-- [ ] Policy-engine outage follows documented fail-closed behavior for protected operations.
+- [x] Modified input is observable in the executed operation and audit evidence.
+- [x] Every allow, warning, modification, confirmation, and block is queryable.
+- [x] Policy-engine outage follows documented fail-closed behavior for protected operations.
 
 ## GOV-03 — Output safety and constitutions
 

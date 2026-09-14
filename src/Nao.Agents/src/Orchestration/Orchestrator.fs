@@ -149,12 +149,14 @@ module Orchestrator =
         /// every subclass gets identical logging and tracing for free — a custom orchestrator only
         /// supplies the prompt and the parser and can never accidentally drop the round's trace.
         let reasonAsync
-            (correlation: CorrelationContext)
-            (authorization: AuthorizationScope option)
+            (agentContext: AgentContext)
             (conversation: Conversation)
             (round: int)
             (successfulToolCalls: Collections.Generic.HashSet<string * string>)
             : Task<string * (string -> AgentAction list)> =
+            let correlation = agentContext.Correlation
+            let authorization = agentContext.Authorization
+
             let prepareDefault () =
                 task {
                     let! messages = definition.GenerateReasoningPrompt conversation
@@ -236,6 +238,12 @@ module Orchestrator =
                         let span = startLlmSpan attempt prompt.Length
 
                         try
+                            let model = LlmProvider.name config.Provider
+                            let! eligible = agentContext.RequestModelEligibility model
+
+                            if not eligible then
+                                raise (UnauthorizedAccessException(sprintf "Model '%s' is not eligible." model))
+
                             match RuntimeExecutionBudget.beginLlmCall () with
                             | Some limit -> raise (ExecutionLimitExceededException limit)
                             | None -> ()
@@ -425,13 +433,7 @@ module Orchestrator =
                     // The base performs the LLM call (with repair + reasoning logging + tracing),
                     // so logs/traces are captured no matter how a subclass builds the prompt or
                     // parses the response.
-                    let! response, parseActions =
-                        reasonAsync
-                            agentContext.Correlation
-                            agentContext.Authorization
-                            conversation
-                            (rounds + 1)
-                            successfulToolCalls
+                    let! response, parseActions = reasonAsync agentContext conversation (rounds + 1) successfulToolCalls
                     // The assistant's own message joins the running conversation — like before —
                     // so the next round's prompt can include what the model already said.
                     conversation <- conversation @ [ { Role = Assistant; Content = response } ]
@@ -625,13 +627,7 @@ module Orchestrator =
 
                     conversation <- conversation @ [ forceMsg ]
 
-                    let! response, parseActions =
-                        reasonAsync
-                            agentContext.Correlation
-                            agentContext.Authorization
-                            conversation
-                            (rounds + 1)
-                            successfulToolCalls
+                    let! response, parseActions = reasonAsync agentContext conversation (rounds + 1) successfulToolCalls
 
                     finalAnswer <-
                         parseActions response

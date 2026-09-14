@@ -12,6 +12,15 @@ module private EtclovgHarness =
     let runAsync config context agent request =
         Nao.Agents.EtclovgHarness.runAsync config context agent request CancellationToken.None
 
+module private TestAudit =
+    let create () : AuditLog =
+        { RecordAsync = fun _ _ -> Task.FromResult()
+          QueryAsync = fun _ _ _ -> Task.FromResult []
+          QueryByExecutionAsync = fun _ _ -> Task.FromResult []
+          GetDeniedCountAsync = fun _ _ _ -> Task.FromResult 0
+          DeleteScopeAsync = fun _ -> Task.FromResult(Ok 0)
+          DeleteExpiredAsync = fun _ _ -> Task.FromResult(Ok 0) }
+
 module private TestAgents =
     let echo prefix =
         Agent.create "echo" "Echo" "Echoes input with a prefix" 0 [] AgentContract.Text (fun _ input ->
@@ -381,15 +390,18 @@ type EvalRunnerTests() =
 
         let policy =
             { Id = "block-evaluation"
+              Version = "test-v1"
               Description = "Blocks evaluation execution"
+              Scope = PolicyScope.platform
               Enforcement = PolicyEnforcement.Block
-              Evaluate = fun _ -> Some "evaluation denied" }
+              EvaluateAsync = Policy.evaluateSynchronously (fun _ -> Some "evaluation denied") }
 
         let blockedExecution =
             { execution with
                 Harness =
                     { EtclovgConfig.Default with
-                        PolicyEngine = Some(PolicyEngine.create [ policy ]) } }
+                        PolicyEngine = Some(PolicyEngine.create (TimeSpan.FromSeconds 1.0) [ policy ])
+                        AuditLog = Some(TestAudit.create ()) } }
 
         let case = EvalCase.create "blocked" "question" "answer"
         let dataset = EvalDataset.create owner "blocked" [ case ]
@@ -411,15 +423,18 @@ type EvalRunnerTests() =
 
         let policy =
             { Id = "normalize-input"
+              Version = "test-v1"
               Description = "Normalizes execution input"
+              Scope = PolicyScope.platform
               Enforcement = PolicyEnforcement.Modify _.ToUpperInvariant()
-              Evaluate = fun _ -> Some "normalize" }
+              EvaluateAsync = Policy.evaluateSynchronously (fun _ -> Some "normalize") }
 
         let configuredExecution =
             { execution with
                 Harness =
                     { EtclovgConfig.Default with
-                        PolicyEngine = Some(PolicyEngine.create [ policy ]) }
+                        PolicyEngine = Some(PolicyEngine.create (TimeSpan.FromSeconds 1.0) [ policy ])
+                        AuditLog = Some(TestAudit.create ()) }
                 PolicyVersions = Map [ "input", "v1" ]
                 DependencyVersions = Map [ "agent", "v1" ] }
 

@@ -149,6 +149,77 @@ Policies evaluate execution context and can block, warn, request confirmation, o
 
 A modified policy result must alter the operation that actually executes. A policy or approval outage must never silently become allow.
 
+Policy callbacks are asynchronous, receive caller-linked cancellation, and run within the
+positive timeout configured on `PolicyEngine`. A callback can return a typed
+`PolicyEvaluationFailure`; timeout, non-fatal callback exceptions, and modification-transform
+exceptions are converted to explicit failures. Every such failure blocks regardless of whether
+the policy declared warning, confirmation, or modification enforcement. Caller cancellation and
+fatal runtime exceptions propagate rather than being relabeled as policy failures.
+
+Nao provides strict built-in factories for cost and total-token budgets, process-local
+sliding-window rate limits, data-classification ceilings, HTTP(S) destination allowlists, and
+model eligibility allowlists. Every factory requires an explicit policy ID, host-managed
+version, and hierarchical scope, so multiple independently versioned instances can coexist.
+Limits must be positive; destination and model allowlists must be non-empty.
+
+Classification, destination, and model rules consume typed `PolicyFacts`, never values parsed
+from prompts or free-form tool input. Hosts attach classifications and planned model targets to
+an immutable `ExecutionRequest`. Child executions inherit those facts. Tool stages additionally
+derive destination origins and model targets from the tool's canonical `ResourceAccess`
+declarations, so undeclared prompt text cannot manufacture eligibility. Data-classification
+policies fail closed when classification is absent. Destination matching uses normalized
+scheme, IDN host, and effective port; paths do not widen an origin. The built-in rate limiter
+is process-local by design; distributed deployments must supply a policy backed by shared,
+strongly consistent quota state.
+
+The standard orchestrator also submits the actual `LlmProvider` name through the governed model
+eligibility capability immediately before every live or replayed provider invocation. A denial
+occurs before LLM-call budget consumption or provider access. Custom agents that invoke provider
+capabilities outside the standard orchestrator must expose the same host-governed boundary rather
+than treating a declared planned model as proof of the model actually used.
+
+Policy evaluation identifies a typed lifecycle stage: `PreInput`, `PreAction`,
+`PreSideEffect`, `PostOutput`, or `PreCommit`. Agent input executes through `PreInput`;
+tool invocation executes through `PreAction`; externally side-effecting and reversible tools
+also pass `PreSideEffect` before replay lookup, intent recording, or execution. Successful
+agent output passes `PostOutput` and then `PreCommit` before constitution validation,
+observability storage, lifecycle completion, or publication. Applied modifications flow into
+the next stage and become the actual agent input, tool input, or returned response. The same
+effective value is supplied to confirmation as `EffectiveInput`.
+
+Policies have an explicit hierarchical scope. Platform policies match every execution; tenant
+policies match the authenticated tenant; workspace policies additionally match the selected
+group and workspace; agent policies add the logical agent identity; tool policies add the agent
+and current tool identity; and session policies match the complete claim-free authorization
+identity. Agent and tool scopes therefore cannot leak across tenants or workspaces, and tool
+policies do not run during agent-only stages.
+
+Matching policies are evaluated from broadest to narrowest: platform, tenant, workspace, agent,
+tool, then session. Declaration order is stable among policies at the same level. Each modifying
+policy receives the value produced by every broader and earlier matching modification. Every
+matching violation and warning is retained. A block at any level is absolute and cannot be
+overridden by a narrower modification, warning, or confirmation; multiple matching confirmation
+violations are delivered together in one broker request. Duplicate policy identifiers and
+session scopes without a session-bound authorization are rejected.
+
+Every policy definition carries a mandatory host-managed version. Each matching policy emits
+immutable `PolicyEvaluationEvidence`, including policies that pass. Evidence records the policy
+ID and version, scope level, lifecycle stage, agent and optional tool, action, outcome, optional
+failure code, optional confirmation decision, evaluation time, and SHA-256 digests of the input
+and effective input.
+It deliberately excludes raw inputs, policy messages, and tenant/workspace/session coordinates.
+The harness writes each record to the authenticated audit partition before continuing and
+retains the same records in `ExecutionResult` and successful `TurnRecord` values. A configured
+policy engine without an audit capability fails closed, and audit-write failures propagate
+instead of allowing execution without evidence.
+
+`Confirm` is not a block alias. Matching confirmation policies produce an explicit request for
+the injected, timeout-bounded `PolicyConfirmationBroker`. The request carries authenticated
+authorization, correlation, typed policy context, only the matching confirmation violations,
+the effective modified input, and request time. Approval continues execution; denial, timeout,
+or an unavailable broker blocks it. A matching block policy wins without invoking confirmation,
+and caller cancellation propagates.
+
 ## Constitutions and output controls
 
 Constitutions evaluate generated output against deterministic or probabilistic rules. Remediation can include repair, redaction, rejection, escalation, or quarantine.

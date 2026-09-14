@@ -736,6 +736,7 @@ type SessionGrain
                           GetGrantedResources =
                             (fun () -> lock grantedResources (fun () -> List.ofSeq grantedResources))
                           RequestPermission = requestPermission
+                          RequestModelEligibility = (fun _ -> Task.FromResult false)
                           PublishArtifact = publishArtifact
                           Authorization = None }
 
@@ -776,7 +777,8 @@ type SessionGrain
                                 let turnRecord =
                                     { TurnRecorder.snapshot recorder with
                                         Output = response
-                                        PermissionDecisions = List.ofSeq permissionDecisions }
+                                        PermissionDecisions = List.ofSeq permissionDecisions
+                                        PolicyEvaluations = result.PolicyDecisions.PolicyEvaluations }
 
                                 do!
                                     EventBus.publishAsync

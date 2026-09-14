@@ -814,10 +814,11 @@ type EtclovgGovernanceTests() =
     [<TestMethod>]
     member _.PolicyEngineEnforcesBudgetAndRateLimits() =
         let policies =
-            [ PolicyEngine.costBudgetPolicy 5.0m
-              PolicyEngine.rateLimitPolicy "tool_call" 10 ]
+            [ PolicyEngine.costBudgetPolicy "cost-budget" "1" PolicyScope.platform 5.0m
+              PolicyEngine.rateLimitPolicy "tool-rate" "1" PolicyScope.platform "tool_call" 10 ]
 
-        let engine = PolicyEngine.create policies
+        let engine = PolicyEngine.create (TimeSpan.FromSeconds 1.0) policies
+        let authorization = EtclovgHarness.telemetryScope "policy"
 
         // Within budget — passes
         let usage =
@@ -825,13 +826,17 @@ type EtclovgGovernanceTests() =
                 EstimatedCostUsd = 2.0m }
 
         let ctx =
-            { AgentId = agentId
+            { Authorization = authorization
+              AgentId = agentId
+              Stage = PolicyStage.PreInput
+              ToolName = None
               Action = "execute"
               Input = None
+              Facts = PolicyFacts.empty
               ExecutionId = None
               CurrentUsage = Some usage }
 
-        let result = engine.Evaluate(ctx)
+        let result = engine.EvaluateAsync(ctx, Threading.CancellationToken.None).Result
         Assert.IsTrue(result.Proceed)
 
         // Over budget — blocked
@@ -840,13 +845,17 @@ type EtclovgGovernanceTests() =
                 EstimatedCostUsd = 6.0m }
 
         let ctx2 =
-            { AgentId = agentId
+            { Authorization = authorization
+              AgentId = agentId
+              Stage = PolicyStage.PreInput
+              ToolName = None
               Action = "execute"
               Input = None
+              Facts = PolicyFacts.empty
               ExecutionId = None
               CurrentUsage = Some overBudget }
 
-        let result2 = engine.Evaluate(ctx2)
+        let result2 = engine.EvaluateAsync(ctx2, Threading.CancellationToken.None).Result
         Assert.IsFalse(result2.Proceed)
         Assert.IsTrue(result2.Violations |> List.exists (fun v -> v.PolicyId = "cost-budget"))
 
@@ -926,7 +935,11 @@ type EtclovgFullIntegrationTests() =
             |> Constitution.addRule Constitution.noPrivateDataRule
 
         let audit = InMemory.auditLog ()
-        let policyEngine = PolicyEngine.create [ PolicyEngine.costBudgetPolicy 10.0m ]
+
+        let policyEngine =
+            PolicyEngine.create
+                (TimeSpan.FromSeconds 1.0)
+                [ PolicyEngine.costBudgetPolicy "cost-budget" "1" PolicyScope.platform 10.0m ]
 
         // L: Lifecycle hooks
         let lifecycleHook = LifecycleHook.passthrough
@@ -1038,11 +1051,15 @@ type EtclovgFullIntegrationTests() =
                 PolicyEngine =
                     Some(
                         PolicyEngine.create
+                            (TimeSpan.FromSeconds 1.0)
                             [ { Id = "zero-budget"
+                                Version = "test-v1"
                                 Description = "No budget remaining"
+                                Scope = PolicyScope.platform
                                 Enforcement = PolicyEnforcement.Block
-                                Evaluate = fun _ -> Some "Budget exhausted" } ]
-                    ) }
+                                EvaluateAsync = Policy.evaluateSynchronously (fun _ -> Some "Budget exhausted") } ]
+                    )
+                AuditLog = Some(InMemory.auditLog ()) }
 
         let context = AgentContext.unrestrictedForTests ()
 
@@ -1108,7 +1125,12 @@ type EtclovgFullIntegrationTests() =
                 TraceStore = Some traceStore
                 AuditLog = Some audit
                 Constitution = Some(Constitution.empty "basic" |> Constitution.addRule Constitution.noHarmRule)
-                PolicyEngine = Some(PolicyEngine.create [ PolicyEngine.costBudgetPolicy 100.0m ])
+                PolicyEngine =
+                    Some(
+                        PolicyEngine.create
+                            (TimeSpan.FromSeconds 1.0)
+                            [ PolicyEngine.costBudgetPolicy "cost-budget" "1" PolicyScope.platform 100.0m ]
+                    )
                 Lifecycle = [ LifecycleHook.passthrough ] }
 
         let context =

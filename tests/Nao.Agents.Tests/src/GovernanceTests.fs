@@ -325,104 +325,654 @@ type PolicyEngineTests() =
 
     let agentId = "test"
 
+    let authorization =
+        SecurityPrincipal.create (TenantId.parse "tenant") (UserId.parse "user") []
+        |> fun principal ->
+            AuthorizationScope.tryCreate
+                principal
+                None
+                (WorkspaceId.parse "workspace")
+                (Some(SessionId.parse "session"))
+            |> Option.get
+
+    let context toolName =
+        { Authorization = authorization
+          AgentId = agentId
+          Stage = PolicyStage.PreAction
+          ToolName = toolName
+          Action = "execute"
+          Input = Some ""
+          Facts = PolicyFacts.empty
+          ExecutionId = None
+          CurrentUsage = None }
+
+    let evaluate (engine: PolicyEngine) policyContext =
+        engine.EvaluateAsync(policyContext, CancellationToken.None).Result
+
+    let modifyingPolicy id scope suffix (observedInputs: ResizeArray<string> option) =
+        { Id = id
+          Version = "test-v1"
+          Description = id
+          Scope = scope
+          Enforcement = PolicyEnforcement.Modify(fun input -> input + suffix)
+          EvaluateAsync =
+            Policy.evaluateSynchronously (fun (policyContext: PolicyContext) ->
+                observedInputs
+                |> Option.iter (fun inputs -> inputs.Add policyContext.Input.Value)
+
+                Some id) }
+
     [<TestMethod>]
     member _.NoPoliciesAllowsAll() =
-        let engine = PolicyEngine.create []
+        let engine = PolicyEngine.create (TimeSpan.FromSeconds 1.0) []
 
         let ctx =
-            { AgentId = agentId
+            { Authorization = authorization
+              AgentId = agentId
+              Stage = PolicyStage.PreInput
+              ToolName = None
               Action = "execute"
               Input = Some "hello"
+              Facts = PolicyFacts.empty
               ExecutionId = None
               CurrentUsage = None }
 
-        let result = engine.Evaluate(ctx)
+        let result = evaluate engine ctx
         Assert.IsTrue(result.Proceed)
         Assert.AreEqual(None, result.ModifiedInput)
         Assert.AreEqual(0, result.Violations.Length)
 
     [<TestMethod>]
     member _.CostBudgetPolicyBlocksWhenExceeded() =
-        let policy = PolicyEngine.costBudgetPolicy 1.0m
-        let engine = PolicyEngine.create [ policy ]
+        let policy =
+            PolicyEngine.costBudgetPolicy "cost-budget" "1" PolicyScope.platform 1.0m
+
+        let engine = PolicyEngine.create (TimeSpan.FromSeconds 1.0) [ policy ]
 
         let usage =
             { ResourceUsage.Zero with
                 EstimatedCostUsd = 1.5m }
 
         let ctx =
-            { AgentId = agentId
+            { Authorization = authorization
+              AgentId = agentId
+              Stage = PolicyStage.PreInput
+              ToolName = None
               Action = "execute"
               Input = None
+              Facts = PolicyFacts.empty
               ExecutionId = None
               CurrentUsage = Some usage }
 
-        let result = engine.Evaluate(ctx)
+        let result = evaluate engine ctx
         Assert.IsFalse(result.Proceed)
         Assert.AreEqual(1, result.Violations.Length)
         Assert.IsTrue(result.Violations.[0].Message.Contains("Cost budget exceeded"))
 
     [<TestMethod>]
     member _.CostBudgetPolicyAllowsWithinBudget() =
-        let policy = PolicyEngine.costBudgetPolicy 10.0m
-        let engine = PolicyEngine.create [ policy ]
+        let policy =
+            PolicyEngine.costBudgetPolicy "cost-budget" "1" PolicyScope.platform 10.0m
+
+        let engine = PolicyEngine.create (TimeSpan.FromSeconds 1.0) [ policy ]
 
         let usage =
             { ResourceUsage.Zero with
                 EstimatedCostUsd = 5.0m }
 
         let ctx =
-            { AgentId = agentId
+            { Authorization = authorization
+              AgentId = agentId
+              Stage = PolicyStage.PreInput
+              ToolName = None
               Action = "execute"
               Input = None
+              Facts = PolicyFacts.empty
               ExecutionId = None
               CurrentUsage = Some usage }
 
-        let result = engine.Evaluate(ctx)
+        let result = evaluate engine ctx
         Assert.IsTrue(result.Proceed)
 
     [<TestMethod>]
+    member _.TokenAndRatePoliciesEnforceTypedUsageAndActionLimits() =
+        let tokenPolicy =
+            PolicyEngine.totalTokenBudgetPolicy "tokens" "budget-v2" PolicyScope.platform 100
+
+        let ratePolicy =
+            PolicyEngine.rateLimitPolicy "rate" "window-v3" PolicyScope.platform "execute" 1
+
+        let usage =
+            { ResourceUsage.Zero with
+                TotalTokens = 101 }
+
+        let tokenResult =
+            PolicyEngine.create (TimeSpan.FromSeconds 1.0) [ tokenPolicy ]
+            |> fun engine ->
+                evaluate
+                    engine
+                    { context None with
+                        CurrentUsage = Some usage }
+
+        Assert.IsFalse(tokenResult.Proceed)
+        Assert.AreEqual("budget-v2", tokenResult.Evaluations.Head.PolicyVersion)
+
+        let rateEngine = PolicyEngine.create (TimeSpan.FromSeconds 1.0) [ ratePolicy ]
+        Assert.IsTrue((evaluate rateEngine (context None)).Proceed)
+        Assert.IsFalse((evaluate rateEngine (context None)).Proceed)
+
+    [<TestMethod>]
+    member _.ClassificationDestinationAndModelPoliciesUseTypedFacts() =
+        let classificationPolicy =
+            PolicyEngine.dataClassificationPolicy
+                "classification"
+                "classification-v1"
+                PolicyScope.platform
+                DataClassification.Confidential
+
+        let destinationPolicy =
+            PolicyEngine.destinationPolicy
+                "destination"
+                "destination-v1"
+                PolicyScope.platform
+                [ Uri "https://api.example.com/allowed" ]
+
+        let modelPolicy =
+            PolicyEngine.modelEligibilityPolicy "model" "model-v1" PolicyScope.platform [ "approved-model" ]
+
+        let evaluate facts policies =
+            PolicyEngine.create (TimeSpan.FromSeconds 1.0) policies
+            |> fun engine -> evaluate engine { context None with Facts = facts }
+
+        let approvedFacts =
+            PolicyFacts.create
+                [ DataClassification.Confidential ]
+                [ Uri "https://api.example.com/another-path" ]
+                [ "approved-model" ]
+
+        Assert.IsTrue((evaluate approvedFacts [ classificationPolicy; destinationPolicy; modelPolicy ]).Proceed)
+        Assert.IsFalse((evaluate PolicyFacts.empty [ classificationPolicy ]).Proceed)
+
+        let deniedFacts =
+            PolicyFacts.create
+                [ DataClassification.Restricted ]
+                [ Uri "https://other.example.com/path" ]
+                [ "unapproved-model" ]
+
+        let denied =
+            evaluate deniedFacts [ classificationPolicy; destinationPolicy; modelPolicy ]
+
+        Assert.IsFalse(denied.Proceed)
+
+        CollectionAssert.AreEquivalent(
+            [| "classification"; "destination"; "model" |],
+            denied.Violations |> List.map _.PolicyId |> List.toArray
+        )
+
+    [<TestMethod>]
+    member _.BuiltInPoliciesRejectInvalidConfiguration() =
+        Assert.ThrowsExactly<ArgumentException>(fun () ->
+            PolicyEngine.totalTokenBudgetPolicy "tokens" "1" PolicyScope.platform 0
+            |> ignore)
+        |> ignore
+
+        Assert.ThrowsExactly<ArgumentException>(fun () ->
+            PolicyEngine.rateLimitPolicy "rate" "1" PolicyScope.platform "execute" 0
+            |> ignore)
+        |> ignore
+
+        Assert.ThrowsExactly<ArgumentException>(fun () ->
+            PolicyEngine.destinationPolicy "destination" "1" PolicyScope.platform []
+            |> ignore)
+        |> ignore
+
+        Assert.ThrowsExactly<ArgumentException>(fun () ->
+            PolicyEngine.modelEligibilityPolicy "model" "1" PolicyScope.platform []
+            |> ignore)
+        |> ignore
+
+    [<TestMethod>]
     member _.MaxOutputLengthPolicyModifiesContent() =
-        let policy = PolicyEngine.maxOutputLengthPolicy 10
-        let engine = PolicyEngine.create [ policy ]
+        let policy =
+            PolicyEngine.maxOutputLengthPolicy "max-output-length" "1" PolicyScope.platform 10
+
+        let engine = PolicyEngine.create (TimeSpan.FromSeconds 1.0) [ policy ]
 
         let ctx =
-            { AgentId = agentId
+            { Authorization = authorization
+              AgentId = agentId
+              Stage = PolicyStage.PostOutput
+              ToolName = None
               Action = "output"
               Input = Some "this is way too long for the limit"
+              Facts = PolicyFacts.empty
               ExecutionId = None
               CurrentUsage = None }
 
-        let result = engine.Evaluate(ctx)
+        let result = evaluate engine ctx
         // Modify enforcement doesn't block
         Assert.IsTrue(result.Proceed)
         Assert.IsTrue(result.ModifiedInput.IsSome)
         Assert.IsTrue(result.ModifiedInput.Value.Length <= 30) // truncated + "... [truncated]"
 
+        let evidence = result.Evaluations |> List.exactlyOne
+        Assert.AreEqual("max-output-length", evidence.PolicyId)
+        Assert.AreEqual("1", evidence.PolicyVersion)
+        Assert.AreEqual(PolicyEvaluationOutcome.Modified, evidence.Outcome)
+        Assert.AreNotEqual(evidence.InputDigest, evidence.EffectiveInputDigest)
+        Assert.AreEqual(None, evidence.Confirmation)
+
     [<TestMethod>]
     member _.MultiplePoliciesEvaluatedInOrder() =
         let warnPolicy =
             { Id = "warn-test"
+              Version = "test-v1"
               Description = "Always warns"
+              Scope = PolicyScope.platform
               Enforcement = PolicyEnforcement.Warn
-              Evaluate = fun _ -> Some "just a warning" }
+              EvaluateAsync = Policy.evaluateSynchronously (fun _ -> Some "just a warning") }
 
         let blockPolicy =
             { Id = "block-test"
+              Version = "test-v1"
               Description = "Always blocks"
+              Scope = PolicyScope.platform
               Enforcement = PolicyEnforcement.Block
-              Evaluate = fun _ -> Some "blocked" }
+              EvaluateAsync = Policy.evaluateSynchronously (fun _ -> Some "blocked") }
 
-        let engine = PolicyEngine.create [ warnPolicy; blockPolicy ]
+        let engine =
+            PolicyEngine.create (TimeSpan.FromSeconds 1.0) [ warnPolicy; blockPolicy ]
 
         let ctx =
-            { AgentId = agentId
+            { Authorization = authorization
+              AgentId = agentId
+              Stage = PolicyStage.PreAction
+              ToolName = None
               Action = "x"
               Input = None
+              Facts = PolicyFacts.empty
               ExecutionId = None
               CurrentUsage = None }
 
-        let result = engine.Evaluate(ctx)
+        let result = evaluate engine ctx
         Assert.IsFalse(result.Proceed)
         Assert.AreEqual(2, result.Violations.Length)
         Assert.AreEqual(1, result.Warnings.Length)
+
+    [<TestMethod>]
+    member _.MatchingScopesTransformBroadToNarrowAndPreserveDeclarationOrder() =
+        let tenantId = AuthorizationScope.tenantId authorization
+        let groupId = AuthorizationScope.groupId authorization
+        let workspaceId = AuthorizationScope.workspaceId authorization
+        let observedInputs = ResizeArray<string>()
+        let observed = Some observedInputs
+
+        let policies =
+            [ modifyingPolicy "session" (PolicyScope.session authorization) "S" observed
+              modifyingPolicy "platform-1" PolicyScope.platform "P1" observed
+              modifyingPolicy "tool" (PolicyScope.tool tenantId groupId workspaceId agentId "search") "O" observed
+              modifyingPolicy "tenant" (PolicyScope.tenant tenantId) "T" observed
+              modifyingPolicy "platform-2" PolicyScope.platform "P2" observed
+              modifyingPolicy "agent" (PolicyScope.agent tenantId groupId workspaceId agentId) "A" observed
+              modifyingPolicy "workspace" (PolicyScope.workspace tenantId groupId workspaceId) "W" observed ]
+
+        let result =
+            PolicyEngine.create (TimeSpan.FromSeconds 1.0) policies
+            |> fun engine -> evaluate engine (context (Some "search"))
+
+        Assert.IsTrue(result.Proceed)
+        Assert.AreEqual(Some "P1P2TWAOS", result.ModifiedInput)
+
+        CollectionAssert.AreEqual(
+            [| ""; "P1"; "P1P2"; "P1P2T"; "P1P2TW"; "P1P2TWA"; "P1P2TWAO" |],
+            observedInputs.ToArray()
+        )
+
+    [<TestMethod>]
+    member _.ForeignAndInapplicableScopesDoNotEvaluate() =
+        let tenantId = TenantId.parse "foreign-tenant"
+        let workspaceId = WorkspaceId.parse "foreign-workspace"
+        let mutable evaluations = 0
+
+        let policy id scope =
+            { Id = id
+              Version = "test-v1"
+              Description = id
+              Scope = scope
+              Enforcement = PolicyEnforcement.Block
+              EvaluateAsync =
+                Policy.evaluateSynchronously (fun _ ->
+                    evaluations <- evaluations + 1
+                    Some id) }
+
+        let foreignAuthorization =
+            SecurityPrincipal.create tenantId (UserId.parse "foreign-user") []
+            |> fun principal ->
+                AuthorizationScope.tryCreate principal None workspaceId (Some(SessionId.parse "foreign-session"))
+                |> Option.get
+
+        let policies =
+            [ policy "tenant" (PolicyScope.tenant tenantId)
+              policy "workspace" (PolicyScope.workspace tenantId None workspaceId)
+              policy "agent" (PolicyScope.agent tenantId None workspaceId agentId)
+              policy "tool" (PolicyScope.tool tenantId None workspaceId agentId "search")
+              policy "session" (PolicyScope.session foreignAuthorization)
+              policy
+                  "tool-without-tool-context"
+                  (PolicyScope.tool
+                      (AuthorizationScope.tenantId authorization)
+                      (AuthorizationScope.groupId authorization)
+                      (AuthorizationScope.workspaceId authorization)
+                      agentId
+                      "search") ]
+
+        let result =
+            PolicyEngine.create (TimeSpan.FromSeconds 1.0) policies
+            |> fun engine -> engine.EvaluateAsync(context None, CancellationToken.None).Result
+
+        Assert.IsTrue(result.Proceed)
+        Assert.AreEqual(0, evaluations)
+        Assert.AreEqual(0, result.Violations.Length)
+
+    [<TestMethod>]
+    member _.BlockCannotBeOverriddenAcrossScopeLevels() =
+        let tenantId = AuthorizationScope.tenantId authorization
+        let groupId = AuthorizationScope.groupId authorization
+        let workspaceId = AuthorizationScope.workspaceId authorization
+
+        let block id scope =
+            { Id = id
+              Version = "test-v1"
+              Description = id
+              Scope = scope
+              Enforcement = PolicyEnforcement.Block
+              EvaluateAsync = Policy.evaluateSynchronously (fun _ -> Some id) }
+
+        let narrowerPolicies =
+            [ modifyingPolicy "workspace-modify" (PolicyScope.workspace tenantId groupId workspaceId) "W" None
+              { Id = "agent-confirm"
+                Version = "test-v1"
+                Description = "agent-confirm"
+                Scope = PolicyScope.agent tenantId groupId workspaceId agentId
+                Enforcement = PolicyEnforcement.Confirm
+                EvaluateAsync = Policy.evaluateSynchronously (fun _ -> Some "confirm") } ]
+
+        let platformBlocked =
+            PolicyEngine.create
+                (TimeSpan.FromSeconds 1.0)
+                (block "platform-block" PolicyScope.platform :: narrowerPolicies)
+            |> fun engine -> evaluate engine (context None)
+
+        let sessionBlocked =
+            PolicyEngine.create
+                (TimeSpan.FromSeconds 1.0)
+                (narrowerPolicies @ [ block "session-block" (PolicyScope.session authorization) ])
+            |> fun engine -> evaluate engine (context None)
+
+        Assert.IsFalse(platformBlocked.Proceed)
+        Assert.IsTrue(platformBlocked.RequiresConfirmation)
+        Assert.AreEqual(Some "W", platformBlocked.ModifiedInput)
+        Assert.IsFalse(sessionBlocked.Proceed)
+        Assert.IsTrue(sessionBlocked.RequiresConfirmation)
+        Assert.AreEqual(Some "W", sessionBlocked.ModifiedInput)
+
+    [<TestMethod>]
+    member _.InvalidPolicyScopeAndDuplicateIdentityAreRejected() =
+        let tenantId = AuthorizationScope.tenantId authorization
+        let groupId = AuthorizationScope.groupId authorization
+        let workspaceId = AuthorizationScope.workspaceId authorization
+        let duplicate = modifyingPolicy "duplicate" PolicyScope.platform "x" None
+
+        Assert.ThrowsExactly<ArgumentException>(fun () -> PolicyScope.agent tenantId groupId workspaceId " " |> ignore)
+        |> ignore
+
+        let sessionlessAuthorization =
+            SecurityPrincipal.create tenantId (UserId.parse "user") []
+            |> fun principal -> AuthorizationScope.tryCreate principal None workspaceId None |> Option.get
+
+        Assert.ThrowsExactly<ArgumentException>(fun () -> PolicyScope.session sessionlessAuthorization |> ignore)
+        |> ignore
+
+        Assert.ThrowsExactly<ArgumentException>(fun () ->
+            PolicyEngine.create (TimeSpan.FromSeconds 1.0) [ duplicate; duplicate ]
+            |> ignore)
+        |> ignore
+
+        Assert.ThrowsExactly<ArgumentException>(fun () ->
+            PolicyEngine.create
+                (TimeSpan.FromSeconds 1.0)
+                [ { duplicate with
+                      Id = "blank-version"
+                      Version = " " } ]
+            |> ignore)
+        |> ignore
+
+        Assert.ThrowsExactly<ArgumentException>(fun () -> PolicyEngine.create TimeSpan.Zero [ duplicate ] |> ignore)
+        |> ignore
+
+    [<TestMethod>]
+    member _.EvaluationFailuresAlwaysBlockRegardlessOfDeclaredEnforcement() =
+        let failing id enforcement =
+            { Id = id
+              Version = "test-v1"
+              Description = id
+              Scope = PolicyScope.platform
+              Enforcement = enforcement
+              EvaluateAsync =
+                fun _ _ ->
+                    Task.FromResult(
+                        Error(PolicyEvaluationFailure.create "backend_unavailable" "Policy backend unavailable.")
+                    ) }
+
+        let policies =
+            [ failing "warn-failure" PolicyEnforcement.Warn
+              failing "confirm-failure" PolicyEnforcement.Confirm
+              failing "modify-failure" (PolicyEnforcement.Modify id) ]
+
+        let result =
+            PolicyEngine.create (TimeSpan.FromSeconds 1.0) policies
+            |> fun engine -> evaluate engine (context None)
+
+        Assert.IsFalse(result.Proceed)
+        Assert.AreEqual(3, result.Violations.Length)
+
+        Assert.IsTrue(
+            result.Violations
+            |> List.forall (fun violation ->
+                match violation.Enforcement with
+                | PolicyEnforcement.Block -> true
+                | _ -> false)
+        )
+
+        Assert.IsTrue(
+            result.Evaluations
+            |> List.forall (fun evidence -> evidence.Outcome = PolicyEvaluationOutcome.Failed)
+        )
+
+        Assert.IsTrue(
+            result.Evaluations
+            |> List.forall (fun evidence -> evidence.FailureCode = Some "backend_unavailable")
+        )
+
+    [<TestMethod>]
+    member _.EvaluationTimeoutCancelsCallbackAndFailsClosed() =
+        let mutable callbackCancelled = false
+
+        let policy =
+            { Id = "slow-policy"
+              Version = "test-v1"
+              Description = "Never completes within the deadline"
+              Scope = PolicyScope.platform
+              Enforcement = PolicyEnforcement.Warn
+              EvaluateAsync =
+                fun _ cancellationToken ->
+                    task {
+                        try
+                            do! Task.Delay(TimeSpan.FromSeconds 5.0, cancellationToken)
+                            return Ok None
+                        with :? OperationCanceledException ->
+                            callbackCancelled <- true
+                            return raise (OperationCanceledException(cancellationToken))
+                    } }
+
+        let result =
+            PolicyEngine.create (TimeSpan.FromMilliseconds 20.0) [ policy ]
+            |> fun engine -> evaluate engine (context None)
+
+        Assert.IsFalse(result.Proceed)
+        Assert.IsTrue(callbackCancelled)
+        Assert.AreEqual(Some "policy_evaluation_timeout", result.Evaluations.Head.FailureCode)
+        Assert.AreEqual(PolicyEvaluationOutcome.Failed, result.Evaluations.Head.Outcome)
+
+    [<TestMethod>]
+    member _.CallbackAndTransformExceptionsFailClosed() =
+        let callbackException =
+            { Id = "callback-exception"
+              Version = "test-v1"
+              Description = "Throws during evaluation"
+              Scope = PolicyScope.platform
+              Enforcement = PolicyEnforcement.Confirm
+              EvaluateAsync =
+                fun _ _ ->
+                    Task.FromException<Result<string option, PolicyEvaluationFailure>>(
+                        InvalidOperationException("callback failed")
+                    ) }
+
+        let transformException =
+            { Id = "transform-exception"
+              Version = "test-v1"
+              Description = "Throws while modifying input"
+              Scope = PolicyScope.platform
+              Enforcement = PolicyEnforcement.Modify(fun _ -> invalidOp "transform failed")
+              EvaluateAsync = Policy.evaluateSynchronously (fun _ -> Some "modify") }
+
+        let result =
+            PolicyEngine.create (TimeSpan.FromSeconds 1.0) [ callbackException; transformException ]
+            |> fun engine -> evaluate engine (context None)
+
+        Assert.IsFalse(result.Proceed)
+        Assert.AreEqual(2, result.Evaluations.Length)
+
+        Assert.IsTrue(
+            result.Evaluations
+            |> List.forall (fun evidence -> evidence.Outcome = PolicyEvaluationOutcome.Failed)
+        )
+
+        Assert.IsTrue(
+            result.Evaluations
+            |> List.forall (fun evidence -> evidence.FailureCode = Some "policy_callback_exception")
+        )
+
+    [<TestMethod>]
+    member _.CallerCancellationPropagatesWithoutFailureEvidence() =
+        let policy =
+            { Id = "cancelled-policy"
+              Version = "test-v1"
+              Description = "Waits for cancellation"
+              Scope = PolicyScope.platform
+              Enforcement = PolicyEnforcement.Block
+              EvaluateAsync =
+                fun _ cancellationToken ->
+                    task {
+                        do! Task.Delay(TimeSpan.FromSeconds 5.0, cancellationToken)
+                        return Ok None
+                    } }
+
+        use cancellation = new CancellationTokenSource()
+        cancellation.Cancel()
+
+        let engine = PolicyEngine.create (TimeSpan.FromSeconds 1.0) [ policy ]
+
+        Assert.ThrowsExactly<OperationCanceledException>(fun () ->
+            engine.EvaluateAsync(context None, cancellation.Token)
+            |> _.GetAwaiter().GetResult()
+            |> ignore)
+        |> ignore
+
+    [<TestMethod>]
+    member _.ConfirmationIsExplicitAndBlockStillWins() =
+        let confirmation =
+            { Id = "confirm"
+              Version = "test-v1"
+              Description = "Requires host confirmation"
+              Scope = PolicyScope.platform
+              Enforcement = PolicyEnforcement.Confirm
+              EvaluateAsync = Policy.evaluateSynchronously (fun _ -> Some "confirm this action") }
+
+        let block =
+            { Id = "block"
+              Version = "test-v1"
+              Description = "Blocks the action"
+              Scope = PolicyScope.platform
+              Enforcement = PolicyEnforcement.Block
+              EvaluateAsync = Policy.evaluateSynchronously (fun _ -> Some "blocked") }
+
+        let context =
+            { Authorization = authorization
+              AgentId = agentId
+              Stage = PolicyStage.PreAction
+              ToolName = None
+              Action = "dangerous"
+              Input = Some "input"
+              Facts = PolicyFacts.empty
+              ExecutionId = None
+              CurrentUsage = None }
+
+        let confirmOnly =
+            PolicyEngine.create (TimeSpan.FromSeconds 1.0) [ confirmation ]
+            |> fun engine -> engine.EvaluateAsync(context, CancellationToken.None).Result
+
+        Assert.IsTrue(confirmOnly.Proceed)
+        Assert.IsTrue(confirmOnly.RequiresConfirmation)
+
+        let blocked =
+            PolicyEngine.create (TimeSpan.FromSeconds 1.0) [ confirmation; block ]
+            |> fun engine -> engine.EvaluateAsync(context, CancellationToken.None).Result
+
+        Assert.IsFalse(blocked.Proceed)
+        Assert.IsTrue(blocked.RequiresConfirmation)
+
+    [<TestMethod>]
+    member _.ConfirmationBrokerTimesOutAndPropagatesCallerCancellation() =
+        let request =
+            { Authorization =
+                SecurityPrincipal.create (TenantId.parse "tenant") (UserId.parse "user") []
+                |> fun principal ->
+                    AuthorizationScope.tryCreate principal None (WorkspaceId.parse "workspace") None
+                    |> Option.get
+              Correlation = CorrelationContext.root ()
+              Context =
+                { Authorization = authorization
+                  AgentId = agentId
+                  Stage = PolicyStage.PreInput
+                  ToolName = None
+                  Action = "execute"
+                  Input = Some "input"
+                  Facts = PolicyFacts.empty
+                  ExecutionId = None
+                  CurrentUsage = None }
+              Violations = []
+              EffectiveInput = Some "input"
+              RequestedAt = DateTimeOffset.UtcNow }
+
+        let broker =
+            PolicyConfirmationBroker.create (TimeSpan.FromMilliseconds 20.0) (fun _ cancellationToken ->
+                task {
+                    do! Task.Delay(TimeSpan.FromSeconds 5.0, cancellationToken)
+                    return PolicyConfirmation.Approved
+                })
+
+        Assert.AreEqual(
+            PolicyConfirmation.Denied,
+            PolicyConfirmationBroker.resolve broker request CancellationToken.None
+            |> _.Result
+        )
+
+        use cancellation = new CancellationTokenSource()
+        cancellation.Cancel()
+
+        Assert.ThrowsExactly<TaskCanceledException>(fun () ->
+            PolicyConfirmationBroker.resolve broker request cancellation.Token
+            |> _.GetAwaiter().GetResult()
+            |> ignore)
+        |> ignore
