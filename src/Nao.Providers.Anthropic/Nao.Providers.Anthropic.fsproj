@@ -6,9 +6,9 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Include="..\Nao.Providers\src\Configs\AnthropicConfig.fs" Link="src\Configs\AnthropicConfig.fs" />
-    <Compile Include="..\Nao.Providers\src\Providers\AnthropicDtos.fs" Link="src\Providers\AnthropicDtos.fs" />
-    <Compile Include="..\Nao.Providers\src\Providers\AnthropicProvider.fs" Link="src\Providers\AnthropicProvider.fs" />
+    <Compile Include="src\Configs\AnthropicConfig.fs" />
+    <Compile Include="src\Providers\AnthropicDtos.fs" />
+    <Compile Include="src\Providers\AnthropicProvider.fs" />
   </ItemGroup>
 
   <ItemGroup>

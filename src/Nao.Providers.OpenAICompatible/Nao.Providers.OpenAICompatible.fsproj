@@ -6,16 +6,16 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Include="..\Nao.Providers\src\Configs\OpenAIConfig.fs" Link="src\Configs\OpenAIConfig.fs" />
-    <Compile Include="..\Nao.Providers\src\Configs\DeepSeekConfig.fs" Link="src\Configs\DeepSeekConfig.fs" />
-    <Compile Include="..\Nao.Providers\src\Configs\KimiConfig.fs" Link="src\Configs\KimiConfig.fs" />
-    <Compile Include="..\Nao.Providers\src\Configs\VllmConfig.fs" Link="src\Configs\VllmConfig.fs" />
-    <Compile Include="..\Nao.Providers\src\Configs\LlamaCppConfig.fs" Link="src\Configs\LlamaCppConfig.fs" />
-    <Compile Include="..\Nao.Providers\src\Configs\OpenAICompatibleEmbeddingConfig.fs" Link="src\Configs\OpenAICompatibleEmbeddingConfig.fs" />
-    <Compile Include="..\Nao.Providers\src\Providers\OpenAIChatDtos.fs" Link="src\Providers\OpenAIChatDtos.fs" />
-    <Compile Include="..\Nao.Providers\src\Providers\OpenAIEmbeddingDtos.fs" Link="src\Providers\OpenAIEmbeddingDtos.fs" />
-    <Compile Include="..\Nao.Providers\src\Providers\OpenAICompatibleProvider.fs" Link="src\Providers\OpenAICompatibleProvider.fs" />
-    <Compile Include="..\Nao.Providers\src\Providers\OpenAICompatibleEmbeddingProvider.fs" Link="src\Providers\OpenAICompatibleEmbeddingProvider.fs" />
+    <Compile Include="src\Configs\OpenAIConfig.fs" />
+    <Compile Include="src\Configs\DeepSeekConfig.fs" />
+    <Compile Include="src\Configs\KimiConfig.fs" />
+    <Compile Include="src\Configs\VllmConfig.fs" />
+    <Compile Include="src\Configs\LlamaCppConfig.fs" />
+    <Compile Include="src\Configs\OpenAICompatibleEmbeddingConfig.fs" />
+    <Compile Include="src\Providers\OpenAIChatDtos.fs" />
+    <Compile Include="src\Providers\OpenAIEmbeddingDtos.fs" />
+    <Compile Include="src\Providers\OpenAICompatibleProvider.fs" />
+    <Compile Include="src\Providers\OpenAICompatibleEmbeddingProvider.fs" />
   </ItemGroup>
 
   <ItemGroup>

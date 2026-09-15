@@ -6,10 +6,10 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Include="..\Nao.Providers\src\Configs\OllamaConfig.fs" Link="src\Configs\OllamaConfig.fs" />
-    <Compile Include="..\Nao.Providers\src\Configs\OllamaEmbeddingConfig.fs" Link="src\Configs\OllamaEmbeddingConfig.fs" />
-    <Compile Include="..\Nao.Providers\src\Providers\OllamaProvider.fs" Link="src\Providers\OllamaProvider.fs" />
-    <Compile Include="..\Nao.Providers\src\Providers\OllamaEmbeddingProvider.fs" Link="src\Providers\OllamaEmbeddingProvider.fs" />
+    <Compile Include="src\Configs\OllamaConfig.fs" />
+    <Compile Include="src\Configs\OllamaEmbeddingConfig.fs" />
+    <Compile Include="src\Providers\OllamaProvider.fs" />
+    <Compile Include="src\Providers\OllamaEmbeddingProvider.fs" />
   </ItemGroup>
 
   <ItemGroup>
