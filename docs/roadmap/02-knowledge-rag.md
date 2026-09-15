@@ -91,21 +91,21 @@ This workstream creates a reusable knowledge subsystem for ingestion, indexing, 
 ## KNO-04 — Chunking and enrichment
 
 - [x] Define a versioned chunker contract.
-- [ ] Implement token-window chunking with overlap.
+- [x] Implement token-window chunking with overlap.
 - [x] Implement structure-aware chunking using headings, paragraphs, tables, and code boundaries.
 - [x] Implement parent-child chunks for broad retrieval and focused context.
-- [ ] Define semantic chunking as an optional strategy with pinned model/configuration.
+- [x] Define semantic chunking as an optional strategy with pinned model/configuration.
 - [x] Preserve source offsets and parent hierarchy.
-- [ ] Add deterministic metadata extraction.
-- [ ] Add optional LLM entity/topic/summary extraction with provenance and confidence.
-- [ ] Detect near-duplicate content.
-- [ ] Measure chunk-size distributions and truncated-content rates.
+- [x] Add deterministic metadata extraction.
+- [x] Add optional LLM entity/topic/summary extraction with provenance and confidence.
+- [x] Detect near-duplicate content.
+- [x] Measure chunk-size distributions and truncated-content rates.
 
 **Acceptance criteria**
 
 - [x] Chunk generation is deterministic for deterministic strategies and pinned configuration.
 - [x] Every chunk cites a valid source range.
-- [ ] Chunk strategy can be changed through a resumable re-indexing migration.
+- [x] Chunk strategy can be changed through a resumable re-indexing migration.
 
 ## KNO-05 — Embeddings
 

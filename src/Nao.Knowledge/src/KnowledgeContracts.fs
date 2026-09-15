@@ -87,6 +87,12 @@ type ContentUnitId = private ContentUnitId of string
 type KnowledgeChunkId = private KnowledgeChunkId of string
 
 [<Struct>]
+type KnowledgeEnrichmentId = private KnowledgeEnrichmentId of string
+
+[<Struct>]
+type NearDuplicateId = private NearDuplicateId of string
+
+[<Struct>]
 type KnowledgeIndexEntryId = private KnowledgeIndexEntryId of string
 
 [<Struct>]
@@ -277,6 +283,43 @@ module ComponentVersion =
     let create componentId version =
         { ComponentId = Validation.canonical (nameof componentId) componentId
           Version = Validation.canonical (nameof version) version }
+
+module KnowledgeEnrichmentId =
+    let derive chunkId generator configurationHash kind value (confidence: float) evidenceHashes =
+        StableIdentity.derive
+            "enrich"
+            [ KnowledgeChunkId.value chunkId
+              generator.ComponentId
+              generator.Version
+              ContentHash.value configurationHash
+              kind
+              value
+              confidence.ToString("R", Globalization.CultureInfo.InvariantCulture)
+              String.concat "\u001f" evidenceHashes ]
+        |> KnowledgeEnrichmentId
+
+    let value (KnowledgeEnrichmentId value) = value
+    let tryParse = StableIdentity.tryParse "enrich" KnowledgeEnrichmentId
+
+    let parse value =
+        StableIdentity.parse (nameof value) "enrich" KnowledgeEnrichmentId value
+
+module NearDuplicateId =
+    let derive detector configurationHash canonicalChunkId duplicateChunkId =
+        StableIdentity.derive
+            "duplicate"
+            [ detector.ComponentId
+              detector.Version
+              ContentHash.value configurationHash
+              KnowledgeChunkId.value canonicalChunkId
+              KnowledgeChunkId.value duplicateChunkId ]
+        |> NearDuplicateId
+
+    let value (NearDuplicateId value) = value
+    let tryParse = StableIdentity.tryParse "duplicate" NearDuplicateId
+
+    let parse value =
+        StableIdentity.parse (nameof value) "duplicate" NearDuplicateId value
 
 type SourceAcquisition =
     { Connector: ComponentVersion
@@ -576,6 +619,83 @@ type KnowledgeChunkRole =
     | Parent
     | Leaf
 
+[<RequireQualifiedAccess>]
+type KnowledgeEnrichmentKind =
+    | Entity of category: string
+    | Topic
+    | Summary
+
+type KnowledgeEnrichmentEvidence =
+    { ContentUnitId: ContentUnitId
+      Location: SourceLocation
+      Quote: string
+      QuotedContentHash: ContentHash }
+
+module KnowledgeEnrichmentEvidence =
+    let create contentUnitId location quote =
+        if String.IsNullOrWhiteSpace quote || quote <> quote.Trim() then
+            invalidArg (nameof quote) "Enrichment evidence quote must be non-blank and trimmed."
+
+        { ContentUnitId = contentUnitId
+          Location = location
+          Quote = quote
+          QuotedContentHash = ContentHash.computeText quote }
+
+[<RequireQualifiedAccess>]
+type KnowledgeEnrichmentTrust = | ModelGeneratedUntrusted
+
+type KnowledgeEnrichment =
+    { SchemaVersion: KnowledgeSchemaVersion
+      Id: KnowledgeEnrichmentId
+      Kind: KnowledgeEnrichmentKind
+      Value: string
+      Confidence: Confidence
+      Evidence: KnowledgeEnrichmentEvidence list
+      Generator: ComponentVersion
+      GeneratorConfigurationHash: ContentHash
+      GeneratedAt: DateTimeOffset
+      Trust: KnowledgeEnrichmentTrust }
+
+module KnowledgeEnrichment =
+    let private kindKey =
+        function
+        | KnowledgeEnrichmentKind.Entity category -> "entity:" + Validation.canonical "entity category" category
+        | KnowledgeEnrichmentKind.Topic -> "topic"
+        | KnowledgeEnrichmentKind.Summary -> "summary"
+
+    let create chunkId kind value confidence evidence generator generatorConfigurationHash generatedAt =
+        let value = Validation.canonical (nameof value) value
+
+        if isNull (box evidence) || List.isEmpty evidence then
+            invalidArg (nameof evidence) "A model enrichment requires source evidence."
+
+        let evidenceHashes =
+            evidence
+            |> List.map (fun item ->
+                ContentUnitId.value item.ContentUnitId
+                + ":"
+                + ContentHash.value item.QuotedContentHash)
+            |> List.sort
+
+        { SchemaVersion = KnowledgeSchemaVersion.current
+          Id =
+            KnowledgeEnrichmentId.derive
+                chunkId
+                generator
+                generatorConfigurationHash
+                (kindKey kind)
+                value
+                (Confidence.value confidence)
+                evidenceHashes
+          Kind = kind
+          Value = value
+          Confidence = confidence
+          Evidence = evidence
+          Generator = generator
+          GeneratorConfigurationHash = generatorConfigurationHash
+          GeneratedAt = generatedAt
+          Trust = KnowledgeEnrichmentTrust.ModelGeneratedUntrusted }
+
 type KnowledgeChunk =
     { SchemaVersion: KnowledgeSchemaVersion
       Id: KnowledgeChunkId
@@ -589,6 +709,7 @@ type KnowledgeChunk =
       Locations: SourceLocation list
       Chunker: ComponentVersion
       ChunkerConfigurationHash: ContentHash
+      Enrichments: KnowledgeEnrichment list
       Derivation: DerivationStep list
       Metadata: Map<string, string>
       Lifecycle: KnowledgeLifecycle }
@@ -645,6 +766,7 @@ module KnowledgeChunk =
           Locations = locations
           Chunker = chunker
           ChunkerConfigurationHash = chunkerConfigurationHash
+          Enrichments = []
           Derivation = derivation
           Metadata = Validation.metadata metadata
           Lifecycle = lifecycle }

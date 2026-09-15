@@ -21,7 +21,8 @@ type KnowledgeCatalogSnapshot =
       ContentUnits: ContentUnit list
       Chunks: KnowledgeChunk list
       IndexEntries: KnowledgeIndexEntry list
-      CacheEntries: KnowledgeCacheEntry list }
+      CacheEntries: KnowledgeCacheEntry list
+      ChunkingMigrations: ChunkingMigrationCheckpoint list }
 
 type KnowledgeDeletionEvidence =
     { SourceId: KnowledgeSourceId
@@ -38,6 +39,18 @@ type KnowledgeCatalog =
     { SaveVersionAsync: AuthorizationScope -> KnowledgeVersionBundle -> CancellationToken -> Task
       SaveCacheEntryAsync: AuthorizationScope -> KnowledgeCacheEntry -> CancellationToken -> Task
       SnapshotAsync: AuthorizationScope -> CancellationToken -> Task<KnowledgeCatalogSnapshot>
+      LoadChunkingMigrationAsync:
+          AuthorizationScope -> ChunkingMigrationId -> CancellationToken -> Task<ChunkingMigrationCheckpoint option>
+      LoadChunkingMigrationInputAsync:
+          AuthorizationScope -> KnowledgeDocumentVersionId -> CancellationToken -> Task<ChunkingMigrationInput>
+      CommitChunkingMigrationStepAsync:
+          AuthorizationScope
+              -> ChunkingMigrationCheckpoint option
+              -> ChunkingMigrationCheckpoint
+              -> KnowledgeDocumentVersionId
+              -> KnowledgeChunk list
+              -> CancellationToken
+              -> Task
       TombstoneSourceAsync:
           AuthorizationScope
               -> KnowledgeSourceId
@@ -60,7 +73,8 @@ module KnowledgeCatalog =
           ContentUnits: Map<ContentUnitId, ContentUnit>
           Chunks: Map<KnowledgeChunkId, KnowledgeChunk>
           IndexEntries: Map<KnowledgeIndexEntryId, KnowledgeIndexEntry>
-          CacheEntries: Map<RetrievalResultId, KnowledgeCacheEntry> }
+          CacheEntries: Map<RetrievalResultId, KnowledgeCacheEntry>
+          ChunkingMigrations: Map<ChunkingMigrationId, ChunkingMigrationCheckpoint> }
 
     let private empty =
         { Sources = Map.empty
@@ -69,7 +83,8 @@ module KnowledgeCatalog =
           ContentUnits = Map.empty
           Chunks = Map.empty
           IndexEntries = Map.empty
-          CacheEntries = Map.empty }
+          CacheEntries = Map.empty
+          ChunkingMigrations = Map.empty }
 
     let private requireOwner (authorization: AuthorizationScope) (source: KnowledgeSource) =
         if source.Owner <> AuthorizationScope.identity authorization then
@@ -103,6 +118,9 @@ module KnowledgeCatalog =
 
         let unitIds = bundle.ContentUnits |> List.map _.Id |> Set.ofList
 
+        let units =
+            bundle.ContentUnits |> List.map (fun unit -> unit.Id, unit) |> Map.ofList
+
         bundle.Chunks
         |> List.iter (fun chunk ->
             requireActive "chunk" chunk.Lifecycle
@@ -111,7 +129,41 @@ module KnowledgeCatalog =
                 invalidArg (nameof bundle) "Chunk does not belong to the supplied document version."
 
             if chunk.ContentUnitIds |> List.exists (unitIds.Contains >> not) then
-                invalidArg (nameof bundle) "Chunk refers to a content unit outside the supplied version.")
+                invalidArg (nameof bundle) "Chunk refers to a content unit outside the supplied version."
+
+            let chunkUnitIds = chunk.ContentUnitIds |> Set.ofList
+            let enrichmentIds = chunk.Enrichments |> List.map _.Id |> Set.ofList
+
+            if enrichmentIds.Count <> chunk.Enrichments.Length then
+                invalidArg (nameof bundle) "Chunk contains duplicate enrichments."
+
+            chunk.Enrichments
+            |> List.iter (fun enrichment ->
+                let expected =
+                    KnowledgeEnrichment.create
+                        chunk.Id
+                        enrichment.Kind
+                        enrichment.Value
+                        enrichment.Confidence
+                        enrichment.Evidence
+                        enrichment.Generator
+                        enrichment.GeneratorConfigurationHash
+                        enrichment.GeneratedAt
+
+                if
+                    enrichment.Id <> expected.Id
+                    || enrichment.Evidence
+                       |> List.exists (fun evidence ->
+                           match units |> Map.tryFind evidence.ContentUnitId with
+                           | Some unit ->
+                               not (chunkUnitIds.Contains evidence.ContentUnitId)
+                               || evidence.Location <> unit.Location
+                               || not (chunk.Locations |> List.contains evidence.Location)
+                               || evidence.QuotedContentHash <> ContentHash.computeText evidence.Quote
+                               || not (unit.Text.Contains(evidence.Quote, StringComparison.Ordinal))
+                           | None -> true)
+                then
+                    invalidArg (nameof bundle) "Chunk enrichment evidence falls outside the chunk provenance."))
 
         let chunks = bundle.Chunks |> Seq.map (fun chunk -> chunk.Id, chunk) |> Map.ofSeq
 
@@ -293,7 +345,154 @@ module KnowledgeCatalog =
           ContentUnits = state.ContentUnits |> Map.values |> List.ofSeq
           Chunks = state.Chunks |> Map.values |> List.ofSeq
           IndexEntries = state.IndexEntries |> Map.values |> List.ofSeq
-          CacheEntries = state.CacheEntries |> Map.values |> List.ofSeq }
+          CacheEntries = state.CacheEntries |> Map.values |> List.ofSeq
+          ChunkingMigrations = state.ChunkingMigrations |> Map.values |> List.ofSeq }
+
+    let private requireMigrationCheckpoint
+        (expected: ChunkingMigrationCheckpoint option)
+        (next: ChunkingMigrationCheckpoint)
+        =
+        if
+            next.Version <> ChunkingMigrationCheckpoint.currentVersion
+            || List.isEmpty next.DocumentVersionIds
+            || next.DocumentVersionIds
+               <> (next.DocumentVersionIds |> List.sortBy KnowledgeDocumentVersionId.value)
+            || (next.DocumentVersionIds |> Set.ofList).Count <> next.DocumentVersionIds.Length
+            || next.PlanHash
+               <> ChunkingMigrationCheckpoint.computePlanHash next.DocumentVersionIds
+            || next.Id <> ChunkingMigrationId.derive next.Target next.PlanHash
+            || next.Revision <> next.NextDocumentIndex
+            || next.NextDocumentIndex <= 0
+            || next.NextDocumentIndex > next.DocumentVersionIds.Length
+            || next.UpdatedAt < next.StartedAt
+            || (next.CompletedAt.IsSome
+                <> (next.NextDocumentIndex = next.DocumentVersionIds.Length))
+            || next.CompletedAt |> Option.exists ((<>) next.UpdatedAt)
+        then
+            invalidArg (nameof next) "Chunking-migration checkpoint is invalid."
+
+        match expected with
+        | None when next.Revision = 1 -> ()
+        | Some previous when
+            previous.Id = next.Id
+            && previous.Owner = next.Owner
+            && previous.Target = next.Target
+            && previous.PlanHash = next.PlanHash
+            && previous.DocumentVersionIds = next.DocumentVersionIds
+            && previous.StartedAt = next.StartedAt
+            && previous.CompletedAt.IsNone
+            && next.Revision = previous.Revision + 1
+            && next.NextDocumentIndex = previous.NextDocumentIndex + 1
+            && next.UpdatedAt >= previous.UpdatedAt
+            ->
+            ()
+        | _ -> invalidArg (nameof next) "Chunking-migration checkpoint does not advance the expected revision."
+
+    let private replaceChunksForMigration
+        (documentVersionId: KnowledgeDocumentVersionId)
+        (target: ChunkerDescriptor)
+        (chunks: KnowledgeChunk list)
+        (state: CatalogState)
+        =
+        let version =
+            state.Versions
+            |> Map.tryFind documentVersionId
+            |> Option.defaultWith (fun () ->
+                raise (Collections.Generic.KeyNotFoundException "Knowledge document version was not found."))
+
+        requireActive "document version" version.Lifecycle
+        let source = sourceState version.SourceId state
+        requireActive "source" source.Lifecycle
+
+        let units =
+            state.ContentUnits
+            |> Map.filter (fun _ unit -> unit.DocumentVersionId = documentVersionId)
+
+        if
+            source.Lifecycle.LegalHold
+            || version.Lifecycle.LegalHold
+            || units |> Map.exists (fun _ unit -> unit.Lifecycle.LegalHold)
+        then
+            invalidOp "Knowledge under legal hold cannot be re-indexed."
+
+        let unitIds = units |> Map.keys |> Set.ofSeq
+
+        chunks
+        |> List.iter (fun chunk ->
+            requireActive "chunk" chunk.Lifecycle
+
+            let expectedId =
+                KnowledgeChunkId.derive
+                    chunk.DocumentVersionId
+                    (chunk.Chunker.ComponentId
+                     + "@"
+                     + chunk.Chunker.Version
+                     + "#"
+                     + ContentHash.value chunk.ChunkerConfigurationHash)
+                    chunk.Sequence
+                    chunk.ContentHash
+
+            if
+                chunk.DocumentVersionId <> documentVersionId
+                || chunk.Chunker <> target.Component
+                || chunk.ChunkerConfigurationHash <> target.ConfigurationHash
+                || chunk.ContentHash <> ContentHash.computeText chunk.Text
+                || chunk.Id <> expectedId
+                || chunk.ContentUnitIds |> List.exists (unitIds.Contains >> not)
+            then
+                invalidArg (nameof chunks) "Migrated chunk does not match the target strategy and document version.")
+
+        let suppliedChunks = chunks |> List.map (fun chunk -> chunk.Id, chunk) |> Map.ofList
+
+        if suppliedChunks.Count <> chunks.Length then
+            invalidArg (nameof chunks) "Migrated chunks contain duplicate identities."
+
+        chunks
+        |> List.iter (fun chunk ->
+            match chunk.ParentChunkId with
+            | None -> ()
+            | Some parentId ->
+                match suppliedChunks |> Map.tryFind parentId with
+                | Some parent when parent.Role = KnowledgeChunkRole.Parent && parent.Sequence < chunk.Sequence -> ()
+                | _ -> invalidArg (nameof chunks) "Migrated chunk parent is not an earlier supplied parent chunk.")
+
+        let previousChunks =
+            state.Chunks
+            |> Map.filter (fun _ chunk -> chunk.DocumentVersionId = documentVersionId)
+
+        let previousChunkIds = previousChunks |> Map.keys |> Set.ofSeq
+
+        let staleIndexes =
+            state.IndexEntries
+            |> Map.filter (fun _ entry -> previousChunkIds.Contains entry.ChunkId)
+
+        let staleCaches =
+            state.CacheEntries
+            |> Map.filter (fun _ entry ->
+                entry.DocumentVersionId = documentVersionId
+                || entry.ChunkIds |> List.exists previousChunkIds.Contains)
+
+        if
+            previousChunks |> Map.exists (fun _ chunk -> chunk.Lifecycle.LegalHold)
+            || staleIndexes |> Map.exists (fun _ entry -> entry.Lifecycle.LegalHold)
+            || staleCaches |> Map.exists (fun _ entry -> entry.Lifecycle.LegalHold)
+        then
+            invalidOp "Knowledge under legal hold cannot be re-indexed."
+
+        let remainingChunks =
+            state.Chunks
+            |> Map.filter (fun _ chunk -> chunk.DocumentVersionId <> documentVersionId)
+
+        { state with
+            Chunks =
+                chunks
+                |> List.fold (fun current chunk -> addImmutable "chunk" chunk.Id chunk current) remainingChunks
+            IndexEntries =
+                state.IndexEntries
+                |> Map.filter (fun _ entry -> not (previousChunkIds.Contains entry.ChunkId))
+            CacheEntries =
+                state.CacheEntries
+                |> Map.filter (fun key _ -> not (staleCaches.ContainsKey key)) }
 
     let inMemory () =
         let partitions = ConcurrentDictionary<string, CatalogState>()
@@ -385,6 +584,76 @@ module KnowledgeCatalog =
             fun authorization cancellationToken ->
                 cancellationToken.ThrowIfCancellationRequested()
                 read authorization |> snapshot |> Task.FromResult
+          LoadChunkingMigrationAsync =
+            fun authorization migrationId cancellationToken ->
+                cancellationToken.ThrowIfCancellationRequested()
+
+                read authorization
+                |> _.ChunkingMigrations
+                |> Map.tryFind migrationId
+                |> Task.FromResult
+          LoadChunkingMigrationInputAsync =
+            fun authorization documentVersionId cancellationToken ->
+                cancellationToken.ThrowIfCancellationRequested()
+                let state = read authorization
+
+                let version =
+                    state.Versions
+                    |> Map.tryFind documentVersionId
+                    |> Option.defaultWith (fun () ->
+                        raise (Collections.Generic.KeyNotFoundException "Knowledge document version was not found."))
+
+                let source = sourceState version.SourceId state
+                requireOwner authorization source
+                requireActive "source" source.Lifecycle
+                requireActive "document version" version.Lifecycle
+
+                { DocumentVersionId = documentVersionId
+                  Units =
+                    state.ContentUnits
+                    |> Map.values
+                    |> Seq.filter (fun unit -> unit.DocumentVersionId = documentVersionId)
+                    |> Seq.sortBy _.Sequence
+                    |> List.ofSeq
+                  Lifecycle = version.Lifecycle }
+                |> Task.FromResult
+          CommitChunkingMigrationStepAsync =
+            fun authorization expected next documentVersionId chunks cancellationToken ->
+                cancellationToken.ThrowIfCancellationRequested()
+                requireMigrationCheckpoint expected next
+
+                if next.Owner <> AuthorizationScope.identity authorization then
+                    raise (UnauthorizedAccessException "Chunking migration belongs to another authorization identity.")
+
+                update authorization (fun state ->
+                    let persisted = state.ChunkingMigrations |> Map.tryFind next.Id
+
+                    if persisted <> expected then
+                        invalidOp "Chunking migration checkpoint revision has changed."
+
+                    if next.DocumentVersionIds[next.NextDocumentIndex - 1] <> documentVersionId then
+                        invalidArg
+                            (nameof documentVersionId)
+                            "Committed document version is not the next item in the chunking-migration plan."
+
+                    let sourceId =
+                        state.Versions
+                        |> Map.tryFind documentVersionId
+                        |> Option.map _.SourceId
+                        |> Option.defaultWith (fun () ->
+                            raise (
+                                Collections.Generic.KeyNotFoundException "Knowledge document version was not found."
+                            ))
+
+                    state |> sourceState sourceId |> requireOwner authorization
+
+                    let replaced = replaceChunksForMigration documentVersionId next.Target chunks state
+
+                    { replaced with
+                        ChunkingMigrations = replaced.ChunkingMigrations |> Map.add next.Id next },
+                    ())
+                |> Task.FromResult
+                :> Task
           TombstoneSourceAsync =
             fun authorization sourceId deletedAt reason cancellationToken ->
                 cancellationToken.ThrowIfCancellationRequested()

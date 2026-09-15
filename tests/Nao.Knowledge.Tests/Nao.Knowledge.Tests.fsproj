@@ -18,6 +18,10 @@
     <Compile Include="src/StructuredParsingTests.fs" />
     <Compile Include="src/IsolatedParsingTests.fs" />
     <Compile Include="src/ChunkingTests.fs" />
+    <Compile Include="src/ChunkingMigrationTests.fs" />
+    <Compile Include="src/MetadataExtractionTests.fs" />
+    <Compile Include="src/ModelEnrichmentTests.fs" />
+    <Compile Include="src/NearDuplicateTests.fs" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Nao.Testing\Nao.Testing.fsproj" />

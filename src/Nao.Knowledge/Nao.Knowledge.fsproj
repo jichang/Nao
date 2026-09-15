@@ -6,7 +6,6 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="src/KnowledgeContracts.fs" />
-    <Compile Include="src/KnowledgeCatalog.fs" />
     <Compile Include="src/SourceConnector.fs" />
     <Compile Include="src/SourcePath.fs" />
     <Compile Include="src/SourceChanges.fs" />
@@ -28,7 +27,23 @@
     <Compile Include="src/JsonParser.fs" />
     <Compile Include="src/KnowledgeParsingService.fs" />
     <Compile Include="src/ChunkingContracts.fs" />
+    <Compile Include="src/ChunkingMetrics.fs" />
+    <Compile Include="src/ChunkingSupport.fs" />
+    <Compile Include="src/ChunkingMigrationContracts.fs" />
+    <Compile Include="src/KnowledgeCatalog.fs" />
+    <Compile Include="src/ChunkingMigrationRunner.fs" />
+    <Compile Include="src/SemanticChunkerContracts.fs" />
+    <Compile Include="src/SemanticChunker.fs" />
+    <Compile Include="src/UnicodeWordTokenizer.fs" />
+    <Compile Include="src/TokenWindowChunker.fs" />
     <Compile Include="src/StructureAwareChunker.fs" />
+    <Compile Include="src/EnrichmentContracts.fs" />
+    <Compile Include="src/EnrichmentSupport.fs" />
+    <Compile Include="src/DeterministicMetadataEnricher.fs" />
+    <Compile Include="src/ModelEnrichmentContracts.fs" />
+    <Compile Include="src/ModelAssistedEnricher.fs" />
+    <Compile Include="src/NearDuplicateContracts.fs" />
+    <Compile Include="src/ShingleNearDuplicateDetector.fs" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Nao.Agents\Nao.Agents.fsproj" />

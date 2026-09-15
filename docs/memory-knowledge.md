@@ -110,6 +110,65 @@ same committed document bundle, making the hierarchy acyclic and fail-closed. To
 semantic strategies, enrichment, duplicate detection, metrics, and resumable re-indexing remain
 future KNO-04 work.
 
+`TokenWindowChunker` provides deterministic overlapping windows over canonical parsed-unit text.
+Its tokenizer is an explicit versioned capability, and the built-in `UnicodeWordTokenizer`
+offers a vendor-neutral Unicode word/punctuation strategy rather than pretending to reproduce a
+model vendor's tokenization. Window size, overlap, and tokenizer identity are pinned into the
+chunker configuration hash. Windows may cross unit boundaries, but every window retains all
+contributing unit IDs and their truthful source locations. Token indices and canonical-text
+character spans are metadata, not fabricated byte offsets into the original file.
+
+`SemanticChunker` is an optional unit-boundary strategy driven by a separately supplied
+`SemanticBoundaryModel`. The model contract requires a pinned component version, dimensions,
+configuration hash, determinism declaration, batch operation, and cancellation. Adjacent source
+units remain together while their cosine similarity meets the configured threshold, subject to a
+hard maximum-unit bound. Model output must contain one finite, correctly dimensioned vector per
+unit or chunking fails without producing partial output. The caller's authenticated authorization
+scope is passed to every model invocation. Embeddings are used transiently to choose boundaries
+and are not persisted as chunk metadata.
+
+`DeterministicMetadataEnricher` derives stable retrieval facets from the authoritative document
+units after any chunking strategy. It records content kinds, unit count, active heading hierarchy,
+links, pages, and structural source paths under a reserved `derived.*` namespace. The enricher
+validates document lineage and ordered unique units, refuses caller-supplied reserved metadata,
+and records a versioned enrichment derivation. Reapplying the same extraction is idempotent;
+metadata that disagrees with recorded lineage fails closed.
+
+`ModelAssistedEnricher` optionally produces typed entity, topic, and summary records rather than
+placing opaque model JSON in chunk metadata. Each result carries bounded confidence, pinned model
+and configuration identity, an explicit model-generated-untrusted marker, and one or more exact
+quotes tied to contributing content units and their source locations. The authenticated scope is
+passed into the model capability. Response cardinality, chunk identity, value size, confidence,
+evidence count, evidence ownership, exact quotes, and duplicate results are validated before any
+enriched chunks are returned. Low-confidence results are deliberately excluded by the configured
+threshold, and transient model output is never promoted to instructions or deterministic
+metadata.
+
+`ShingleNearDuplicateDetector` performs bounded deterministic duplicate analysis over a
+caller-selected, authorization-scoped chunk set. It normalizes Unicode word tokens, hashes pinned
+word shingles, uses an inverted shingle index to avoid comparing unrelated chunks, and reports
+canonical exact or near-duplicate pairs with Jaccard similarity. Detector, tokenizer, threshold,
+shingle size, and resource limits participate in stable pair identity. Empty or punctuation-only
+content is not treated as duplicate, and chunk, candidate-pair, and result limits fail closed.
+Detection records inform later indexing policy without mutating or discarding source chunks.
+
+Every `ChunkingResult` includes a metrics snapshot rather than requiring callers to reconstruct
+observability from chunk payloads. It reports input and output counts, parent/leaf counts,
+character-size minimum, maximum, mean, p50, and p95, and optional token-size distributions when
+the strategy has an authoritative tokenizer. Truncated unit and character counts use explicit
+input denominators and expose rates without treating overlap as lost or duplicated source
+coverage. Current structure-aware, token-window, and semantic strategies are lossless and report
+zero truncation.
+
+`ChunkingMigration` changes the pinned strategy across an explicit, canonically ordered set of
+document versions. Its stable v1 migration identity covers the target chunker contract,
+component, configuration, and document-version plan. For each document, the reference catalog
+atomically replaces the prior chunks, invalidates index entries and retrieval-cache entries that
+could cite those chunks, and advances an owner-partitioned revision checkpoint. A process that
+fails between documents resumes from the next committed cursor; a completed migration is an
+idempotent no-op. Supplied chunks must match the target strategy and document lineage, concurrent
+checkpoint changes fail closed, and legal hold prevents replacement.
+
 ## Data categories
 
 | Category | Purpose | Typical lifetime | Authority |

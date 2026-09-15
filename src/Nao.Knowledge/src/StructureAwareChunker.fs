@@ -2,7 +2,6 @@ namespace Nao.Knowledge
 
 open System
 open System.Globalization
-open System.Text
 open System.Threading.Tasks
 
 type StructureAwareChunkerConfig = { MaximumParentCharacters: int }
@@ -14,27 +13,6 @@ module StructureAwareChunker =
     let private configurationHash config =
         $"maximum-parent-characters={config.MaximumParentCharacters.ToString(CultureInfo.InvariantCulture)}"
         |> ContentHash.computeText
-
-    let private validateRequest (request: ChunkingRequest) =
-        if isNull (box request.Units) then
-            nullArg (nameof request.Units)
-
-        if
-            request.Units
-            |> List.exists (fun unit -> unit.DocumentVersionId <> request.DocumentVersionId)
-        then
-            invalidArg (nameof request) "Every content unit must belong to the requested document version."
-
-        let distinctIds = request.Units |> List.map _.Id |> Set.ofList
-
-        if distinctIds.Count <> request.Units.Length then
-            invalidArg (nameof request) "Chunking input must not contain duplicate content units."
-
-        request.Units
-        |> List.pairwise
-        |> List.iter (fun (left, right) ->
-            if right.Sequence <= left.Sequence then
-                invalidArg (nameof request) "Content units must be ordered by increasing sequence.")
 
     let private splitSections (units: ContentUnit list) =
         let finish (current: ContentUnit list) (sections: ContentUnit list list) =
@@ -81,17 +59,6 @@ module StructureAwareChunker =
     let private chunkText (units: ContentUnit list) =
         units |> List.map _.Text |> String.concat "\n\n"
 
-    let private derivation (descriptor: ChunkerDescriptor) chunkedAt (units: ContentUnit list) text =
-        DerivationStep.create
-            DerivationStage.Chunking
-            descriptor.Component
-            (units |> List.map _.ContentHash)
-            (ContentHash.computeText text)
-            chunkedAt
-            (Map.ofList
-                [ "chunker.contract", string (ChunkerContractVersion.value descriptor.ContractVersion)
-                  "chunker.configuration", ContentHash.value descriptor.ConfigurationHash ])
-
     let private createChunk
         (descriptor: ChunkerDescriptor)
         (request: ChunkingRequest)
@@ -102,19 +69,7 @@ module StructureAwareChunker =
         =
         let text = chunkText units
 
-        KnowledgeChunk.create
-            request.DocumentVersionId
-            sequence
-            role
-            parent
-            (units |> List.map _.Id)
-            text
-            (units |> List.map _.Location |> List.distinct)
-            descriptor.Component
-            descriptor.ConfigurationHash
-            [ derivation descriptor request.ChunkedAt units text ]
-            Map.empty
-            request.Lifecycle
+        ChunkingSupport.createChunk descriptor request sequence role parent units text Map.empty
 
     let create (config: StructureAwareChunkerConfig) =
         if config.MaximumParentCharacters <= 0 then
@@ -131,7 +86,7 @@ module StructureAwareChunker =
             fun request cancellationToken ->
                 task {
                     cancellationToken.ThrowIfCancellationRequested()
-                    validateRequest request
+                    ChunkingSupport.validateRequest request
 
                     let groups =
                         request.Units
@@ -164,13 +119,5 @@ module StructureAwareChunker =
 
                     return
                         { Chunks = values
-                          InputUnits = request.Units.Length
-                          ParentChunks =
-                            values
-                            |> List.filter (fun chunk -> chunk.Role = KnowledgeChunkRole.Parent)
-                            |> List.length
-                          LeafChunks =
-                            values
-                            |> List.filter (fun chunk -> chunk.Role = KnowledgeChunkRole.Leaf)
-                            |> List.length }
+                          Metrics = ChunkingMeasurement.measure request.Units values None 0 0L }
                 } }
