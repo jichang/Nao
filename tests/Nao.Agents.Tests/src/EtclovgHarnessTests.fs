@@ -714,7 +714,10 @@ type EtclovgHarnessTests() =
         let mutable receivedInput = None
 
         let containerEnvironment =
-            { ExecuteAsync =
+            { Isolation =
+                { SeparateProcess = false
+                  SupportsHardMemoryLimit = false }
+              ExecuteAsync =
                 fun _ _ _ input ->
                     receivedInput <- Some input
                     Task.FromResult(Ok("container:" + input)) }

@@ -54,6 +54,7 @@ type KnowledgeContractTests() =
     let location = SourceLocation.create 0L 12L 0 12 None (Some 1) (Some 1) None
     let parser = ComponentVersion.create "markdown-parser" "1"
     let chunker = ComponentVersion.create "token-window" "1"
+    let chunkerConfigurationHash = ContentHash.computeText "window=256;overlap=32"
 
     [<TestMethod>]
     member _.``Content hashes and derived IDs are canonical and deterministic``() =
@@ -93,7 +94,19 @@ type KnowledgeContractTests() =
                 lifecycle
 
         let chunk =
-            KnowledgeChunk.create documentVersion.Id 0 [ unit.Id ] unit.Text [ location ] chunker [] Map.empty lifecycle
+            KnowledgeChunk.create
+                documentVersion.Id
+                0
+                KnowledgeChunkRole.Leaf
+                None
+                [ unit.Id ]
+                unit.Text
+                [ location ]
+                chunker
+                chunkerConfigurationHash
+                []
+                Map.empty
+                lifecycle
 
         let resultId = RetrievalResultId.generate ()
 
@@ -130,7 +143,19 @@ type KnowledgeContractTests() =
                 lifecycle
 
         let chunk =
-            KnowledgeChunk.create firstVersion.Id 0 [ unit.Id ] unit.Text [ location ] chunker [] Map.empty lifecycle
+            KnowledgeChunk.create
+                firstVersion.Id
+                0
+                KnowledgeChunkRole.Leaf
+                None
+                [ unit.Id ]
+                unit.Text
+                [ location ]
+                chunker
+                chunkerConfigurationHash
+                []
+                Map.empty
+                lifecycle
 
         Assert.ThrowsExactly<ArgumentException>(fun () ->
             Citation.create (RetrievalResultId.generate ()) source document secondVersion chunk location chunk.Text now
@@ -154,7 +179,19 @@ type KnowledgeContractTests() =
                 lifecycle
 
         let chunk =
-            KnowledgeChunk.create documentVersion.Id 0 [ unit.Id ] unit.Text [ location ] chunker [] Map.empty lifecycle
+            KnowledgeChunk.create
+                documentVersion.Id
+                0
+                KnowledgeChunkRole.Leaf
+                None
+                [ unit.Id ]
+                unit.Text
+                [ location ]
+                chunker
+                chunkerConfigurationHash
+                []
+                Map.empty
+                lifecycle
 
         let resultId = RetrievalResultId.generate ()
 
@@ -249,7 +286,19 @@ type KnowledgeContractTests() =
                 lifecycle
 
         let chunk =
-            KnowledgeChunk.create documentVersion.Id 0 [ unit.Id ] unit.Text [ location ] chunker [] Map.empty lifecycle
+            KnowledgeChunk.create
+                documentVersion.Id
+                0
+                KnowledgeChunkRole.Leaf
+                None
+                [ unit.Id ]
+                unit.Text
+                [ location ]
+                chunker
+                chunkerConfigurationHash
+                []
+                Map.empty
+                lifecycle
 
         let indexEntry = KnowledgeIndexEntry.create "primary" chunk None now []
 
@@ -372,7 +421,19 @@ type KnowledgeContractTests() =
                 heldLifecycle
 
         let chunk =
-            KnowledgeChunk.create documentVersion.Id 0 [ unit.Id ] unit.Text [ location ] chunker [] Map.empty lifecycle
+            KnowledgeChunk.create
+                documentVersion.Id
+                0
+                KnowledgeChunkRole.Leaf
+                None
+                [ unit.Id ]
+                unit.Text
+                [ location ]
+                chunker
+                chunkerConfigurationHash
+                []
+                Map.empty
+                lifecycle
 
         catalog.SaveVersionAsync
             authorization

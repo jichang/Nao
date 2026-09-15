@@ -571,26 +571,50 @@ module ContentUnit =
           Metadata = Validation.metadata metadata
           Lifecycle = lifecycle }
 
+[<RequireQualifiedAccess>]
+type KnowledgeChunkRole =
+    | Parent
+    | Leaf
+
 type KnowledgeChunk =
     { SchemaVersion: KnowledgeSchemaVersion
       Id: KnowledgeChunkId
       DocumentVersionId: KnowledgeDocumentVersionId
       Sequence: int
+      Role: KnowledgeChunkRole
+      ParentChunkId: KnowledgeChunkId option
       ContentUnitIds: ContentUnitId list
       Text: string
       ContentHash: ContentHash
       Locations: SourceLocation list
       Chunker: ComponentVersion
+      ChunkerConfigurationHash: ContentHash
       Derivation: DerivationStep list
       Metadata: Map<string, string>
       Lifecycle: KnowledgeLifecycle }
 
 module KnowledgeChunk =
-    let create documentVersionId sequence contentUnitIds text locations chunker derivation metadata lifecycle =
+    let create
+        documentVersionId
+        sequence
+        role
+        parentChunkId
+        contentUnitIds
+        text
+        locations
+        chunker
+        chunkerConfigurationHash
+        derivation
+        metadata
+        lifecycle
+        =
         Validation.nonNegative (nameof sequence) sequence |> ignore
 
         if List.isEmpty contentUnitIds then
             invalidArg (nameof contentUnitIds) "A chunk requires at least one content unit."
+
+        if (contentUnitIds |> Set.ofList |> Set.count) <> contentUnitIds.Length then
+            invalidArg (nameof contentUnitIds) "A chunk cannot refer to the same content unit more than once."
 
         if List.isEmpty locations then
             invalidArg (nameof locations) "A chunk requires at least one source location."
@@ -602,14 +626,25 @@ module KnowledgeChunk =
 
         { SchemaVersion = KnowledgeSchemaVersion.current
           Id =
-            KnowledgeChunkId.derive documentVersionId (chunker.ComponentId + "@" + chunker.Version) sequence contentHash
+            KnowledgeChunkId.derive
+                documentVersionId
+                (chunker.ComponentId
+                 + "@"
+                 + chunker.Version
+                 + "#"
+                 + ContentHash.value chunkerConfigurationHash)
+                sequence
+                contentHash
           DocumentVersionId = documentVersionId
           Sequence = sequence
+          Role = role
+          ParentChunkId = parentChunkId
           ContentUnitIds = contentUnitIds
           Text = text
           ContentHash = contentHash
           Locations = locations
           Chunker = chunker
+          ChunkerConfigurationHash = chunkerConfigurationHash
           Derivation = derivation
           Metadata = Validation.metadata metadata
           Lifecycle = lifecycle }

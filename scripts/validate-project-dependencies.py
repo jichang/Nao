@@ -10,6 +10,16 @@ from xml.etree import ElementTree
 PROJECT_EXTENSIONS = ("*.fsproj", "*.csproj")
 
 ALLOWED_PROJECT_REFERENCES = {
+    Path("src/Nao.Documents/Nao.Documents.fsproj"): set(),
+    Path("src/Nao.Knowledge.Documents/Nao.Knowledge.Documents.fsproj"): {
+        Path("src/Nao.Agents/Nao.Agents.fsproj"),
+        Path("src/Nao.Knowledge/Nao.Knowledge.fsproj"),
+        Path("src/Nao.Documents/Nao.Documents.fsproj"),
+    },
+    Path("src/Nao.Knowledge.Documents.Worker/Nao.Knowledge.Documents.Worker.fsproj"): {
+        Path("src/Nao.Agents/Nao.Agents.fsproj"),
+        Path("src/Nao.Knowledge.Documents/Nao.Knowledge.Documents.fsproj"),
+    },
     Path("src/Nao.Protocols/Nao.Protocols.fsproj"): set(),
     Path("src/Nao.Agents/Nao.Agents.fsproj"): {
         Path("src/Nao.Protocols/Nao.Protocols.fsproj"),

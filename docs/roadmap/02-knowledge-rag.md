@@ -25,6 +25,15 @@ This workstream creates a reusable knowledge subsystem for ingestion, indexing, 
 - [x] Keep vector, lexical, graph, parser, and object-storage vendors behind optional adapters.
 - [x] Permit retrieval without generation and ingestion without an LLM.
 
+### Document parsing boundary
+
+- [x] Keep parser discovery, trust enforcement, resource limits, quarantine, and knowledge-unit conversion in `Nao.Knowledge`.
+- [x] Maintain `Nao.Documents` as a separate reusable document-model and format-conversion package.
+- [x] Integrate the packages through optional `Nao.Knowledge.Documents`; do not pull document-format dependencies into core knowledge contracts.
+- [x] Distinguish exact text ranges from package structural paths instead of fabricating byte offsets for ZIP/XML formats.
+- [x] Require callers to provide compressed-package limits explicitly.
+- [x] Add new document readers to `Nao.Documents` first, then expose only provenance-safe readers through `Nao.Knowledge.Documents`.
+
 ## KNO-01 — Knowledge contracts and records
 
 - [x] Define source, document, document version, content unit, chunk, index entry, citation, and retrieval-result contracts.
@@ -62,29 +71,31 @@ This workstream creates a reusable knowledge subsystem for ingestion, indexing, 
 
 ## KNO-03 — Parsing and normalization
 
-- [ ] Define parser discovery by media type and signature.
-- [ ] Provide plain-text, Markdown, JSON, HTML, and PDF integration paths.
-- [ ] Preserve headings, pages, tables, code blocks, links, and source offsets where available.
-- [ ] Normalize encoding and Unicode without destroying source location mapping.
-- [ ] Detect language and optionally OCR requirements.
-- [ ] Treat parsed text as untrusted data and mitigate prompt-injection instructions.
-- [ ] Bound parser time, memory, expansion ratio, and output size.
-- [ ] Quarantine malformed, encrypted, unsupported, or suspicious files.
+- [x] Define parser discovery by media type and signature.
+- [x] Provide plain-text, Markdown, JSON, HTML, DOCX, ODT, and PDF integration paths.
+- [x] Preserve headings, tables, code blocks, links, exact source offsets, and package structural paths where available.
+- [x] Preserve page number and visible-page bounds through paginated-format parsing adapters.
+- [x] Normalize encoding and Unicode without destroying source location mapping.
+- [x] Detect language through an optional detector and route OCR-required documents explicitly.
+- [x] Treat parsed text as untrusted data and mitigate prompt-injection instructions.
+- [x] Bound parser time, input size, expansion ratio, and output size.
+- [x] Enforce hard parser memory limits through an isolated execution boundary.
+- [x] Quarantine malformed, encrypted, unsupported, or suspicious files.
 
 **Acceptance criteria**
 
-- [ ] Parser fixtures verify text and location fidelity for supported formats.
-- [ ] Archive bombs and oversized documents fail safely.
-- [ ] Parsed instructions never become privileged system instructions by default.
+- [x] Parser fixtures verify text and location fidelity for supported text, Markdown, JSON, HTML, DOCX, ODT, and PDF formats.
+- [x] Archive bombs and oversized documents fail safely.
+- [x] Parsed instructions never become privileged system instructions by default.
 
 ## KNO-04 — Chunking and enrichment
 
-- [ ] Define a versioned chunker contract.
+- [x] Define a versioned chunker contract.
 - [ ] Implement token-window chunking with overlap.
-- [ ] Implement structure-aware chunking using headings, paragraphs, tables, and code boundaries.
-- [ ] Implement parent-child chunks for broad retrieval and focused context.
+- [x] Implement structure-aware chunking using headings, paragraphs, tables, and code boundaries.
+- [x] Implement parent-child chunks for broad retrieval and focused context.
 - [ ] Define semantic chunking as an optional strategy with pinned model/configuration.
-- [ ] Preserve source offsets and parent hierarchy.
+- [x] Preserve source offsets and parent hierarchy.
 - [ ] Add deterministic metadata extraction.
 - [ ] Add optional LLM entity/topic/summary extraction with provenance and confidence.
 - [ ] Detect near-duplicate content.
@@ -92,8 +103,8 @@ This workstream creates a reusable knowledge subsystem for ingestion, indexing, 
 
 **Acceptance criteria**
 
-- [ ] Chunk generation is deterministic for deterministic strategies and pinned configuration.
-- [ ] Every chunk cites a valid source range.
+- [x] Chunk generation is deterministic for deterministic strategies and pinned configuration.
+- [x] Every chunk cites a valid source range.
 - [ ] Chunk strategy can be changed through a resumable re-indexing migration.
 
 ## KNO-05 — Embeddings

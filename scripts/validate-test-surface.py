@@ -18,6 +18,7 @@ TEST_CATEGORIES = {
     Path("tests/Nao.Protocols.Tests/Nao.Protocols.Tests.fsproj"): "unit",
     Path("tests/Nao.Providers.Tests/Nao.Providers.Tests.fsproj"): "integration",
     Path("tests/Nao.Runtime.Orleans.Tests/Nao.Runtime.Orleans.Tests.fsproj"): "integration",
+    Path("tests/Nao.Documents.Tests/Nao.Documents.Tests.fsproj"): "unit",
 }
 
 TEST_SUPPORT_PROJECTS = {

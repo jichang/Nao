@@ -21,6 +21,14 @@
     <Compile Include="src/SourceResilienceContracts.fs" />
     <Compile Include="src/SourceFailureStore.fs" />
     <Compile Include="src/SourceSynchronizationRunner.fs" />
+    <Compile Include="src/ParserContracts.fs" />
+    <Compile Include="src/ParserRegistry.fs" />
+    <Compile Include="src/TextNormalization.fs" />
+    <Compile Include="src/PlainTextParser.fs" />
+    <Compile Include="src/JsonParser.fs" />
+    <Compile Include="src/KnowledgeParsingService.fs" />
+    <Compile Include="src/ChunkingContracts.fs" />
+    <Compile Include="src/StructureAwareChunker.fs" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Nao.Agents\Nao.Agents.fsproj" />

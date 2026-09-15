@@ -8,8 +8,14 @@ open System.Text.Json
 open System.Threading.Tasks
 
 /// Executable environment capability represented as an immutable function record.
+[<NoEquality; NoComparison>]
+type ExecutionIsolationCapabilities =
+    { SeparateProcess: bool
+      SupportsHardMemoryLimit: bool }
+
 type ExecutionEnvironment =
-    { ExecuteAsync: ExecutionContext -> AgentContext -> Agent -> string -> Task<Result<string, LimitExceeded>> }
+    { Isolation: ExecutionIsolationCapabilities
+      ExecuteAsync: ExecutionContext -> AgentContext -> Agent -> string -> Task<Result<string, LimitExceeded>> }
 
 /// Host-owned policy for retaining redacted process output artifacts.
 [<NoEquality; NoComparison>]
@@ -320,7 +326,10 @@ module ExecutionEnvironment =
 
     /// Create a local (in-process) execution environment
     let local () : ExecutionEnvironment =
-        { ExecuteAsync =
+        { Isolation =
+            { SeparateProcess = false
+              SupportsHardMemoryLimit = false }
+          ExecuteAsync =
             fun ctx agentContext agent input ->
                 task {
                     if ctx.CancellationToken.IsCancellationRequested then
@@ -360,7 +369,10 @@ module ExecutionEnvironment =
             if resolver.References.Length <> (resolver.References |> List.distinct).Length then
                 invalidArg (nameof config) "Process secret references must be unique.")
 
-        { ExecuteAsync =
+        { Isolation =
+            { SeparateProcess = true
+              SupportsHardMemoryLimit = false }
+          ExecuteAsync =
             fun ctx agentContext agent input ->
                 task {
                     requireWorkerAuthorization agentContext
@@ -638,6 +650,11 @@ module ExecutionEnvironment =
                                         return resolved
                                     }
 
+                            let workerInput =
+                                match agent.WorkerPayloadProtection with
+                                | WorkerPayloadProtection.RedactedText -> SecretRedaction.redact input
+                                | WorkerPayloadProtection.OpaqueUntrusted -> input
+
                             let request =
                                 WorkerProtocol.request
                                     config.ProtocolVersion
@@ -647,7 +664,7 @@ module ExecutionEnvironment =
                                     enforceFileSystemPolicy
                                     allowedPaths
                                     secrets
-                                    (SecretRedaction.redact input)
+                                    workerInput
 
                             do! worker.StandardInput.WriteLineAsync(WorkerProtocol.serialize request)
                             do! worker.StandardInput.FlushAsync()
@@ -687,7 +704,13 @@ module ExecutionEnvironment =
                             ctx.RecordWorkerUsage(WorkerProtocol.usage response)
 
                             match response.Kind with
-                            | WorkerProtocol.Succeeded -> return Ok(SecretRedaction.redact response.Output)
+                            | WorkerProtocol.Succeeded ->
+                                return
+                                    Ok(
+                                        match agent.WorkerPayloadProtection with
+                                        | WorkerPayloadProtection.RedactedText -> SecretRedaction.redact response.Output
+                                        | WorkerPayloadProtection.OpaqueUntrusted -> response.Output
+                                    )
                             | WorkerProtocol.LimitExceeded ->
                                 match WorkerProtocol.tryParseLimit response.Limit with
                                 | Some limit -> return Error limit
@@ -847,7 +870,10 @@ module ExecutionEnvironment =
         | ContainerHostSupport.Supported _ -> ()
         | ContainerHostSupport.Unsupported reasons -> raise (ContainerHostUnsupportedException reasons)
 
-        { ExecuteAsync =
+        { Isolation =
+            { SeparateProcess = true
+              SupportsHardMemoryLimit = true }
+          ExecuteAsync =
             fun ctx agentContext agent input ->
                 task {
                     requireWorkerAuthorization agentContext

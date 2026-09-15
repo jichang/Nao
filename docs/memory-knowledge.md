@@ -62,6 +62,54 @@ ownership, connector/source identity, attempt counts, and timestamps. The owner-
 in-memory failure store is the reference implementation; production durable storage remains
 adapter-owned.
 
+KNO-03 parsing begins at a signature-aware `ParserRegistry`; signatures take precedence over
+declared media types so mislabeled binary content cannot be routed to a permissive text parser.
+`KnowledgeParsingService` verifies the source content hash, enforces input bytes, timeout, unit
+count, output characters, and expansion ratio, and returns an explicit quarantine outcome for
+unsupported, malformed, suspicious, encrypted, or OCR-required content. Parser crashes remain
+visible dependency failures rather than being mislabeled as document defects. Every successful
+parse is marked `UntrustedSource`; parser output cannot elevate itself into system instructions.
+
+`PlainTextParser` is the deterministic core text parser. It accepts strict UTF-8 with an
+optional BOM, separates paragraphs, normalizes line endings and Unicode to NFC, and retains the
+original byte, character, and line span for every normalized unit. The normalized unit carries
+an explicit untrusted marker. `JsonParser` validates JSON while retaining its complete source
+range. The optional `Nao.Knowledge.Documents` package adapts the separately packaged
+`Nao.Documents` model and its Markdig and HtmlAgilityPack readers into located Markdown
+and HTML knowledge units. `Nao.Documents` distinguishes exact UTF-8 ranges from structural addresses inside
+document packages. Markdown and HTML produce exact byte, character, and line ranges; DOCX and ODT
+produce stable paths within `word/document.xml` and `content.xml` without fabricated offsets.
+Callers must provide entry-count, per-entry, total-expanded-byte, and compression-ratio limits
+before a package reader can execute. The Nao adapter records provenance precision on every unit
+and rejects missing provenance. RTF's internally generated HTML coordinates are deliberately
+discarded because they do not identify the original RTF bytes, so RTF is not exposed as a
+knowledge parser. PDF text extraction uses PdfPig and produces paginated content with page number,
+visible-page bounds in points, and a bottom-left coordinate origin. Malformed and encrypted PDFs
+have distinct quarantine outcomes, while image-only PDFs explicitly require OCR. Optional
+language detection and OCR routing are implemented.
+
+Public `Nao.Knowledge.Documents` parsers execute through `Nao.Knowledge.Documents.Worker`; their
+in-process implementations are internal to the worker and tests. Parser construction rejects
+local and process environments because their sampled memory limits are not hard guarantees. A
+host must provide a container execution environment that advertises hard memory enforcement,
+plus explicit memory, CPU, duration, output, and package-expansion limits. Each parse carries its
+authenticated authorization scope into a newly created worker context rather than retaining a
+cross-session `AgentContext`. Document bytes use the explicit opaque-untrusted worker payload
+mode so text redaction cannot corrupt source or parsed output; stderr, failures, and captured
+diagnostics remain redacted. Memory, CPU, duration, and output violations become typed suspicious
+quarantine outcomes.
+
+KNO-04 chunking starts with the v1 `KnowledgeChunker` contract and deterministic
+`StructureAwareChunker`. The descriptor pins both the chunker component version and a canonical
+configuration hash; both participate in chunk identity and derivation lineage. Heading-delimited
+sections are grouped without splitting paragraphs, tables, code blocks, or other parsed units.
+Bounded section parents support broad retrieval, while one leaf per source unit supports focused
+retrieval. Every parent and leaf retains the contributing content-unit IDs and exact, structural,
+or page-region source locations. Parent references must point to an earlier parent chunk from the
+same committed document bundle, making the hierarchy acyclic and fail-closed. Token-window and
+semantic strategies, enrichment, duplicate detection, metrics, and resumable re-indexing remain
+future KNO-04 work.
+
 ## Data categories
 
 | Category | Purpose | Typical lifetime | Authority |

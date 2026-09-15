@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Description>Nao.Documents parsing adapters for Nao knowledge ingestion.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="src/AssemblyInfo.fs" />
+    <Compile Include="src/DocumentText.fs" />
+    <Compile Include="src/DocumentParserRuntime.fs" />
+    <Compile Include="src/DocumentParserWorkerProtocol.fs" />
+    <Compile Include="src/IsolatedDocumentParser.fs" />
+    <Compile Include="src/DocumentParser.fs" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Nao.Agents\Nao.Agents.fsproj" />
+    <ProjectReference Include="..\Nao.Knowledge\Nao.Knowledge.fsproj" />
+    <ProjectReference Include="..\Nao.Documents\Nao.Documents.fsproj" />
+  </ItemGroup>
+  <Import Project="..\..\.paket\Paket.Restore.targets" />
+</Project>

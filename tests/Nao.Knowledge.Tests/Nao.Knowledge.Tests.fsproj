@@ -14,8 +14,15 @@
     <Compile Include="src/HttpSourceConnectorTests.fs" />
     <Compile Include="src/GitSourceConnectorTests.fs" />
     <Compile Include="src/SourceSynchronizationRunnerTests.fs" />
+    <Compile Include="src/ParsingTests.fs" />
+    <Compile Include="src/StructuredParsingTests.fs" />
+    <Compile Include="src/IsolatedParsingTests.fs" />
+    <Compile Include="src/ChunkingTests.fs" />
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="..\Nao.Testing\Nao.Testing.fsproj" />
+    <ProjectReference Include="..\..\src\Nao.Knowledge.Documents.Worker\Nao.Knowledge.Documents.Worker.fsproj" />
+    <ProjectReference Include="..\..\src\Nao.Knowledge.Documents\Nao.Knowledge.Documents.fsproj" />
     <ProjectReference Include="..\..\src\Nao.Knowledge\Nao.Knowledge.fsproj" />
   </ItemGroup>
   <Import Project="..\..\.paket\Paket.Restore.targets" />

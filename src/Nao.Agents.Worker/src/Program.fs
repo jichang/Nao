@@ -280,6 +280,8 @@ module StandardWorkerHandlers =
         |> Ok
         |> Task.FromResult
 
+    let processEcho (request: WorkerExecutionRequest) = Ok request.Input |> Task.FromResult
+
     let processWorkingDirectory (_request: WorkerExecutionRequest) =
         Environment.CurrentDirectory |> Ok |> Task.FromResult
 
@@ -344,6 +346,7 @@ module StandardWorkerHandlers =
               ("process-cpu", processCpu)
               ("process-delay", processDelay)
               ("process-environment", processEnvironment)
+              ("process-echo", processEcho)
               ("process-filesystem-probe", processFileSystemProbe)
               ("process-identity", processIdentity)
               ("process-principal-hash", processPrincipalHash)

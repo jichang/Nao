@@ -6,6 +6,9 @@
 /src/Nao.Protocols/ @jichang
 /src/Nao.Eval/ @jichang
 /src/Nao.Knowledge/ @jichang
+/src/Nao.Knowledge.Documents/ @jichang
+/src/Nao.Knowledge.Documents.Worker/ @jichang
+/src/Nao.Documents/ @jichang
 /src/Nao.Persistence/ @jichang
 /src/Nao.Persistence.Infrastructure/ @jichang
 /src/Nao.Persistence.Memory/ @jichang

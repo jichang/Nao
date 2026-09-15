@@ -46,10 +46,17 @@ module WorkerAgentReference =
 
     let value (WorkerAgentReference value) = value
 
+/// Controls how an agent's input and successful output are transported across a worker boundary.
+[<RequireQualifiedAccess>]
+type WorkerPayloadProtection =
+    | RedactedText
+    | OpaqueUntrusted
+
 /// Immutable executable agent capability represented entirely by data and functions.
 type Agent =
     { Metadata: AgentMetadata
       WorkerReference: WorkerAgentReference option
+      WorkerPayloadProtection: WorkerPayloadProtection
       Execute: AgentContext -> string -> Task<string> }
 
 /// Fail-closed violation raised by a governed execution boundary.
@@ -115,6 +122,7 @@ module Agent =
 
         { Metadata = metadata
           WorkerReference = None
+          WorkerPayloadProtection = WorkerPayloadProtection.RedactedText
           Execute = execute }
 
     /// Construct an agent capability resolved by stable identity inside a process worker.
@@ -126,6 +134,11 @@ module Agent =
 
         { create id name description priority responsibilities contract localExecutionNotSupported with
             WorkerReference = Some workerReference }
+
+    /// Construct a worker agent whose opaque untrusted payload must not be text-redacted in transit.
+    let createOpaqueWorker id name description priority responsibilities contract workerReference =
+        { createWorker id name description priority responsibilities contract workerReference with
+            WorkerPayloadProtection = WorkerPayloadProtection.OpaqueUntrusted }
 
     /// Execute an agent through the active governed runtime.
     let runAsync context input agent =

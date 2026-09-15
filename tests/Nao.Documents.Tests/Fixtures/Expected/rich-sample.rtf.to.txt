@@ -1,0 +1,28 @@
+Rich Fixture Report
+
+[Image: SignedByte evaluation badge]
+
+A paragraph with bold text, italic text, struck text, underlined text, inline code, and a link (https://example.com).
+
+Styled approval note with blue text and warm highlight.
+
+Review Items
+
+• Preserve bold and italic text
+
+• Preserve colored and highlighted text
+
+• Keep inline image references
+
+• Keep list content readable
+
+• Convert into rich text targets
+
+A quoted note from the fixture.
+
+NameStatus
+
+HTMLReady
+
+RTFReady
+

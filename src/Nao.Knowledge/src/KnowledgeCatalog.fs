@@ -115,6 +115,18 @@ module KnowledgeCatalog =
 
         let chunks = bundle.Chunks |> Seq.map (fun chunk -> chunk.Id, chunk) |> Map.ofSeq
 
+        bundle.Chunks
+        |> List.iter (fun chunk ->
+            match chunk.ParentChunkId with
+            | None -> ()
+            | Some parentId ->
+                match chunks |> Map.tryFind parentId with
+                | Some parent when parent.Role = KnowledgeChunkRole.Parent && parent.Sequence < chunk.Sequence -> ()
+                | _ ->
+                    invalidArg
+                        (nameof bundle)
+                        "Chunk parent must be an earlier parent chunk from the supplied document version.")
+
         bundle.IndexEntries
         |> List.iter (fun entry ->
             requireActive "index entry" entry.Lifecycle

@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="src/Model/Geometry.fs" />
+    <Compile Include="src/Model/Resources.fs" />
+    <Compile Include="src/Model/Styling.fs" />
+    <Compile Include="src/Model/Layout.fs" />
+    <Compile Include="src/Model/Content.fs" />
+    <Compile Include="src/Model/Document.fs" />
+    <Compile Include="src/Editing/DocumentBuilders.fs" />
+    <Compile Include="src/Editing/DocumentEditor.fs" />
+    <Compile Include="src/Conversion/Conversion.fs" />
+    <Compile Include="src/Conversion/PackageValidation.fs" />
+    <Compile Include="src/Conversion/Registry.fs" />
+    <Compile Include="src/Formats/PlainText.fs" />
+    <Compile Include="src/Formats/Csv.fs" />
+    <Compile Include="src/Formats/Odt.fs" />
+    <Compile Include="src/Formats/Markdown.fs" />
+    <Compile Include="src/Formats/Html.fs" />
+    <Compile Include="src/Formats/Rtf.fs" />
+    <Compile Include="src/Formats/SignedByteDoc.fs" />
+    <Compile Include="src/Formats/PdfWriter.fs" />
+    <Compile Include="src/Formats/PdfReader.fs" />
+    <Compile Include="src/Formats/Pdf.fs" />
+    <Compile Include="src/Formats/OpenXml.fs" />
+    <Compile Include="src/Formats/Formats.fs" />
+  </ItemGroup>
+  <Import Project="..\..\.paket\Paket.Restore.targets" />
+</Project>

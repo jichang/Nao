@@ -1088,6 +1088,50 @@ type ExecutionEnvironmentTests() =
         CollectionAssert.AreEqual([| handle |], resolvedHandles.ToArray())
 
     [<TestMethod>]
+    member _.OpaqueWorkerInputPreservesAuthorizedUntrustedPayloadBytes() =
+        let canary = "opaque-" + Guid.NewGuid().ToString("N")
+        let reference = SecretReference.parse "opaque-canary"
+        let execution = ExecutionContext.Create SandboxConfig.Default
+
+        let agent =
+            Agent.createOpaqueWorker
+                "opaque-worker"
+                "opaque-worker"
+                "opaque worker input test"
+                0
+                []
+                AgentContract.Text
+                (WorkerAgentReference.create "process-echo")
+
+        let authorization =
+            SecurityPrincipal.create (TenantId.parse "opaque-tenant") (UserId.parse "opaque-user") []
+            |> fun principal -> AuthorizationScope.tryCreate principal None (WorkspaceId.parse "opaque-workspace") None
+            |> Option.map (AuthorizationScope.startAgent agent.Metadata.Id execution.ExecutionId)
+            |> Option.get
+
+        let provider =
+            SecretProvider.create "opaque-test" "1" (fun _ _ _ ->
+                Task.FromResult(SecretLookup.Available(SecretVersion.initial, SecretValue.create reference canary)))
+
+        let agentContext =
+            { AgentContext.unrestrictedForTests () with
+                ExecutionBoundary = ExecutionBoundary.HarnessRequired
+                Authorization = Some authorization }
+
+        let environment = processEnvironment WorkerProtocol.CurrentVersion []
+
+        let result =
+            SecretRedaction.runAsync (fun () ->
+                task {
+                    let! _ = SecretProvider.resolveAsync authorization reference CancellationToken.None provider
+
+                    return! environment.ExecuteAsync execution agentContext agent canary
+                })
+            |> _.Result
+
+        Assert.AreEqual(Ok canary, result)
+
+    [<TestMethod>]
     member _.ProcessEnvironmentDoesNotLeakCanarySecretThroughInputOutputOrCapturedStreams() =
         let handle = SecretReference.parse "worker/canary"
         let canary = "worker-canary-" + Guid.NewGuid().ToString("N")

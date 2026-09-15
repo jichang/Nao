@@ -5,6 +5,8 @@
     <Project Path="src/Nao.Eval/Nao.Eval.fsproj" />
     <Project Path="src/Nao.Identity.Oidc/Nao.Identity.Oidc.fsproj" />
     <Project Path="src/Nao.Knowledge/Nao.Knowledge.fsproj" />
+    <Project Path="src/Nao.Knowledge.Documents/Nao.Knowledge.Documents.fsproj" />
+    <Project Path="src/Nao.Knowledge.Documents.Worker/Nao.Knowledge.Documents.Worker.fsproj" />
     <Project Path="src/Nao.Persistence/Nao.Persistence.fsproj" />
     <Project Path="src/Nao.Persistence.Feedback/Nao.Persistence.Feedback.fsproj" />
     <Project Path="src/Nao.Persistence.Infrastructure/Nao.Persistence.Infrastructure.fsproj" />
@@ -17,6 +19,7 @@
     <Project Path="src/Nao.Providers.OpenAICompatible/Nao.Providers.OpenAICompatible.fsproj" />
     <Project Path="src/Nao.Runtime.Orleans/Nao.Runtime.Orleans.fsproj" />
     <Project Path="src/Nao.Runtime.Orleans.Codegen/Nao.Runtime.Orleans.Codegen.csproj" />
+    <Project Path="src/Nao.Documents/Nao.Documents.fsproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Nao.Testing/Nao.Testing.fsproj" />
@@ -29,5 +32,6 @@
     <Project Path="tests/Nao.Protocols.Tests/Nao.Protocols.Tests.fsproj" />
     <Project Path="tests/Nao.Providers.Tests/Nao.Providers.Tests.fsproj" />
     <Project Path="tests/Nao.Runtime.Orleans.Tests/Nao.Runtime.Orleans.Tests.fsproj" />
+    <Project Path="tests/Nao.Documents.Tests/Nao.Documents.Tests.fsproj" />
   </Folder>
 </Solution>

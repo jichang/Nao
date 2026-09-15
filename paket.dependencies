@@ -9,9 +9,15 @@ nuget Microsoft.Orleans.Persistence.AdoNet
 nuget Microsoft.Data.Sqlite
 nuget FSharp.Core
 nuget FSharp.SystemTextJson
+nuget Markdig
+nuget HtmlAgilityPack
+nuget DocumentFormat.OpenXml
+nuget PDFsharp-MigraDoc
+nuget PdfPig
+nuget RtfPipe
+nuget System.Text.Encoding.CodePages
 nuget Newtonsoft.Json
 nuget YamlDotNet
-nuget SignedByte.Documents
 nuget Avalonia
 nuget Avalonia.Desktop
 nuget Avalonia.Themes.Fluent
