@@ -69,6 +69,7 @@
     <!-- The orchestrator/harness publish turn progress onto the durable event bus, so the
          event envelope (Events.fs) and every type it aggregates must compile before them. -->
     <Compile Include="src/Observability/Metrics.fs" />
+    <Compile Include="src/Observability/ExecutionInstrumentation.fs" />
     <Compile Include="src/Verification/Verification.fs" />
     <!-- G: Governance & Security -->
     <Compile Include="src/Governance/ResourcePermission.fs" />

@@ -28,6 +28,14 @@ type MetricPoint =
 [<RequireQualifiedAccess>]
 type MetricPayload =
     | LlmCall of inputTokens: int * outputTokens: int * latencyMs: int64
+    | EmbeddingCall of
+        profileId: string *
+        batchId: string *
+        inputCount: int *
+        inputTokens: int *
+        latencyMs: int64 *
+        estimatedCostUsd: decimal *
+        providerAttempts: int
     | ToolCall of toolName: string * durationMs: int64 * success: bool
     | Custom of MetricPoint
 
@@ -51,6 +59,31 @@ module MetricRecord =
           Timestamp = timestamp
           Payload = MetricPayload.ToolCall(toolName, durationMs, success) }
 
+    let embeddingCall
+        correlation
+        timestamp
+        profileId
+        batchId
+        inputCount
+        inputTokens
+        latencyMs
+        estimatedCostUsd
+        providerAttempts
+        : MetricRecord =
+        { Id = Guid.NewGuid()
+          Correlation = correlation
+          Timestamp = timestamp
+          Payload =
+            MetricPayload.EmbeddingCall(
+                profileId,
+                batchId,
+                inputCount,
+                inputTokens,
+                latencyMs,
+                estimatedCostUsd,
+                providerAttempts
+            ) }
+
     let custom correlation timestamp point : MetricRecord =
         { Id = Guid.NewGuid()
           Correlation = correlation
@@ -64,12 +97,18 @@ type ExecutionMetrics =
         Usage: ResourceUsage
         /// Total LLM calls made
         TotalLlmCalls: int
+        /// Total embedding batches executed
+        TotalEmbeddingCalls: int
         /// Total input tokens consumed
         TotalInputTokens: int
         /// Total output tokens generated
         TotalOutputTokens: int
+        /// Total embedding input tokens consumed
+        TotalEmbeddingInputTokens: int
         /// Total estimated cost in USD
         TotalCostUsd: decimal
+        /// Total embedding cost in USD
+        TotalEmbeddingCostUsd: decimal
         /// Total tool invocations
         TotalToolCalls: int
         /// Average latency per LLM call in milliseconds
@@ -80,6 +119,8 @@ type ExecutionMetrics =
         TotalDuration: TimeSpan
         /// Time spent waiting for LLM responses
         LlmWaitTime: TimeSpan
+        /// Time spent waiting for embedding responses
+        EmbeddingWaitTime: TimeSpan
         /// Time spent in tool execution
         ToolExecutionTime: TimeSpan
     }
@@ -87,14 +128,18 @@ type ExecutionMetrics =
     static member Zero =
         { Usage = ResourceUsage.Zero
           TotalLlmCalls = 0
+          TotalEmbeddingCalls = 0
           TotalInputTokens = 0
           TotalOutputTokens = 0
+          TotalEmbeddingInputTokens = 0
           TotalCostUsd = 0m
+          TotalEmbeddingCostUsd = 0m
           TotalToolCalls = 0
           AvgLatencyMs = 0.0
           P95LatencyMs = 0.0
           TotalDuration = TimeSpan.Zero
           LlmWaitTime = TimeSpan.Zero
+          EmbeddingWaitTime = TimeSpan.Zero
           ToolExecutionTime = TimeSpan.Zero }
 
     /// Create from ResourceUsage (bridge from Environment layer)
@@ -102,6 +147,7 @@ type ExecutionMetrics =
         { ExecutionMetrics.Zero with
             Usage = usage
             TotalLlmCalls = usage.LlmCalls
+            TotalEmbeddingCalls = usage.EmbeddingCalls
             TotalToolCalls = usage.ToolCalls
             TotalCostUsd = usage.EstimatedCostUsd
             TotalDuration = usage.ElapsedTime }

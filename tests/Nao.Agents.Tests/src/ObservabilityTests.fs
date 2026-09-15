@@ -117,6 +117,20 @@ type MetricsTests() =
         Assert.AreEqual(2, metrics.TotalToolCalls)
 
     [<TestMethod>]
+    member _.RecordEmbeddingCallTracksDedicatedUsageAndCost() =
+        let collector = InMemory.metrics ()
+
+        collector.Record scope (MetricRecord.embeddingCall correlation timestamp "profile" "batch" 2 40 125L 0.003m 2)
+
+        let metrics = collector.GetMetrics scope
+        Assert.AreEqual(0, metrics.TotalLlmCalls)
+        Assert.AreEqual(1, metrics.TotalEmbeddingCalls)
+        Assert.AreEqual(40, metrics.TotalEmbeddingInputTokens)
+        Assert.AreEqual(0.003m, metrics.TotalEmbeddingCostUsd)
+        Assert.AreEqual(0.003m, metrics.TotalCostUsd)
+        Assert.AreEqual(TimeSpan.FromMilliseconds 125.0, metrics.EmbeddingWaitTime)
+
+    [<TestMethod>]
     member _.AvgLatencyCalculatedCorrectly() =
         let collector = InMemory.metrics ()
         collector.Record scope (MetricRecord.llmCall correlation timestamp 100 50 100L)

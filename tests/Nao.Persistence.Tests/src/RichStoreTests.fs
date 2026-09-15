@@ -623,6 +623,19 @@ type MetricsTests() =
 
             first.Record
                 ownerA
+                (MetricRecord.embeddingCall
+                    correlation
+                    (cutoff.AddMinutes(float llmCount + 1.0))
+                    "eprof_test"
+                    "ebatch_test"
+                    2
+                    17
+                    25L
+                    0.004m
+                    1)
+
+            first.Record
+                ownerA
                 (MetricRecord.custom
                     correlation
                     (cutoff.AddTicks(-1L))
@@ -648,9 +661,12 @@ type MetricsTests() =
             Assert.AreEqual(llmCount, metricsA.TotalLlmCalls)
             Assert.AreEqual(expectedInput, metricsA.TotalInputTokens)
             Assert.AreEqual(expectedOutput, metricsA.TotalOutputTokens)
+            Assert.AreEqual(1, metricsA.TotalEmbeddingCalls)
+            Assert.AreEqual(17, metricsA.TotalEmbeddingInputTokens)
+            Assert.AreEqual(0.004m, metricsA.TotalEmbeddingCostUsd)
             Assert.AreEqual(0, metricsA.TotalToolCalls)
             Assert.AreEqual(1, (reloaded.GetMetrics ownerB).TotalToolCalls)
-            Assert.AreEqual(llmCount + 2, (reloaded.GetByExecution ownerA correlation.ExecutionId).Length)
+            Assert.AreEqual(llmCount + 3, (reloaded.GetByExecution ownerA correlation.ExecutionId).Length)
             Assert.AreEqual(1, (reloaded.GetByExecution ownerB correlation.ExecutionId).Length)
 
             match! reloaded.DeleteExpiredAsync ownerA cutoff with
@@ -658,7 +674,7 @@ type MetricsTests() =
             | Ok count -> Assert.AreEqual(1, count)
 
             let afterExpiry = make ()
-            Assert.AreEqual(TimeSpan.FromMinutes(float llmCount), (afterExpiry.GetMetrics ownerA).TotalDuration)
+            Assert.AreEqual(TimeSpan.FromMinutes(float llmCount + 1.0), (afterExpiry.GetMetrics ownerA).TotalDuration)
 
             match! afterExpiry.DeleteScopeAsync ownerB with
             | Error failure -> Assert.Fail failure.Message
@@ -666,7 +682,7 @@ type MetricsTests() =
 
             match! afterExpiry.DeleteScopeAsync ownerA with
             | Error failure -> Assert.Fail failure.Message
-            | Ok count -> Assert.AreEqual(llmCount + 1, count)
+            | Ok count -> Assert.AreEqual(llmCount + 2, count)
 
             let afterDeletion = make ()
             Assert.AreEqual(0, (afterDeletion.GetMetrics ownerA).TotalLlmCalls)

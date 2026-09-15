@@ -183,6 +183,9 @@ module KnowledgeCatalog =
         |> List.iter (fun entry ->
             requireActive "index entry" entry.Lifecycle
 
+            entry.Embedding
+            |> Option.iter (EmbeddingCapabilityDescriptor.validate >> ignore)
+
             match chunks |> Map.tryFind entry.ChunkId with
             | Some chunk when
                 entry.DocumentVersionId = bundle.Version.Id

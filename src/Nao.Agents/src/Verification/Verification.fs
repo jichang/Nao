@@ -78,6 +78,7 @@ and TraceStep =
 /// Actions that can appear in a trace
 and [<RequireQualifiedAccess>] TraceAction =
     | LlmCall of model: string
+    | EmbeddingCall of profileId: string
     | ToolInvocation of toolName: string
     | AgentDelegation of agentName: string
     | MemoryAccess of operation: string
@@ -134,6 +135,7 @@ module Verification =
         let redactAction =
             function
             | TraceAction.LlmCall model -> TraceAction.LlmCall(SecretRedaction.redact model)
+            | TraceAction.EmbeddingCall profileId -> TraceAction.EmbeddingCall(SecretRedaction.redact profileId)
             | TraceAction.ToolInvocation toolName -> TraceAction.ToolInvocation(SecretRedaction.redact toolName)
             | TraceAction.AgentDelegation agentName -> TraceAction.AgentDelegation(SecretRedaction.redact agentName)
             | TraceAction.MemoryAccess operation -> TraceAction.MemoryAccess(SecretRedaction.redact operation)

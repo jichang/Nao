@@ -771,57 +771,6 @@ module KnowledgeChunk =
           Metadata = Validation.metadata metadata
           Lifecycle = lifecycle }
 
-[<RequireQualifiedAccess>]
-type EmbeddingNormalization =
-    | None
-    | UnitLength
-
-[<RequireQualifiedAccess>]
-type VectorDistanceMetric =
-    | Cosine
-    | DotProduct
-    | Euclidean
-
-type EmbeddingDescriptor =
-    { Model: ComponentVersion
-      Dimensions: int
-      Normalization: EmbeddingNormalization
-      DistanceMetric: VectorDistanceMetric
-      Preprocessing: ComponentVersion }
-
-module EmbeddingDescriptor =
-    let create model dimensions normalization distanceMetric preprocessing =
-        { Model = model
-          Dimensions = Validation.positive (nameof dimensions) dimensions
-          Normalization = normalization
-          DistanceMetric = distanceMetric
-          Preprocessing = preprocessing }
-
-type KnowledgeIndexEntry =
-    { SchemaVersion: KnowledgeSchemaVersion
-      Id: KnowledgeIndexEntryId
-      IndexName: string
-      ChunkId: KnowledgeChunkId
-      DocumentVersionId: KnowledgeDocumentVersionId
-      ContentHash: ContentHash
-      Embedding: EmbeddingDescriptor option
-      IndexedAt: DateTimeOffset
-      Derivation: DerivationStep list
-      Lifecycle: KnowledgeLifecycle }
-
-module KnowledgeIndexEntry =
-    let create indexName (chunk: KnowledgeChunk) embedding indexedAt derivation =
-        { SchemaVersion = KnowledgeSchemaVersion.current
-          Id = KnowledgeIndexEntryId.derive indexName chunk.Id
-          IndexName = Validation.canonical (nameof indexName) indexName
-          ChunkId = chunk.Id
-          DocumentVersionId = chunk.DocumentVersionId
-          ContentHash = chunk.ContentHash
-          Embedding = embedding
-          IndexedAt = indexedAt
-          Derivation = derivation
-          Lifecycle = chunk.Lifecycle }
-
 type Citation =
     { SchemaVersion: KnowledgeSchemaVersion
       Id: CitationId

@@ -14,6 +14,7 @@ type ResourceLimitsTests() =
     member _.UnlimitedHasMaxValues() =
         let limits = ResourceLimits.Unlimited
         Assert.AreEqual(Int32.MaxValue, limits.MaxLlmCalls)
+        Assert.AreEqual(Int32.MaxValue, limits.MaxEmbeddingCalls)
         Assert.AreEqual(Int32.MaxValue, limits.MaxTotalTokens)
         Assert.AreEqual(Int32.MaxValue, limits.MaxToolCalls)
 
@@ -93,6 +94,16 @@ type SandboxTests() =
         Assert.AreEqual(2, ctx.Usage.ToolCalls)
 
     [<TestMethod>]
+    member _.ExecutionContextRecordsEmbeddingCallSeparately() =
+        let ctx = ExecutionContext.Create SandboxConfig.Default
+        Assert.AreEqual(None, ctx.BeginEmbeddingCall())
+        Assert.AreEqual(None, ctx.RecordEmbeddingUsage(25, 0.002m))
+        Assert.AreEqual(0, ctx.Usage.LlmCalls)
+        Assert.AreEqual(1, ctx.Usage.EmbeddingCalls)
+        Assert.AreEqual(25, ctx.Usage.TotalTokens)
+        Assert.AreEqual(0.002m, ctx.Usage.EstimatedCostUsd)
+
+    [<TestMethod>]
     member _.CreateChildLinksToParent() =
         let parent = ExecutionContext.Create SandboxConfig.Default
         let child = parent.CreateChild()
@@ -153,6 +164,7 @@ type SandboxTests() =
         let limits =
             { ResourceLimits.Unlimited with
                 MaxLlmCalls = 1
+                MaxEmbeddingCalls = 1
                 MaxToolCalls = 1 }
 
         let parent =
@@ -164,6 +176,8 @@ type SandboxTests() =
 
         Assert.AreEqual(None, parent.BeginLlmCall())
         Assert.AreEqual(Some LimitExceeded.LlmCalls, child.BeginLlmCall())
+        Assert.AreEqual(None, child.BeginEmbeddingCall())
+        Assert.AreEqual(Some LimitExceeded.EmbeddingCalls, parent.BeginEmbeddingCall())
         Assert.AreEqual(None, child.BeginToolCall())
         Assert.AreEqual(Some LimitExceeded.ToolCalls, parent.BeginToolCall())
 
@@ -1573,6 +1587,10 @@ type ExecutionEnvironmentTests() =
               { ResourceLimits.Unlimited with
                   MaxLlmCalls = 0 },
               "llm-call"
+              LimitExceeded.EmbeddingCalls,
+              { ResourceLimits.Unlimited with
+                  MaxEmbeddingCalls = 0 },
+              "embedding-call"
               LimitExceeded.ToolCalls,
               { ResourceLimits.Unlimited with
                   MaxToolCalls = 0 },

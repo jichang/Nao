@@ -9,6 +9,8 @@ type ResourceLimits =
         MaxDuration: TimeSpan
         /// Maximum number of LLM calls permitted
         MaxLlmCalls: int
+        /// Maximum number of embedding batches permitted
+        MaxEmbeddingCalls: int
         /// Maximum total tokens (input + output) across all calls
         MaxTotalTokens: int
         /// Maximum monetary cost in USD (approximate)
@@ -28,6 +30,7 @@ type ResourceLimits =
     static member Unlimited =
         { MaxDuration = TimeSpan.FromHours 1.0
           MaxLlmCalls = Int32.MaxValue
+          MaxEmbeddingCalls = Int32.MaxValue
           MaxTotalTokens = Int32.MaxValue
           MaxCostUsd = Decimal.MaxValue
           MaxToolCalls = Int32.MaxValue
@@ -45,6 +48,7 @@ type ResourceLimits =
 /// Tracks current resource consumption against limits
 type ResourceUsage =
     { LlmCalls: int
+      EmbeddingCalls: int
       TotalTokens: int
       ToolCalls: int
       EstimatedCostUsd: decimal
@@ -52,6 +56,7 @@ type ResourceUsage =
 
     static member Zero =
         { LlmCalls = 0
+          EmbeddingCalls = 0
           TotalTokens = 0
           ToolCalls = 0
           EstimatedCostUsd = 0m
@@ -59,6 +64,7 @@ type ResourceUsage =
 
     member this.Exceeds(limits: ResourceLimits) =
         this.LlmCalls > limits.MaxLlmCalls
+        || this.EmbeddingCalls > limits.MaxEmbeddingCalls
         || this.TotalTokens > limits.MaxTotalTokens
         || this.ToolCalls > limits.MaxToolCalls
         || this.EstimatedCostUsd > limits.MaxCostUsd
@@ -69,6 +75,7 @@ type ResourceUsage =
 type LimitExceeded =
     | Duration
     | LlmCalls
+    | EmbeddingCalls
     | TotalTokens
     | Cost
     | ToolCalls
@@ -84,6 +91,8 @@ module ResourceUsage =
             Some LimitExceeded.Duration
         elif usage.LlmCalls > limits.MaxLlmCalls then
             Some LimitExceeded.LlmCalls
+        elif usage.EmbeddingCalls > limits.MaxEmbeddingCalls then
+            Some LimitExceeded.EmbeddingCalls
         elif usage.TotalTokens > limits.MaxTotalTokens then
             Some LimitExceeded.TotalTokens
         elif usage.EstimatedCostUsd > limits.MaxCostUsd then

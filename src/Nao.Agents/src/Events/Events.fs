@@ -301,6 +301,7 @@ module private EventRedaction =
         let traceAction =
             function
             | TraceAction.LlmCall model -> TraceAction.LlmCall(text model)
+            | TraceAction.EmbeddingCall profileId -> TraceAction.EmbeddingCall(text profileId)
             | TraceAction.ToolInvocation toolName -> TraceAction.ToolInvocation(text toolName)
             | TraceAction.AgentDelegation agentName -> TraceAction.AgentDelegation(text agentName)
             | TraceAction.MemoryAccess operation -> TraceAction.MemoryAccess(text operation)
@@ -344,6 +345,16 @@ module private EventRedaction =
     let metric (record: MetricRecord) =
         let payload =
             match record.Payload with
+            | MetricPayload.EmbeddingCall(profileId, batchId, inputCount, inputTokens, latencyMs, cost, attempts) ->
+                MetricPayload.EmbeddingCall(
+                    text profileId,
+                    text batchId,
+                    inputCount,
+                    inputTokens,
+                    latencyMs,
+                    cost,
+                    attempts
+                )
             | MetricPayload.ToolCall(toolName, durationMs, success) ->
                 MetricPayload.ToolCall(text toolName, durationMs, success)
             | MetricPayload.Custom point ->

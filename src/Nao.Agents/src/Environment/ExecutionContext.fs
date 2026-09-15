@@ -157,6 +157,34 @@ type ExecutionContext =
 
             ResourceUsage.check this.Sandbox.Limits this.Budget.Usage)
 
+    member this.BeginEmbeddingCall() =
+        lock this.Budget.SyncRoot (fun () ->
+            let previous = this.Budget.Usage
+
+            this.Budget.Usage <-
+                { this.Budget.Usage with
+                    EmbeddingCalls = this.Budget.Usage.EmbeddingCalls + 1
+                    ElapsedTime = DateTimeOffset.UtcNow - this.StartedAt }
+
+            match ResourceUsage.check this.Sandbox.Limits this.Budget.Usage with
+            | None -> None
+            | Some limit ->
+                this.Budget.Usage <- previous
+                Some limit)
+
+    member this.RecordEmbeddingUsage(tokens: int, costUsd: decimal) =
+        if tokens < 0 || costUsd < 0m then
+            invalidArg (nameof tokens) "Embedding resource usage cannot be negative."
+
+        lock this.Budget.SyncRoot (fun () ->
+            this.Budget.Usage <-
+                { this.Budget.Usage with
+                    TotalTokens = this.Budget.Usage.TotalTokens + tokens
+                    EstimatedCostUsd = this.Budget.Usage.EstimatedCostUsd + costUsd
+                    ElapsedTime = DateTimeOffset.UtcNow - this.StartedAt }
+
+            ResourceUsage.check this.Sandbox.Limits this.Budget.Usage)
+
     member this.RecordToolCall() =
         lock this.Budget.SyncRoot (fun () ->
             this.Budget.Usage <-
@@ -177,6 +205,7 @@ type ExecutionContext =
             this.Budget.Usage <-
                 { this.Budget.Usage with
                     LlmCalls = this.Budget.Usage.LlmCalls + usage.LlmCalls
+                    EmbeddingCalls = this.Budget.Usage.EmbeddingCalls + usage.EmbeddingCalls
                     TotalTokens = this.Budget.Usage.TotalTokens + usage.TotalTokens
                     ToolCalls = this.Budget.Usage.ToolCalls + usage.ToolCalls
                     EstimatedCostUsd = this.Budget.Usage.EstimatedCostUsd + usage.EstimatedCostUsd

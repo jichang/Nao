@@ -116,6 +116,8 @@ type IsolatedParsingTests() =
               Budget =
                 { BeginLlmCall = ignore
                   RecordLlmUsage = fun _ _ -> ()
+                  BeginEmbeddingCall = ignore
+                  RecordEmbeddingUsage = fun _ _ -> ()
                   BeginToolCall = ignore } }
 
         let response =

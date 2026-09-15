@@ -32,3 +32,10 @@ module internal RuntimeExecutionBudget =
             |> Option.defaultValue 0
 
         current.Value |> Option.bind (fun context -> context.RecordLlmUsage(tokens, 0m))
+
+    let beginEmbeddingCall () =
+        current.Value |> Option.bind _.BeginEmbeddingCall()
+
+    let recordEmbeddingUsage tokens costUsd =
+        current.Value
+        |> Option.bind (fun context -> context.RecordEmbeddingUsage(tokens, costUsd))

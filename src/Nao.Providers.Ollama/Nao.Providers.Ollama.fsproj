@@ -7,11 +7,14 @@
 
   <ItemGroup>
     <Compile Include="..\Nao.Providers\src\Configs\OllamaConfig.fs" Link="src\Configs\OllamaConfig.fs" />
+    <Compile Include="..\Nao.Providers\src\Configs\OllamaEmbeddingConfig.fs" Link="src\Configs\OllamaEmbeddingConfig.fs" />
     <Compile Include="..\Nao.Providers\src\Providers\OllamaProvider.fs" Link="src\Providers\OllamaProvider.fs" />
+    <Compile Include="..\Nao.Providers\src\Providers\OllamaEmbeddingProvider.fs" Link="src\Providers\OllamaEmbeddingProvider.fs" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Nao.Agents\Nao.Agents.fsproj" />
+    <ProjectReference Include="..\Nao.Knowledge\Nao.Knowledge.fsproj" />
     <ProjectReference Include="..\Nao.Providers.OpenAICompatible\Nao.Providers.OpenAICompatible.fsproj" />
   </ItemGroup>
 

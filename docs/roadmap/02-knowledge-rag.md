@@ -109,19 +109,19 @@ This workstream creates a reusable knowledge subsystem for ingestion, indexing, 
 
 ## KNO-05 — Embeddings
 
-- [ ] Define embedding capability metadata: model ID, dimensions, normalization, distance metric, limits, and version.
-- [ ] Support batching, cancellation, retries, throttling, and cost accounting.
-- [ ] Validate dimensions before persistence.
-- [ ] Add content-hash embedding caches scoped by model and preprocessing version.
-- [ ] Define migration and dual-read behavior for model upgrades.
-- [ ] Support local and hosted embedding providers.
-- [ ] Record input provenance without storing prohibited raw content in telemetry.
+- [x] Define embedding capability metadata: model ID, dimensions, normalization, distance metric, limits, and version.
+- [x] Support batching, cancellation, retries, throttling, and cost accounting.
+- [x] Validate dimensions before persistence.
+- [x] Add content-hash embedding caches scoped by model and preprocessing version.
+- [x] Define migration and dual-read behavior for model upgrades.
+- [x] Support local and hosted embedding providers.
+- [x] Record input provenance without storing prohibited raw content in telemetry.
 
 **Acceptance criteria**
 
-- [ ] Mixed dimensions or model identities cannot enter one incompatible index.
-- [ ] Re-embedding can resume after interruption.
-- [ ] Embedding calls appear in budgets, traces, and evaluations.
+- [x] Mixed dimensions or model identities cannot enter one incompatible index.
+- [x] Re-embedding can resume after interruption.
+- [x] Embedding calls appear in budgets, traces, and evaluations.
 
 ## KNO-06 — Indexes and storage adapters
 

@@ -6,6 +6,16 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="src/KnowledgeContracts.fs" />
+    <Compile Include="src/EmbeddingContracts.fs" />
+    <Compile Include="src/EmbeddingExecutionContracts.fs" />
+    <Compile Include="src/EmbeddingExecutor.fs" />
+    <Compile Include="src/EmbeddingPersistence.fs" />
+    <Compile Include="src/EmbeddingCacheContracts.fs" />
+    <Compile Include="src/InMemoryEmbeddingCache.fs" />
+    <Compile Include="src/CachedEmbeddingExecution.fs" />
+    <Compile Include="src/EmbeddingMigrationContracts.fs" />
+    <Compile Include="src/InMemoryEmbeddingMigrationStore.fs" />
+    <Compile Include="src/EmbeddingMigration.fs" />
     <Compile Include="src/SourceConnector.fs" />
     <Compile Include="src/SourcePath.fs" />
     <Compile Include="src/SourceChanges.fs" />

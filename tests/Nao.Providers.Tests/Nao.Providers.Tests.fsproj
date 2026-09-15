@@ -13,9 +13,11 @@
   <ItemGroup>
     <Compile Include="src/MSTestSettings.fs" />
     <Compile Include="src/ProviderTests.fs" />
+    <Compile Include="src/EmbeddingProviderTests.fs" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\Nao.Providers\Nao.Providers.fsproj" />
+    <ProjectReference Include="..\..\src\Nao.Knowledge\Nao.Knowledge.fsproj" />
   </ItemGroup>
   <Import Project="..\..\.paket\Paket.Restore.targets" />
 </Project>

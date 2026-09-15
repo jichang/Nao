@@ -979,6 +979,14 @@ module EtclovgHarness =
                         let previousReplayFixtures = RuntimeReplayFixtures.get ()
                         let previousDispatcher = ExecutionRuntime.get ()
                         let previousBudget = RuntimeExecutionBudget.get ()
+
+                        let previousInstrumentation, instrumentation =
+                            ExecutionInstrumentation.install
+                                request.Authorization
+                                execCtx.Correlation
+                                config.Tracer
+                                execSpan
+
                         RuntimeMetrics.set config.Metrics
                         RuntimeExecutionJournal.set config.ExecutionJournal
                         RuntimeReplayFixtures.set config.ReplayFixtures
@@ -1032,9 +1040,22 @@ module EtclovgHarness =
                                     RuntimeReplayFixtures.set previousReplayFixtures
                                     ExecutionRuntime.set previousDispatcher
                                     RuntimeExecutionBudget.set previousBudget
+                                    ExecutionInstrumentation.restore previousInstrumentation
                             }
 
                         sw.Stop()
+
+                        for observation in ExecutionInstrumentation.embeddingCalls instrumentation do
+                            let durationMs =
+                                max 0L (int64 (observation.CompletedAt - observation.StartedAt).TotalMilliseconds)
+
+                            trace <-
+                                trace
+                                |> Verification.addStep
+                                    (TraceAction.EmbeddingCall observation.ProfileId)
+                                    $"batch={observation.BatchId};inputs={observation.InputCount}"
+                                    $"tokens={observation.InputTokens};attempts={observation.ProviderAttempts};cost_usd={observation.EstimatedCostUsd}"
+                                    durationMs
 
                         let normalizedExecutionOutcome =
                             match executionOutcome with

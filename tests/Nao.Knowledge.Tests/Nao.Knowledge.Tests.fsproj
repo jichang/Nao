@@ -9,6 +9,11 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="src/MSTestSettings.fs" />
+    <Compile Include="src/EmbeddingContractTests.fs" />
+    <Compile Include="src/EmbeddingExecutionTests.fs" />
+    <Compile Include="src/EmbeddingPersistenceTests.fs" />
+    <Compile Include="src/EmbeddingCacheTests.fs" />
+    <Compile Include="src/EmbeddingMigrationTests.fs" />
     <Compile Include="src/KnowledgeContractTests.fs" />
     <Compile Include="src/SourceConnectorTests.fs" />
     <Compile Include="src/HttpSourceConnectorTests.fs" />

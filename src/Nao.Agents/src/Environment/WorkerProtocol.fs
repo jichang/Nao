@@ -12,6 +12,8 @@ open System.Threading.Tasks
 type WorkerExecutionBudget =
     { BeginLlmCall: unit -> unit
       RecordLlmUsage: int -> decimal -> unit
+      BeginEmbeddingCall: unit -> unit
+      RecordEmbeddingUsage: int -> decimal -> unit
       BeginToolCall: unit -> unit }
 
 /// Worker-local access to host-authorized secret handles.
@@ -61,11 +63,13 @@ type internal WorkerMessage() =
     member val AllowedPaths: string array = Array.empty with get, set
     member val Secrets = Dictionary<string, string>() with get, set
     member val MaxLlmCalls = Int32.MaxValue with get, set
+    member val MaxEmbeddingCalls = Int32.MaxValue with get, set
     member val MaxTotalTokens = Int32.MaxValue with get, set
     member val MaxCostUsd = Decimal.MaxValue.ToString(Globalization.CultureInfo.InvariantCulture) with get, set
     member val MaxToolCalls = Int32.MaxValue with get, set
     member val Limit = "" with get, set
     member val LlmCalls = 0 with get, set
+    member val EmbeddingCalls = 0 with get, set
     member val TotalTokens = 0 with get, set
     member val EstimatedCostUsd = "0" with get, set
     member val ToolCalls = 0 with get, set
@@ -247,11 +251,13 @@ module WorkerProtocol =
         fields.Add("allowedPaths", box message.AllowedPaths)
         fields.Add("secrets", box message.Secrets)
         fields.Add("maxLlmCalls", box message.MaxLlmCalls)
+        fields.Add("maxEmbeddingCalls", box message.MaxEmbeddingCalls)
         fields.Add("maxTotalTokens", box message.MaxTotalTokens)
         fields.Add("maxCostUsd", box message.MaxCostUsd)
         fields.Add("maxToolCalls", box message.MaxToolCalls)
         fields.Add("limit", box message.Limit)
         fields.Add("llmCalls", box message.LlmCalls)
+        fields.Add("embeddingCalls", box message.EmbeddingCalls)
         fields.Add("totalTokens", box message.TotalTokens)
         fields.Add("estimatedCostUsd", box message.EstimatedCostUsd)
         fields.Add("toolCalls", box message.ToolCalls)
@@ -333,11 +339,13 @@ module WorkerProtocol =
             message.Secrets <- secrets
 
             message.MaxLlmCalls <- root.GetProperty("maxLlmCalls").GetInt32()
+            message.MaxEmbeddingCalls <- root.GetProperty("maxEmbeddingCalls").GetInt32()
             message.MaxTotalTokens <- root.GetProperty("maxTotalTokens").GetInt32()
             message.MaxCostUsd <- root.GetProperty("maxCostUsd").GetString()
             message.MaxToolCalls <- root.GetProperty("maxToolCalls").GetInt32()
             message.Limit <- root.GetProperty("limit").GetString()
             message.LlmCalls <- root.GetProperty("llmCalls").GetInt32()
+            message.EmbeddingCalls <- root.GetProperty("embeddingCalls").GetInt32()
             message.TotalTokens <- root.GetProperty("totalTokens").GetInt32()
             message.EstimatedCostUsd <- root.GetProperty("estimatedCostUsd").GetString()
             message.ToolCalls <- root.GetProperty("toolCalls").GetInt32()
@@ -398,6 +406,7 @@ module WorkerProtocol =
 
         let usage = context.Usage
         value.MaxLlmCalls <- max 0 (context.Sandbox.Limits.MaxLlmCalls - usage.LlmCalls)
+        value.MaxEmbeddingCalls <- max 0 (context.Sandbox.Limits.MaxEmbeddingCalls - usage.EmbeddingCalls)
         value.MaxTotalTokens <- max 0 (context.Sandbox.Limits.MaxTotalTokens - usage.TotalTokens)
 
         value.MaxCostUsd <-
@@ -425,6 +434,7 @@ module WorkerProtocol =
     let private withUsage (context: Nao.Agents.ExecutionContext) (message: WorkerMessage) =
         let usage = context.Usage
         message.LlmCalls <- usage.LlmCalls
+        message.EmbeddingCalls <- usage.EmbeddingCalls
         message.TotalTokens <- usage.TotalTokens
         message.EstimatedCostUsd <- usage.EstimatedCostUsd.ToString(Globalization.CultureInfo.InvariantCulture)
         message.ToolCalls <- usage.ToolCalls
@@ -433,6 +443,7 @@ module WorkerProtocol =
     let internal usage (message: WorkerMessage) =
         { ResourceUsage.Zero with
             LlmCalls = message.LlmCalls
+            EmbeddingCalls = message.EmbeddingCalls
             TotalTokens = message.TotalTokens
             EstimatedCostUsd = Decimal.Parse(message.EstimatedCostUsd, Globalization.CultureInfo.InvariantCulture)
             ToolCalls = message.ToolCalls }
@@ -440,6 +451,7 @@ module WorkerProtocol =
     let internal tryParseLimit value =
         match value with
         | "LlmCalls" -> Some Nao.Agents.LimitExceeded.LlmCalls
+        | "EmbeddingCalls" -> Some Nao.Agents.LimitExceeded.EmbeddingCalls
         | "TotalTokens" -> Some Nao.Agents.LimitExceeded.TotalTokens
         | "Cost" -> Some Nao.Agents.LimitExceeded.Cost
         | "ToolCalls" -> Some Nao.Agents.LimitExceeded.ToolCalls
@@ -449,6 +461,7 @@ module WorkerProtocol =
         let limits =
             { ResourceLimits.Unlimited with
                 MaxLlmCalls = message.MaxLlmCalls
+                MaxEmbeddingCalls = message.MaxEmbeddingCalls
                 MaxTotalTokens = message.MaxTotalTokens
                 MaxCostUsd = Decimal.Parse(message.MaxCostUsd, Globalization.CultureInfo.InvariantCulture)
                 MaxToolCalls = message.MaxToolCalls }
@@ -474,6 +487,16 @@ module WorkerProtocol =
                         invalidArg (nameof costUsd) "Worker cost usage cannot be negative."
 
                     requireAvailable (fun () -> context.RecordLlmUsage(tokens, costUsd))
+              BeginEmbeddingCall = fun () -> requireAvailable context.BeginEmbeddingCall
+              RecordEmbeddingUsage =
+                fun tokens costUsd ->
+                    if tokens < 0 then
+                        invalidArg (nameof tokens) "Worker embedding token usage cannot be negative."
+
+                    if costUsd < 0m then
+                        invalidArg (nameof costUsd) "Worker embedding cost usage cannot be negative."
+
+                    requireAvailable (fun () -> context.RecordEmbeddingUsage(tokens, costUsd))
               BeginToolCall = fun () -> requireAvailable context.BeginToolCall }
 
         let secrets =

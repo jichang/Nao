@@ -69,10 +69,12 @@ ALLOWED_PROJECT_REFERENCES = {
     },
     Path("src/Nao.Providers.Ollama/Nao.Providers.Ollama.fsproj"): {
         Path("src/Nao.Agents/Nao.Agents.fsproj"),
+        Path("src/Nao.Knowledge/Nao.Knowledge.fsproj"),
         Path("src/Nao.Providers.OpenAICompatible/Nao.Providers.OpenAICompatible.fsproj"),
     },
     Path("src/Nao.Providers.OpenAICompatible/Nao.Providers.OpenAICompatible.fsproj"): {
         Path("src/Nao.Agents/Nao.Agents.fsproj"),
+        Path("src/Nao.Knowledge/Nao.Knowledge.fsproj"),
     },
     Path("src/Nao.Runtime.Orleans/Nao.Runtime.Orleans.fsproj"): {
         Path("src/Nao.Agents/Nao.Agents.fsproj"),

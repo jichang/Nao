@@ -11,12 +11,16 @@
     <Compile Include="..\Nao.Providers\src\Configs\KimiConfig.fs" Link="src\Configs\KimiConfig.fs" />
     <Compile Include="..\Nao.Providers\src\Configs\VllmConfig.fs" Link="src\Configs\VllmConfig.fs" />
     <Compile Include="..\Nao.Providers\src\Configs\LlamaCppConfig.fs" Link="src\Configs\LlamaCppConfig.fs" />
+    <Compile Include="..\Nao.Providers\src\Configs\OpenAICompatibleEmbeddingConfig.fs" Link="src\Configs\OpenAICompatibleEmbeddingConfig.fs" />
     <Compile Include="..\Nao.Providers\src\Providers\OpenAIChatDtos.fs" Link="src\Providers\OpenAIChatDtos.fs" />
+    <Compile Include="..\Nao.Providers\src\Providers\OpenAIEmbeddingDtos.fs" Link="src\Providers\OpenAIEmbeddingDtos.fs" />
     <Compile Include="..\Nao.Providers\src\Providers\OpenAICompatibleProvider.fs" Link="src\Providers\OpenAICompatibleProvider.fs" />
+    <Compile Include="..\Nao.Providers\src\Providers\OpenAICompatibleEmbeddingProvider.fs" Link="src\Providers\OpenAICompatibleEmbeddingProvider.fs" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Nao.Agents\Nao.Agents.fsproj" />
+    <ProjectReference Include="..\Nao.Knowledge\Nao.Knowledge.fsproj" />
   </ItemGroup>
 
   <Import Project="..\..\.paket\Paket.Restore.targets" />

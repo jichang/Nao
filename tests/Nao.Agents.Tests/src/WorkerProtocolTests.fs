@@ -17,7 +17,7 @@ type WorkerProtocolTests() =
     let message kind principal required =
         let node =
             JsonNode.Parse(
-                """{"protocolVersion":0,"kind":"","agentId":"test","authorityAgentId":"test","input":"model input","output":"","error":"","executionId":"","correlationId":"","attempt":1,"processId":0,"enforceFileSystemPolicy":false,"allowedPaths":[],"secrets":{},"maxLlmCalls":10,"maxTotalTokens":100,"maxCostUsd":"1","maxToolCalls":10,"limit":"","llmCalls":0,"totalTokens":0,"estimatedCostUsd":"0","toolCalls":0,"principal":null,"agentLineage":[],"requirePrincipal":false}"""
+                """{"protocolVersion":0,"kind":"","agentId":"test","authorityAgentId":"test","input":"model input","output":"","error":"","executionId":"","correlationId":"","attempt":1,"processId":0,"enforceFileSystemPolicy":false,"allowedPaths":[],"secrets":{},"maxLlmCalls":10,"maxEmbeddingCalls":10,"maxTotalTokens":100,"maxCostUsd":"1","maxToolCalls":10,"limit":"","llmCalls":0,"embeddingCalls":0,"totalTokens":0,"estimatedCostUsd":"0","toolCalls":0,"principal":null,"agentLineage":[],"requirePrincipal":false}"""
             )
             |> Option.ofObj
             |> Option.defaultWith (fun () -> invalidOp "Worker protocol fixture must be a JSON object.")

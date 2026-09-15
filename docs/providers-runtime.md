@@ -4,9 +4,16 @@ Nao separates model-provider integration from agent behavior and offers Orleans 
 
 ## Provider abstraction
 
-The immutable `LlmProvider` capability record provides common completion behavior with an optional streaming function. Current adapters cover OpenAI-compatible services, Anthropic, DeepSeek, Kimi, Ollama, vLLM, and llama.cpp.
+The immutable `LlmProvider` capability record provides common completion behavior with an optional streaming function. Current adapters cover OpenAI-compatible services, Anthropic, DeepSeek, Kimi, Ollama, vLLM, and llama.cpp. Source-backed embeddings use the separate `KnowledgeEmbeddingProvider` contract, with hosted OpenAI-compatible and local Ollama adapters.
 
-Adapters are independently consumable through `Nao.Providers.OpenAICompatible`, `Nao.Providers.Anthropic`, and `Nao.Providers.Ollama`. Applications that want closed provider selection and all adapters can opt into the aggregate `Nao.Providers` composition package. Direct adapter consumers do not inherit unrelated provider implementations.
+Adapters are independently consumable through `Nao.Providers.OpenAICompatible`, `Nao.Providers.Anthropic`, and `Nao.Providers.Ollama`. The OpenAI-compatible and Ollama packages also expose their protocol-specific embedding configurations and factories while depending only on the vendor-independent contracts in `Nao.Knowledge`. Applications that want closed provider selection and all adapters can opt into the aggregate `Nao.Providers` composition package. Direct adapter consumers do not inherit unrelated provider implementations.
+
+Embedding adapters require an explicit, validated profile and an authoritative tokenizer callback.
+Hosted credentials are references rather than raw configuration values and are resolved under the
+caller's authenticated scope for every outbound operation. Provider-reported model identity,
+usage, vector cardinality, dimensions, and finite values are validated across the adapter and
+embedding executor. HTTP error bodies are not copied into platform failures because they may
+echo source content. Callers dispose provider capabilities when their HTTP lifetime ends.
 
 Applications should not select a provider by hard-coded model-name heuristics. A production control plane needs explicit capability metadata for:
 

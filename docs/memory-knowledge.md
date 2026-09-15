@@ -169,6 +169,89 @@ fails between documents resumes from the next committed cursor; a completed migr
 idempotent no-op. Supplied chunks must match the target strategy and document lineage, concurrent
 checkpoint changes fail closed, and legal hold prevents replacement.
 
+KNO-05 embedding metadata uses a dedicated v1 `EmbeddingCapabilityDescriptor`. A stable profile
+identity covers the model component and version, output dimensions, normalization, distance
+metric, preprocessing component and version, and all advertised limits. Limits declare maximum
+batch size, characters and tokens per item, and tokens per batch. Descriptor creation and catalog
+persistence recompute this identity and reject unsupported contract versions, invalid dimensions,
+incoherent limits, or forged records. This knowledge-index contract is intentionally separate
+from the simpler conversational-memory embedding capability.
+
+`EmbeddingExecution` prepares source-backed embedding work through provider-owned token counting
+and deterministic batches bounded by both item count and total input tokens. Every batch has a
+stable ID derived from its embedding profile and ordered chunk/content identities, allowing
+providers and accounting adapters to make retries idempotent. The executor propagates
+authenticated scope and cancellation, reacquires the host throttle before every provider
+attempt, retries only failures marked retryable by the platform taxonomy, and records one v1 cost
+entry after each successful response. Cost records contain batch/profile/chunk identities,
+counts, attempts, and estimated USD only; they do not copy source text. Provider responses must
+return exactly one finite, correctly dimensioned vector for every requested chunk under the
+pinned profile. Malformed output is a non-retryable failure and is never costed as a successful
+batch.
+
+Every successful provider batch also emits a private validated v1
+`EmbeddingProvenanceRecord` before cost accounting completes. The stable batch identity binds
+the ordered chunk IDs and canonical content hashes to the embedding profile. Each input records
+only its chunk ID, content hash, character count, and authoritative preflight token count; batch
+metadata adds provider-reported input tokens, estimated cost, attempt count, and start/completion
+times. Raw text, vectors, provider responses, error messages, principals, and authentication
+evidence are structurally absent. The recorder receives `AuthorizationScope` separately so
+durable adapters can partition records by complete identity without persisting credentials or
+claims. Recorder failure is not ignored and prevents the execution from reporting success.
+
+Within a governed harness execution, every provider batch reserves a distinct embedding-call
+budget before transport and records provider-reported tokens and cost afterward. Embedding calls
+do not masquerade as chat LLM calls. The runtime emits a typed metric and a text-free
+`embedding.generate` child span keyed only by profile and stable batch identities and numeric
+usage. It also adds a text-free `EmbeddingCall` step to the execution trace consumed by
+evaluations. Exceeding `MaxEmbeddingCalls`, total-token, or cost limits produces the same
+structured execution-limit outcome as other governed resources; a zero-call budget blocks
+before provider invocation.
+
+Concrete provider adapters live outside the vendor-independent knowledge package. The hosted
+OpenAI-compatible adapter posts ordered batches to a complete embeddings endpoint, resolves an
+optional bearer credential from `SecretProvider` for each operation, verifies the returned model
+and response indexes, and calculates cost from provider-reported input tokens. The local Ollama
+adapter uses `/api/embed`, explicitly disables server-side truncation, verifies the returned
+model, and reports zero hosted cost. Both require a tokenizer callback matching the pinned
+preprocessing profile so the executor can enforce limits before transport. Neither includes
+provider error bodies in platform failures, and both expose deterministic disposal for their
+owned HTTP clients.
+
+`EmbeddingPersistence` is the validated boundary between generated vectors and storage adapters.
+It creates private immutable v1 records only after recomputing the embedding profile, checking
+the profile identity, requiring exact dimensions, and rejecting non-finite values. Stable
+persisted IDs bind one chunk to one embedding profile. The reference store partitions by the
+complete authorization identity, validates an entire batch before mutation, copies arrays on
+write and read, accepts an equivalent replay without replacing the first record, and rejects any
+attempt to rebind an ID to different vector data. Production vector-index persistence remains a
+separate KNO-06 adapter concern.
+
+`CachedEmbeddingExecution` adds an authorization-partitioned, content-addressed v1 cache above
+provider execution. Keys combine the canonical content hash with the complete validated
+embedding profile, so model and preprocessing versions—and every other compatibility-relevant
+vector property—cannot collide. Equal text from different chunks is embedded once per profile
+and expanded back into ordered chunk-specific results. Only unique misses reach the provider;
+cache hits retain the executor's total-input bound and do not produce provider usage or cost.
+Entries contain hashes, profile metadata, vectors, and timestamps but no source text. Cache
+stores validate immutable batch writes, copy vector arrays, reject conflicting key reuse, and
+expose a validating restoration factory for durable adapters.
+
+`EmbeddingMigration` backfills a new profile over a canonical, unique content-hash plan. Its
+stable v1 identity binds the complete source and target profiles to that plan without retaining
+source text. Before work begins, the runner requires every source-profile cache entry to exist.
+It then executes target work in the target executor's bounded batches and advances an
+owner-partitioned compare-and-swap checkpoint only after the target cache commit succeeds. A
+failure after cache persistence but before checkpoint persistence is safe: resume repeats the
+batch as cache hits and does not repeat provider work.
+
+Model cutover is explicit through source-only, target-first, and target-only read modes.
+Target-first selects the target only when the complete requested result exists under that
+profile; otherwise it falls back to a complete source-profile result. It never combines vectors
+from different profiles or dimensions. Target-only therefore fails closed on any missing target
+entry instead of inferring readiness from partial cache population. The selected profile is
+returned with every result so callers can address only its compatible index.
+
 ## Data categories
 
 | Category | Purpose | Typical lifetime | Authority |

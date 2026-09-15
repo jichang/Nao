@@ -30,6 +30,16 @@ module private ObservabilityRedaction =
     let metric (record: MetricRecord) =
         let payload =
             match record.Payload with
+            | MetricPayload.EmbeddingCall(profileId, batchId, inputCount, inputTokens, latencyMs, cost, attempts) ->
+                MetricPayload.EmbeddingCall(
+                    redact profileId,
+                    redact batchId,
+                    inputCount,
+                    inputTokens,
+                    latencyMs,
+                    cost,
+                    attempts
+                )
             | MetricPayload.ToolCall(toolName, durationMs, success) ->
                 MetricPayload.ToolCall(redact toolName, durationMs, success)
             | MetricPayload.Custom point ->
@@ -45,6 +55,7 @@ module private ObservabilityRedaction =
         let action =
             function
             | TraceAction.LlmCall model -> TraceAction.LlmCall(redact model)
+            | TraceAction.EmbeddingCall profileId -> TraceAction.EmbeddingCall(redact profileId)
             | TraceAction.ToolInvocation toolName -> TraceAction.ToolInvocation(redact toolName)
             | TraceAction.AgentDelegation agentName -> TraceAction.AgentDelegation(redact agentName)
             | TraceAction.MemoryAccess operation -> TraceAction.MemoryAccess(redact operation)
@@ -201,10 +212,21 @@ module InMemoryMetricsCollector =
                     | MetricPayload.ToolCall(_, duration, _) -> Some duration
                     | _ -> None)
 
+            let embeddingCalls =
+                retained
+                |> Array.choose (fun metric ->
+                    match metric.Payload with
+                    | MetricPayload.EmbeddingCall(_, _, _, inputTokens, latency, cost, _) ->
+                        Some(inputTokens, latency, cost)
+                    | _ -> None)
+
             let inputs = llmCalls |> Array.sumBy (fun (input, _, _) -> input)
             let outputs = llmCalls |> Array.sumBy (fun (_, output, _) -> output)
+            let embeddingInputs = embeddingCalls |> Array.sumBy (fun (input, _, _) -> input)
+            let embeddingCost = embeddingCalls |> Array.sumBy (fun (_, _, cost) -> cost)
             let sorted = llmCalls |> Array.map (fun (_, _, latency) -> latency) |> Array.sort
             let llmWait = sorted |> Array.sum
+            let embeddingWait = embeddingCalls |> Array.sumBy (fun (_, latency, _) -> latency)
             let toolTime = toolCalls |> Array.sum
 
             let duration =
@@ -228,21 +250,26 @@ module InMemoryMetricsCollector =
 
             let usage: ResourceUsage =
                 { LlmCalls = llmCalls.Length
-                  TotalTokens = inputs + outputs
+                  EmbeddingCalls = embeddingCalls.Length
+                  TotalTokens = inputs + outputs + embeddingInputs
                   ToolCalls = toolCalls.Length
-                  EstimatedCostUsd = 0m
+                  EstimatedCostUsd = embeddingCost
                   ElapsedTime = duration }
 
             { Usage = usage
               TotalLlmCalls = llmCalls.Length
+              TotalEmbeddingCalls = embeddingCalls.Length
               TotalInputTokens = inputs
               TotalOutputTokens = outputs
-              TotalCostUsd = 0m
+              TotalEmbeddingInputTokens = embeddingInputs
+              TotalCostUsd = embeddingCost
+              TotalEmbeddingCostUsd = embeddingCost
               TotalToolCalls = toolCalls.Length
               AvgLatencyMs = average
               P95LatencyMs = p95
               TotalDuration = duration
               LlmWaitTime = TimeSpan.FromMilliseconds(float llmWait)
+              EmbeddingWaitTime = TimeSpan.FromMilliseconds(float embeddingWait)
               ToolExecutionTime = TimeSpan.FromMilliseconds(float toolTime) }
 
         let delete scope (predicate: MetricRecord -> bool) =
@@ -273,6 +300,7 @@ module InMemoryMetricsCollector =
 
                 decimal aggregate.TotalInputTokens / 1000m * model.InputCostPer1K
                 + decimal aggregate.TotalOutputTokens / 1000m * model.OutputCostPer1K
+                + aggregate.TotalEmbeddingCostUsd
           DeleteScopeAsync = fun scope -> delete scope (fun _ -> true)
           DeleteExpiredAsync = fun scope before -> delete scope (fun metric -> metric.Timestamp < before) }
 

@@ -81,6 +81,13 @@ A reproducible evaluation records:
 - Random seeds, clocks, IDs, and scheduling controls where applicable
 - All fixtures needed for replay
 
+Source-backed embedding batches participate in the same governed evidence path as agent and tool
+work. Runtime budgets track embedding calls separately from chat LLM calls while sharing total
+token and cost limits. Metrics include profile ID, stable batch ID, input count, provider tokens,
+latency, cost, and attempt count. Distributed spans use `embedding.generate`, and evaluation
+execution traces include text-free `EmbeddingCall` steps. These records contain no chunk text,
+vector values, provider response bodies, principal evidence, or credentials.
+
 Production, test, and replay should use the same harness path. Recorded provider and tool fixtures should allow a failed case to run without live network dependencies.
 
 ## Release gates

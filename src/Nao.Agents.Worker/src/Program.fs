@@ -244,6 +244,8 @@ module StandardWorkerHandlers =
             request.Budget.RecordLlmUsage (Int32.Parse fields.[1]) (Decimal.Parse fields.[2])
         | "llm-call" -> request.Budget.BeginLlmCall()
         | "llm-usage" -> request.Budget.RecordLlmUsage (Int32.Parse fields.[1]) (Decimal.Parse fields.[2])
+        | "embedding-call" -> request.Budget.BeginEmbeddingCall()
+        | "embedding-usage" -> request.Budget.RecordEmbeddingUsage (Int32.Parse fields.[1]) (Decimal.Parse fields.[2])
         | "tool-call" -> request.Budget.BeginToolCall()
         | operation -> invalidArg (nameof request) (sprintf "Unknown budget operation '%s'." operation)
 
