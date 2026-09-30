@@ -17,6 +17,10 @@
     <Compile Include="src/IndexContractTests.fs" />
     <Compile Include="src/IndexManagementContractTests.fs" />
     <Compile Include="src/IndexBenchmarkTests.fs" />
+    <Compile Include="src/RetrievalContractTests.fs" />
+    <Compile Include="src/RetrievalNormalizationTests.fs" />
+    <Compile Include="src/RetrievalTransformationTests.fs" />
+    <Compile Include="src/RetrievalAdmissionTests.fs" />
     <Compile Include="src/KnowledgeContractTests.fs" />
     <Compile Include="src/SourceConnectorTests.fs" />
     <Compile Include="src/HttpSourceConnectorTests.fs" />

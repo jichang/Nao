@@ -82,7 +82,7 @@ type ModelEnrichmentTests() =
         enricher.EnrichAsync request CancellationToken.None
         |> _.GetAwaiter().GetResult()
 
-    let descriptor =
+    let descriptor: KnowledgeEnrichmentModelDescriptor =
         { Model = ComponentVersion.create "knowledge-enrichment-model" "2026-09"
           ConfigurationHash = ContentHash.computeText "prompt-v1"
           Deterministic = true }

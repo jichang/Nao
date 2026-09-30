@@ -143,17 +143,17 @@ This workstream creates a reusable knowledge subsystem for ingestion, indexing, 
 
 ## RAG-01 — Query understanding
 
-- [ ] Define a retrieval request with query, identity, filters, strategy, limits, and budget.
-- [ ] Add deterministic normalization.
-- [ ] Add optional query rewriting, decomposition, hypothetical-document, and multi-query strategies.
-- [ ] Preserve the original query and all generated variants in evidence.
-- [ ] Guard generated queries against authorization-scope expansion.
-- [ ] Skip retrieval for clearly non-knowledge tasks through an explicit policy.
+- [x] Define a retrieval request with query, identity, filters, strategy, limits, and budget.
+- [x] Add deterministic normalization.
+- [x] Add optional query rewriting, decomposition, hypothetical-document, and multi-query strategies.
+- [x] Preserve the original query and all generated variants in evidence.
+- [x] Guard generated queries against authorization-scope expansion.
+- [x] Skip retrieval for clearly non-knowledge tasks through an explicit policy.
 
 **Acceptance criteria**
 
-- [ ] Query transformations never remove mandatory tenant or ACL filters.
-- [ ] Evaluation can compare original-query and transformed-query retrieval.
+- [x] Query transformations never remove mandatory tenant or ACL filters.
+- [x] Evaluation can compare original-query and transformed-query retrieval.
 
 ## RAG-02 — Hybrid retrieval and fusion
 

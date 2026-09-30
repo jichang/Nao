@@ -17,6 +17,7 @@
     <Compile Include="src/Evaluators/LlmJudge.fs" />
     <Compile Include="src/Evaluators/Composite.fs" />
     <Compile Include="src/Evaluators/VerificationJudge.fs" />
+    <Compile Include="src/Evaluators/KnowledgeRetrievalComparison.fs" />
     <Compile Include="src/Running/EvalReport.fs" />
     <Compile Include="src/Running/EvalArchive.fs" />
     <Compile Include="src/Running/EvalRunner.fs" />
@@ -24,6 +25,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Nao.Agents\Nao.Agents.fsproj" />
+    <ProjectReference Include="..\Nao.Knowledge\Nao.Knowledge.fsproj" />
   </ItemGroup>
 
   <Import Project="..\..\.paket\Paket.Restore.targets" />

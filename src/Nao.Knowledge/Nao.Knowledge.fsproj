@@ -13,6 +13,10 @@
     <Compile Include="src/IndexContracts.fs" />
     <Compile Include="src/IndexManagementContracts.fs" />
     <Compile Include="src/IndexBenchmark.fs" />
+    <Compile Include="src/RetrievalContracts.fs" />
+    <Compile Include="src/RetrievalNormalization.fs" />
+    <Compile Include="src/RetrievalTransformation.fs" />
+    <Compile Include="src/RetrievalAdmission.fs" />
     <Compile Include="src/EmbeddingCacheContracts.fs" />
     <Compile Include="src/InMemoryEmbeddingCache.fs" />
     <Compile Include="src/CachedEmbeddingExecution.fs" />

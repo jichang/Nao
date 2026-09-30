@@ -246,6 +246,39 @@ fixtures report zero cost because their embeddings and queries invoke no billed 
 [Knowledge index benchmarks](knowledge-index-benchmarks.md) for the reproducible workload and
 reference evidence.
 
+RAG retrieval begins with `KnowledgeRetrievalRequest`. It preserves the exact original query and
+binds it to the complete `AuthorizationScope`, namespace, typed index filter, vendor-independent
+retrieval strategy, bounded query/candidate fan-out, and explicit duration/model/embedding/token/
+cost budget. The boundary accepts authorization scope rather than a bare identity so query
+understanding cannot discard tenant, workspace, session, group, role, or principal evidence.
+Zero provider-call and cost budgets are valid for deterministic lexical retrieval.
+
+`KnowledgeQueryNormalizer` deterministically converts the original query to Unicode NFKC,
+collapses Unicode whitespace to single ASCII spaces, trims through that canonicalization pass,
+and rejects non-whitespace controls. It deliberately preserves case and punctuation. The
+`KnowledgeNormalizedQuery` evidence retains the unchanged request, versioned normalizer
+descriptor, and original/normalized content hashes, so normalization cannot discard authorization,
+filters, limits, or budget and cannot overwrite the original user input.
+
+`KnowledgeQueryTransformation` optionally applies rewrite, decomposition, hypothetical-document,
+or multi-query generation through a provider-independent model capability. Every plan retains the
+same request and normalized original as variant zero, then records normalized, deduplicated
+generated variants with typed origin, ordinal, hash, and model/configuration provenance. Models
+can return only text plus metered usage, not replacement authorization or filters. Duration,
+model-call, token, cost, generated-character, and variant limits fail closed.
+
+`KnowledgeRetrievalAdmissionPolicy` evaluates explicit task intent before transformation.
+Knowledge-seeking and unspecified tasks retrieve; only explicit non-knowledge intent skips. The
+conservative unspecified behavior prevents uncertain classification from silently suppressing
+relevant sources. `KnowledgeQueryUnderstanding.planAsync` returns typed skip or retrieval-plan
+evidence and never invokes the transformation model for a skipped task.
+
+`Nao.Eval` compares original and transformed retrieval with
+`KnowledgeRetrievalComparison.evaluateAsync`. It executes every evidenced variant exactly once
+with the same immutable request, measures per-variant recall, precision, and latency, and compares
+the ordinal-zero original against the union of generated-variant results. Comparison evidence
+includes original/transformed measurements and recall, precision, and latency deltas.
+
 Index control-plane operations are represented separately from query capabilities. A
 `KnowledgeIndexManagement<'Record>` implementation exposes idempotent creation, health,
 revision-based migration planning/application, atomic namespace rebuild, typed backup, and

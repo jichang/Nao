@@ -17,10 +17,12 @@
     <Compile Include="src/SafetyMetricsTests.fs" />
     <Compile Include="src/EvalRunnerTests.fs" />
     <Compile Include="src/EvalArchiveTests.fs" />
+    <Compile Include="src/KnowledgeRetrievalComparisonTests.fs" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Nao.Testing\Nao.Testing.fsproj" />
     <ProjectReference Include="..\..\src\Nao.Eval\Nao.Eval.fsproj" />
+    <ProjectReference Include="..\..\src\Nao.Knowledge\Nao.Knowledge.fsproj" />
   </ItemGroup>
   <Import Project="..\..\.paket\Paket.Restore.targets" />
 </Project>
