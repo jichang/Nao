@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="src/PgvectorIndexConfig.fs" />
+    <Compile Include="src/PostgresIndexSupport.fs" />
+    <Compile Include="src/PostgresKnowledgeDataSource.fs" />
+    <Compile Include="src/PgvectorKnowledgeIndex.fs" />
+    <Compile Include="src/PostgresLexicalKnowledgeIndex.fs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Nao.Agents\Nao.Agents.fsproj" />
+    <ProjectReference Include="..\Nao.Knowledge\Nao.Knowledge.fsproj" />
+  </ItemGroup>
+
+  <Import Project="..\..\.paket\Paket.Restore.targets" />
+
+</Project>

@@ -125,21 +125,21 @@ This workstream creates a reusable knowledge subsystem for ingestion, indexing, 
 
 ## KNO-06 — Indexes and storage adapters
 
-- [ ] Define a vector index interface distinct from in-process semantic memory.
-- [ ] Define lexical/full-text index and optional graph-index interfaces.
-- [ ] Support namespace, tenant, workspace, ACL, metadata, time, and source-version filters.
-- [ ] Implement one production vector adapter, with pgvector or Qdrant as an initial candidate.
-- [ ] Implement one production lexical adapter.
-- [ ] Define index creation, health, migration, rebuild, backup, and restore operations.
-- [ ] Add bulk upsert/delete and transactional or compensating update semantics.
-- [ ] Prevent stale chunks from remaining queryable after deletion.
-- [ ] Benchmark corpus size, index time, recall, latency, memory, and cost.
+- [x] Define a vector index interface distinct from in-process semantic memory.
+- [x] Define lexical/full-text index and optional graph-index interfaces.
+- [x] Support namespace, tenant, workspace, ACL, metadata, time, and source-version filters.
+- [x] Implement one production vector adapter, with pgvector or Qdrant as an initial candidate.
+- [x] Implement one production lexical adapter.
+- [x] Define index creation, health, migration, rebuild, backup, and restore operations.
+- [x] Add bulk upsert/delete and transactional or compensating update semantics.
+- [x] Prevent stale chunks from remaining queryable after deletion.
+- [x] Benchmark corpus size, index time, recall, latency, memory, and cost.
 
 **Acceptance criteria**
 
-- [ ] Retrieval does not require loading all embeddings into process memory.
-- [ ] ACL and tenant filters are applied inside the query boundary, not only after retrieval.
-- [ ] Rebuilding from source records yields equivalent searchable content.
+- [x] Retrieval does not require loading all embeddings into process memory.
+- [x] ACL and tenant filters are applied inside the query boundary, not only after retrieval.
+- [x] Rebuilding from source records yields equivalent searchable content.
 
 ## RAG-01 — Query understanding
 

@@ -74,6 +74,7 @@ Dependencies point inward from runtimes and adapters to core contracts:
 | `Nao.Agents` | Core agent, tool, memory, governance, and observability contracts and execution | `Nao.Protocols` |
 | `Nao.Eval` | Evaluation implementation | `Nao.Agents` |
 | `Nao.Knowledge` | Source-backed knowledge and retrieval contracts | `Nao.Agents` |
+| `Nao.Knowledge.Postgres` | Optional PostgreSQL vector and full-text knowledge indexes | `Nao.Agents`, `Nao.Knowledge` |
 | `Nao.Persistence.Infrastructure` | Provider-neutral ADO.NET, serialization, events, and backend selection contracts | `Nao.Agents` |
 | `Nao.Persistence.Memory` | Memory storage implementations | `Nao.Agents`, `Nao.Persistence.Infrastructure` |
 | `Nao.Persistence.Observability` | Trace, metric, audit, and journal implementations | `Nao.Agents`, `Nao.Persistence.Infrastructure` |
@@ -127,7 +128,7 @@ The supported solution uses these primary test categories:
 |---|---|---|
 | Unit | `Nao.Agents.Tests`, `Nao.Protocols.Tests` | In-process contract and behavior checks |
 | Knowledge unit | `Nao.Knowledge.Tests` | Source, version, lineage, lifecycle, citation, and retrieval contracts |
-| Integration | `Nao.Identity.Oidc.Tests`, `Nao.Persistence.Tests`, `Nao.Providers.Tests`, `Nao.Runtime.Orleans.Tests` | Deterministic identity-adapter, storage, provider-adapter, and runtime checks |
+| Integration | `Nao.Identity.Oidc.Tests`, `Nao.Knowledge.Postgres.Tests`, `Nao.Persistence.Tests`, `Nao.Providers.Tests`, `Nao.Runtime.Orleans.Tests` | Identity-adapter, external knowledge-index, storage, provider-adapter, and runtime checks |
 | End-to-end | `Nao.E2E.Tests` | Full harness and orchestration flows using local fakes |
 | Evaluation | `Nao.Eval.Tests` | Evaluation runner, metric, and report behavior |
 | Security | MSTest `Security` category within an owning project | Permission, policy, isolation, and tenant-boundary checks |
@@ -135,7 +136,12 @@ The supported solution uses these primary test categories:
 | Isolation | MSTest `Isolation` category in `Nao.Agents.Tests` | Process, container-adapter, worker-protocol, resource-limit, and secret-boundary checks |
 | Performance | MSTest `Performance` category within an owning project | Explicit benchmark or regression-threshold checks |
 
-All currently supported projects are deterministic and run with `dotnet test Nao.slnx`. Tests that require an external database, container, network service, or model must use the corresponding MSTest category (`ExternalDatabase`, `Container`, `Network`, or `ExternalModel`) and an explicit opt-in CI job before entering the supported solution. No such tests currently exist.
+All currently supported projects run with `dotnet test Nao.slnx`; tests without configured external
+infrastructure remain deterministic. Tests that require an external database, container, network
+service, or model use the corresponding MSTest category (`ExternalDatabase`, `Container`,
+`Network`, or `ExternalModel`). Pgvector integration coverage is tagged `ExternalDatabase` and
+`Container`, runs when `NAO_TEST_POSTGRES` supplies a PostgreSQL connection string, and otherwise
+reports inconclusive.
 
 The CI workflow validates solution membership and required security categories, runs the
 `FailClosed` and `Isolation` categories as explicit security gates, then runs the complete test

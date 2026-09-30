@@ -36,6 +36,10 @@ ALLOWED_PROJECT_REFERENCES = {
     Path("src/Nao.Knowledge/Nao.Knowledge.fsproj"): {
         Path("src/Nao.Agents/Nao.Agents.fsproj"),
     },
+    Path("src/Nao.Knowledge.Postgres/Nao.Knowledge.Postgres.fsproj"): {
+        Path("src/Nao.Agents/Nao.Agents.fsproj"),
+        Path("src/Nao.Knowledge/Nao.Knowledge.fsproj"),
+    },
     Path("src/Nao.Persistence/Nao.Persistence.fsproj"): {
         Path("src/Nao.Agents/Nao.Agents.fsproj"),
         Path("src/Nao.Persistence.Feedback/Nao.Persistence.Feedback.fsproj"),

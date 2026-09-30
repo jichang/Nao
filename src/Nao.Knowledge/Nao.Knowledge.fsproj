@@ -10,6 +10,9 @@
     <Compile Include="src/EmbeddingExecutionContracts.fs" />
     <Compile Include="src/EmbeddingExecutor.fs" />
     <Compile Include="src/EmbeddingPersistence.fs" />
+    <Compile Include="src/IndexContracts.fs" />
+    <Compile Include="src/IndexManagementContracts.fs" />
+    <Compile Include="src/IndexBenchmark.fs" />
     <Compile Include="src/EmbeddingCacheContracts.fs" />
     <Compile Include="src/InMemoryEmbeddingCache.fs" />
     <Compile Include="src/CachedEmbeddingExecution.fs" />

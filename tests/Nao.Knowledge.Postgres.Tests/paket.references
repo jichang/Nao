@@ -1,0 +1,6 @@
+Npgsql
+Pgvector
+
+group Test
+coverlet.collector
+MSTest

@@ -208,6 +208,60 @@ evaluations. Exceeding `MaxEmbeddingCalls`, total-token, or cost limits produces
 structured execution-limit outcome as other governed resources; a zero-call budget blocks
 before provider invocation.
 
+Search storage is defined independently from agent semantic memory. Vector indexes accept only
+validated records bound to one complete embedding profile; lexical indexes receive source-backed
+text records; graph indexes are optional and store explicit chunk-to-chunk edges. Every operation
+requires an `AuthorizationScope`. Tenant, workspace, session, and ACL constraints therefore form
+the mandatory query boundary rather than optional post-retrieval filters. Callers may additionally
+filter by namespace, source, immutable document version, prefixed source/version/chunk metadata,
+source-modification time, and ingestion time.
+
+`Nao.Knowledge.Postgres` implements the vector contract with PostgreSQL and pgvector. An adapter
+instance is bound to one complete embedding profile and creates a profile-derived table with a
+fixed `vector(dimensions)` column and the matching cosine, inner-product, or Euclidean HNSW
+operator class. Profile metadata is recorded and verified before use. `ApplyAsync` accepts one
+explicit mutation containing bulk upserts plus chunk-ID and/or typed-filter deletion. PostgreSQL
+applies the deletion union and upserts in one owner-scoped transaction, rolls back every change
+on failure, and reports upserted/deleted counts only after commit. Source retirement additionally
+records a permanent owner/namespace/source tombstone under a transaction lock, deletes every
+source row, and rejects later upserts. Queries require an active source-state row inside the SQL
+boundary, so a retired source remains unqueryable even if physical cleanup is interrupted.
+Queries apply tenant, workspace,
+session, user/group/role ACL, namespace, source/version, metadata, and time predicates in SQL
+before nearest-neighbor ordering. The host owns the configured `NpgsqlDataSource`, so credential
+resolution, pooling, rotation, and disposal remain deployment concerns.
+
+The same package implements lexical retrieval with PostgreSQL full-text search. Each configured
+PostgreSQL text-search configuration receives a stable table and marker, persisted `tsvector`,
+and GIN index. Configuration names are resolved through PostgreSQL's `regconfig` boundary rather
+than interpolated into SQL. Indexing uses `to_tsvector`; queries use `websearch_to_tsquery` and
+`ts_rank_cd`. Atomic mutation, source/version and metadata/time filters, and
+tenant/workspace/session/user/group/role authorization share the vector adapter's implementation,
+so lexical and vector results cannot diverge on access-control or transaction semantics.
+
+Index benchmarks use `KnowledgeIndexBenchmark` to emit versioned JSON evidence for corpus size,
+index duration and throughput, recall, query-latency percentiles, managed allocation, physical
+adapter storage, and explicit USD cost. PostgreSQL storage uses `pg_total_relation_size`; benchmark
+fixtures report zero cost because their embeddings and queries invoke no billed provider. See
+[Knowledge index benchmarks](knowledge-index-benchmarks.md) for the reproducible workload and
+reference evidence.
+
+Index control-plane operations are represented separately from query capabilities. A
+`KnowledgeIndexManagement<'Record>` implementation exposes idempotent creation, health,
+revision-based migration planning/application, atomic namespace rebuild, typed backup, and
+owner-validated restore. Creation, health, and migration are authorized by deployment-controlled
+adapter credentials rather than an end-user scope. Rebuild, backup, and restore require
+`AuthorizationScope` and operate on exactly one owner and namespace. Backups retain validated
+vector or lexical records instead of opaque provider dumps, carry a v1 marker, and fail closed
+when restored under another authorization identity. Backup records may contain source text and
+vectors and therefore require storage protection matching the indexed source classification.
+
+`KnowledgeIndexRebuild.vectorAsync` and `KnowledgeIndexRebuild.lexicalAsync` execute rebuilds
+through the normal atomic mutation boundary. They delete the complete owner namespace and insert
+the authoritative records in one transaction, including the empty-corpus case. PostgreSQL
+integration tests compare complete ranked hits before and after rebuild, covering restored
+documents, ordering, and scores rather than row counts alone.
+
 Concrete provider adapters live outside the vendor-independent knowledge package. The hosted
 OpenAI-compatible adapter posts ordered batches to a complete embeddings endpoint, resolves an
 optional bearer credential from `SecretProvider` for each operation, verifies the returned model
@@ -224,8 +278,8 @@ the profile identity, requiring exact dimensions, and rejecting non-finite value
 persisted IDs bind one chunk to one embedding profile. The reference store partitions by the
 complete authorization identity, validates an entire batch before mutation, copies arrays on
 write and read, accepts an equivalent replay without replacing the first record, and rejects any
-attempt to rebind an ID to different vector data. Production vector-index persistence remains a
-separate KNO-06 adapter concern.
+attempt to rebind an ID to different vector data. Pgvector indexing consumes these validated
+records without making the embedding store itself queryable.
 
 `CachedEmbeddingExecution` adds an authorization-partitioned, content-addressed v1 cache above
 provider execution. Keys combine the canonical content hash with the complete validated

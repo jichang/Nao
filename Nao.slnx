@@ -5,6 +5,7 @@
     <Project Path="src/Nao.Eval/Nao.Eval.fsproj" />
     <Project Path="src/Nao.Identity.Oidc/Nao.Identity.Oidc.fsproj" />
     <Project Path="src/Nao.Knowledge/Nao.Knowledge.fsproj" />
+    <Project Path="src/Nao.Knowledge.Postgres/Nao.Knowledge.Postgres.fsproj" />
     <Project Path="src/Nao.Knowledge.Documents/Nao.Knowledge.Documents.fsproj" />
     <Project Path="src/Nao.Knowledge.Documents.Worker/Nao.Knowledge.Documents.Worker.fsproj" />
     <Project Path="src/Nao.Persistence/Nao.Persistence.fsproj" />
@@ -28,6 +29,7 @@
     <Project Path="tests/Nao.Eval.Tests/Nao.Eval.Tests.fsproj" />
     <Project Path="tests/Nao.Identity.Oidc.Tests/Nao.Identity.Oidc.Tests.fsproj" />
     <Project Path="tests/Nao.Knowledge.Tests/Nao.Knowledge.Tests.fsproj" />
+    <Project Path="tests/Nao.Knowledge.Postgres.Tests/Nao.Knowledge.Postgres.Tests.fsproj" />
     <Project Path="tests/Nao.Persistence.Tests/Nao.Persistence.Tests.fsproj" />
     <Project Path="tests/Nao.Protocols.Tests/Nao.Protocols.Tests.fsproj" />
     <Project Path="tests/Nao.Providers.Tests/Nao.Providers.Tests.fsproj" />
