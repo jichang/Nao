@@ -248,6 +248,17 @@ module internal PostgresIndexSupport =
         else
             Some(reader.GetFieldValue<DateTimeOffset> ordinal)
 
+    let chunkRoleValue =
+        function
+        | KnowledgeChunkRole.Parent -> "parent"
+        | KnowledgeChunkRole.Leaf -> "leaf"
+
+    let private parseChunkRole =
+        function
+        | "parent" -> KnowledgeChunkRole.Parent
+        | "leaf" -> KnowledgeChunkRole.Leaf
+        | value -> invalidOp $"PostgreSQL index contains unsupported chunk role '{value}'."
+
     let readDocument (reader: NpgsqlDataReader) =
         let owner =
             { TenantId = reader.GetString(0) |> TenantId.parse
@@ -274,6 +285,8 @@ module internal PostgresIndexSupport =
             (reader.GetString(9) |> KnowledgeSourceId.parse)
             (reader.GetString(10) |> KnowledgeDocumentVersionId.parse)
             (reader.GetString(11) |> KnowledgeChunkId.parse)
+            (reader.GetString(18) |> parseChunkRole)
+            (getOptionalString reader 19 |> Option.map KnowledgeChunkId.parse)
             (reader.GetString(12) |> ContentHash.parse)
             (reader.GetString(14))
             metadata
@@ -285,7 +298,8 @@ module internal PostgresIndexSupport =
         """
         tenant_id, workspace_id, owner_user_id, owner_group_id, owner_session_id,
         acl_users, acl_groups, acl_roles, namespace, source_id, document_version_id,
-        chunk_id, content_hash, metadata::text, content, source_modified_at, ingested_at, indexed_at
+        chunk_id, content_hash, metadata::text, content, source_modified_at, ingested_at, indexed_at,
+        chunk_role, parent_chunk_id
         """
 
     let authorizationPredicate =

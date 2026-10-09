@@ -83,11 +83,14 @@ type PostgresKnowledgeIndexTests() =
             ContentUnit.create version.Id 0 ContentUnitKind.Paragraph text location testComponent [] Map.empty lifecycle
 
         let chunk =
+            let parentChunkId =
+                KnowledgeChunkId.derive version.Id "parent-fixture" 0 (ContentHash.computeText "parent")
+
             KnowledgeChunk.create
                 version.Id
                 0
                 KnowledgeChunkRole.Leaf
-                None
+                (Some parentChunkId)
                 [ unit.Id ]
                 text
                 [ location ]
@@ -206,6 +209,15 @@ type PostgresKnowledgeIndexTests() =
                     |> List.head
                     |> VectorIndexHit.document
                     |> KnowledgeIndexDocument.chunkId
+                )
+
+                let firstDocument = first |> VectorIndexRecord.document
+                let returnedDocument = ownerHits |> List.head |> VectorIndexHit.document
+                Assert.AreEqual(KnowledgeChunkRole.Leaf, KnowledgeIndexDocument.role returnedDocument)
+
+                Assert.AreEqual(
+                    KnowledgeIndexDocument.parentChunkId firstDocument,
+                    KnowledgeIndexDocument.parentChunkId returnedDocument
                 )
 
                 let rebuildResult =
@@ -397,6 +409,64 @@ type PostgresKnowledgeIndexTests() =
                     |> LexicalIndexHit.document
                     |> KnowledgeIndexDocument.chunkId
                 )
+
+                let returnedDocument = ranked |> List.head |> LexicalIndexHit.document
+                Assert.AreEqual(KnowledgeChunkRole.Leaf, KnowledgeIndexDocument.role returnedDocument)
+
+                Assert.AreEqual(
+                    KnowledgeIndexDocument.parentChunkId first,
+                    KnowledgeIndexDocument.parentChunkId returnedDocument
+                )
+
+                let parentChunkId = KnowledgeIndexDocument.parentChunkId first |> Option.get
+                let parentText = "hierarchy context"
+                let parentHash = ContentHash.computeText parentText
+
+                let parent =
+                    KnowledgeIndexDocument.restore
+                        namespaceName
+                        (KnowledgeIndexDocument.owner first)
+                        (KnowledgeIndexDocument.access first)
+                        (KnowledgeIndexDocument.sourceId first)
+                        (KnowledgeIndexDocument.documentVersionId first)
+                        parentChunkId
+                        KnowledgeChunkRole.Parent
+                        None
+                        parentHash
+                        parentText
+                        (KnowledgeIndexDocument.metadata first)
+                        (KnowledgeIndexDocument.sourceModifiedAt first)
+                        (KnowledgeIndexDocument.ingestedAt first)
+                        (KnowledgeIndexDocument.indexedAt first)
+
+                index.ApplyAsync
+                    owner
+                    (KnowledgeIndexMutation.create namespaceName [ parent ] [] None [])
+                    CancellationToken.None
+                |> _.GetAwaiter().GetResult()
+                |> ignore
+
+                let parentResolver = PostgresKnowledgeParentResolver.create dataSource config
+
+                let resolvedParents =
+                    parentResolver.ResolveAsync
+                        owner
+                        (KnowledgeParentResolutionRequest.create
+                            namespaceName
+                            KnowledgeIndexFilter.none
+                            [ parentChunkId ]
+                            1)
+                        CancellationToken.None
+                    |> _.GetAwaiter().GetResult()
+
+                CollectionAssert.AreEqual([| parent |], resolvedParents |> List.toArray)
+
+                index.ApplyAsync
+                    owner
+                    (KnowledgeIndexMutation.create namespaceName [] [ parentChunkId ] None [])
+                    CancellationToken.None
+                |> _.GetAwaiter().GetResult()
+                |> ignore
 
                 Assert.IsTrue(ranked |> List.head |> LexicalIndexHit.score |> (fun score -> score > 0.0))
 

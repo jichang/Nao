@@ -68,6 +68,18 @@ name, version, and content hash. Missing, duplicated, or unknown case results ar
 than producing a success-shaped partial report. A rate is `None` when its ground-truth class is
 absent, keeping “not measurable” distinct from a measured zero-error rate.
 
+`KnowledgeHybridRetrievalEvaluator` compares lexical, vector, and hybrid ranked retrieval against
+the exact same versioned `KnowledgeRetrievalQualityDataset`. Dataset identity includes a
+deterministic SHA-256 hash over its name, version, ordered case identities, queries, and sorted
+relevance judgments. Each strategy executes exactly once per case at one cutoff. Duplicate,
+null, or over-cutoff rankings fail closed. Evidence retains per-case rankings and macro-averaged
+recall, precision, mean reciprocal rank, and nDCG.
+
+The hybrid quality gate compares each hybrid metric with the better single-strategy value.
+Acceptance requires either a material improvement in at least one metric without a regression
+beyond tolerance, or parity across every metric with an explicit justification. Parity cannot
+silently pass without that rationale.
+
 ## Reproducibility
 
 A reproducible evaluation records:

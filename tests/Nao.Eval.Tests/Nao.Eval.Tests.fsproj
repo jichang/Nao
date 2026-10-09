@@ -18,6 +18,7 @@
     <Compile Include="src/EvalRunnerTests.fs" />
     <Compile Include="src/EvalArchiveTests.fs" />
     <Compile Include="src/KnowledgeRetrievalComparisonTests.fs" />
+    <Compile Include="src/KnowledgeHybridRetrievalEvaluationTests.fs" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Nao.Testing\Nao.Testing.fsproj" />

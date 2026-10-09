@@ -84,6 +84,8 @@ module PostgresLexicalKnowledgeIndex =
                     source_id text NOT NULL,
                     document_version_id text NOT NULL,
                     chunk_id text NOT NULL,
+                    chunk_role text NOT NULL CHECK (chunk_role IN ('parent', 'leaf')),
+                    parent_chunk_id text NULL,
                     content_hash text NOT NULL,
                     content text NOT NULL,
                     metadata jsonb NOT NULL,
@@ -91,6 +93,7 @@ module PostgresLexicalKnowledgeIndex =
                     ingested_at timestamptz NOT NULL,
                     indexed_at timestamptz NOT NULL,
                     search_vector tsvector NOT NULL,
+                    CHECK (chunk_role <> 'parent' OR parent_chunk_id IS NULL),
                     PRIMARY KEY (owner_key, namespace, chunk_id)
                 );
 
@@ -102,6 +105,8 @@ module PostgresLexicalKnowledgeIndex =
                     ON {table} (tenant_id, workspace_id, namespace);
                 CREATE INDEX IF NOT EXISTS {quoted (tableName + "_source")}
                     ON {table} (source_id, document_version_id);
+                CREATE INDEX IF NOT EXISTS {quoted (tableName + "_parent")}
+                    ON {table} (parent_chunk_id) WHERE parent_chunk_id IS NOT NULL;
                 CREATE INDEX IF NOT EXISTS {quoted (tableName + "_metadata")}
                     ON {table} USING gin (metadata);
                 """
@@ -241,12 +246,13 @@ module PostgresLexicalKnowledgeIndex =
                     INSERT INTO {table} (
                         owner_key, namespace, tenant_id, workspace_id, owner_user_id, owner_group_id,
                         owner_session_id, acl_users, acl_groups, acl_roles, source_id, document_version_id,
-                        chunk_id, content_hash, content, metadata, source_modified_at, ingested_at, indexed_at,
-                        search_vector
+                        chunk_id, chunk_role, parent_chunk_id, content_hash, content, metadata,
+                        source_modified_at, ingested_at, indexed_at, search_vector
                     ) VALUES (
                         @owner_key, @namespace, @tenant_id, @workspace_id, @owner_user_id, @owner_group_id,
                         @owner_session_id, @acl_users, @acl_groups, @acl_roles, @source_id, @document_version_id,
-                        @chunk_id, @content_hash, @content, @metadata, @source_modified_at, @ingested_at, @indexed_at,
+                        @chunk_id, @chunk_role, @parent_chunk_id, @content_hash, @content, @metadata,
+                        @source_modified_at, @ingested_at, @indexed_at,
                         to_tsvector(CAST(@text_search_configuration AS regconfig), @content)
                     )
                     ON CONFLICT (owner_key, namespace, chunk_id) DO UPDATE SET
@@ -255,6 +261,8 @@ module PostgresLexicalKnowledgeIndex =
                         acl_roles = EXCLUDED.acl_roles,
                         source_id = EXCLUDED.source_id,
                         document_version_id = EXCLUDED.document_version_id,
+                        chunk_role = EXCLUDED.chunk_role,
+                        parent_chunk_id = EXCLUDED.parent_chunk_id,
                         content_hash = EXCLUDED.content_hash,
                         content = EXCLUDED.content,
                         metadata = EXCLUDED.metadata,
@@ -297,6 +305,14 @@ module PostgresLexicalKnowledgeIndex =
                      |> KnowledgeDocumentVersionId.value)
 
                 addParameter command "chunk_id" (KnowledgeIndexDocument.chunkId document |> KnowledgeChunkId.value)
+                addParameter command "chunk_role" (KnowledgeIndexDocument.role document |> chunkRoleValue)
+
+                addNullableParameter
+                    command
+                    "parent_chunk_id"
+                    (KnowledgeIndexDocument.parentChunkId document
+                     |> Option.map KnowledgeChunkId.value)
+
                 addParameter command "content_hash" (KnowledgeIndexDocument.contentHash document |> ContentHash.value)
                 addParameter command "content" (KnowledgeIndexDocument.text document)
                 let metadataParameter = command.Parameters.Add("metadata", NpgsqlDbType.Jsonb)
@@ -380,7 +396,7 @@ module PostgresLexicalKnowledgeIndex =
                 let! found = reader.ReadAsync cancellationToken
 
                 if found then
-                    hits.Add(LexicalIndexHit.create (readDocument reader) (reader.GetDouble 18))
+                    hits.Add(LexicalIndexHit.create (readDocument reader) (reader.GetDouble 20))
                 else
                     reading <- false
 

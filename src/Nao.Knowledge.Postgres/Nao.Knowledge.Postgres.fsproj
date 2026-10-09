@@ -11,6 +11,7 @@
     <Compile Include="src/PostgresKnowledgeDataSource.fs" />
     <Compile Include="src/PgvectorKnowledgeIndex.fs" />
     <Compile Include="src/PostgresLexicalKnowledgeIndex.fs" />
+    <Compile Include="src/PostgresKnowledgeParentResolver.fs" />
   </ItemGroup>
 
   <ItemGroup>

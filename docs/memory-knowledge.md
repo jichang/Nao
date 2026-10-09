@@ -279,6 +279,107 @@ with the same immutable request, measures per-variant recall, precision, and lat
 the ordinal-zero original against the union of generated-variant results. Comparison evidence
 includes original/transformed measurements and recall, precision, and latency deltas.
 
+`KnowledgeLexicalRetrievalExecutor` implements the production lexical retrieval leg over an
+admitted query-understanding result. Skipped requests do not require an index. Retrieval plans run
+every evidenced query variant exactly once against `KnowledgeLexicalIndex`, passing the immutable
+authorization scope, namespace, typed filter, and per-query limit. Evidence retains the versioned
+executor, original plan, raw adapter score and rank, per-variant timing, total candidate count,
+duration, and zero lexical provider cost. The executor fails closed on null or over-limit output,
+actively cancels on duration-budget expiry, and revalidates returned documents against namespace,
+ACL, and every typed filter before exposing them. Raw candidates remain unfused and undeduplicated
+for the later hybrid-fusion policy.
+
+`KnowledgeVectorRetrievalExecutor` implements the corresponding vector leg. Query embeddings use a
+dedicated `KnowledgeQueryEmbedder` instead of source-backed `EmbeddingExecution`; queries therefore
+never acquire fake chunk identities or document-provenance records. One bounded embedding request
+contains every normalized variant by stable content hash and returns metered provider-call, token,
+and cost evidence under the index's complete embedding profile. Transformation usage is deducted
+before calculating query-embedding token and cost limits. The executor then runs profile-pinned
+vector queries concurrently with the immutable authorization, namespace, typed filter, and
+per-query limit. Its duration budget covers embedding and index access, and returned hits are
+revalidated against profile, namespace, ACL, and filter boundaries. Evidence retains raw
+per-variant ranks and scores for later fusion.
+
+Metadata-filtered retrieval is orthogonal to ranking strategy. Lexical and vector executors pass
+the request's exact `KnowledgeIndexFilter` into every index query, where production adapters apply
+source, immutable document-version, prefixed metadata, source-modification, and ingestion
+predicates before ranking and limiting. Successful results include versioned
+`KnowledgeRetrievalFilterEvidence` containing the exact filter and validated candidate count.
+Every returned document is revalidated against all filter dimensions; this is defense in depth,
+not a substitute for filtering inside the index boundary.
+
+`KnowledgeReciprocalRankFusionExecutor` combines lexical and vector evidence only when both legs
+retain the exact same immutable query plan and admission decision. Weighted reciprocal-rank fusion
+uses `weight / (rankConstant + oneBasedRank)` for every strategy-and-variant list containing a
+candidate; raw lexical and vector scores remain evidence but never become falsely comparable.
+Each fused candidate retains every leg, variant, source rank, raw score, weight, and contribution.
+Output ordering is deterministic by fused score, best contributing rank, then canonical chunk
+identity, and the request's total candidate limit caps the result. Duplicate chunks inside one
+ranking list or inconsistent documents for one chunk identity fail closed.
+
+`KnowledgeRetrievalDiversitySelector` performs deterministic greedy selection over fused rank.
+Configuration bounds the total selected candidates and optionally candidates per source and per
+immutable document version, while exact-content suppression uses the indexed content hash. Every
+fused candidate receives evidenced selected or suppressed status, including the selected rank or
+the canonical duplicate chunk, source limit, document-version limit, or total limit. Selected
+candidates retain their complete fusion evidence and score. The selector intentionally does not
+infer near duplicates from text because durable near-duplicate relationships are not present in
+indexed retrieval documents.
+
+Searchable index documents now retain chunk role and optional parent identity. PostgreSQL vector
+and lexical adapters persist and restore both fields, while `PostgresKnowledgeParentResolver`
+resolves parent documents from the lexical table under SQL-bound authorization, active-source,
+namespace, typed-filter, role, identity, and count predicates.
+`KnowledgeParentChildExpansionExecutor` gathers unique parent identities from selected leaf chunks,
+resolves each eligible parent once, and revalidates its request boundary, parent role, child
+relationship, source, and immutable document version. Configuration and remaining request
+candidate capacity bound expansion; every relationship is evidenced as expanded, unavailable, or
+parent-limited. Resolution timeout actively cancels the adapter.
+
+`KnowledgeGraphNeighborhoodExpansionExecutor` optionally follows graph edges only for
+`HybridWithGraph` retrieval. Selected chunks become the authorized graph start set, while
+configuration bounds edge kinds, depth, and neighbors and the request's remaining candidate
+capacity provides the final result bound. Empty configured edge kinds permit all adapter-defined
+edge kinds. Every returned path must begin at a selected chunk, end at its declared hit, remain
+within depth, and contain no cycle. Non-selected hits are materialized through
+`KnowledgeGraphDocumentResolver` with the exact authorization, namespace, typed filter, requested
+chunk identities, and count limit, then revalidated at the retrieval boundary. Evidence records
+expanded, already-selected, and unavailable hits with graph score, depth, path, and rank.
+Ordinary lexical, vector, and hybrid strategies do not require graph infrastructure. Expansion
+timeout actively cancels both graph traversal and document resolution.
+
+`KnowledgeRetrievalCandidateAssembler` produces one ordered, deduplicated scored-candidate surface
+from diversity selection and optional parent and graph expansion. It requires every input to
+reference the exact same diversity selection. Selected chunks retain their weighted
+reciprocal-rank fusion candidate and contribution evidence. Parent scores are explicitly derived
+as the maximum fused score among their evidenced selected children; the supporting candidates and
+relationship evidence remain attached. Graph neighbors retain the adapter's graph score, depth,
+path, and hit evidence. These score kinds remain a typed discriminated union and are not normalized
+or falsely compared across strategies. When parent and graph expansion reach the same document,
+one candidate retains both evidence entries in stage order. Final ranks follow selected, parent,
+then graph discovery order, and assembly fails if the unique aggregate exceeds the request's
+candidate limit.
+
+`KnowledgeHybridRetrievalPipeline` is the aggregate execution boundary for hybrid and
+hybrid-with-graph retrieval. One linked deadline starts before normalization and query
+understanding and remains active through lexical/vector execution, fusion, diversity, parent
+expansion, graph expansion, and candidate assembly. Caller cancellation remains distinguishable
+from budget expiry. Lexical and vector legs execute concurrently after one shared understanding
+plan. Parent expansion receives precedence after selected candidates, and the pipeline reduces the
+graph neighbor limit to the remaining candidate capacity; a zero limit is an explicit bounded
+no-op. The resulting `KnowledgeHybridRetrievalUsage` reports model calls, embedding calls, input
+and output tokens, estimated cost, raw lexical/vector candidate observations, final unique
+candidates, and end-to-end duration. Calls, tokens, cost, duration, and final candidates are
+validated again against the immutable request budget and limits after all stages complete.
+
+`Nao.Eval` provides `KnowledgeHybridRetrievalEvaluator` for versioned lexical, vector, and hybrid
+quality comparison at one ranked cutoff. Datasets carry deterministic content hashes and
+non-empty relevance judgments. Evaluation invokes every strategy exactly once per case and
+retains per-case rankings plus macro recall, precision, mean reciprocal rank, and nDCG. Hybrid is
+accepted only when it materially improves at least one metric without exceeding the configured
+regression tolerance, or when every metric is within parity tolerance and the evidence records an
+explicit justification.
+
 Index control-plane operations are represented separately from query capabilities. A
 `KnowledgeIndexManagement<'Record>` implementation exposes idempotent creation, health,
 revision-based migration planning/application, atomic namespace rebuild, typed backup, and

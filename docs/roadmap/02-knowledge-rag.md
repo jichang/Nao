@@ -157,20 +157,20 @@ This workstream creates a reusable knowledge subsystem for ingestion, indexing, 
 
 ## RAG-02 — Hybrid retrieval and fusion
 
-- [ ] Implement lexical retrieval.
-- [ ] Implement vector retrieval.
-- [ ] Implement metadata-filtered retrieval.
-- [ ] Implement reciprocal-rank fusion or another documented fusion algorithm.
-- [ ] Add configurable diversity and duplicate suppression.
-- [ ] Add parent-child expansion.
-- [ ] Add optional graph-neighborhood expansion.
-- [ ] Return scored candidates with strategy-specific evidence.
-- [ ] Bound candidate count, latency, and cost.
+- [x] Implement lexical retrieval.
+- [x] Implement vector retrieval.
+- [x] Implement metadata-filtered retrieval.
+- [x] Implement reciprocal-rank fusion or another documented fusion algorithm.
+- [x] Add configurable diversity and duplicate suppression.
+- [x] Add parent-child expansion.
+- [x] Add optional graph-neighborhood expansion.
+- [x] Return scored candidates with strategy-specific evidence.
+- [x] Bound candidate count, latency, and cost.
 
 **Acceptance criteria**
 
-- [ ] Hybrid retrieval outperforms or justifies parity with single-strategy baselines on versioned datasets.
-- [ ] Score semantics and fusion behavior are documented and tested.
+- [x] Hybrid retrieval outperforms or justifies parity with single-strategy baselines on versioned datasets.
+- [x] Score semantics and fusion behavior are documented and tested.
 
 ## RAG-03 — Reranking and context assembly
 

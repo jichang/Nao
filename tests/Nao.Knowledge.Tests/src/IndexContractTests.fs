@@ -96,6 +96,8 @@ type IndexContractTests() =
 
         Assert.AreEqual(namespaceName, KnowledgeIndexDocument.namespaceName document)
         Assert.AreEqual("content", KnowledgeIndexDocument.text document)
+        Assert.AreEqual(KnowledgeChunkRole.Leaf, KnowledgeIndexDocument.role document)
+        Assert.AreEqual(None, KnowledgeIndexDocument.parentChunkId document)
         Assert.AreEqual("docs", KnowledgeIndexDocument.metadata document |> Map.find "source.system")
         Assert.AreEqual("current", KnowledgeIndexDocument.metadata document |> Map.find "version.release")
         Assert.AreEqual("intro", KnowledgeIndexDocument.metadata document |> Map.find "chunk.section")
@@ -165,6 +167,29 @@ type IndexContractTests() =
         |> ignore
 
         Assert.ThrowsExactly<ArgumentException>(fun () -> GraphIndexQuery.create namespaceName [] [] 1 5 |> ignore)
+        |> ignore
+
+    [<TestMethod>]
+    member _.``Restored parent index documents cannot reference another parent``() =
+        let document, _ = createDocument KnowledgeIndexAccess.ownerOnly
+
+        Assert.ThrowsExactly<ArgumentException>(fun () ->
+            KnowledgeIndexDocument.restore
+                namespaceName
+                (KnowledgeIndexDocument.owner document)
+                (KnowledgeIndexDocument.access document)
+                (KnowledgeIndexDocument.sourceId document)
+                (KnowledgeIndexDocument.documentVersionId document)
+                (KnowledgeIndexDocument.chunkId document)
+                KnowledgeChunkRole.Parent
+                (Some(KnowledgeIndexDocument.chunkId document))
+                (KnowledgeIndexDocument.contentHash document)
+                (KnowledgeIndexDocument.text document)
+                (KnowledgeIndexDocument.metadata document)
+                (KnowledgeIndexDocument.sourceModifiedAt document)
+                (KnowledgeIndexDocument.ingestedAt document)
+                (KnowledgeIndexDocument.indexedAt document)
+            |> ignore)
         |> ignore
 
     [<TestMethod>]

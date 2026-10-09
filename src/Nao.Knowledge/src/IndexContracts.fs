@@ -78,6 +78,8 @@ type KnowledgeIndexDocument =
           SourceId: KnowledgeSourceId
           DocumentVersionId: KnowledgeDocumentVersionId
           ChunkId: KnowledgeChunkId
+          Role: KnowledgeChunkRole
+          ParentChunkId: KnowledgeChunkId option
           ContentHash: ContentHash
           Text: string
           Metadata: Map<string, string>
@@ -132,6 +134,8 @@ module KnowledgeIndexDocument =
           SourceId = source.Id
           DocumentVersionId = version.Id
           ChunkId = chunk.Id
+          Role = chunk.Role
+          ParentChunkId = chunk.ParentChunkId
           ContentHash = chunk.ContentHash
           Text = chunk.Text
           Metadata = metadata
@@ -146,6 +150,8 @@ module KnowledgeIndexDocument =
         sourceId
         documentVersionId
         chunkId
+        role
+        parentChunkId
         contentHash
         text
         metadata
@@ -162,12 +168,19 @@ module KnowledgeIndexDocument =
         if indexedAt < ingestedAt then
             invalidArg (nameof indexedAt) "Index timestamp cannot precede ingestion."
 
+        match role, parentChunkId with
+        | KnowledgeChunkRole.Parent, Some _ ->
+            invalidArg (nameof parentChunkId) "An indexed parent chunk cannot itself reference a parent."
+        | _ -> ()
+
         { Namespace = namespaceName
           Owner = owner
           Access = access
           SourceId = sourceId
           DocumentVersionId = documentVersionId
           ChunkId = chunkId
+          Role = role
+          ParentChunkId = parentChunkId
           ContentHash = contentHash
           Text = text
           Metadata = validateMetadata metadata
@@ -181,6 +194,8 @@ module KnowledgeIndexDocument =
     let sourceId value = value.SourceId
     let documentVersionId value = value.DocumentVersionId
     let chunkId value = value.ChunkId
+    let role value = value.Role
+    let parentChunkId value = value.ParentChunkId
     let contentHash value = value.ContentHash
     let text value = value.Text
     let metadata value = value.Metadata

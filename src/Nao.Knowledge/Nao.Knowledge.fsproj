@@ -17,6 +17,16 @@
     <Compile Include="src/RetrievalNormalization.fs" />
     <Compile Include="src/RetrievalTransformation.fs" />
     <Compile Include="src/RetrievalAdmission.fs" />
+    <Compile Include="src/RetrievalBoundary.fs" />
+    <Compile Include="src/QueryEmbeddingContracts.fs" />
+    <Compile Include="src/LexicalRetrieval.fs" />
+    <Compile Include="src/VectorRetrieval.fs" />
+    <Compile Include="src/ReciprocalRankFusion.fs" />
+    <Compile Include="src/RetrievalDiversity.fs" />
+    <Compile Include="src/ParentChildExpansion.fs" />
+    <Compile Include="src/GraphNeighborhoodExpansion.fs" />
+    <Compile Include="src/RetrievalCandidates.fs" />
+    <Compile Include="src/HybridRetrievalPipeline.fs" />
     <Compile Include="src/EmbeddingCacheContracts.fs" />
     <Compile Include="src/InMemoryEmbeddingCache.fs" />
     <Compile Include="src/CachedEmbeddingExecution.fs" />

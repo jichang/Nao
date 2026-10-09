@@ -21,6 +21,14 @@
     <Compile Include="src/RetrievalNormalizationTests.fs" />
     <Compile Include="src/RetrievalTransformationTests.fs" />
     <Compile Include="src/RetrievalAdmissionTests.fs" />
+    <Compile Include="src/LexicalRetrievalTests.fs" />
+    <Compile Include="src/VectorRetrievalTests.fs" />
+    <Compile Include="src/MetadataFilteredRetrievalTests.fs" />
+    <Compile Include="src/ReciprocalRankFusionTests.fs" />
+    <Compile Include="src/RetrievalDiversityTests.fs" />
+    <Compile Include="src/ParentChildExpansionTests.fs" />
+    <Compile Include="src/GraphNeighborhoodExpansionTests.fs" />
+    <Compile Include="src/HybridRetrievalPipelineTests.fs" />
     <Compile Include="src/KnowledgeContractTests.fs" />
     <Compile Include="src/SourceConnectorTests.fs" />
     <Compile Include="src/HttpSourceConnectorTests.fs" />
