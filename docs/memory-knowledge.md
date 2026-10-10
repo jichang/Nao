@@ -380,6 +380,53 @@ accepted only when it materially improves at least one metric without exceeding 
 regression tolerance, or when every metric is within parity tolerance and the evidence records an
 explicit justification.
 
+RAG reranking starts from `KnowledgeRerankRequest`, which binds the exact unified retrieval
+candidates to an output limit and independent duration, model-call, token, and cost budget.
+`KnowledgeReranker` is a vendor-independent capability for deterministic score, cross-encoder,
+and language-model implementations. Its descriptor records kind, component, optional model,
+configuration hash, and determinism. The executor passes the original authorization scope,
+requires exactly one finite score for every candidate identity, applies deterministic score/rank/
+chunk tie-breaking, actively cancels on timeout, and retains original versus reranked score and
+rank evidence. `KnowledgeScoreBasedReranker` is the deterministic reference implementation; it
+uses normalized original rank and optional evidence breadth rather than comparing heterogeneous
+lexical, vector, parent, and graph raw scores.
+`KnowledgeCrossEncoderReranker` and `KnowledgeLanguageModelRerankerAdapter` adapt host-provided
+scoring capabilities to the same contract. They expose only the original query, ordered chunk
+identities and text, and the request's model-call, token, and cost ceilings. Query and candidate
+character limits are enforced before invocation. Cross-encoder determinism is declared by its
+adapter; the optional language-model adapter is always non-deterministic. Both require metered,
+nonzero model-call evidence and rely on the shared executor for exact score coverage, budgets,
+ordering, and timeout cancellation.
+
+`KnowledgeContextAssembler` consumes one reranking under the exact original
+`AuthorizationScope`. It revalidates every candidate against namespace, ACL, and typed filters
+before considering it for context. Deterministic greedy selection follows reranked order while
+enforcing total candidates, candidates per source, and exact tokens over the final rendered text,
+including separators and stable chunk markers. Every candidate receives included, candidate-limit,
+source-limit, or token-limit evidence. The result is explicitly insufficient when no candidate
+fits or the configured minimum evidence count cannot be met. Chunk markers are not fabricated
+source citations: searchable index documents retain validated byte, character, page, line, and
+path locations from their chunks. Each included context item binds its marker and source,
+immutable document-version, and chunk identities to those locations, the exact statement range in
+the final rendered context, and the quoted statement's SHA-256 hash. Context assembly includes
+whole statements rather than truncating them, so formatting and token suppression cannot detach a
+marker from its citation evidence.
+
+Context assembly also compares the explicit document identity and positive numeric version retained
+by every searchable index document. Lower versions are suppressed when a newer version of the same
+document is present. A document identity claimed by multiple sources, or multiple immutable
+document-version identities claiming the same document and numeric version, is treated as a
+conflict; every conflicting branch is suppressed with typed evidence before context budgets are
+allocated. Separate chunks from one immutable version remain valid.
+
+Context allocation requires an explicit source-preference policy. `AuthorityThenCurrent` sorts by
+the conservative minimum of source and document-version trust before freshness;
+`CurrentThenAuthority` reverses those priorities. Freshness uses source modification time when
+available and ingestion time otherwise, and reranker rank remains the deterministic final
+tie-breaker. Every candidate decision records both trust assessments, effective trust, freshness,
+reranker rank, and final preference rank. PostgreSQL indexes persist the complete trust
+assessments rather than deriving authority from mutable metadata.
+
 Index control-plane operations are represented separately from query capabilities. A
 `KnowledgeIndexManagement<'Record>` implementation exposes idempotent creation, health,
 revision-based migration planning/application, atomic namespace rebuild, typed backup, and

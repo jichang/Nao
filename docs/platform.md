@@ -20,7 +20,7 @@ Nao currently provides the agent, harness, persistence, provider, evaluation, an
 | Hosted and local LLM provider adapters | Available; pooling and policy-based routing remain |
 | Persistence and Orleans session/workspace runtime | Available; broader tenancy operations remain |
 | Evaluation, traces, metrics, and regression primitives | Available; continuous evaluation remains |
-| Knowledge ingestion, hybrid RAG, reranking, grounding, and citations | Planned |
+| Knowledge ingestion and hybrid retrieval | Available; reranking is partial, while context assembly, grounding, and citations remain planned |
 | Enforced process/container isolation and enterprise security integrations | Planned |
 | RDF/OWL, rule-engine, and constraint-solver integrations | Optional and planned |
 | Deployment, administration, recovery, and extension ecosystem | Planned |

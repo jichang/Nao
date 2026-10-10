@@ -76,13 +76,18 @@ type KnowledgeIndexDocument =
           Owner: AuthorizationIdentity
           Access: KnowledgeIndexAccess
           SourceId: KnowledgeSourceId
+          DocumentId: KnowledgeDocumentId
+          DocumentVersion: int
           DocumentVersionId: KnowledgeDocumentVersionId
           ChunkId: KnowledgeChunkId
           Role: KnowledgeChunkRole
           ParentChunkId: KnowledgeChunkId option
+          Locations: SourceLocation list
           ContentHash: ContentHash
           Text: string
           Metadata: Map<string, string>
+          SourceTrust: TrustAssessment
+          VersionTrust: TrustAssessment
           SourceModifiedAt: DateTimeOffset option
           IngestedAt: DateTimeOffset
           IndexedAt: DateTimeOffset }
@@ -132,13 +137,18 @@ module KnowledgeIndexDocument =
           Owner = source.Owner
           Access = access
           SourceId = source.Id
+          DocumentId = version.DocumentId
+          DocumentVersion = version.Version
           DocumentVersionId = version.Id
           ChunkId = chunk.Id
           Role = chunk.Role
           ParentChunkId = chunk.ParentChunkId
+          Locations = chunk.Locations
           ContentHash = chunk.ContentHash
           Text = chunk.Text
           Metadata = metadata
+          SourceTrust = source.Trust
+          VersionTrust = version.Trust
           SourceModifiedAt = version.SourceModifiedAt
           IngestedAt = version.IngestedAt
           IndexedAt = indexedAt }
@@ -148,13 +158,18 @@ module KnowledgeIndexDocument =
         owner
         access
         sourceId
+        documentId
+        documentVersion
         documentVersionId
         chunkId
         role
         parentChunkId
+        locations
         contentHash
         text
         metadata
+        sourceTrust
+        versionTrust
         sourceModifiedAt
         ingestedAt
         indexedAt
@@ -168,22 +183,44 @@ module KnowledgeIndexDocument =
         if indexedAt < ingestedAt then
             invalidArg (nameof indexedAt) "Index timestamp cannot precede ingestion."
 
+        if isNull (box sourceTrust) then
+            nullArg (nameof sourceTrust)
+
+        if isNull (box versionTrust) then
+            nullArg (nameof versionTrust)
+
+        if documentVersion <= 0 then
+            invalidArg (nameof documentVersion) "Indexed document versions must be positive."
+
         match role, parentChunkId with
         | KnowledgeChunkRole.Parent, Some _ ->
             invalidArg (nameof parentChunkId) "An indexed parent chunk cannot itself reference a parent."
         | _ -> ()
 
+        if isNull (box locations) || List.isEmpty locations then
+            invalidArg (nameof locations) "Indexed documents require at least one source location."
+
+        locations
+        |> List.iter (fun location ->
+            if location.CharacterOffset + location.CharacterLength > text.Length then
+                invalidArg (nameof locations) "An indexed source location exceeds the chunk text boundary.")
+
         { Namespace = namespaceName
           Owner = owner
           Access = access
           SourceId = sourceId
+          DocumentId = documentId
+          DocumentVersion = documentVersion
           DocumentVersionId = documentVersionId
           ChunkId = chunkId
           Role = role
           ParentChunkId = parentChunkId
+          Locations = locations
           ContentHash = contentHash
           Text = text
           Metadata = validateMetadata metadata
+          SourceTrust = sourceTrust
+          VersionTrust = versionTrust
           SourceModifiedAt = sourceModifiedAt
           IngestedAt = ingestedAt
           IndexedAt = indexedAt }
@@ -192,13 +229,18 @@ module KnowledgeIndexDocument =
     let owner value = value.Owner
     let access value = value.Access
     let sourceId value = value.SourceId
+    let documentId value = value.DocumentId
+    let documentVersion value = value.DocumentVersion
     let documentVersionId value = value.DocumentVersionId
     let chunkId value = value.ChunkId
     let role value = value.Role
     let parentChunkId value = value.ParentChunkId
+    let locations value = value.Locations
     let contentHash value = value.ContentHash
     let text value = value.Text
     let metadata value = value.Metadata
+    let sourceTrust value = value.SourceTrust
+    let versionTrust value = value.VersionTrust
     let sourceModifiedAt value = value.SourceModifiedAt
     let ingestedAt value = value.IngestedAt
     let indexedAt value = value.IndexedAt

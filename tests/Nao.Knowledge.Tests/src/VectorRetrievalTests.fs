@@ -42,8 +42,8 @@ type VectorRetrievalTests() =
         let text = "content " + suffix
         let contentHash = ContentHash.computeText text
 
-        let documentVersionId =
-            KnowledgeDocumentVersionId.derive (KnowledgeDocumentId.parse ("document-" + suffix)) 1 contentHash
+        let documentId = KnowledgeDocumentId.parse ("document-" + suffix)
+        let documentVersionId = KnowledgeDocumentVersionId.derive documentId 1 contentHash
 
         let chunkId = KnowledgeChunkId.derive documentVersionId "test-chunker" 0 contentHash
         let now = DateTimeOffset(2026, 9, 30, 0, 0, 0, TimeSpan.Zero)
@@ -53,13 +53,18 @@ type VectorRetrievalTests() =
             (AuthorizationScope.identity authorization)
             KnowledgeIndexAccess.ownerOnly
             sourceValue
+            documentId
+            1
             documentVersionId
             chunkId
             KnowledgeChunkRole.Leaf
             None
+            [ SourceLocation.create 0L (int64 text.Length) 0 text.Length None (Some 1) (Some 1) None ]
             contentHash
             text
             Map.empty
+            (TrustAssessment.create KnowledgeTrust.OrganizationVerified "test" now)
+            (TrustAssessment.create KnowledgeTrust.OrganizationVerified "test" now)
             (Some now)
             now
             now

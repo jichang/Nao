@@ -10,6 +10,23 @@ open Nao.Knowledge
 open Npgsql
 open NpgsqlTypes
 
+[<CLIMutable>]
+type internal PostgresSourceLocation =
+    { ByteOffset: int64
+      ByteLength: int64
+      CharacterOffset: int
+      CharacterLength: int
+      Page: Nullable<int>
+      LineStart: Nullable<int>
+      LineEnd: Nullable<int>
+      Path: string }
+
+[<CLIMutable>]
+type internal PostgresTrustAssessment =
+    { Level: string
+      Basis: string
+      AssessedAt: DateTimeOffset }
+
 module internal PostgresIndexSupport =
     let quoted (value: string) = "\"" + value + "\""
     let qualified schema table = quoted schema + "." + quoted table
@@ -182,6 +199,55 @@ module internal PostgresIndexSupport =
     let metadataJson (metadata: Map<string, string>) =
         JsonSerializer.Serialize(Dictionary<string, string>(metadata |> Map.toSeq |> dict))
 
+    let sourceLocationsJson (locations: SourceLocation list) =
+        locations
+        |> List.map (fun location ->
+            let row: PostgresSourceLocation =
+                { ByteOffset = location.ByteOffset
+                  ByteLength = location.ByteLength
+                  CharacterOffset = location.CharacterOffset
+                  CharacterLength = location.CharacterLength
+                  Page = location.Page |> Option.map Nullable |> Option.defaultValue (Nullable())
+                  LineStart = location.LineStart |> Option.map Nullable |> Option.defaultValue (Nullable())
+                  LineEnd = location.LineEnd |> Option.map Nullable |> Option.defaultValue (Nullable())
+                  Path = location.Path |> Option.defaultValue null }
+
+            row)
+        |> List.toArray
+        |> JsonSerializer.Serialize
+
+    let private trustLevelValue =
+        function
+        | KnowledgeTrust.Unverified -> "unverified"
+        | KnowledgeTrust.SourceAsserted -> "source-asserted"
+        | KnowledgeTrust.OrganizationVerified -> "organization-verified"
+        | KnowledgeTrust.Authoritative -> "authoritative"
+
+    let private parseTrustLevel =
+        function
+        | "unverified" -> KnowledgeTrust.Unverified
+        | "source-asserted" -> KnowledgeTrust.SourceAsserted
+        | "organization-verified" -> KnowledgeTrust.OrganizationVerified
+        | "authoritative" -> KnowledgeTrust.Authoritative
+        | value -> invalidOp $"PostgreSQL index contains unsupported knowledge trust level '{value}'."
+
+    let trustAssessmentJson (assessment: TrustAssessment) =
+        let row: PostgresTrustAssessment =
+            { Level = trustLevelValue assessment.Level
+              Basis = assessment.Basis
+              AssessedAt = assessment.AssessedAt }
+
+        JsonSerializer.Serialize row
+
+    let private readTrustAssessment (reader: NpgsqlDataReader) ordinal =
+        let row =
+            JsonSerializer.Deserialize<PostgresTrustAssessment>(reader.GetString ordinal)
+
+        if isNull (box row) then
+            invalidOp "A searchable knowledge document has null trust-assessment evidence."
+
+        TrustAssessment.create (parseTrustLevel row.Level) row.Basis row.AssessedAt
+
     let addIdentityParameters (command: NpgsqlCommand) (authorization: AuthorizationScope) =
         let identity = AuthorizationScope.identity authorization
         let principal = AuthorizationScope.principal authorization
@@ -274,32 +340,66 @@ module internal PostgresIndexSupport =
                 (reader.GetFieldValue<string array>(7))
 
         let metadata =
-            JsonSerializer.Deserialize<Dictionary<string, string>>(reader.GetString 13)
+            JsonSerializer.Deserialize<Dictionary<string, string>>(reader.GetString 15)
             |> Seq.map (fun pair -> pair.Key, pair.Value)
             |> Map.ofSeq
+
+        let serializedLocations =
+            JsonSerializer.Deserialize<PostgresSourceLocation array>(reader.GetString 22)
+
+        if isNull serializedLocations then
+            invalidOp "A searchable knowledge document has null source-location evidence."
+
+        let locations =
+            serializedLocations
+            |> Array.map (fun location ->
+                SourceLocation.create
+                    location.ByteOffset
+                    location.ByteLength
+                    location.CharacterOffset
+                    location.CharacterLength
+                    (if location.Page.HasValue then
+                         Some location.Page.Value
+                     else
+                         None)
+                    (if location.LineStart.HasValue then
+                         Some location.LineStart.Value
+                     else
+                         None)
+                    (if location.LineEnd.HasValue then
+                         Some location.LineEnd.Value
+                     else
+                         None)
+                    (if isNull location.Path then None else Some location.Path))
+            |> List.ofArray
 
         KnowledgeIndexDocument.restore
             (reader.GetString(8) |> KnowledgeIndexNamespace.parse)
             owner
             access
             (reader.GetString(9) |> KnowledgeSourceId.parse)
-            (reader.GetString(10) |> KnowledgeDocumentVersionId.parse)
-            (reader.GetString(11) |> KnowledgeChunkId.parse)
-            (reader.GetString(18) |> parseChunkRole)
-            (getOptionalString reader 19 |> Option.map KnowledgeChunkId.parse)
-            (reader.GetString(12) |> ContentHash.parse)
-            (reader.GetString(14))
+            (reader.GetString(10) |> KnowledgeDocumentId.parse)
+            (reader.GetInt32(11))
+            (reader.GetString(12) |> KnowledgeDocumentVersionId.parse)
+            (reader.GetString(13) |> KnowledgeChunkId.parse)
+            (reader.GetString(20) |> parseChunkRole)
+            (getOptionalString reader 21 |> Option.map KnowledgeChunkId.parse)
+            locations
+            (reader.GetString(14) |> ContentHash.parse)
+            (reader.GetString(16))
             metadata
-            (getOptionalTimestamp reader 15)
-            (reader.GetFieldValue<DateTimeOffset> 16)
-            (reader.GetFieldValue<DateTimeOffset> 17)
+            (readTrustAssessment reader 23)
+            (readTrustAssessment reader 24)
+            (getOptionalTimestamp reader 17)
+            (reader.GetFieldValue<DateTimeOffset> 18)
+            (reader.GetFieldValue<DateTimeOffset> 19)
 
     let selectColumns =
         """
         tenant_id, workspace_id, owner_user_id, owner_group_id, owner_session_id,
-        acl_users, acl_groups, acl_roles, namespace, source_id, document_version_id,
-        chunk_id, content_hash, metadata::text, content, source_modified_at, ingested_at, indexed_at,
-        chunk_role, parent_chunk_id
+        acl_users, acl_groups, acl_roles, namespace, source_id, document_id, document_version,
+        document_version_id, chunk_id, content_hash, metadata::text, content, source_modified_at, ingested_at, indexed_at,
+        chunk_role, parent_chunk_id, source_locations::text, source_trust::text, version_trust::text
         """
 
     let authorizationPredicate =

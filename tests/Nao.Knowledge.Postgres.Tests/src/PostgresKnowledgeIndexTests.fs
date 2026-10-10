@@ -216,8 +216,33 @@ type PostgresKnowledgeIndexTests() =
                 Assert.AreEqual(KnowledgeChunkRole.Leaf, KnowledgeIndexDocument.role returnedDocument)
 
                 Assert.AreEqual(
+                    KnowledgeIndexDocument.documentId firstDocument,
+                    KnowledgeIndexDocument.documentId returnedDocument
+                )
+
+                Assert.AreEqual(
+                    KnowledgeIndexDocument.documentVersion firstDocument,
+                    KnowledgeIndexDocument.documentVersion returnedDocument
+                )
+
+                Assert.AreEqual(
+                    KnowledgeIndexDocument.sourceTrust firstDocument,
+                    KnowledgeIndexDocument.sourceTrust returnedDocument
+                )
+
+                Assert.AreEqual(
+                    KnowledgeIndexDocument.versionTrust firstDocument,
+                    KnowledgeIndexDocument.versionTrust returnedDocument
+                )
+
+                Assert.AreEqual(
                     KnowledgeIndexDocument.parentChunkId firstDocument,
                     KnowledgeIndexDocument.parentChunkId returnedDocument
+                )
+
+                CollectionAssert.AreEqual(
+                    KnowledgeIndexDocument.locations firstDocument |> List.toArray,
+                    KnowledgeIndexDocument.locations returnedDocument |> List.toArray
                 )
 
                 let rebuildResult =
@@ -414,8 +439,33 @@ type PostgresKnowledgeIndexTests() =
                 Assert.AreEqual(KnowledgeChunkRole.Leaf, KnowledgeIndexDocument.role returnedDocument)
 
                 Assert.AreEqual(
+                    KnowledgeIndexDocument.documentId first,
+                    KnowledgeIndexDocument.documentId returnedDocument
+                )
+
+                Assert.AreEqual(
+                    KnowledgeIndexDocument.documentVersion first,
+                    KnowledgeIndexDocument.documentVersion returnedDocument
+                )
+
+                Assert.AreEqual(
+                    KnowledgeIndexDocument.sourceTrust first,
+                    KnowledgeIndexDocument.sourceTrust returnedDocument
+                )
+
+                Assert.AreEqual(
+                    KnowledgeIndexDocument.versionTrust first,
+                    KnowledgeIndexDocument.versionTrust returnedDocument
+                )
+
+                Assert.AreEqual(
                     KnowledgeIndexDocument.parentChunkId first,
                     KnowledgeIndexDocument.parentChunkId returnedDocument
+                )
+
+                CollectionAssert.AreEqual(
+                    KnowledgeIndexDocument.locations first |> List.toArray,
+                    KnowledgeIndexDocument.locations returnedDocument |> List.toArray
                 )
 
                 let parentChunkId = KnowledgeIndexDocument.parentChunkId first |> Option.get
@@ -428,13 +478,26 @@ type PostgresKnowledgeIndexTests() =
                         (KnowledgeIndexDocument.owner first)
                         (KnowledgeIndexDocument.access first)
                         (KnowledgeIndexDocument.sourceId first)
+                        (KnowledgeIndexDocument.documentId first)
+                        (KnowledgeIndexDocument.documentVersion first)
                         (KnowledgeIndexDocument.documentVersionId first)
                         parentChunkId
                         KnowledgeChunkRole.Parent
                         None
+                        [ SourceLocation.create
+                              0L
+                              (int64 parentText.Length)
+                              0
+                              parentText.Length
+                              None
+                              (Some 1)
+                              (Some 1)
+                              None ]
                         parentHash
                         parentText
                         (KnowledgeIndexDocument.metadata first)
+                        (KnowledgeIndexDocument.sourceTrust first)
+                        (KnowledgeIndexDocument.versionTrust first)
                         (KnowledgeIndexDocument.sourceModifiedAt first)
                         (KnowledgeIndexDocument.ingestedAt first)
                         (KnowledgeIndexDocument.indexedAt first)

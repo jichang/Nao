@@ -27,6 +27,8 @@
     <Compile Include="src/GraphNeighborhoodExpansion.fs" />
     <Compile Include="src/RetrievalCandidates.fs" />
     <Compile Include="src/HybridRetrievalPipeline.fs" />
+    <Compile Include="src/Reranking.fs" />
+    <Compile Include="src/ModelRerankers.fs" />
     <Compile Include="src/EmbeddingCacheContracts.fs" />
     <Compile Include="src/InMemoryEmbeddingCache.fs" />
     <Compile Include="src/CachedEmbeddingExecution.fs" />
@@ -54,6 +56,7 @@
     <Compile Include="src/JsonParser.fs" />
     <Compile Include="src/KnowledgeParsingService.fs" />
     <Compile Include="src/ChunkingContracts.fs" />
+    <Compile Include="src/ContextAssembly.fs" />
     <Compile Include="src/ChunkingMetrics.fs" />
     <Compile Include="src/ChunkingSupport.fs" />
     <Compile Include="src/ChunkingMigrationContracts.fs" />

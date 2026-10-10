@@ -29,6 +29,7 @@
     <Compile Include="src/ParentChildExpansionTests.fs" />
     <Compile Include="src/GraphNeighborhoodExpansionTests.fs" />
     <Compile Include="src/HybridRetrievalPipelineTests.fs" />
+    <Compile Include="src/RerankingTests.fs" />
     <Compile Include="src/KnowledgeContractTests.fs" />
     <Compile Include="src/SourceConnectorTests.fs" />
     <Compile Include="src/HttpSourceConnectorTests.fs" />

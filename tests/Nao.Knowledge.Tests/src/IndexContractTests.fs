@@ -98,6 +98,9 @@ type IndexContractTests() =
         Assert.AreEqual("content", KnowledgeIndexDocument.text document)
         Assert.AreEqual(KnowledgeChunkRole.Leaf, KnowledgeIndexDocument.role document)
         Assert.AreEqual(None, KnowledgeIndexDocument.parentChunkId document)
+        Assert.AreEqual(1, KnowledgeIndexDocument.documentVersion document)
+        Assert.AreEqual(KnowledgeTrust.OrganizationVerified, (KnowledgeIndexDocument.sourceTrust document).Level)
+        Assert.AreEqual(KnowledgeTrust.OrganizationVerified, (KnowledgeIndexDocument.versionTrust document).Level)
         Assert.AreEqual("docs", KnowledgeIndexDocument.metadata document |> Map.find "source.system")
         Assert.AreEqual("current", KnowledgeIndexDocument.metadata document |> Map.find "version.release")
         Assert.AreEqual("intro", KnowledgeIndexDocument.metadata document |> Map.find "chunk.section")
@@ -179,13 +182,66 @@ type IndexContractTests() =
                 (KnowledgeIndexDocument.owner document)
                 (KnowledgeIndexDocument.access document)
                 (KnowledgeIndexDocument.sourceId document)
+                (KnowledgeIndexDocument.documentId document)
+                (KnowledgeIndexDocument.documentVersion document)
                 (KnowledgeIndexDocument.documentVersionId document)
                 (KnowledgeIndexDocument.chunkId document)
                 KnowledgeChunkRole.Parent
                 (Some(KnowledgeIndexDocument.chunkId document))
+                (KnowledgeIndexDocument.locations document)
                 (KnowledgeIndexDocument.contentHash document)
                 (KnowledgeIndexDocument.text document)
                 (KnowledgeIndexDocument.metadata document)
+                (KnowledgeIndexDocument.sourceTrust document)
+                (KnowledgeIndexDocument.versionTrust document)
+                (KnowledgeIndexDocument.sourceModifiedAt document)
+                (KnowledgeIndexDocument.ingestedAt document)
+                (KnowledgeIndexDocument.indexedAt document)
+            |> ignore)
+        |> ignore
+
+        Assert.ThrowsExactly<ArgumentException>(fun () ->
+            KnowledgeIndexDocument.restore
+                namespaceName
+                (KnowledgeIndexDocument.owner document)
+                (KnowledgeIndexDocument.access document)
+                (KnowledgeIndexDocument.sourceId document)
+                (KnowledgeIndexDocument.documentId document)
+                0
+                (KnowledgeIndexDocument.documentVersionId document)
+                (KnowledgeIndexDocument.chunkId document)
+                KnowledgeChunkRole.Leaf
+                None
+                (KnowledgeIndexDocument.locations document)
+                (KnowledgeIndexDocument.contentHash document)
+                (KnowledgeIndexDocument.text document)
+                (KnowledgeIndexDocument.metadata document)
+                (KnowledgeIndexDocument.sourceTrust document)
+                (KnowledgeIndexDocument.versionTrust document)
+                (KnowledgeIndexDocument.sourceModifiedAt document)
+                (KnowledgeIndexDocument.ingestedAt document)
+                (KnowledgeIndexDocument.indexedAt document)
+            |> ignore)
+        |> ignore
+
+        Assert.ThrowsExactly<ArgumentException>(fun () ->
+            KnowledgeIndexDocument.restore
+                namespaceName
+                (KnowledgeIndexDocument.owner document)
+                (KnowledgeIndexDocument.access document)
+                (KnowledgeIndexDocument.sourceId document)
+                (KnowledgeIndexDocument.documentId document)
+                (KnowledgeIndexDocument.documentVersion document)
+                (KnowledgeIndexDocument.documentVersionId document)
+                (KnowledgeIndexDocument.chunkId document)
+                KnowledgeChunkRole.Leaf
+                None
+                []
+                (KnowledgeIndexDocument.contentHash document)
+                (KnowledgeIndexDocument.text document)
+                (KnowledgeIndexDocument.metadata document)
+                (KnowledgeIndexDocument.sourceTrust document)
+                (KnowledgeIndexDocument.versionTrust document)
                 (KnowledgeIndexDocument.sourceModifiedAt document)
                 (KnowledgeIndexDocument.ingestedAt document)
                 (KnowledgeIndexDocument.indexedAt document)

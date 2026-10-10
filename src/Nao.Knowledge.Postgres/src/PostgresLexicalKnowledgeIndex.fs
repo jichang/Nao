@@ -82,10 +82,15 @@ module PostgresLexicalKnowledgeIndex =
                     acl_groups text[] NOT NULL,
                     acl_roles text[] NOT NULL,
                     source_id text NOT NULL,
+                    document_id text NOT NULL,
+                    document_version integer NOT NULL CHECK (document_version > 0),
                     document_version_id text NOT NULL,
                     chunk_id text NOT NULL,
                     chunk_role text NOT NULL CHECK (chunk_role IN ('parent', 'leaf')),
                     parent_chunk_id text NULL,
+                    source_locations jsonb NOT NULL,
+                    source_trust jsonb NOT NULL,
+                    version_trust jsonb NOT NULL,
                     content_hash text NOT NULL,
                     content text NOT NULL,
                     metadata jsonb NOT NULL,
@@ -245,13 +250,17 @@ module PostgresLexicalKnowledgeIndex =
                     $"""
                     INSERT INTO {table} (
                         owner_key, namespace, tenant_id, workspace_id, owner_user_id, owner_group_id,
-                        owner_session_id, acl_users, acl_groups, acl_roles, source_id, document_version_id,
-                        chunk_id, chunk_role, parent_chunk_id, content_hash, content, metadata,
+                        owner_session_id, acl_users, acl_groups, acl_roles, source_id, document_id, document_version,
+                        document_version_id,
+                        chunk_id, chunk_role, parent_chunk_id, source_locations, source_trust, version_trust,
+                        content_hash, content, metadata,
                         source_modified_at, ingested_at, indexed_at, search_vector
                     ) VALUES (
                         @owner_key, @namespace, @tenant_id, @workspace_id, @owner_user_id, @owner_group_id,
-                        @owner_session_id, @acl_users, @acl_groups, @acl_roles, @source_id, @document_version_id,
-                        @chunk_id, @chunk_role, @parent_chunk_id, @content_hash, @content, @metadata,
+                        @owner_session_id, @acl_users, @acl_groups, @acl_roles, @source_id, @document_id, @document_version,
+                        @document_version_id,
+                        @chunk_id, @chunk_role, @parent_chunk_id, @source_locations, @source_trust, @version_trust,
+                        @content_hash, @content, @metadata,
                         @source_modified_at, @ingested_at, @indexed_at,
                         to_tsvector(CAST(@text_search_configuration AS regconfig), @content)
                     )
@@ -260,9 +269,14 @@ module PostgresLexicalKnowledgeIndex =
                         acl_groups = EXCLUDED.acl_groups,
                         acl_roles = EXCLUDED.acl_roles,
                         source_id = EXCLUDED.source_id,
+                        document_id = EXCLUDED.document_id,
+                        document_version = EXCLUDED.document_version,
                         document_version_id = EXCLUDED.document_version_id,
                         chunk_role = EXCLUDED.chunk_role,
                         parent_chunk_id = EXCLUDED.parent_chunk_id,
+                        source_locations = EXCLUDED.source_locations,
+                        source_trust = EXCLUDED.source_trust,
+                        version_trust = EXCLUDED.version_trust,
                         content_hash = EXCLUDED.content_hash,
                         content = EXCLUDED.content,
                         metadata = EXCLUDED.metadata,
@@ -300,6 +314,13 @@ module PostgresLexicalKnowledgeIndex =
 
                 addParameter
                     command
+                    "document_id"
+                    (KnowledgeIndexDocument.documentId document |> KnowledgeDocumentId.value)
+
+                addParameter command "document_version" (KnowledgeIndexDocument.documentVersion document)
+
+                addParameter
+                    command
                     "document_version_id"
                     (KnowledgeIndexDocument.documentVersionId document
                      |> KnowledgeDocumentVersionId.value)
@@ -312,6 +333,21 @@ module PostgresLexicalKnowledgeIndex =
                     "parent_chunk_id"
                     (KnowledgeIndexDocument.parentChunkId document
                      |> Option.map KnowledgeChunkId.value)
+
+                let locationsParameter =
+                    command.Parameters.Add("source_locations", NpgsqlDbType.Jsonb)
+
+                locationsParameter.Value <- sourceLocationsJson (KnowledgeIndexDocument.locations document)
+
+                let sourceTrustParameter =
+                    command.Parameters.Add("source_trust", NpgsqlDbType.Jsonb)
+
+                sourceTrustParameter.Value <- trustAssessmentJson (KnowledgeIndexDocument.sourceTrust document)
+
+                let versionTrustParameter =
+                    command.Parameters.Add("version_trust", NpgsqlDbType.Jsonb)
+
+                versionTrustParameter.Value <- trustAssessmentJson (KnowledgeIndexDocument.versionTrust document)
 
                 addParameter command "content_hash" (KnowledgeIndexDocument.contentHash document |> ContentHash.value)
                 addParameter command "content" (KnowledgeIndexDocument.text document)
@@ -396,7 +432,7 @@ module PostgresLexicalKnowledgeIndex =
                 let! found = reader.ReadAsync cancellationToken
 
                 if found then
-                    hits.Add(LexicalIndexHit.create (readDocument reader) (reader.GetDouble 20))
+                    hits.Add(LexicalIndexHit.create (readDocument reader) (reader.GetDouble 25))
                 else
                     reading <- false
 

@@ -40,13 +40,18 @@ type RetrievalDiversityTests() =
             (AuthorizationScope.identity authorization)
             KnowledgeIndexAccess.ownerOnly
             sourceId
+            (KnowledgeDocumentId.parse ("document-" + KnowledgeDocumentVersionId.value versionId))
+            1
             versionId
             chunkId
             KnowledgeChunkRole.Leaf
             None
+            [ SourceLocation.create 0L (int64 text.Length) 0 text.Length None (Some 1) (Some 1) None ]
             contentHash
             text
             (Map.ofList [ "test.suffix", suffix ])
+            (TrustAssessment.create KnowledgeTrust.OrganizationVerified "test" now)
+            (TrustAssessment.create KnowledgeTrust.OrganizationVerified "test" now)
             (Some now)
             now
             now

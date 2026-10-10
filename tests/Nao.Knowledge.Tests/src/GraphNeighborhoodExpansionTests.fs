@@ -44,13 +44,18 @@ type GraphNeighborhoodExpansionTests() =
             (AuthorizationScope.identity authorization)
             KnowledgeIndexAccess.ownerOnly
             source
+            (KnowledgeDocumentId.parse ("document-" + KnowledgeDocumentVersionId.value versionId))
+            1
             versionId
             chunkId
             role
             parentChunkId
+            [ SourceLocation.create 0L (int64 text.Length) 0 text.Length None (Some 1) (Some 1) None ]
             contentHash
             text
             Map.empty
+            (TrustAssessment.create KnowledgeTrust.OrganizationVerified "test" now)
+            (TrustAssessment.create KnowledgeTrust.OrganizationVerified "test" now)
             (Some now)
             now
             now

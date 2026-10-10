@@ -174,21 +174,21 @@ This workstream creates a reusable knowledge subsystem for ingestion, indexing, 
 
 ## RAG-03 — Reranking and context assembly
 
-- [ ] Define a reranker contract.
-- [ ] Support deterministic score-based, cross-encoder, and optional LLM rerankers.
-- [ ] Record reranker model/configuration and candidate score changes.
-- [ ] Enforce authorization again before context assembly as defense in depth.
-- [ ] Assemble context within token and source-diversity budgets.
-- [ ] Preserve citation markers through formatting and truncation.
-- [ ] Detect conflicting or stale sources.
-- [ ] Prefer authoritative and current sources through explicit policy.
-- [ ] Represent insufficient evidence rather than forcing context.
+- [x] Define a reranker contract.
+- [x] Support deterministic score-based, cross-encoder, and optional LLM rerankers.
+- [x] Record reranker model/configuration and candidate score changes.
+- [x] Enforce authorization again before context assembly as defense in depth.
+- [x] Assemble context within token and source-diversity budgets.
+- [x] Preserve citation markers through formatting and truncation.
+- [x] Detect conflicting or stale sources.
+- [x] Prefer authoritative and current sources through explicit policy.
+- [x] Represent insufficient evidence rather than forcing context.
 
 **Acceptance criteria**
 
-- [ ] Assembled context never contains an unauthorized candidate.
-- [ ] Context stays within the declared token budget.
-- [ ] Every included statement range maps to citation evidence.
+- [x] Assembled context never contains an unauthorized candidate.
+- [x] Context stays within the declared token budget.
+- [x] Every included statement range maps to citation evidence.
 
 ## RAG-04 — Grounded generation and citations
 

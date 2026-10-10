@@ -46,13 +46,18 @@ type MetadataFilteredRetrievalTests() =
             (AuthorizationScope.identity authorization)
             KnowledgeIndexAccess.ownerOnly
             source
+            (KnowledgeDocumentId.parse ("document-" + KnowledgeDocumentVersionId.value documentVersion))
+            1
             documentVersion
             chunkId
             KnowledgeChunkRole.Leaf
             None
+            [ SourceLocation.create 0L (int64 text.Length) 0 text.Length None (Some 1) (Some 1) None ]
             contentHash
             text
             metadata
+            (TrustAssessment.create KnowledgeTrust.OrganizationVerified "test" ingestedAt)
+            (TrustAssessment.create KnowledgeTrust.OrganizationVerified "test" ingestedAt)
             sourceModifiedAt
             ingestedAt
             ingestedAt
