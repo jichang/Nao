@@ -427,6 +427,74 @@ tie-breaker. Every candidate decision records both trust assessments, effective 
 reranker rank, and final preference rank. PostgreSQL indexes persist the complete trust
 assessments rather than deriving authority from mutable metadata.
 
+Context allocation also requires an explicit `KnowledgeContextSafetyPolicy`. The built-in strict
+inspector runs against exact retrieved text before resource allocation and suppresses reserved
+Nao control syntax, known prompt-injection directives, and model role delimiters with typed
+range-and-hash evidence. Included source statements are wrapped in chunk-bound framework
+delimiters and an explicit untrusted-data policy line; the generated citation marker remains
+immediately before the exact statement. Reserved delimiters found in source text are suppressed,
+so retrieved content cannot manufacture citation markers or close framework source blocks.
+Security framing consumes the normal context token budget. Source identity, version, trust, and
+authority always come from validated index records rather than assertions in retrieved text.
+
+Grounded generation begins with a two-phase contract. A `KnowledgeGroundedAnswerProposal`
+separates answer text, exact material-claim ranges, asserted citation references, per-claim
+confidence, and answer confidence, but it is never represented as verified. Every claim explicitly
+declares whether its exact answer range is a source quotation or generated interpretation. Model
+assertions may include unresolved citation IDs so deterministic verification can report them
+explicitly rather than silently dropping them. `KnowledgeGroundedGenerationResult` separately
+represents proposed answers and typed insufficient evidence; abstention and insufficient context
+are normal outcomes, not execution failures or empty successful answers.
+
+Model output uses `KnowledgeGroundedResponseProtocol`, a provider-neutral JSON response protocol
+shared by prompting, DTO deserialization, diagnostics, and repair. Answer responses require every
+material claim to assert at least one defined citation ID and require citation markers to match
+their declared chunk identities. Insufficiency responses use a separate DTO. Ordinary
+`System.Text.Json` behavior applies to additional and duplicate properties; grounded domain
+validation still rejects missing required values, invalid ranges, invalid identities, and
+configured character, claim, citation, and per-claim citation bound violations. Parsed citations
+remain assertions until the deterministic context verifier resolves them.
+
+`KnowledgeGroundedCitationVerifier` is the only constructor path to
+`KnowledgeVerifiedGroundedAnswer`. It revalidates the final context statement and marker ranges,
+quoted hashes, source locations, and unique chunk identities before resolving every claim citation
+ID to a context chunk. Missing definitions, chunks outside the context, marker mismatches, or
+invalid context evidence reject the whole proposal with typed failures. Verified claims retain
+their exact `KnowledgeContextCitation` and quoted text; typed insufficient evidence passes through
+without becoming an error or fabricated answer. Source-quotation claim text must additionally
+occur exactly in at least one cited context statement; generated interpretations proceed without
+substring matching.
+
+Structural citation validity does not imply semantic entailment.
+`KnowledgeGroundedClaimSupportEvaluator` therefore runs as a separate provider-neutral boundary
+over a `KnowledgeVerifiedGroundedAnswer`. Its evaluator receives each exact material claim and its
+presentation kind and resolved quoted citations, then returns one explicit supported or
+unsupported assessment per claim, including confidence, explanation, and the claim-owned citations
+that actually provide support. Missing, duplicate, extra, or cross-claim evidence attribution
+fails closed. The result is supported only when every material claim is supported; otherwise it
+retains the complete ordered assessment set and exposes the unsupported claims as a typed quality
+outcome. Evaluation evidence also retains evaluator component, model and configuration provenance,
+metered usage, and duration, with explicit model-call, token, cost, and duration budgets.
+
+`KnowledgeGroundedSupportPolicy` then maps unsupported assessments to one configured outcome.
+Supported answers are always accepted. Unsupported answers either become typed policy
+insufficiency, a repair request, an explicitly warned result, or a rejected result; rejection is
+the default. Repair retains the original evaluation and unsupported assessments and asks for a new
+proposal rather than mutating or partially approving the old one. Any repaired proposal must pass
+citation verification and semantic support evaluation again. Warning is the only policy that
+deliberately permits presentation while preserving an unmistakable unsupported-claim outcome.
+
+`KnowledgeGroundedOutputProjector` materializes the final policy result without losing provenance.
+Accepted and explicitly warned results receive an `ArtifactId` and an immutable output artifact
+containing exact claims, support assessments, quoted evidence, and complete source/document/
+version/chunk/location/hash citation provenance. Abstained, repair-required, and rejected results
+produce no presentable artifact. Every outcome produces a version-1 grounded audit record with
+optional artifact correlation, answer and claim hashes, claim presentation and support evidence,
+complete citation provenance, evaluator provenance, usage, and duration. Audit records omit answer
+and quotation text and do not copy authorization evidence. `KnowledgeGroundedOutputEmitter`
+persists the audit record under the authenticated scope before returning output, and recorder
+failure propagates so artifact publication fails closed.
+
 Index control-plane operations are represented separately from query capabilities. A
 `KnowledgeIndexManagement<'Record>` implementation exposes idempotent creation, health,
 revision-based migration planning/application, atomic namespace rebuild, typed backup, and
@@ -628,9 +696,10 @@ Retrieval and generation are evaluated separately. Retrieval metrics include rec
 
 Retrieved content is untrusted data, even when it comes from an approved source. Documents can contain instructions intended to override platform behavior.
 
-- Keep source text separate from system and policy instructions.
+- Inspect source text before context allocation and suppress typed injection or reserved-marker findings.
+- Keep source text inside framework-owned untrusted-data boundaries, separate from system and policy instructions.
 - Do not grant permissions based on retrieved content.
-- Preserve source identity and trust classification.
+- Preserve source identity and trust classification from index provenance, never source assertions.
 - Validate generated queries and filters.
 - Require evidence for material claims.
 - Detect unsupported or spoofed citations.

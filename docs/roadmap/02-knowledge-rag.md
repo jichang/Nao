@@ -192,19 +192,19 @@ This workstream creates a reusable knowledge subsystem for ingestion, indexing, 
 
 ## RAG-04 — Grounded generation and citations
 
-- [ ] Define grounded-answer contracts separating answer text, claims, citations, confidence, and insufficiency.
-- [ ] Require models to cite retrieved evidence through a response protocol.
-- [ ] Validate citation existence and source ranges deterministically.
-- [ ] Detect unsupported material claims.
-- [ ] Add configurable abstain, repair, warn, and reject behavior.
-- [ ] Distinguish source quotation from generated interpretation.
-- [ ] Preserve citation provenance in output artifacts and audit records.
-- [ ] Protect against retrieved prompt injection and source spoofing.
+- [x] Define grounded-answer contracts separating answer text, claims, citations, confidence, and insufficiency.
+- [x] Require models to cite retrieved evidence through a response protocol.
+- [x] Validate citation existence and source ranges deterministically.
+- [x] Detect unsupported material claims.
+- [x] Add configurable abstain, repair, warn, and reject behavior.
+- [x] Distinguish source quotation from generated interpretation.
+- [x] Preserve citation provenance in output artifacts and audit records.
+- [x] Protect against retrieved prompt injection and source spoofing.
 
 **Acceptance criteria**
 
-- [ ] Invalid citations cannot be presented as verified citations.
-- [ ] The system can return “insufficient evidence” without treating it as execution failure.
+- [x] Invalid citations cannot be presented as verified citations.
+- [x] The system can return “insufficient evidence” without treating it as execution failure.
 - [ ] Groundedness and citation correctness meet release thresholds.
 
 ## RAG-05 — Retrieval evaluation

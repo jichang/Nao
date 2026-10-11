@@ -57,6 +57,12 @@
     <Compile Include="src/KnowledgeParsingService.fs" />
     <Compile Include="src/ChunkingContracts.fs" />
     <Compile Include="src/ContextAssembly.fs" />
+    <Compile Include="src/GroundedAnswerContracts.fs" />
+    <Compile Include="src/GroundedGenerationResponseProtocol.fs" />
+    <Compile Include="src/GroundedCitationVerification.fs" />
+    <Compile Include="src/GroundedClaimSupport.fs" />
+    <Compile Include="src/GroundedClaimSupportPolicy.fs" />
+    <Compile Include="src/GroundedOutputArtifacts.fs" />
     <Compile Include="src/ChunkingMetrics.fs" />
     <Compile Include="src/ChunkingSupport.fs" />
     <Compile Include="src/ChunkingMigrationContracts.fs" />

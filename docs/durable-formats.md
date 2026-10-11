@@ -34,7 +34,7 @@ Nao is unreleased. All Nao-owned protocol and durable-schema markers remain vers
 | Orleans session state | Orleans provider | Nao schema version 1 plus Orleans field IDs | Conversation messages retain full execution correlation; persisted missing or unsupported versions reject before state access or mutation. |
 | Orleans session-directory state | Orleans provider | Nao schema version 1 plus Orleans field IDs | New state is stamped during activation; persisted missing or unsupported versions reject before state access or mutation. |
 
-Knowledge-record persistence is not implemented and therefore has no durable format yet. New durable capabilities must define ownership, deletion, current schema version, rejection behavior, and a migration-guide path with their first implementation.
+Knowledge-record persistence is not implemented and therefore has no durable format yet. Version-1 grounded audit records are storage-neutral contracts delivered to a host-supplied authenticated recorder; Nao does not yet own their encoding or backend, so they are not a durable-format inventory entry. New durable capabilities must define ownership, deletion, current schema version, rejection behavior, and a migration-guide path with their first implementation.
 
 ## Change process
 
