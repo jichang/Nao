@@ -68,17 +68,71 @@ name, version, and content hash. Missing, duplicated, or unknown case results ar
 than producing a success-shaped partial report. A rate is `None` when its ground-truth class is
 absent, keeping “not measurable” distinct from a measured zero-error rate.
 
+`KnowledgeEvaluationDataset` is the versioned source of truth for knowledge quality evaluation.
+Each case records a query, relevant document and chunk identities, expected facts bound to
+supporting relevant chunks, prohibited document or chunk results with reasons, and required source,
+format, language, tenant-policy, and query-type dimensions. Schema version, positive dataset
+revision, and every governed field produce a deterministic SHA-256 content hash. DTO-based JSON
+fixtures retain and verify that hash when loaded.
+
 `KnowledgeHybridRetrievalEvaluator` compares lexical, vector, and hybrid ranked retrieval against
-the exact same versioned `KnowledgeRetrievalQualityDataset`. Dataset identity includes a
-deterministic SHA-256 hash over its name, version, ordered case identities, queries, and sorted
-relevance judgments. Each strategy executes exactly once per case at one cutoff. Duplicate,
-null, or over-cutoff rankings fail closed. Evidence retains per-case rankings and macro-averaged
-recall, precision, mean reciprocal rank, and nDCG.
+the exact same `KnowledgeEvaluationDataset`. Each strategy executes exactly once per case at one
+cutoff. Duplicate, null, or over-cutoff rankings fail closed. Evidence retains per-case rankings
+and macro-averaged recall@k, precision@k, mean reciprocal rank, and nDCG. Retrieval implementations
+return explicit non-negative USD cost, while the evaluator independently measures invocation
+latency. Per-strategy evidence aggregates mean and nearest-rank p95 latency plus total cost.
+Every strategy also exposes the same metrics independently for each observed source, format,
+language, tenant policy, and query type.
 
 The hybrid quality gate compares each hybrid metric with the better single-strategy value.
 Acceptance requires either a material improvement in at least one metric without a regression
 beyond tolerance, or parity across every metric with an explicit justification. Parity cannot
 silently pass without that rationale.
+
+`KnowledgeGroundedGenerationEvaluator` measures generation behavior against the same dataset.
+Context relevance compares assembled chunk identities with case relevance judgments. Answer
+faithfulness reuses the grounded pipeline's semantic claim-support verdicts instead of invoking a
+second judge. Citation correctness requires each citation occurrence both to be selected by that
+support evaluator as entailing its claim and to reference a chunk labeled relevant for the case.
+
+Abstention expectations come from expected-fact judgments: a case with expected facts requires a
+published answer, while a case without expected facts requires abstention. Accepted and warned
+artifacts count as answers; repair-required and rejected outcomes are unresolved rather than
+successful abstentions. Per-case evidence retains support-evaluator component, model,
+configuration, usage, latency, and cost. Missing, duplicate, or extra case results fail closed,
+and a metric without a denominator remains unavailable rather than becoming a synthetic score.
+Grounded-generation reports expose the same five segment dimensions with per-slice quality,
+abstention, usage, duration, and cost evidence.
+
+Cases may belong to multiple source or format slices. Segment aggregates overlap by design and are
+not additive; global metrics are always computed directly from the complete case set.
+
+`KnowledgeQualitySnapshot` projects retrieval and grounded-generation reports into one release-gate
+metric model. Metric keys identify either the global report or an exact source, format, language,
+tenant-policy, or query-type slice. This allows a segment regression to block release even when
+the aggregate remains acceptable.
+
+`KnowledgeQualityGate` enforces minimum case count, absolute thresholds, and maximum regression
+from a promoted baseline. Quality ratios are higher-is-better; latency and cost are
+lower-is-better. Missing metrics fail rather than defaulting, and baseline comparison requires the
+exact dataset content hash and evaluator component family.
+
+Passing evidence can be promoted through `KnowledgeQualityBaselinePromotion`. Version-1 baseline
+artifacts retain the complete snapshot, threshold-configuration hash, authenticated owner,
+mandatory justification, promotion time, and previous baseline identity. A new dataset content
+hash requires a separately reviewed initial baseline rather than comparison with non-equivalent
+cases.
+
+`KnowledgeAdversarialDatasets.adversarialV1` is the repository-owned executable RAG threat
+fixture. Its synthetic corpus carries source, document, chunk, exact text, trust, freshness,
+access, and typed risk evidence. Five cases cover poisoning, retrieved prompt injection, stale
+guidance, unresolved authoritative conflict, and an unauthorized cross-boundary result. Each case
+also exposes an ordinary `KnowledgeEvaluationCase`, allowing retrieval and grounded-generation
+metrics to run without a separate adversarial execution path.
+
+The adversarial dataset hash governs both corpus content and scenario judgments. References to
+unknown corpus entries, duplicate chunks, documents assigned to multiple sources, and risk labels
+without corresponding relevant or prohibited evidence are rejected during construction.
 
 ## Reproducibility
 
@@ -110,7 +164,7 @@ Evaluation gates can cover:
 - Quality and groundedness
 - Safety and policy compliance
 - Retrieval recall and citation correctness
-- Latency and reliability
+- Mean/p95 latency and reliability
 - Tokens and monetary cost
 - Tool selection and side-effect behavior
 
@@ -131,6 +185,19 @@ Production traces and feedback
 ```
 
 Production-derived data requires consent, tenant isolation, redaction, retention, and review before becoming a dataset. `TurnStore` and `FeedbackStore` require the complete authenticated scope for access, deletion, and strict retention cutoff. Their durable payloads contain no authorization identity or authentication evidence, and deleting either source does not erase already-derived datasets governed by their own policy.
+
+Production retrieval failures use an explicit candidate workflow. Capture requires authenticated
+ownership, a consent-record hash, retention deadline, and a versioned query redactor. The
+candidate stores only the redacted query, removed-value count, typed failure and correlation
+evidence, observed chunk identities, dimensions, and redactor provenance. Raw queries and removed
+values are not retained by the candidate.
+
+Candidates do not become cases automatically. Review and promotion are separate administration
+resources with independent permission decisions. Authorized approval requires complete relevance,
+expected-fact, and prohibited-result judgments and constructs the ordinary
+`KnowledgeEvaluationCase` contract. Rejected or expired candidates cannot be promoted. Promotion
+creates a new dataset revision and records the candidate identities, authenticated promoter,
+permission evidence, and promotion time.
 
 `EvalDataset`, `EvalRun`, `EvalResult`, and `EvalReport` carry stable identity and an `AuthorizationIdentity` owner: tenant, user, selected group, workspace, and optional session. This is persistable ownership metadata, not an authorization capability; it contains no principal claims, roles, service identity, or authentication-strength evidence. Ownership uses exact lineage matching: a session-owned dataset is not implicitly shared with another session or a workspace-wide scope.
 

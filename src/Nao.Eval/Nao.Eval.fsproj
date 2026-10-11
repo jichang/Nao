@@ -11,6 +11,9 @@
     <Compile Include="src/Core/Evaluator.fs" />
     <Compile Include="src/Datasets/SafetyDataset.fs" />
     <Compile Include="src/Datasets/SafetyMetrics.fs" />
+    <Compile Include="src/Datasets/KnowledgeEvaluationDataset.fs" />
+    <Compile Include="src/Datasets/KnowledgeAdversarialDataset.fs" />
+    <Compile Include="src/Datasets/KnowledgeDatasetCandidates.fs" />
     <Compile Include="src/Evaluators/ExactMatch.fs" />
     <Compile Include="src/Evaluators/Contains.fs" />
     <Compile Include="src/Evaluators/Regex.fs" />
@@ -19,6 +22,8 @@
     <Compile Include="src/Evaluators/VerificationJudge.fs" />
     <Compile Include="src/Evaluators/KnowledgeRetrievalComparison.fs" />
     <Compile Include="src/Evaluators/KnowledgeHybridRetrievalEvaluation.fs" />
+    <Compile Include="src/Evaluators/KnowledgeGroundedGenerationEvaluation.fs" />
+    <Compile Include="src/Evaluators/KnowledgeQualityRegression.fs" />
     <Compile Include="src/Running/EvalReport.fs" />
     <Compile Include="src/Running/EvalArchive.fs" />
     <Compile Include="src/Running/EvalRunner.fs" />

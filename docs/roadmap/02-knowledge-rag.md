@@ -209,13 +209,13 @@ This workstream creates a reusable knowledge subsystem for ingestion, indexing, 
 
 ## RAG-05 — Retrieval evaluation
 
-- [ ] Create versioned datasets with queries, relevant documents/chunks, expected facts, and prohibited results.
-- [ ] Measure recall@k, precision@k, MRR, nDCG, latency, and cost.
-- [ ] Measure context relevance, answer faithfulness, citation correctness, and abstention quality.
-- [ ] Add adversarial datasets for poisoning, prompt injection, stale sources, ambiguity, and ACL boundaries.
-- [ ] Segment reports by source, format, language, tenant policy, and query type.
-- [ ] Add regression thresholds and baseline promotion workflow.
-- [ ] Capture production retrieval failures as reviewed dataset candidates.
+- [x] Create versioned datasets with queries, relevant documents/chunks, expected facts, and prohibited results.
+- [x] Measure recall@k, precision@k, MRR, nDCG, latency, and cost.
+- [x] Measure context relevance, answer faithfulness, citation correctness, and abstention quality.
+- [x] Add adversarial datasets for poisoning, prompt injection, stale sources, ambiguity, and ACL boundaries.
+- [x] Segment reports by source, format, language, tenant policy, and query type.
+- [x] Add regression thresholds and baseline promotion workflow.
+- [x] Capture production retrieval failures as reviewed dataset candidates.
 
 ## MEM-01 — Memory and knowledge integration
 

@@ -1,8 +1,7 @@
 namespace Nao.Eval
 
 open System
-open System.Text
-open System.Security.Cryptography
+open System.Diagnostics
 open System.Threading
 open System.Threading.Tasks
 open Nao.Knowledge
@@ -13,113 +12,45 @@ type KnowledgeRetrievalEvaluationStrategy =
     | Vector
     | Hybrid
 
-type KnowledgeRetrievalQualityCase =
+type KnowledgeRankedRetrievalOutput =
     private
-        { Id: string
-          Query: string
-          RelevantChunkIds: Set<KnowledgeChunkId> }
+        { ChunkIds: KnowledgeChunkId list
+          CostUsd: decimal }
 
 [<RequireQualifiedAccess>]
-module KnowledgeRetrievalQualityCase =
-    let create id query relevantChunkIds =
-        if String.IsNullOrWhiteSpace id || id <> id.Trim() then
-            invalidArg (nameof id) "Retrieval quality case identity must be non-blank and trimmed."
+module KnowledgeRankedRetrievalOutput =
+    let create chunkIds costUsd =
+        if isNull (box chunkIds) then
+            nullArg (nameof chunkIds)
 
-        if String.IsNullOrWhiteSpace query || query <> query.Trim() then
-            invalidArg (nameof query) "Retrieval quality query must be non-blank and trimmed."
+        if costUsd < 0m then
+            invalidArg (nameof costUsd) "Ranked retrieval cost cannot be negative."
 
-        let relevantChunkIds = Set.ofSeq relevantChunkIds
+        { ChunkIds = chunkIds
+          CostUsd = costUsd }
 
-        if relevantChunkIds.IsEmpty then
-            invalidArg (nameof relevantChunkIds) "Retrieval quality cases require relevant chunks."
-
-        { Id = id
-          Query = query
-          RelevantChunkIds = relevantChunkIds }
-
-    let id value = value.Id
-    let query value = value.Query
-    let relevantChunkIds value = value.RelevantChunkIds
-
-type KnowledgeRetrievalQualityDataset =
-    private
-        { Name: string
-          Version: string
-          ContentSha256: string
-          Cases: KnowledgeRetrievalQualityCase list }
-
-[<RequireQualifiedAccess>]
-module KnowledgeRetrievalQualityDataset =
-    let private appendValue (builder: StringBuilder) (value: string) =
-        builder.Append(value.Length).Append(':').Append(value).Append('|') |> ignore
-
-    let private computeHash name version cases =
-        let canonical = StringBuilder()
-        appendValue canonical name
-        appendValue canonical version
-
-        for case in cases do
-            appendValue canonical (KnowledgeRetrievalQualityCase.id case)
-            appendValue canonical (KnowledgeRetrievalQualityCase.query case)
-
-            case
-            |> KnowledgeRetrievalQualityCase.relevantChunkIds
-            |> Seq.map string
-            |> Seq.sort
-            |> Seq.iter (appendValue canonical)
-
-        canonical
-        |> _.ToString()
-        |> Encoding.UTF8.GetBytes
-        |> SHA256.HashData
-        |> Convert.ToHexString
-        |> _.ToLowerInvariant()
-
-    let create name version cases =
-        if String.IsNullOrWhiteSpace name || name <> name.Trim() then
-            invalidArg (nameof name) "Retrieval quality dataset name must be non-blank and trimmed."
-
-        if String.IsNullOrWhiteSpace version || version <> version.Trim() then
-            invalidArg (nameof version) "Retrieval quality dataset version must be non-blank and trimmed."
-
-        if List.isEmpty cases then
-            invalidArg (nameof cases) "Retrieval quality datasets require at least one case."
-
-        let duplicateIds =
-            cases
-            |> List.countBy KnowledgeRetrievalQualityCase.id
-            |> List.choose (fun (id, count) -> if count > 1 then Some id else None)
-
-        if not duplicateIds.IsEmpty then
-            invalidArg (nameof cases) "Retrieval quality case identities must be unique."
-
-        { Name = name
-          Version = version
-          ContentSha256 = computeHash name version cases
-          Cases = cases }
-
-    let name value = value.Name
-    let version value = value.Version
-    let contentSha256 value = value.ContentSha256
-    let cases value = value.Cases
+    let chunkIds value = value.ChunkIds
+    let costUsd value = value.CostUsd
 
 type KnowledgeRankedRetrievalEvaluator =
     { RetrieveAsync:
         KnowledgeRetrievalEvaluationStrategy
-            -> KnowledgeRetrievalQualityCase
+            -> KnowledgeEvaluationCase
             -> int
             -> CancellationToken
-            -> Task<KnowledgeChunkId list> }
+            -> Task<KnowledgeRankedRetrievalOutput> }
 
 type KnowledgeRetrievalCaseMeasurement =
     private
-        { Case: KnowledgeRetrievalQualityCase
+        { Case: KnowledgeEvaluationCase
           Retrieved: KnowledgeChunkId list
           RelevantRetrieved: int
           Recall: float
           Precision: float
           ReciprocalRank: float
-          NormalizedDiscountedCumulativeGain: float }
+          NormalizedDiscountedCumulativeGain: float
+          Latency: TimeSpan
+          CostUsd: decimal }
 
 [<RequireQualifiedAccess>]
 module KnowledgeRetrievalCaseMeasurement =
@@ -129,9 +60,38 @@ module KnowledgeRetrievalCaseMeasurement =
     let recall value = value.Recall
     let precision value = value.Precision
     let reciprocalRank value = value.ReciprocalRank
+    let latency value = value.Latency
+    let costUsd value = value.CostUsd
 
     let normalizedDiscountedCumulativeGain value =
         value.NormalizedDiscountedCumulativeGain
+
+type KnowledgeRetrievalSegmentQuality =
+    private
+        { Segment: KnowledgeEvaluationSegment
+          CaseCount: int
+          Recall: float
+          Precision: float
+          MeanReciprocalRank: float
+          NormalizedDiscountedCumulativeGain: float
+          MeanLatency: TimeSpan
+          P95Latency: TimeSpan
+          TotalCostUsd: decimal }
+
+[<RequireQualifiedAccess>]
+module KnowledgeRetrievalSegmentQuality =
+    let segment value = value.Segment
+    let caseCount value = value.CaseCount
+    let recall value = value.Recall
+    let precision value = value.Precision
+    let meanReciprocalRank value = value.MeanReciprocalRank
+
+    let normalizedDiscountedCumulativeGain value =
+        value.NormalizedDiscountedCumulativeGain
+
+    let meanLatency value = value.MeanLatency
+    let p95Latency value = value.P95Latency
+    let totalCostUsd value = value.TotalCostUsd
 
 type KnowledgeRetrievalStrategyQuality =
     private
@@ -143,7 +103,11 @@ type KnowledgeRetrievalStrategyQuality =
           Recall: float
           Precision: float
           MeanReciprocalRank: float
-          NormalizedDiscountedCumulativeGain: float }
+          NormalizedDiscountedCumulativeGain: float
+          MeanLatency: TimeSpan
+          P95Latency: TimeSpan
+          TotalCostUsd: decimal
+          Segments: KnowledgeRetrievalSegmentQuality list }
 
 [<RequireQualifiedAccess>]
 module KnowledgeRetrievalStrategyQuality =
@@ -155,6 +119,10 @@ module KnowledgeRetrievalStrategyQuality =
     let recall value = value.Recall
     let precision value = value.Precision
     let meanReciprocalRank value = value.MeanReciprocalRank
+    let meanLatency value = value.MeanLatency
+    let p95Latency value = value.P95Latency
+    let totalCostUsd value = value.TotalCostUsd
+    let segments value = value.Segments
 
     let normalizedDiscountedCumulativeGain value =
         value.NormalizedDiscountedCumulativeGain
@@ -195,7 +163,7 @@ type KnowledgeHybridQualityDecision =
 type KnowledgeHybridRetrievalEvaluation =
     private
         { Evaluator: ComponentVersion
-          Dataset: KnowledgeRetrievalQualityDataset
+          Dataset: KnowledgeEvaluationDataset
           Cutoff: int
           Lexical: KnowledgeRetrievalStrategyQuality
           Vector: KnowledgeRetrievalStrategyQuality
@@ -239,14 +207,18 @@ module KnowledgeHybridRetrievalEvaluator =
         =
         values |> List.averageBy selector
 
-    let private measureCase case retrieved =
+    let private measureCase case retrieved latency costUsd =
         if isNull (box retrieved) then
             invalidOp "Ranked retrieval evaluator returned a null result."
 
         if (retrieved |> Set.ofList).Count <> retrieved.Length then
             invalidOp "Ranked retrieval results cannot contain duplicate chunk identities."
 
-        let relevant = KnowledgeRetrievalQualityCase.relevantChunkIds case
+        let relevant = KnowledgeEvaluationCase.relevantChunkIds case
+
+        if relevant.IsEmpty then
+            invalidOp "Hybrid retrieval evaluation requires relevant chunk judgments for every case."
+
         let relevantRetrieved = retrieved |> List.filter relevant.Contains |> List.length
 
         let reciprocalRank =
@@ -282,7 +254,50 @@ module KnowledgeHybridRetrievalEvaluator =
             if idealDiscountedCumulativeGain = 0.0 then
                 0.0
             else
-                discountedCumulativeGain / idealDiscountedCumulativeGain }
+                discountedCumulativeGain / idealDiscountedCumulativeGain
+          Latency = latency
+          CostUsd = costUsd }
+
+    let private meanLatency measurements =
+        measurements
+        |> List.averageBy (KnowledgeRetrievalCaseMeasurement.latency >> _.Ticks >> float)
+        |> int64
+        |> TimeSpan.FromTicks
+
+    let private p95Latency measurements =
+        let ordered =
+            measurements
+            |> List.map KnowledgeRetrievalCaseMeasurement.latency
+            |> List.sort
+            |> List.toArray
+
+        let index = int (Math.Ceiling(0.95 * float ordered.Length)) - 1
+        ordered[max 0 index]
+
+    let private segmentQuality segment (measurements: KnowledgeRetrievalCaseMeasurement list) =
+        { Segment = segment
+          CaseCount = measurements.Length
+          Recall = average _.Recall measurements
+          Precision = average _.Precision measurements
+          MeanReciprocalRank = average _.ReciprocalRank measurements
+          NormalizedDiscountedCumulativeGain = average _.NormalizedDiscountedCumulativeGain measurements
+          MeanLatency = meanLatency measurements
+          P95Latency = p95Latency measurements
+          TotalCostUsd = measurements |> List.sumBy KnowledgeRetrievalCaseMeasurement.costUsd }
+
+    let private segments measurements =
+        measurements
+        |> List.collect (fun measurement ->
+            measurement
+            |> KnowledgeRetrievalCaseMeasurement.case
+            |> KnowledgeEvaluationCase.dimensions
+            |> KnowledgeEvaluationSegment.ofDimensions
+            |> List.map (fun segment -> segment, measurement))
+        |> List.groupBy fst
+        |> List.map (fun (segment, values) -> values |> List.map snd |> segmentQuality segment)
+        |> List.sortBy (fun quality ->
+            let segment = KnowledgeRetrievalSegmentQuality.segment quality
+            KnowledgeEvaluationSegment.dimension segment, KnowledgeEvaluationSegment.value segment)
 
     let private aggregate
         strategy
@@ -291,16 +306,26 @@ module KnowledgeHybridRetrievalEvaluator =
         { Strategy = strategy
           Cases = measurements
           RetrievedChunks = measurements |> List.sumBy (_.Retrieved.Length)
-          RelevantChunks = measurements |> List.sumBy (_.Case.RelevantChunkIds.Count)
+          RelevantChunks =
+            measurements
+            |> List.sumBy (
+                KnowledgeRetrievalCaseMeasurement.case
+                >> KnowledgeEvaluationCase.relevantChunkIds
+                >> _.Count
+            )
           RelevantRetrieved = measurements |> List.sumBy _.RelevantRetrieved
           Recall = average _.Recall measurements
           Precision = average _.Precision measurements
           MeanReciprocalRank = average _.ReciprocalRank measurements
-          NormalizedDiscountedCumulativeGain = average _.NormalizedDiscountedCumulativeGain measurements }
+          NormalizedDiscountedCumulativeGain = average _.NormalizedDiscountedCumulativeGain measurements
+          MeanLatency = meanLatency measurements
+          P95Latency = p95Latency measurements
+          TotalCostUsd = measurements |> List.sumBy KnowledgeRetrievalCaseMeasurement.costUsd
+          Segments = segments measurements }
 
     let evaluateAsync
         (retriever: KnowledgeRankedRetrievalEvaluator)
-        (dataset: KnowledgeRetrievalQualityDataset)
+        (dataset: KnowledgeEvaluationDataset)
         cutoff
         (gate: KnowledgeHybridQualityGate)
         (cancellationToken: CancellationToken)
@@ -326,17 +351,30 @@ module KnowledgeHybridRetrievalEvaluator =
                   KnowledgeRetrievalEvaluationStrategy.Hybrid ]
 
             let! measured =
-                KnowledgeRetrievalQualityDataset.cases dataset
+                KnowledgeEvaluationDataset.cases dataset
                 |> List.collect (fun case ->
                     strategies
                     |> List.map (fun strategy ->
                         task {
-                            let! retrieved = retriever.RetrieveAsync strategy case cutoff cancellationToken
+                            let stopwatch = Stopwatch.StartNew()
+                            let! output = retriever.RetrieveAsync strategy case cutoff cancellationToken
+                            stopwatch.Stop()
 
-                            if not (isNull (box retrieved)) && retrieved.Length > cutoff then
+                            if isNull (box output) then
+                                invalidOp "Ranked retrieval evaluator returned a null output."
+
+                            let retrieved = KnowledgeRankedRetrievalOutput.chunkIds output
+
+                            if retrieved.Length > cutoff then
                                 invalidOp "Ranked retrieval evaluator exceeded the requested cutoff."
 
-                            return strategy, measureCase case retrieved
+                            return
+                                strategy,
+                                measureCase
+                                    case
+                                    retrieved
+                                    stopwatch.Elapsed
+                                    (KnowledgeRankedRetrievalOutput.costUsd output)
                         }))
                 |> Task.WhenAll
 

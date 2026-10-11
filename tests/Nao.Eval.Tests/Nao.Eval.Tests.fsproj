@@ -18,7 +18,12 @@
     <Compile Include="src/EvalRunnerTests.fs" />
     <Compile Include="src/EvalArchiveTests.fs" />
     <Compile Include="src/KnowledgeRetrievalComparisonTests.fs" />
+    <Compile Include="src/KnowledgeEvaluationDatasetTests.fs" />
+    <Compile Include="src/KnowledgeAdversarialDatasetTests.fs" />
+    <Compile Include="src/KnowledgeDatasetCandidateTests.fs" />
     <Compile Include="src/KnowledgeHybridRetrievalEvaluationTests.fs" />
+    <Compile Include="src/KnowledgeGroundedGenerationEvaluationTests.fs" />
+    <Compile Include="src/KnowledgeQualityRegressionTests.fs" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Nao.Testing\Nao.Testing.fsproj" />
