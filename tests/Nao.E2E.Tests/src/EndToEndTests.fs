@@ -138,7 +138,11 @@ type EndToEndProviderTests() =
                 Content = "What's the weather?" } ]
 
         let result =
-            provider.CompleteAsync (CorrelationContext.root ()) conversation CompletionOptions.Default
+            provider.CompleteAsync
+                (CorrelationContext.root ())
+                conversation
+                CompletionOptions.Default
+                System.Threading.CancellationToken.None
 
         let r = result.Result
         Assert.AreEqual("stop", r.FinishReason)
@@ -154,7 +158,11 @@ type EndToEndProviderTests() =
                 Content = "tool_result: 42" } ]
 
         let result =
-            provider.CompleteAsync (CorrelationContext.root ()) conversation CompletionOptions.Default
+            provider.CompleteAsync
+                (CorrelationContext.root ())
+                conversation
+                CompletionOptions.Default
+                System.Threading.CancellationToken.None
 
         let r = result.Result
         Assert.IsTrue(r.Content.Contains("42"))
@@ -165,7 +173,12 @@ type EndToEndProviderTests() =
         let conversation = [ { Role = User; Content = "hello" } ]
 
         let r =
-            (provider.CompleteAsync (CorrelationContext.root ()) conversation CompletionOptions.Default).Result
+            (provider.CompleteAsync
+                (CorrelationContext.root ())
+                conversation
+                CompletionOptions.Default
+                System.Threading.CancellationToken.None)
+                .Result
 
         Assert.IsTrue(r.TokensUsed.IsSome)
         Assert.IsTrue(r.TokensUsed.Value > 0)

@@ -53,7 +53,8 @@ module Summarizer =
                     Content = summaryPrompt }
                   { Role = User; Content = formatted } ]
 
-            let! result = provider.CompleteAsync correlation conversation options
+            let! result =
+                provider.CompleteAsync correlation conversation options System.Threading.CancellationToken.None
 
             return
                 { Role = System

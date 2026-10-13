@@ -57,7 +57,7 @@ type VerificationTests() =
         let observed = ref None
 
         let provider =
-            LlmProvider.create (fun () -> "capturing") (fun actual _conversation _options ->
+            LlmProvider.create (fun () -> "capturing") (fun actual _conversation _options _ ->
                 observed.Value <- Some actual
                 Task.FromResult(CompletionResult.create "PASS: verified" "stop" None None))
 
@@ -76,7 +76,7 @@ type VerificationTests() =
         let observed = ref None
 
         let provider =
-            LlmProvider.create (fun () -> "capturing") (fun actual _conversation _options ->
+            LlmProvider.create (fun () -> "capturing") (fun actual _conversation _options _ ->
                 observed.Value <- Some actual
                 Task.FromResult(CompletionResult.create "understood" "stop" None None))
 

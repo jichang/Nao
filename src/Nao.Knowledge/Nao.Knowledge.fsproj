@@ -6,6 +6,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="src/KnowledgeContracts.fs" />
+    <Compile Include="src/MemoryKnowledgeAuthority.fs" />
     <Compile Include="src/EmbeddingContracts.fs" />
     <Compile Include="src/EmbeddingExecutionContracts.fs" />
     <Compile Include="src/EmbeddingExecutor.fs" />
@@ -59,8 +60,10 @@
     <Compile Include="src/ContextAssembly.fs" />
     <Compile Include="src/GroundedAnswerContracts.fs" />
     <Compile Include="src/GroundedGenerationResponseProtocol.fs" />
+    <Compile Include="src/GroundedGenerationAdapter.fs" />
     <Compile Include="src/GroundedCitationVerification.fs" />
     <Compile Include="src/GroundedClaimSupport.fs" />
+    <Compile Include="src/LlmClaimSupportEvaluator.fs" />
     <Compile Include="src/GroundedClaimSupportPolicy.fs" />
     <Compile Include="src/GroundedOutputArtifacts.fs" />
     <Compile Include="src/ChunkingMetrics.fs" />

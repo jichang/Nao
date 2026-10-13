@@ -17,9 +17,16 @@
     <Compile Include="src/PromptPatchTests.fs" />
     <Compile Include="src/LlmTypeTests.fs" />
     <Compile Include="src/IdentityTests.fs" />
+    <Compile Include="src/ArtifactTests.fs" />
     <Compile Include="src/SecretTests.fs" />
     <Compile Include="src/ConversationWindowTests.fs" />
     <Compile Include="src/MemoryStoreTests.fs" />
+    <Compile Include="src/FederatedMemoryRecallTests.fs" />
+    <Compile Include="src/SessionMemoryEligibilityTests.fs" />
+    <Compile Include="src/CrossSessionMemoryConsentTests.fs" />
+    <Compile Include="src/BackgroundMemoryExtractionTests.fs" />
+    <Compile Include="src/DurableMemoryLifecycleTests.fs" />
+    <Compile Include="src/MemoryBoundaryMatrixTests.fs" />
     <Compile Include="src/SummarizerTests.fs" />
     <Compile Include="src/SemanticMemoryTests.fs" />
     <Compile Include="src/EnvironmentTests.fs" />

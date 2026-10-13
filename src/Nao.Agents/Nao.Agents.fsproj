@@ -79,6 +79,10 @@
     <Compile Include="src/Governance/AuditLog.fs" />
     <Compile Include="src/Governance/ConstitutionQuarantine.fs" />
     <Compile Include="src/Events/TurnRecords.fs" />
+    <Compile Include="src/Memory/SessionMemoryEligibility.fs" />
+    <Compile Include="src/Memory/CrossSessionMemoryConsent.fs" />
+    <Compile Include="src/Memory/BackgroundMemoryExtraction.fs" />
+    <Compile Include="src/Memory/DurableMemoryLifecycle.fs" />
     <Compile Include="src/Feedback/FeedbackTypes.fs" />
     <Compile Include="src/Events/Events.fs" />
     <Compile Include="src/Events/TurnRecorder.fs" />

@@ -4,6 +4,7 @@ open System
 open System.Net.Http
 open System.Text
 open System.Text.Json
+open System.Threading
 open System.Threading.Tasks
 open Nao.Agents
 
@@ -143,14 +144,19 @@ let createWithHandler
 
     let providerName () = sprintf "Anthropic(%s)" config.Model
 
-    let completeAsync (_correlation: CorrelationContext) conversation options : Task<CompletionResult> =
+    let completeAsync
+        (_correlation: CorrelationContext)
+        conversation
+        options
+        (cancellationToken: CancellationToken)
+        : Task<CompletionResult> =
         task {
             try
                 use content =
                     new StringContent(buildRequestBody conversation options false, Encoding.UTF8, "application/json")
 
-                let! response = client.PostAsync(messagesUrl, content)
-                let! responseBody = response.Content.ReadAsStringAsync()
+                let! response = client.PostAsync(messagesUrl, content, cancellationToken)
+                let! responseBody = response.Content.ReadAsStringAsync(cancellationToken)
 
                 if response.IsSuccessStatusCode then
                     return parseResponse responseBody
@@ -161,13 +167,22 @@ let createWithHandler
                             (int response.StatusCode)
                             (sprintf "Provider returned HTTP %d: %s" (int response.StatusCode) responseBody)
                         |> PlatformFailure.raiseException
-            with ex ->
+            with
+            | :? OperationCanceledException as error when cancellationToken.IsCancellationRequested ->
+                return raise error
+            | ex ->
                 return
                     PlatformFailure.fromException PlatformFailureBoundary.Provider None ex
                     |> PlatformFailure.raiseException
         }
 
-    let streamAsync (_correlation: CorrelationContext) conversation options onChunk : Task<CompletionResult> =
+    let streamAsync
+        (_correlation: CorrelationContext)
+        conversation
+        options
+        onChunk
+        (cancellationToken: CancellationToken)
+        : Task<CompletionResult> =
         task {
             try
                 use request = new HttpRequestMessage(HttpMethod.Post, messagesUrl)
@@ -175,10 +190,10 @@ let createWithHandler
                 request.Content <-
                     new StringContent(buildRequestBody conversation options true, Encoding.UTF8, "application/json")
 
-                let! response = client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead)
+                let! response = client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
 
                 if not response.IsSuccessStatusCode then
-                    let! responseBody = response.Content.ReadAsStringAsync()
+                    let! responseBody = response.Content.ReadAsStringAsync(cancellationToken)
 
                     return
                         PlatformFailure.fromHttpStatus
@@ -187,7 +202,7 @@ let createWithHandler
                             (sprintf "Provider returned HTTP %d: %s" (int response.StatusCode) responseBody)
                         |> PlatformFailure.raiseException
                 else
-                    use! responseStream = response.Content.ReadAsStreamAsync()
+                    use! responseStream = response.Content.ReadAsStreamAsync(cancellationToken)
                     use reader = new System.IO.StreamReader(responseStream)
                     let content = StringBuilder()
                     let mutable reason = "stop"
@@ -196,7 +211,7 @@ let createWithHandler
                     let mutable reading = true
 
                     while reading do
-                        let! line = reader.ReadLineAsync()
+                        let! line = reader.ReadLineAsync(cancellationToken)
 
                         if isNull line then
                             reading <- false
@@ -233,7 +248,10 @@ let createWithHandler
                           FinishReason = reason
                           TokensUsed = tokens
                           Usage = None }
-            with ex ->
+            with
+            | :? OperationCanceledException as error when cancellationToken.IsCancellationRequested ->
+                return raise error
+            | ex ->
                 return
                     PlatformFailure.fromException PlatformFailureBoundary.Provider None ex
                     |> PlatformFailure.raiseException

@@ -478,7 +478,7 @@ type MemoryToolTests() =
     member _.RememberedFactCanBeDeliberatelySearched() =
         let store = InMemoryStore.create ()
         let owner = memoryScope "one"
-        let tools = MemoryTools.create MemoryToolConfig.Default store
+        let tools = MemoryTools.create MemoryToolConfig.Default store None
         let remember = tools |> List.find (fun tool -> tool.Name = "memory_remember")
         let search = tools |> List.find (fun tool -> tool.Name = "memory_search")
 
@@ -492,7 +492,7 @@ type MemoryToolTests() =
             runTool
                 owner
                 search
-                "{\"query\":\"HTML format\",\"intent\":\"Recall the user's document preference\",\"tags\":[\"preference\"]}"
+                "{\"query\":\"HTML format\",\"intent\":\"Recall the user's document preference\",\"source\":\"memory\",\"memoryTags\":[\"preference\"]}"
 
         use document = JsonDocument.Parse result
 
@@ -520,17 +520,17 @@ type MemoryToolTests() =
                 MaxSearchResults = maxResults }
 
         let search =
-            MemoryTools.create config store
+            MemoryTools.create config store None
             |> List.find (fun tool -> tool.Name = "memory_search")
 
         let result =
             runTool
                 owner
                 search
-                "{\"query\":\"project decision\",\"intent\":\"Find earlier project decisions\",\"limit\":999}"
+                "{\"query\":\"project decision\",\"intent\":\"Find earlier project decisions\",\"source\":\"memory\",\"limit\":999}"
 
         use document = JsonDocument.Parse result
-        let entries = document.RootElement.GetProperty("entries")
+        let entries = document.RootElement.GetProperty("memories")
 
         Assert.AreEqual(maxResults, entries.GetArrayLength())
         Assert.IsFalse(result.Contains("Other session secret"))
@@ -541,7 +541,7 @@ type MemoryToolTests() =
         let owner = memoryScope "forget"
         (store.SaveAsync owner (memEntry "obsolete-decision" "Use the old format")).GetAwaiter().GetResult()
 
-        let defaultTools = MemoryTools.create MemoryToolConfig.Default store
+        let defaultTools = MemoryTools.create MemoryToolConfig.Default store None
 
         Assert.IsFalse(defaultTools |> List.exists (fun tool -> tool.Name = "memory_forget"))
 
@@ -550,7 +550,7 @@ type MemoryToolTests() =
                 ForgetEnabled = true }
 
         let forget =
-            MemoryTools.create config store
+            MemoryTools.create config store None
             |> List.find (fun tool -> tool.Name = "memory_forget")
 
         match

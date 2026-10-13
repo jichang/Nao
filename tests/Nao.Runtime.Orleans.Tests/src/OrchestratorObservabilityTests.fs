@@ -27,7 +27,7 @@ module private ScriptedProvider =
     let create (responses: string list) =
         let responses = Queue<string>(responses)
 
-        LlmProvider.create (fun () -> "scripted") (fun _ _ _ ->
+        LlmProvider.create (fun () -> "scripted") (fun _ _ _ _ ->
             Task.FromResult(CompletionResult.create (responses.Dequeue()) "stop" None None))
 
 module private TestOrchestrator =
@@ -95,7 +95,7 @@ type OrchestratorObservabilityTests() =
         let observed = ResizeArray<CorrelationContext>()
 
         let provider =
-            LlmProvider.create (fun () -> "capturing") (fun correlation _ _ ->
+            LlmProvider.create (fun () -> "capturing") (fun correlation _ _ _ ->
                 observed.Add correlation
                 Task.FromResult(CompletionResult.create "done" "stop" None None))
 

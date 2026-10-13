@@ -6,6 +6,21 @@ Nao separates model-provider integration from agent behavior and offers Orleans 
 
 The immutable `LlmProvider` capability record provides common completion behavior with an optional streaming function. Current adapters cover OpenAI-compatible services, Anthropic, DeepSeek, Kimi, Ollama, vLLM, and llama.cpp. Source-backed embeddings use the separate `KnowledgeEmbeddingProvider` contract, with hosted OpenAI-compatible and local Ollama adapters.
 
+Buffered and streaming calls require an operation `CancellationToken`. The OpenAI-compatible,
+Anthropic, and Ollama implementations propagate it through HTTP sends, response bodies, streams,
+and line reads. Provider adapters rethrow cancellation rather than translating it into a platform
+failure, so execution-budget and caller cancellation stop underlying I/O.
+
+Knowledge generation uses the same provider contract for both grounded-answer production and
+semantic claim-support evaluation. The claim-support adapter requires structured assessments,
+consistent detailed token usage, explicit pricing, and bounded repair; provider output cannot
+introduce claim or citation identities that were absent from verified evidence.
+
+The production qualification runner accepts already activated provider capabilities and
+authorization-bound retrieval contexts. Endpoint selection, credential resolution, and model
+pricing remain explicit host configuration. Missing live configuration cannot fall back to
+reference results while claiming production qualification.
+
 Adapters are independently consumable through `Nao.Providers.OpenAICompatible`, `Nao.Providers.Anthropic`, and `Nao.Providers.Ollama`. The OpenAI-compatible and Ollama packages also expose their protocol-specific embedding configurations and factories while depending only on the vendor-independent contracts in `Nao.Knowledge`. Applications that want closed provider selection and all adapters can opt into the aggregate `Nao.Providers` composition package. Direct adapter consumers do not inherit unrelated provider implementations.
 
 Embedding adapters require an explicit, validated profile and an authoritative tokenizer callback.

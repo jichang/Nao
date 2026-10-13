@@ -104,8 +104,11 @@ Where score is a number on the scale described above."""
                     [ { Role = System; Content = system }; { Role = User; Content = prompt } ]
 
                 let! result =
-                    config.Provider.CompleteAsync context.Correlation conversation config.Options
-                    |> _.WaitAsync(context.CancellationToken)
+                    config.Provider.CompleteAsync
+                        context.Correlation
+                        conversation
+                        config.Options
+                        context.CancellationToken
 
                 let (score, reason) = parseScore result.Content
 

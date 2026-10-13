@@ -146,6 +146,25 @@ match result.Status, result.Outputs.Response with
 verification evidence, and governance decisions. Its terminal status is the sole execution
 outcome; callers do not reconcile separate success and error fields.
 
+### Artifact boundary
+
+An `Artifact` is an immutable, addressable object consumed or produced by one execution. It is
+distinct from conversation context, learned memory, and external source-backed knowledge:
+
+- `ArtifactRole` states whether the execution consumed or produced the object.
+- `ArtifactAddress` is an absolute URI. Nao-produced artifacts receive the canonical
+  `nao://artifacts/<artifact-id>` address; consumed artifacts retain their external address.
+- `ArtifactContentHash` is the canonical SHA-256 identity of the redacted UTF-8 payload.
+- `ArtifactLineage` records the exact execution, recording time, and ordered parent artifact
+  identities.
+- `ArtifactId` provides stable Nao identity, while the idempotency key binds publication to the
+  governed operation.
+
+Construction redacts the payload before hashing. Restore rejects unsupported schema versions,
+payload/hash disagreement, duplicate parents, and self-parent lineage. The contract is private and
+must be constructed through `Artifact.produced`, `Artifact.consumed`, or validated restore.
+Conversation and Orleans transport retain the complete version-1 contract.
+
 ## E — Execution
 
 Execution contracts model resource bounds and isolation intent:

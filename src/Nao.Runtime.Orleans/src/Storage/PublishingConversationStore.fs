@@ -28,11 +28,18 @@ module PublishingConversationStore =
             m.Artifacts
             |> Array.map (fun value ->
                 Artifact.restore
+                    (ArtifactSchemaVersion.parse value.SchemaVersion)
                     (ArtifactId.parse value.Id)
                     (IdempotencyKey.parse value.IdempotencyKey)
+                    (ArtifactRole.parse value.Role)
+                    (ArtifactAddress.parse value.Address)
                     value.Kind
                     value.ContentType
-                    value.Payload)
+                    value.Payload
+                    (ArtifactContentHash.parse value.ContentHash)
+                    (ExecutionId.parse value.RecordedBy)
+                    value.RecordedAt
+                    (value.ParentArtifactIds |> Array.map ArtifactId.parse |> Array.toList))
             |> Array.toList
 
         { Role = m.Role

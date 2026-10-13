@@ -96,7 +96,7 @@ module ContextCompaction =
                     Content = compactionPrompt }
                   { Role = User; Content = content } ]
 
-            let! result = provider.CompleteAsync correlation prompt options
+            let! result = provider.CompleteAsync correlation prompt options System.Threading.CancellationToken.None
             return result.Content
         }
 

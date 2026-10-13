@@ -9,23 +9,27 @@ open Nao.Agents
 module LocalLlmProvider =
 
     let create () =
-        LlmProvider.create (fun () -> "LocalTest") (fun _ (conversation: Conversation) (_options: CompletionOptions) ->
-            let lastMessage =
-                conversation
-                |> List.tryFindBack (fun m -> m.Role = User)
-                |> Option.map (fun m -> m.Content)
-                |> Option.defaultValue ""
+        LlmProvider.create
+            (fun () -> "LocalTest")
+            (fun _ (conversation: Conversation) (_options: CompletionOptions) _ ->
+                let lastMessage =
+                    conversation
+                    |> List.tryFindBack (fun m -> m.Role = User)
+                    |> Option.map (fun m -> m.Content)
+                    |> Option.defaultValue ""
 
-            let response =
-                if lastMessage.Contains("tool_result:") then
-                    // After receiving a tool result, produce a final answer
-                    let result = lastMessage.Split("tool_result:") |> Array.last |> (fun s -> s.Trim())
-                    sprintf "Based on the tool result, the answer is: %s" result
-                elif lastMessage.Contains("weather") then
-                    """{"tool":"get_weather","args":"London"}"""
-                elif lastMessage.Contains("calculate") || lastMessage.Contains("math") then
-                    """{"tool":"calculator","args":"2 + 2"}"""
-                else
-                    sprintf "I can help with that. You said: %s" lastMessage
+                let response =
+                    if lastMessage.Contains("tool_result:") then
+                        // After receiving a tool result, produce a final answer
+                        let result = lastMessage.Split("tool_result:") |> Array.last |> (fun s -> s.Trim())
+                        sprintf "Based on the tool result, the answer is: %s" result
+                    elif lastMessage.Contains("weather") then
+                        """{"tool":"get_weather","args":"London"}"""
+                    elif lastMessage.Contains("calculate") || lastMessage.Contains("math") then
+                        """{"tool":"calculator","args":"2 + 2"}"""
+                    else
+                        sprintf "I can help with that. You said: %s" lastMessage
 
-            Task.FromResult(CompletionResult.create response "stop" (Some(lastMessage.Length + response.Length)) None))
+                Task.FromResult(
+                    CompletionResult.create response "stop" (Some(lastMessage.Length + response.Length)) None
+                ))

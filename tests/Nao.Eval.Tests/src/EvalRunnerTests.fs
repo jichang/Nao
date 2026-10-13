@@ -226,7 +226,7 @@ type EvalRunnerTests() =
         let observed = ref None
 
         let provider =
-            LlmProvider.create (fun () -> "capturing") (fun correlation _conversation _options ->
+            LlmProvider.create (fun () -> "capturing") (fun correlation _conversation _options _ ->
                 observed.Value <- Some correlation
 
                 Task.FromResult(

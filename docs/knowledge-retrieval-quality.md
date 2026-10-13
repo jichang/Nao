@@ -61,6 +61,52 @@ Hybrid metrics are compared independently with the better lexical or vector base
 passes when hybrid materially improves at least one metric without exceeding parity tolerance on
 another metric. Exact parity requires a recorded non-blank justification.
 
+## PostgreSQL production retrieval qualification
+
+`PostgresKnowledgeIndexTests` includes an external-database qualification that runs the production
+pgvector and PostgreSQL full-text adapters through `KnowledgeHybridRetrievalPipeline`. The test:
+
+- transactionally indexes the same source-backed documents in both production indexes;
+- executes lexical and vector queries with authorization predicates inside PostgreSQL;
+- fuses and selects the returned candidates through the ordinary hybrid pipeline;
+- retains exact source, immutable document-version, chunk, location, trust, and content-hash
+  provenance;
+- reranks and assembles the retrieved evidence into bounded context;
+- verifies a grounded citation against the PostgreSQL-backed chunk;
+- proves a different authenticated user receives no candidates.
+
+This evidence establishes the production indexing, authorization, retrieval, and citation path.
+The separately executable quality gates remain responsible for release thresholds. It does not
+qualify a production generation adapter or satisfy the complete R2 production-adapter-set exit
+criterion.
+
+Set `NAO_TEST_POSTGRES` to a PostgreSQL server with pgvector and run:
+
+```bash
+dotnet test tests/Nao.Knowledge.Postgres.Tests/Nao.Knowledge.Postgres.Tests.fsproj -c Release \
+  --filter "FullyQualifiedName~PostgreSQL adapters drive authorized hybrid retrieval and verified citations"
+```
+
+## PostgreSQL production lifecycle qualification
+
+The managed pgvector and lexical adapters implement idempotent creation, health checks, complete
+rebuild, owner-scoped backup, and restore. The external lifecycle qualification performs
+incremental ingestion and an unchanged retry, replaces one source version through an
+authoritative source filter, deletes another chunk, and restores the original searchable state
+from exact vector and lexical snapshots. It also verifies searchable-record health and rejects
+cross-owner restore.
+
+Backups include only active rows owned by the complete authorization identity. They intentionally
+do not clear source-retirement tombstones during restore, preventing an older snapshot from
+resurrecting knowledge deleted by lifecycle policy.
+
+Run the lifecycle evidence with:
+
+```bash
+dotnet test tests/Nao.Knowledge.Postgres.Tests/Nao.Knowledge.Postgres.Tests.fsproj -c Release \
+  --filter "FullyQualifiedName~Managed PostgreSQL indexes preserve incremental lifecycle through backup and restore"
+```
+
 ## Reproducible hybrid reference fixture
 
 The repository fixture `hybrid-retrieval` revision `1` contains two deterministic cases evaluated
@@ -121,6 +167,105 @@ Repair-required and rejected outputs are unresolved and fail response-decision a
 denominators produce an unavailable metric, and case identities must exactly match the versioned
 dataset before any report is returned.
 
+## Production grounded generation boundary
+
+`KnowledgeGroundedGenerationAdapter` consumes an authorization-bound assembled context and invokes
+an arbitrary cancellation-aware `LlmProvider` under explicit duration, cumulative-token, and
+repair-attempt limits. Its prompts contain the exact grounded response protocol instructions, the
+question, and the injection-delimited assembled context. A malformed response may be repaired only
+within the configured attempt bound.
+
+Generated evidence retains the versioned adapter and configuration identity, protocol descriptor,
+context, typed answer or insufficiency, provider-call count, reported tokens, and wall-clock
+duration. Missing token usage, token-budget excess, invalid protocol cardinality, and protocol
+repair exhaustion are typed rejections rather than successful fallbacks. Authorization must
+exactly match the scope used by retrieval and context assembly.
+
+This boundary makes OpenAI-compatible and other `LlmProvider` implementations usable for grounded
+generation. It does not by itself prove live-model quality: production release qualification
+still requires executing the adversarial dataset and satisfying the grounded release profile.
+
+### Semantic claim-support adapter
+
+`KnowledgeLlmClaimSupportEvaluator` supplies the production semantic judge required after
+deterministic citation verification. It sends claims and verified citation excerpts as untrusted
+structured data and requires exactly one typed support assessment per claim. Returned claim and
+citation identities must be drawn from the request; supported claims require direct cited
+evidence, while unsupported claims cannot report supporting citations.
+
+The adapter has bounded repair, response size, duration, and caller cancellation. Provider token
+evidence must include consistent input, output, and total counts. Explicit input/output pricing is
+part of the configuration identity and produces budget-enforceable USD usage. Controlled adapter
+tests are not live-model quality evidence.
+
+### Production qualification runner
+
+`KnowledgeGroundedProductionQualification` executes generation, deterministic citation
+verification, semantic claim-support evaluation, grounded quality measurement, and release
+qualification as one evidence chain. Callers must provide exactly one authorization-bound
+assembled context for every case in the selected dataset. Duplicate, missing, or unexpected cases
+fail before execution.
+
+Each case retains its generation, verification, support, and projected evaluation evidence.
+Rejected generation or invalid citations become unresolved responses; they are never converted to
+abstentions or accepted answers. Typed insufficiency remains an explicit abstention.
+
+For the full R2 production-adapter criterion, a host must provide the exact
+`rag-adversarial` revision-1 dataset, production retrieval contexts, a configured generation
+adapter, and a non-deterministic semantic support evaluator. Completion requires the returned
+`KnowledgeGroundedReleaseQualificationResult` to be `Qualified`; controlled test evidence is not
+substituted when live configuration is unavailable.
+
+## Grounded release qualification
+
+`KnowledgeGroundedReleaseQualification` applies the initial RAG-04 release profile to recorded
+grounded-generation quality. The profile is bound to the exact `rag-adversarial` revision 1
+dataset content hash and the exact grounded-generation evaluator descriptor. It requires all five
+cases and these global thresholds:
+
+| Metric | Minimum |
+|---|---:|
+| Context relevance | 0.90 |
+| Answer faithfulness | 0.95 |
+| Citation correctness | 0.95 |
+| Abstention accuracy | 1.00 |
+
+The initial profile permits no regression from those absolute thresholds and requires zero
+unresolved responses. Every case must use one identical support-evaluator descriptor. Qualification
+also records the versioned generation-adapter component and configuration hash, the complete
+quality-gate result, and the qualification time. Dataset, evaluator, sample-count, unresolved,
+support-evaluator, missing-metric, or threshold mismatches fail closed.
+
+The repository's deterministic reference adapter produces 1.00 for all four metrics across the
+five adversarial cases. This is executable threshold evidence for RAG-04 only. It does not qualify
+a production generation, retrieval, or storage adapter and therefore does not satisfy the separate
+R2 production-adapter exit criterion.
+
+## Retrieval release qualification
+
+`KnowledgeRetrievalReleaseQualification` binds the exact adversarial corpus and evaluation dataset
+to one release decision across retrieval quality, latency, cost, safety, and isolation. The
+version-1 profile requires all five cases, recall and precision of at least 0.90, MRR and nDCG of
+at least 0.95, mean latency no greater than 250 ms, p95 latency no greater than 500 ms, and total
+cost no greater than USD 0.05.
+
+The hybrid comparison must pass independently. Every hybrid result is then checked against the
+case's prohibited-result judgments and the corpus-wide unauthorized chunk set. Any prohibited
+chunk fails safety; any unauthorized chunk fails isolation. These checks cannot be hidden by an
+otherwise favorable aggregate quality score.
+
+Run the unified retrieval release evidence:
+
+```bash
+dotnet test tests/Nao.Eval.Tests/Nao.Eval.Tests.fsproj -c Release \
+  --filter FullyQualifiedName~KnowledgeRetrievalReleaseQualificationTests
+```
+
+The deterministic qualification proves the release gate itself. Production PostgreSQL indexing,
+authorization, lifecycle, and citation behavior have separate external-database evidence. A live
+production generation model remains required before the full production-adapter-set criterion can
+be completed.
+
 ## Adversarial RAG corpus
 
 `KnowledgeAdversarialDatasets.adversarialV1` provides ten synthetic source chunks and five
@@ -144,6 +289,13 @@ Run the focused grounded-generation evidence:
 ```bash
 dotnet test tests/Nao.Eval.Tests/Nao.Eval.Tests.fsproj -c Release \
   --filter FullyQualifiedName~KnowledgeGroundedGenerationEvaluationTests
+```
+
+Run the grounded release qualification evidence:
+
+```bash
+dotnet test tests/Nao.Eval.Tests/Nao.Eval.Tests.fsproj -c Release \
+  --filter FullyQualifiedName~KnowledgeGroundedReleaseQualificationTests
 ```
 
 Run the adversarial dataset contract evidence:

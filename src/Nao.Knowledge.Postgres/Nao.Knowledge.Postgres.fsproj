@@ -8,6 +8,7 @@
   <ItemGroup>
     <Compile Include="src/PgvectorIndexConfig.fs" />
     <Compile Include="src/PostgresIndexSupport.fs" />
+    <Compile Include="src/PostgresIndexManagement.fs" />
     <Compile Include="src/PostgresKnowledgeDataSource.fs" />
     <Compile Include="src/PgvectorKnowledgeIndex.fs" />
     <Compile Include="src/PostgresLexicalKnowledgeIndex.fs" />

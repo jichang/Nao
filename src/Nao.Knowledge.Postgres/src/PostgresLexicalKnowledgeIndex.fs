@@ -471,3 +471,46 @@ module PostgresLexicalKnowledgeIndex =
                    QueryAsync = queryAsync dataSource config }
                 : KnowledgeLexicalIndex)
         }
+
+    let createManaged
+        (dataSource: NpgsqlDataSource)
+        (config: PostgresLexicalIndexConfig)
+        : ManagedKnowledgeLexicalIndex =
+        if isNull dataSource then
+            nullArg (nameof dataSource)
+
+        let index: KnowledgeLexicalIndex =
+            { ApplyAsync = applyAsync dataSource config
+              QueryAsync = queryAsync dataSource config }
+
+        let schema = PostgresLexicalIndexConfig.schema config
+        let tableName = PostgresLexicalIndexConfig.tableName config
+        let sourceStateTable = sourceStateTableName tableName
+
+        let schemaRevision =
+            PostgresLexicalIndexConfig.textSearchConfiguration config
+            |> fun textSearchConfiguration -> "postgres-lexical-v1:" + textSearchConfiguration
+            |> ContentHash.computeText
+
+        { Index = index
+          Management =
+            { EnsureCreatedAsync =
+                PostgresIndexManagement.ensureCreatedAsync
+                    dataSource
+                    schema
+                    tableName
+                    (initializeAsync dataSource config)
+              CheckHealthAsync =
+                PostgresIndexManagement.checkHealthAsync dataSource schema tableName sourceStateTable schemaRevision
+              PlanMigrationAsync = fun _ -> Task.FromResult None
+              MigrateAsync = PostgresIndexManagement.unsupportedMigrationAsync
+              RebuildAsync = KnowledgeIndexRebuild.lexicalAsync index
+              BackupAsync =
+                PostgresIndexManagement.backupAsync
+                    dataSource
+                    schema
+                    tableName
+                    sourceStateTable
+                    selectColumns
+                    readDocument
+              RestoreAsync = PostgresIndexManagement.restoreAsync (KnowledgeIndexRebuild.lexicalAsync index) } }

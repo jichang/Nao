@@ -117,6 +117,14 @@ from a promoted baseline. Quality ratios are higher-is-better; latency and cost 
 lower-is-better. Missing metrics fail rather than defaulting, and baseline comparison requires the
 exact dataset content hash and evaluator component family.
 
+`KnowledgeGroundedReleaseQualification` fixes the initial grounded release profile to the exact
+five-case adversarial dataset and grounded-generation evaluator. It requires context relevance of
+at least 0.90, answer faithfulness and citation correctness of at least 0.95, perfect abstention
+accuracy, no unresolved responses, and one support-evaluator descriptor across every case.
+Evidence also binds the versioned generation-adapter component and configuration hash. The
+deterministic reference adapter proves the thresholds are executable; it does not qualify a
+production adapter.
+
 Passing evidence can be promoted through `KnowledgeQualityBaselinePromotion`. Version-1 baseline
 artifacts retain the complete snapshot, threshold-configuration hash, authenticated owner,
 mandatory justification, promotion time, and previous baseline identity. A new dataset content

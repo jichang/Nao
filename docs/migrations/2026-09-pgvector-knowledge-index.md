@@ -61,9 +61,15 @@ then run:
 dotnet test tests/Nao.Knowledge.Postgres.Tests/Nao.Knowledge.Postgres.Tests.fsproj -c Release
 ```
 
-The integration test creates and removes an isolated schema. It verifies schema creation,
+The integration tests create and remove isolated schemas. They verify schema creation,
 fixed-profile ranking, SQL-bound ACL isolation, metadata filtering, owner-only writes, deletion,
-and stale-row disappearance.
+and stale-row disappearance. A production-retrieval qualification additionally drives pgvector
+and PostgreSQL full-text search through the hybrid pipeline, context assembly, and deterministic
+citation verification.
+
+Source-location and trust JSON use explicit canonical property names and are parsed through a
+fail-closed JSON boundary. Retrieval rejects malformed or incomplete evidence instead of relying
+on reflection over private F# record constructors.
 
 ## Rollback
 

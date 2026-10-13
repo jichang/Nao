@@ -33,6 +33,7 @@
     <Compile Include="src/GroundedAnswerContractTests.fs" />
     <Compile Include="src/GroundedGenerationResponseProtocolTests.fs" />
     <Compile Include="src/KnowledgeContractTests.fs" />
+    <Compile Include="src/MemoryKnowledgeAuthorityTests.fs" />
     <Compile Include="src/SourceConnectorTests.fs" />
     <Compile Include="src/HttpSourceConnectorTests.fs" />
     <Compile Include="src/GitSourceConnectorTests.fs" />
@@ -51,6 +52,8 @@
     <ProjectReference Include="..\..\src\Nao.Knowledge.Documents.Worker\Nao.Knowledge.Documents.Worker.fsproj" />
     <ProjectReference Include="..\..\src\Nao.Knowledge.Documents\Nao.Knowledge.Documents.fsproj" />
     <ProjectReference Include="..\..\src\Nao.Knowledge\Nao.Knowledge.fsproj" />
+    <ProjectReference Include="..\..\src\Nao.Eval\Nao.Eval.fsproj" />
+    <ProjectReference Include="..\..\src\Nao.Providers.OpenAICompatible\Nao.Providers.OpenAICompatible.fsproj" />
   </ItemGroup>
   <Import Project="..\..\.paket\Paket.Restore.targets" />
 </Project>

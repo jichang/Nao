@@ -44,6 +44,27 @@ type ArtifactRecord() =
     [<Id(4u)>]
     member val IdempotencyKey: string = "" with get, set
 
+    [<Id(5u)>]
+    member val SchemaVersion: int = 0 with get, set
+
+    [<Id(6u)>]
+    member val Role: string = "" with get, set
+
+    [<Id(7u)>]
+    member val Address: string = "" with get, set
+
+    [<Id(8u)>]
+    member val ContentHash: string = "" with get, set
+
+    [<Id(9u)>]
+    member val RecordedBy: string = "" with get, set
+
+    [<Id(10u)>]
+    member val RecordedAt: DateTimeOffset = DateTimeOffset.MinValue with get, set
+
+    [<Id(11u)>]
+    member val ParentArtifactIds: string[] = [||] with get, set
+
 /// A single persisted message in a conversation
 type PersistedMessage =
     {

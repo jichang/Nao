@@ -88,7 +88,7 @@ module EtclovgMockProvider =
 
         LlmProvider.create
             (fun () -> "EtclovgMock")
-            (fun _ (conversation: Conversation) (_options: CompletionOptions) ->
+            (fun _ (conversation: Conversation) (_options: CompletionOptions) _ ->
                 callCount <- callCount + 1
 
                 let lastMsg =

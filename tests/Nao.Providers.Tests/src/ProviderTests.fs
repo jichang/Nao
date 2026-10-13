@@ -117,6 +117,7 @@ type ProviderFactoryTests() =
                 (CorrelationContext.root ())
                 [ { Role = User; Content = "test" } ]
                 CompletionOptions.Default
+                CancellationToken.None
             |> _.GetAwaiter().GetResult()
             |> ignore)
         |> ignore
@@ -150,6 +151,7 @@ type ProviderFactoryTests() =
                     (CorrelationContext.root ())
                     [ { Role = User; Content = "test" } ]
                     CompletionOptions.Default
+                    CancellationToken.None
                 |> _.GetAwaiter().GetResult()
                 |> ignore)
             |> ignore
@@ -168,12 +170,12 @@ type ProviderFactoryTests() =
         let mutable receivedPrompt = ""
 
         let createProvider (_: SecretValue) =
-            { LlmProvider.create (fun () -> "test") (fun _ conversation _ ->
+            { LlmProvider.create (fun () -> "test") (fun _ conversation _ _ ->
                   receivedPrompt <- conversation |> List.exactlyOne |> _.Content
 
                   Task.FromResult(CompletionResult.create $"result:{canary}" $"finish:{canary}" None None)) with
                 StreamAsync =
-                    Some(fun _ conversation _ onChunk ->
+                    Some(fun _ conversation _ onChunk _ ->
                         receivedPrompt <- conversation |> List.exactlyOne |> _.Content
                         onChunk (CompletionChunk.create "result:provider-canary-" None None None)
                         onChunk (CompletionChunk.create "secret" (Some $"finish:{canary}") None None)
@@ -193,6 +195,7 @@ type ProviderFactoryTests() =
                     Content = $"prompt:{canary}" } ]
                 CompletionOptions.Default
                 chunks.Add
+                CancellationToken.None
             |> _.Result
 
         Assert.AreEqual("prompt:[REDACTED]", receivedPrompt)
@@ -204,7 +207,7 @@ type ProviderFactoryTests() =
         let failingProvider =
             ProviderFactory.operationScopedProviderWith
                 (fun (_: SecretValue) ->
-                    LlmProvider.create (fun () -> "failing") (fun _ _ _ ->
+                    LlmProvider.create (fun () -> "failing") (fun _ _ _ _ ->
                         Task.FromException<CompletionResult>(InvalidOperationException($"failure:{canary}"))))
                 "failing"
                 authorization
@@ -217,6 +220,7 @@ type ProviderFactoryTests() =
                     (CorrelationContext.root ())
                     [ { Role = User; Content = "test" } ]
                     CompletionOptions.Default
+                    CancellationToken.None
                 |> _.GetAwaiter().GetResult()
                 |> ignore)
 
@@ -239,7 +243,7 @@ type ProviderFactoryTests() =
         let createProvider credential =
             observed.Add(SecretValue.useValue id credential)
 
-            LlmProvider.create (fun () -> "test") (fun _ _ _ ->
+            LlmProvider.create (fun () -> "test") (fun _ _ _ _ ->
                 Task.FromResult(CompletionResult.create "ok" "stop" None None))
 
         let provider =
@@ -255,6 +259,7 @@ type ProviderFactoryTests() =
                 (CorrelationContext.root ())
                 [ { Role = User; Content = "test" } ]
                 CompletionOptions.Default
+                CancellationToken.None
             |> _.GetAwaiter().GetResult()
             |> ignore
 
@@ -294,7 +299,8 @@ type ProviderFactoryTests() =
                     provider.CompleteAsync
                         (CorrelationContext.root ())
                         [ { Role = User; Content = "hi" } ]
-                        CompletionOptions.Default)
+                        CompletionOptions.Default
+                        CancellationToken.None)
 
             Assert.AreEqual(PlatformErrorCategory.TransientDependency, failure.Category)
             Assert.IsTrue(failure.Retryable)
@@ -316,7 +322,8 @@ type ProviderFactoryTests() =
                     provider.CompleteAsync
                         (CorrelationContext.root ())
                         [ { Role = User; Content = "hi" } ]
-                        CompletionOptions.Default)
+                        CompletionOptions.Default
+                        CancellationToken.None)
 
             Assert.AreEqual(PlatformErrorCategory.TransientDependency, failure.Category)
             Assert.IsTrue(failure.Retryable)
@@ -340,7 +347,7 @@ type OpenAICompatibleProviderTests() =
         let mutable requestBody = ""
 
         let handler =
-            StubHttpMessageHandler(fun request ->
+            new StubHttpMessageHandler(fun request ->
                 requestUrl <-
                     request.RequestUri
                     |> Option.ofObj
@@ -375,7 +382,11 @@ type OpenAICompatibleProviderTests() =
                 StopSequences = [ "END" ] }
 
         let result =
-            provider.CompleteAsync (CorrelationContext.root ()) [ { Role = User; Content = "Hello" } ] options
+            provider.CompleteAsync
+                (CorrelationContext.root ())
+                [ { Role = User; Content = "Hello" } ]
+                options
+                CancellationToken.None
             |> _.Result
 
         Assert.AreEqual(endpoint, requestUrl)
@@ -401,7 +412,7 @@ type OpenAICompatibleProviderTests() =
     member _.RejectsMissingRequiredResponseFields() : Task =
         (task {
             let handler =
-                StubHttpMessageHandler(fun _ ->
+                new StubHttpMessageHandler(fun _ ->
                     let response = new HttpResponseMessage(HttpStatusCode.OK)
                     response.Content <- new StringContent("{}", Encoding.UTF8, "application/json")
                     response)
@@ -420,7 +431,8 @@ type OpenAICompatibleProviderTests() =
                     provider.CompleteAsync
                         (CorrelationContext.root ())
                         [ { Role = User; Content = "Hello" } ]
-                        CompletionOptions.Default)
+                        CompletionOptions.Default
+                        CancellationToken.None)
 
             Assert.AreEqual(PlatformErrorCategory.InvalidOutput, failure.Category)
             Assert.IsFalse(failure.Retryable)
@@ -443,7 +455,7 @@ type OpenAICompatibleProviderTests() =
 
             for statusCode, expectedCategory, expectedRetryable in cases do
                 let handler =
-                    StubHttpMessageHandler(fun _ ->
+                    new StubHttpMessageHandler(fun _ ->
                         let response = new HttpResponseMessage(enum<HttpStatusCode> statusCode)
                         response.Content <- new StringContent("provider failure")
                         response)
@@ -462,10 +474,43 @@ type OpenAICompatibleProviderTests() =
                         provider.CompleteAsync
                             (CorrelationContext.root ())
                             [ { Role = User; Content = "Hello" } ]
-                            CompletionOptions.Default)
+                            CompletionOptions.Default
+                            CancellationToken.None)
 
                 Assert.AreEqual(expectedCategory, failure.Category, $"HTTP {statusCode}")
                 Assert.AreEqual(expectedRetryable, failure.Retryable, $"HTTP {statusCode}")
+        }
+        :> Task)
+
+    [<TestMethod>]
+    member _.CallerCancellationStopsRequest() : Task =
+        (task {
+            let provider =
+                OpenAICompatibleProvider.createWithHandler
+                    "Test"
+                    "https://compatible.test/chat"
+                    "model"
+                    None
+                    None
+                    (Some(new WaitingHttpMessageHandler()))
+
+            use cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds 20.0)
+
+            let mutable cancellationObserved = false
+
+            try
+                let! _ =
+                    provider.CompleteAsync
+                        (CorrelationContext.root ())
+                        [ { Role = User; Content = "Wait." } ]
+                        CompletionOptions.Default
+                        cancellation.Token
+
+                Assert.Fail "Expected caller cancellation."
+            with :? OperationCanceledException ->
+                cancellationObserved <- true
+
+            Assert.IsTrue cancellationObserved
         }
         :> Task)
 
@@ -522,7 +567,8 @@ type AnthropicProviderTests() =
                     provider.CompleteAsync
                         (CorrelationContext.root ())
                         [ { Role = User; Content = "Wait." } ]
-                        CompletionOptions.Default)
+                        CompletionOptions.Default
+                        CancellationToken.None)
 
             Assert.AreEqual(PlatformErrorCategory.TransientDependency, failure.Category)
             Assert.IsTrue(failure.Retryable)
@@ -537,7 +583,7 @@ type AnthropicProviderTests() =
         let mutable requestBody = ""
 
         let handler =
-            StubHttpMessageHandler(fun request ->
+            new StubHttpMessageHandler(fun request ->
                 requestUrl <-
                     request.RequestUri
                     |> Option.ofObj
@@ -586,7 +632,7 @@ type AnthropicProviderTests() =
                 StopSequences = [ "END" ] }
 
         let result =
-            provider.CompleteAsync (CorrelationContext.root ()) conversation options
+            provider.CompleteAsync (CorrelationContext.root ()) conversation options CancellationToken.None
             |> _.Result
 
         Assert.AreEqual("https://anthropic.test/v1/messages", requestUrl)
@@ -618,7 +664,7 @@ type AnthropicProviderTests() =
                   "data: {\"type\":\"message_stop\"}" ]
 
         let handler =
-            StubHttpMessageHandler(fun _ ->
+            new StubHttpMessageHandler(fun _ ->
                 let response = new HttpResponseMessage(HttpStatusCode.OK)
                 response.Content <- new StringContent(stream, Encoding.UTF8, "text/event-stream")
                 response)
@@ -639,6 +685,7 @@ type AnthropicProviderTests() =
                 [ { Role = User; Content = "Say hello." } ]
                 CompletionOptions.Default
                 chunks.Add
+                CancellationToken.None
             |> _.Result
 
         Assert.AreEqual("Hello world", result.Content)

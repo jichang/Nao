@@ -146,6 +146,55 @@ type ConversationAuthorizationTests() =
             Directory.Delete(directory, true)
 
     [<TestMethod>]
+    member _.ArtifactTransportRestoresAddressIntegrityAndLineage() =
+        let correlation = CorrelationContext.root ()
+        let artifactId = ArtifactId.generate ()
+        let parentId = ArtifactId.generate ()
+        let payload = """{"result":"verified"}"""
+        let recordedAt = DateTimeOffset(2026, 10, 13, 3, 50, 0, TimeSpan.Zero)
+
+        let idempotencyKey =
+            IdempotencyKey.forExecution correlation.ExecutionId |> IdempotencyKey.value
+
+        let schemaVersion = ArtifactSchemaVersion.current |> ArtifactSchemaVersion.value
+
+        let role = ArtifactRole.Produced |> ArtifactRole.serialize
+        let address = ArtifactAddress.forProduced artifactId |> ArtifactAddress.value
+        let contentHash = ArtifactContentHash.compute payload |> ArtifactContentHash.value
+
+        let record =
+            ArtifactRecord(
+                Id = ArtifactId.serialize artifactId,
+                IdempotencyKey = idempotencyKey,
+                SchemaVersion = schemaVersion,
+                Role = role,
+                Address = address,
+                Kind = "report",
+                ContentType = "application/json",
+                Payload = payload,
+                ContentHash = contentHash,
+                RecordedBy = ExecutionId.serialize correlation.ExecutionId,
+                RecordedAt = recordedAt,
+                ParentArtifactIds = [| ArtifactId.serialize parentId |]
+            )
+
+        let transported =
+            { message correlation "Assistant" "done" "turn" with
+                Artifacts = [| record |] }
+            |> PublishingConversationStore.toMessage
+            |> _.Artifacts
+            |> List.exactlyOne
+
+        Assert.AreEqual(artifactId, Artifact.id transported)
+        Assert.AreEqual(ArtifactRole.Produced, Artifact.role transported)
+        Assert.AreEqual(payload, Artifact.payload transported)
+
+        let lineage = Artifact.lineage transported
+        Assert.AreEqual(correlation.ExecutionId, ArtifactLineage.recordedBy lineage)
+        Assert.AreEqual(recordedAt, ArtifactLineage.recordedAt lineage)
+        Assert.AreEqual([ parentId ], ArtifactLineage.parentArtifactIds lineage)
+
+    [<TestMethod>]
     member _.StreamKeyAndV1PayloadContainNoAuthorizationEvidence() =
         let directory = root ()
 

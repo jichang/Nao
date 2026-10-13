@@ -182,7 +182,8 @@ module MemoryConsolidation =
                               "Consolidate these memory entries into a single concise summary. Preserve all key facts." }
                           { Role = User; Content = content } ]
 
-                    let! result = provider.CompleteAsync correlation prompt options
+                    let! result =
+                        provider.CompleteAsync correlation prompt options System.Threading.CancellationToken.None
                     // Replace cluster with summary
                     for e in group do
                         do! store.ForgetAsync authorization e.Key

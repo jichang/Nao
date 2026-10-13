@@ -708,11 +708,65 @@ Retrieved content is untrusted data, even when it comes from an approved source.
 
 Automatic long-term memory synthesis requires policy and consent:
 
-- Define which session events may become memory.
+- Only recent events directly asserted by the user as facts, preferences, corrections, or explicit
+  remember requests may enter durable-memory candidacy.
+- Require exact authenticated-scope ownership, a session identity, explicit durable intent, and a
+  versioned eligibility policy.
+- Never directly promote assistant, tool, sub-agent, or system output; their content is not a user
+  assertion.
+- Ordinary content may become a candidate. Sensitive content requires review, and secret content
+  is forbidden.
 - Preserve extraction provenance and confidence.
 - Resolve corrections, contradictions, expiry, and forgetting.
 - Prevent uncertain learned memory from becoming authoritative knowledge.
 - Enforce user, tenant, group, workspace, and session boundaries.
+
+`SessionMemoryEligibility.evaluate` implements this first boundary. It returns either a
+`DurableSessionMemoryCandidate` with policy provenance or every applicable typed rejection reason.
+`CrossSessionMemoryApproval.evaluate` implements the next boundary. It requires active consent
+scoped to an exact memory, user-event category, workspace, or user plus a separate allow-policy
+decision bound to the exact candidate and destination. The destination is derived from event
+provenance and removes only the session identity; tenant, user, group, and workspace remain exact.
+Expired, revoked, future, mismatched, or missing evidence fails closed.
+
+`BackgroundMemoryExtraction.extractAsync` accepts only an approved cross-session candidate and the
+exact sessionless owner. Provider-neutral extractors return bounded typed proposals with a key,
+normalized value, exact source text, and confidence. The framework rejects source text not present
+in the approved event, duplicate keys, excessive output, and usage-budget violations. Accepted and
+below-threshold proposals remain distinguishable, and the batch preserves the approved candidate,
+extractor/model/configuration identity, correlation provenance, usage, duration, and extraction
+time.
+
+`DurableMemoryLifecycle` turns accepted assessments into versioned, expiring records. Matching
+values reinforce bounded provenance, conflicting ordinary assertions become contested and
+non-retrievable, and direct user corrections supersede active or contested values. Expiry and
+authenticated user-requested forgetting are terminal transitions that scrub the key, value,
+confidence, and extraction provenance. Every mutation requires exact ownership and an expected
+version so stores can apply it atomically.
+
+Durable memory remains non-authoritative learned state regardless of confidence or repetition.
+`MemoryKnowledgeAuthority.promote` is the only typed bridge toward knowledge. It requires an
+active, unexpired, uncontested record; external references; organization-verified or authoritative
+verification bound to the exact memory ID, version, owner, and value hash; and a separate allow
+decision for that exact promotion resource. The result is still a
+`VerifiedMemoryKnowledgeCandidate`, not an ingested source or index record.
+
+`memory_search` can federate recall without federating storage. Callers explicitly select learned
+memory, source-backed knowledge, or both. Results use separate `memories` and `knowledge`
+collections; knowledge passages retain source, document, version, chunk, URI, content hash, and
+retrieval score. Knowledge-only queries do not read memory storage, and memory remember/forget
+operations can never mutate knowledge. A configured knowledge capability contributes its own
+concrete retrieve permission and receives the same authenticated scope.
+
+The MEM-01 identity matrix varies tenant, user, group, workspace, and session independently across
+eligibility, approval, extraction, lifecycle mutation, forgetting, and federated recall. Session
+events require exact session identity. Cross-session candidates remove only session. Durable
+operations reject any remaining session or changed ownership dimension. Forgetting may originate
+from a later session only when removing that request session yields the exact durable owner.
+
+These boundaries produce and transition records but do not provide durable persistence. Generic
+`TieredMemory` movement is storage lifecycle behavior and does not itself authorize conversion of
+session events into durable user memory.
 
 ## Roadmap
 

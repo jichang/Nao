@@ -13,14 +13,14 @@ This workstream creates a reusable knowledge subsystem for ingestion, indexing, 
 - [x] Functional `GraphMemory` and graph-query contracts exist.
 - [x] Conversation compaction and tiered agent memory exist.
 - [x] A source-to-index knowledge lifecycle exists as an authorization-partitioned in-memory reference.
-- [ ] Retrieval has production indexing, authorization, citations, and quality gates.
+- [x] Retrieval has production indexing, authorization, citations, and quality gates.
 
 ## Architecture boundaries
 
 - [x] Define **knowledge** as versioned content derived from authoritative external sources.
 - [x] Define **memory** as information learned or retained through agent/user activity.
 - [x] Define **context** as transient material selected for one model call.
-- [ ] Define **artifact** as an addressable produced or consumed object with lineage.
+- [x] Define **artifact** as an addressable produced or consumed object with lineage.
 - [x] Keep source ingestion independent of a particular agent or orchestration pattern.
 - [x] Keep vector, lexical, graph, parser, and object-storage vendors behind optional adapters.
 - [x] Permit retrieval without generation and ingestion without an LLM.
@@ -200,12 +200,13 @@ This workstream creates a reusable knowledge subsystem for ingestion, indexing, 
 - [x] Distinguish source quotation from generated interpretation.
 - [x] Preserve citation provenance in output artifacts and audit records.
 - [x] Protect against retrieved prompt injection and source spoofing.
+- [x] Bind assembled context to a cancellation-aware, budgeted production generation adapter.
 
 **Acceptance criteria**
 
 - [x] Invalid citations cannot be presented as verified citations.
 - [x] The system can return “insufficient evidence” without treating it as execution failure.
-- [ ] Groundedness and citation correctness meet release thresholds.
+- [x] Groundedness and citation correctness meet release thresholds.
 
 ## RAG-05 — Retrieval evaluation
 
@@ -219,19 +220,19 @@ This workstream creates a reusable knowledge subsystem for ingestion, indexing, 
 
 ## MEM-01 — Memory and knowledge integration
 
-- [ ] Define when session events may become durable memory.
-- [ ] Require consent/policy for cross-session user memory.
-- [ ] Add background memory extraction with confidence and provenance.
-- [ ] Resolve contradictions, corrections, expiry, and user-requested forgetting.
-- [ ] Prevent unverified memory from becoming authoritative knowledge.
-- [ ] Permit knowledge retrieval from memory tools without conflating storage semantics.
-- [ ] Test tenant, user, group, workspace, and session boundaries.
+- [x] Define when session events may become durable memory.
+- [x] Require consent/policy for cross-session user memory.
+- [x] Add background memory extraction with confidence and provenance.
+- [x] Resolve contradictions, corrections, expiry, and user-requested forgetting.
+- [x] Prevent unverified memory from becoming authoritative knowledge.
+- [x] Permit knowledge retrieval from memory tools without conflating storage semantics.
+- [x] Test tenant, user, group, workspace, and session boundaries.
 
 ### Exit criteria for R2
 
 - [ ] KNO-01 through KNO-06 and RAG-01 through RAG-05 are complete for at least one production adapter set.
-- [ ] MEM-01 boundaries are implemented and documented.
-- [ ] Incremental ingestion, re-indexing, deletion, backup, and restore are tested.
-- [ ] Retrieval quality, latency, cost, safety, and isolation gates pass.
+- [x] MEM-01 boundaries are implemented and documented.
+- [x] Incremental ingestion, re-indexing, deletion, backup, and restore are tested.
+- [x] Retrieval quality, latency, cost, safety, and isolation gates pass.
 
 [Back to roadmap](../roadmap.md)

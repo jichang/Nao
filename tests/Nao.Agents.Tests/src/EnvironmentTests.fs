@@ -700,12 +700,12 @@ type ExecutionEnvironmentTests() =
                 CollectionAssert.DoesNotContain(arguments, argumentsPath)
                 CollectionAssert.DoesNotContain(arguments, workerExecutable)
                 Assert.AreEqual(1, artifacts.Count)
-                Assert.AreEqual("container.image", artifacts.[0].Kind)
-                StringAssert.Contains(artifacts.[0].Payload, "nao-worker@sha256:")
-                StringAssert.Contains(artifacts.[0].Payload, "provenance")
-                StringAssert.Contains(artifacts.[0].Payload, "test-verifier")
-                StringAssert.Contains(artifacts.[0].Payload, "test-policy-v1")
-                StringAssert.Contains(artifacts.[0].Payload, "verified")
+                Assert.AreEqual("container.image", Artifact.kind artifacts.[0])
+                StringAssert.Contains(Artifact.payload artifacts.[0], "nao-worker@sha256:")
+                StringAssert.Contains(Artifact.payload artifacts.[0], "provenance")
+                StringAssert.Contains(Artifact.payload artifacts.[0], "test-verifier")
+                StringAssert.Contains(Artifact.payload artifacts.[0], "test-policy-v1")
+                StringAssert.Contains(Artifact.payload artifacts.[0], "verified")
 
                 let nameIndex = arguments |> Array.findIndex ((=) "--name")
                 let containerName = arguments.[nameIndex + 1]
@@ -794,13 +794,14 @@ type ExecutionEnvironmentTests() =
                 CollectionAssert.DoesNotContain(allowlistArguments, "--network=none")
                 Assert.AreEqual(1, releasedEgressLeases)
                 Assert.AreEqual(artifactsBeforeAllowlist + 2, artifacts.Count)
-                Assert.AreEqual("container.network", artifacts.[artifacts.Count - 1].Kind)
-                StringAssert.Contains(artifacts.[artifacts.Count - 1].Payload, "test-egress-broker")
-                StringAssert.Contains(artifacts.[artifacts.Count - 1].Payload, "test-egress-v1")
-                StringAssert.Contains(artifacts.[artifacts.Count - 1].Payload, string destinations.Length)
+                let networkArtifact = artifacts.[artifacts.Count - 1]
+                Assert.AreEqual("container.network", Artifact.kind networkArtifact)
+                StringAssert.Contains(Artifact.payload networkArtifact, "test-egress-broker")
+                StringAssert.Contains(Artifact.payload networkArtifact, "test-egress-v1")
+                StringAssert.Contains(Artifact.payload networkArtifact, string destinations.Length)
 
                 for destination in destinations do
-                    StringAssert.Contains(artifacts.[artifacts.Count - 1].Payload, destination.AbsoluteUri)
+                    StringAssert.Contains(Artifact.payload networkArtifact, destination.AbsoluteUri)
 
                 let sandboxDeniedAllowlistArguments =
                     execute (ContainerNetworkPolicy.DestinationAllowlist(destinations, egressBroker)) false
@@ -888,7 +889,7 @@ type ExecutionEnvironmentTests() =
 
                 Assert.IsFalse(
                     artifacts
-                    |> Seq.exists (fun artifact -> artifact.Payload.Contains("private-container-region"))
+                    |> Seq.exists (Artifact.payload >> _.Contains("private-container-region"))
                 )
 
                 IO.File.Delete argumentsPath
@@ -1207,12 +1208,11 @@ type ExecutionEnvironmentTests() =
         Assert.IsTrue(artifacts.Count > 0)
 
         for artifact in artifacts do
-            Assert.IsFalse(artifact.Payload.Contains canary)
+            Assert.IsFalse((Artifact.payload artifact).Contains canary)
 
-        let stderr =
-            artifacts |> Seq.find (fun artifact -> artifact.Kind = "process.stderr")
+        let stderr = artifacts |> Seq.find (Artifact.kind >> (=) "process.stderr")
 
-        Assert.AreEqual("[REDACTED]", stderr.Payload)
+        Assert.AreEqual("[REDACTED]", Artifact.payload stderr)
 
     [<TestMethod>]
     member _.ProcessEnvironmentRejectsUndeclaredSecretWithoutResolvingIt() =

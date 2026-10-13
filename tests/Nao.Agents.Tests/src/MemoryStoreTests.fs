@@ -131,7 +131,7 @@ type MemoryToolAuthorizationTests() =
             ForgetEnabled = true }
 
     let searchInput =
-        """{"query":"preference","intent":"recall preference","owner":"other-tenant","tenantId":"other-tenant"}"""
+        """{"query":"preference","intent":"recall preference","source":"memory","owner":"other-tenant","tenantId":"other-tenant"}"""
 
     let rememberInput =
         """{"key":"preference","value":"my preference","owner":"other-tenant","tenantId":"other-tenant"}"""
@@ -165,7 +165,7 @@ type MemoryToolAuthorizationTests() =
                         calls <- calls + 1
                         Task.FromResult() }
 
-        let tools = MemoryTools.create config store
+        let tools = MemoryTools.create config store None
 
         let expectedPermissions =
             Map.ofList
@@ -202,7 +202,7 @@ type MemoryToolAuthorizationTests() =
               Tags = [] }
 
         store.SaveAsync other foreign |> _.Wait()
-        let tools = MemoryTools.create config store
+        let tools = MemoryTools.create config store None
 
         let invoke context name input =
             let tool = tools |> List.find (fun tool -> tool.Name = name)
@@ -245,7 +245,7 @@ type MemoryToolAuthorizationTests() =
               Tags = [] }
 
         store.SaveAsync other foreign |> _.Wait()
-        let protocol = MemoryTools.create config store |> ToolProtocol.fromTools
+        let protocol = MemoryTools.create config store None |> ToolProtocol.fromTools
 
         let child =
             Agent.create "memory-child" "memory-child" "test" 0 [] AgentContract.Text (fun context _ ->

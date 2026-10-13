@@ -261,15 +261,19 @@ type SecretTests() =
         SecretRedaction.runAsync (fun () ->
             task {
                 let! _ = SecretProvider.resolveAsync authorization reference CancellationToken.None provider
+                let executionId = ExecutionId.generate ()
 
                 let artifact =
-                    Artifact.create
-                        (IdempotencyKey.forExecution (ExecutionId.generate ()))
+                    Artifact.produced
+                        executionId
+                        DateTimeOffset.UtcNow
+                        []
+                        (IdempotencyKey.forExecution executionId)
                         "test"
                         "text/plain"
                         $"artifact:{canary}"
 
-                Assert.AreEqual("artifact:[REDACTED]", artifact.Payload)
+                Assert.AreEqual("artifact:[REDACTED]", Artifact.payload artifact)
 
                 let failure =
                     PlatformFailure.create PlatformErrorCategory.InternalFailure $"failure:{canary}" false None

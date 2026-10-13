@@ -133,12 +133,6 @@ module ExecutionResult =
         | ExecutionTerminalStatus.Indeterminate message -> ExecutionTerminalStatus.Indeterminate(redact message)
         | value -> value
 
-    let private artifact (value: Artifact) =
-        { value with
-            Kind = redact value.Kind
-            ContentType = redact value.ContentType
-            Payload = redact value.Payload }
-
     let private judgement (value: JudgementResult) =
         let verdict =
             match value.Verdict with
@@ -178,7 +172,7 @@ module ExecutionResult =
             Status = status result.Status
             Outputs =
                 { Response = SecretRedaction.redactOption result.Outputs.Response
-                  Artifacts = result.Outputs.Artifacts |> List.map artifact }
+                  Artifacts = result.Outputs.Artifacts }
             Evidence =
                 { result.Evidence with
                     Trace = result.Evidence.Trace |> Option.map Verification.redact

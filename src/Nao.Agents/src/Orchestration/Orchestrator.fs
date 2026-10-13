@@ -296,8 +296,13 @@ module Orchestrator =
                                             prompt
                                             config.Options
                                             (fun _ -> ())
+                                            (RuntimeExecutionBudget.cancellationToken ())
                                     else
-                                        config.Provider.CompleteAsync correlation prompt config.Options
+                                        config.Provider.CompleteAsync
+                                            correlation
+                                            prompt
+                                            config.Options
+                                            (RuntimeExecutionBudget.cancellationToken ())
 
                             let! result = invocation.WaitAsync(RuntimeExecutionBudget.cancellationToken ())
 

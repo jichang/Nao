@@ -5,6 +5,7 @@ open System.Net.Http
 open System.Net.Http.Headers
 open System.Text
 open System.Text.Json
+open System.Threading
 open System.Threading.Tasks
 open Nao.Agents
 
@@ -139,14 +140,15 @@ let createWithHandler
         (_correlation: CorrelationContext)
         (conversation: Conversation)
         (options: CompletionOptions)
+        (cancellationToken: CancellationToken)
         : Task<CompletionResult> =
         task {
             try
                 let body = buildRequestBody conversation options false
                 let content = new StringContent(body, Encoding.UTF8, "application/json")
 
-                let! response = client.PostAsync(chatUrl, content)
-                let! responseBody = response.Content.ReadAsStringAsync()
+                let! response = client.PostAsync(chatUrl, content, cancellationToken)
+                let! responseBody = response.Content.ReadAsStringAsync(cancellationToken)
 
                 if not response.IsSuccessStatusCode then
                     return
@@ -157,7 +159,10 @@ let createWithHandler
                         |> PlatformFailure.raiseException
                 else
                     return parseResponse responseBody
-            with ex ->
+            with
+            | :? OperationCanceledException as error when cancellationToken.IsCancellationRequested ->
+                return raise error
+            | ex ->
                 return
                     PlatformFailure.fromException PlatformFailureBoundary.Provider None ex
                     |> PlatformFailure.raiseException
@@ -168,6 +173,7 @@ let createWithHandler
         (conversation: Conversation)
         (options: CompletionOptions)
         (onChunk: CompletionChunk -> unit)
+        (cancellationToken: CancellationToken)
         : Task<CompletionResult> =
         task {
             try
@@ -177,10 +183,10 @@ let createWithHandler
 
                 // ResponseHeadersRead so we start reading the body as it streams rather
                 // than waiting for the whole response to buffer.
-                let! response = client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead)
+                let! response = client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
 
                 if not response.IsSuccessStatusCode then
-                    let! errorBody = response.Content.ReadAsStringAsync()
+                    let! errorBody = response.Content.ReadAsStringAsync(cancellationToken)
 
                     return
                         PlatformFailure.fromHttpStatus
@@ -189,7 +195,7 @@ let createWithHandler
                             (sprintf "Provider returned HTTP %d: %s" (int response.StatusCode) errorBody)
                         |> PlatformFailure.raiseException
                 else
-                    use! responseStream = response.Content.ReadAsStreamAsync()
+                    use! responseStream = response.Content.ReadAsStreamAsync(cancellationToken)
                     use reader = new System.IO.StreamReader(responseStream)
                     let builder = StringBuilder()
                     let mutable finishReason = None
@@ -197,7 +203,7 @@ let createWithHandler
                     let mutable reading = true
 
                     while reading do
-                        let! line = reader.ReadLineAsync()
+                        let! line = reader.ReadLineAsync(cancellationToken)
 
                         if isNull line then
                             reading <- false
@@ -245,7 +251,10 @@ let createWithHandler
                           FinishReason = finishReason
                           TokensUsed = tokens
                           Usage = None }
-            with ex ->
+            with
+            | :? OperationCanceledException as error when cancellationToken.IsCancellationRequested ->
+                return raise error
+            | ex ->
                 return
                     PlatformFailure.fromException PlatformFailureBoundary.Provider None ex
                     |> PlatformFailure.raiseException

@@ -8,7 +8,7 @@ open Nao.Eval.Evaluators
 
 module private CapturingProvider =
     let create response (capturedPrompt: string ref) (capturedCorrelation: CorrelationContext option ref) =
-        LlmProvider.create (fun () -> "capturing") (fun correlation conversation _options ->
+        LlmProvider.create (fun () -> "capturing") (fun correlation conversation _options _ ->
             capturedCorrelation.Value <- Some correlation
             capturedPrompt.Value <- conversation |> List.last |> _.Content
 

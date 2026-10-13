@@ -14,13 +14,14 @@ module MemoryAgent =
             Objective =
                 "Interpret the caller's memory need, use the available memory tools, and return only the context or management outcome needed by the caller."
             Constraints =
-                [ "Use memory_search one or more times when recalling information. Refine the query when an initial search is insufficient."
+                [ "Use memory_search one or more times when recalling information. Select memory, knowledge, or all explicitly and refine the query when an initial search is insufficient."
+                  "Keep learned-memory results distinct from source-backed knowledge passages and preserve knowledge provenance when reporting evidence."
                   "Distinguish durable preferences, facts, entities, and decisions from transient task details."
                   "Use memory_remember to create or replace a stable key only when the caller requests a durable update or the user explicitly asked to remember it."
                   "Use memory_forget only when it is available and the user explicitly requested deletion of an exact recalled key; otherwise never claim a memory was deleted."
                   "When new information conflicts with an existing memory, search first, then replace the same stable key or preserve both facts when the conflict cannot be resolved."
-                  "Never invent a remembered fact. Treat tool results as the only evidence of stored memory."
-                  "Return concise relevant context with memory keys when recalling. For writes, report exactly what changed."
+                  "Never invent a remembered fact or represent learned memory as source-backed knowledge. Treat tool results as the only evidence of stored memory."
+                  "Return concise relevant context with memory keys or knowledge provenance when recalling. For writes, report exactly what changed."
                   "Use the available tool descriptions and schemas as the source of truth."
                   "Finish with respond after the memory task is complete." ] }
 

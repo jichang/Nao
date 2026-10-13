@@ -11,7 +11,7 @@ module MockSummarizerProvider =
     let create (observed: CorrelationContext option ref) =
         LlmProvider.create
             (fun () -> "MockSummarizer")
-            (fun correlation (conversation: Conversation) (_options: CompletionOptions) ->
+            (fun correlation (conversation: Conversation) (_options: CompletionOptions) _ ->
                 observed.Value <- Some correlation
 
                 let lastUserMsg =
@@ -132,7 +132,7 @@ type MemoryConsolidationTests() =
         let own, other = scope "tenant-a", scope "tenant-b"
 
         let provider =
-            LlmProvider.create (fun () -> "scoped-summary") (fun _ messages _ ->
+            LlmProvider.create (fun () -> "scoped-summary") (fun _ messages _ _ ->
                 let prompt = messages |> List.map _.Content |> String.concat "\n"
 
                 for excluded in
@@ -202,7 +202,7 @@ type MemoryConsolidationTests() =
             |> _.Wait()
 
         let provider =
-            LlmProvider.create (fun () -> "capturing") (fun actual _conversation _options ->
+            LlmProvider.create (fun () -> "capturing") (fun actual _conversation _options _ ->
                 observed.Value <- Some actual
                 Task.FromResult(CompletionResult.create "consolidated" "stop" None None))
 

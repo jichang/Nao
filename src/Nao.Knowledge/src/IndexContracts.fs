@@ -311,6 +311,19 @@ type VectorIndexRecord =
 
 [<RequireQualifiedAccess>]
 module VectorIndexRecord =
+    let private build document profile (values: float array) =
+        let profile = EmbeddingCapabilityDescriptor.validate profile
+
+        if isNull values || values.Length <> profile.Dimensions then
+            invalidArg (nameof values) "Vector index values must match the embedding profile dimensions."
+
+        if values |> Array.exists (Double.IsFinite >> not) then
+            invalidArg (nameof values) "Vector index values must be finite."
+
+        { Document = document
+          Profile = profile
+          Values = Array.copy values }
+
     let create document embedding =
         if PersistedEmbedding.owner embedding <> KnowledgeIndexDocument.owner document then
             invalidArg (nameof embedding) "Embedding owner does not match the indexed document."
@@ -322,9 +335,9 @@ module VectorIndexRecord =
         then
             invalidArg (nameof embedding) "Embedding identity does not match the indexed document."
 
-        { Document = document
-          Profile = PersistedEmbedding.profile embedding
-          Values = PersistedEmbedding.values embedding }
+        build document (PersistedEmbedding.profile embedding) (PersistedEmbedding.values embedding)
+
+    let restore document profile values = build document profile values
 
     let document value = value.Document
     let profile value = value.Profile

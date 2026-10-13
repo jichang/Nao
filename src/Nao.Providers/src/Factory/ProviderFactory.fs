@@ -93,10 +93,11 @@ module ProviderFactory =
 
         { Name = provider.Name
           CompleteAsync =
-            fun correlation conversation options ->
-                protect (fun () -> provider.CompleteAsync correlation (redactConversation conversation) options)
+            fun correlation conversation options cancellationToken ->
+                protect (fun () ->
+                    provider.CompleteAsync correlation (redactConversation conversation) options cancellationToken)
           StreamAsync =
-            Some(fun correlation conversation options onChunk ->
+            Some(fun correlation conversation options onChunk cancellationToken ->
                 let streamRedactor = SecretRedaction.stream ()
 
                 protect (fun () ->
@@ -112,6 +113,7 @@ module ProviderFactory =
                                         { chunk with
                                             Delta = streamRedactor.Push(chunk.Delta, chunk.FinishReason.IsSome)
                                             FinishReason = chunk.FinishReason |> Option.map SecretRedaction.redact })
+                                cancellationToken
 
                         let trailing = streamRedactor.Flush()
 
@@ -146,11 +148,11 @@ module ProviderFactory =
         | Ollama config -> $"Ollama({config.Model})"
 
     let internal operationScopedProviderWith createProvider providerName authorization reference secretProvider =
-        let withProvider operation =
+        let withProvider cancellationToken operation =
             SecretRedaction.runAsync (fun () ->
                 task {
                     let! resolution =
-                        SecretProvider.resolveAsync authorization reference CancellationToken.None secretProvider
+                        SecretProvider.resolveAsync authorization reference cancellationToken secretProvider
 
                     let provider =
                         createProvider (SecretResolution.value resolution) |> redactingProvider
@@ -163,12 +165,13 @@ module ProviderFactory =
 
         { Name = fun () -> providerName
           CompleteAsync =
-            fun correlation conversation options ->
-                withProvider (fun provider -> provider.CompleteAsync correlation conversation options)
+            fun correlation conversation options cancellationToken ->
+                withProvider cancellationToken (fun provider ->
+                    provider.CompleteAsync correlation conversation options cancellationToken)
           StreamAsync =
-            Some(fun correlation conversation options onChunk ->
-                withProvider (fun provider ->
-                    LlmProvider.streamAsync provider correlation conversation options onChunk))
+            Some(fun correlation conversation options onChunk cancellationToken ->
+                withProvider cancellationToken (fun provider ->
+                    LlmProvider.streamAsync provider correlation conversation options onChunk cancellationToken))
           Dispose = ignore }
 
     let private operationScopedProvider authorization reference secretProvider providerType =

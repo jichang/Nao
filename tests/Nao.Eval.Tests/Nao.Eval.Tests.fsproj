@@ -24,6 +24,8 @@
     <Compile Include="src/KnowledgeHybridRetrievalEvaluationTests.fs" />
     <Compile Include="src/KnowledgeGroundedGenerationEvaluationTests.fs" />
     <Compile Include="src/KnowledgeQualityRegressionTests.fs" />
+    <Compile Include="src/KnowledgeRetrievalReleaseQualificationTests.fs" />
+    <Compile Include="src/KnowledgeGroundedReleaseQualificationTests.fs" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Nao.Testing\Nao.Testing.fsproj" />

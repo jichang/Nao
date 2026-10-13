@@ -430,12 +430,34 @@ type SessionGrain
             let artifactRecords =
                 artifacts
                 |> List.map (fun value ->
+                    let lineage = Artifact.lineage value
+                    let id = value |> Artifact.id |> ArtifactId.serialize
+                    let idempotencyKey = value |> Artifact.idempotencyKey |> IdempotencyKey.value
+                    let schemaVersion = value |> Artifact.schemaVersion |> ArtifactSchemaVersion.value
+                    let role = value |> Artifact.role |> ArtifactRole.serialize
+                    let address = value |> Artifact.address |> ArtifactAddress.value
+                    let contentHash = value |> Artifact.contentHash |> ArtifactContentHash.value
+                    let recordedBy = lineage |> ArtifactLineage.recordedBy |> ExecutionId.serialize
+
+                    let parentArtifactIds =
+                        lineage
+                        |> ArtifactLineage.parentArtifactIds
+                        |> List.map ArtifactId.serialize
+                        |> List.toArray
+
                     ArtifactRecord(
-                        Id = ArtifactId.serialize value.Id,
-                        IdempotencyKey = IdempotencyKey.value value.IdempotencyKey,
-                        Kind = value.Kind,
-                        ContentType = value.ContentType,
-                        Payload = value.Payload
+                        Id = id,
+                        IdempotencyKey = idempotencyKey,
+                        SchemaVersion = schemaVersion,
+                        Role = role,
+                        Address = address,
+                        Kind = Artifact.kind value,
+                        ContentType = Artifact.contentType value,
+                        Payload = Artifact.payload value,
+                        ContentHash = contentHash,
+                        RecordedBy = recordedBy,
+                        RecordedAt = ArtifactLineage.recordedAt lineage,
+                        ParentArtifactIds = parentArtifactIds
                     ))
 
             let userRecord =
@@ -521,7 +543,7 @@ type SessionGrain
 
     let addMemoryAgentTool (tools: Tool list) =
         let existingNames = tools |> List.map _.Name |> Set.ofList
-        let memoryTools = MemoryTools.create memoryToolConfig memoryStore
+        let memoryTools = MemoryTools.create memoryToolConfig memoryStore None
 
         if memoryTools.IsEmpty || existingNames.Contains "memory" then
             tools

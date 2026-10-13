@@ -1,16 +1,19 @@
 namespace Nao.Agents
 
+open System.Threading
 open System.Threading.Tasks
 
 /// Immutable functional capability for invoking a language model.
 type LlmProvider =
     { Name: unit -> string
-      CompleteAsync: CorrelationContext -> Conversation -> CompletionOptions -> Task<CompletionResult>
+      CompleteAsync:
+          CorrelationContext -> Conversation -> CompletionOptions -> CancellationToken -> Task<CompletionResult>
       StreamAsync:
           (CorrelationContext
               -> Conversation
               -> CompletionOptions
               -> (CompletionChunk -> unit)
+              -> CancellationToken
               -> Task<CompletionResult>) option
       Dispose: unit -> unit }
 
@@ -27,16 +30,16 @@ module LlmProvider =
     let name (provider: LlmProvider) = provider.Name()
 
     /// Request a buffered completion.
-    let completeAsync correlation conversation options (provider: LlmProvider) =
-        provider.CompleteAsync correlation conversation options
+    let completeAsync correlation conversation options cancellationToken (provider: LlmProvider) =
+        provider.CompleteAsync correlation conversation options cancellationToken
 
     /// Stream a completion when supported, otherwise emit one buffered chunk.
-    let streamAsync (provider: LlmProvider) correlation conversation options onChunk =
+    let streamAsync (provider: LlmProvider) correlation conversation options onChunk cancellationToken =
         match provider.StreamAsync with
-        | Some stream -> stream correlation conversation options onChunk
+        | Some stream -> stream correlation conversation options onChunk cancellationToken
         | None ->
             task {
-                let! result = provider.CompleteAsync correlation conversation options
+                let! result = provider.CompleteAsync correlation conversation options cancellationToken
 
                 onChunk (
                     CompletionChunk.create result.Content (Some result.FinishReason) result.TokensUsed result.Usage

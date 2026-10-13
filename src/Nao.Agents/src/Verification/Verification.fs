@@ -239,7 +239,7 @@ module Verification =
                   { Role = User
                     Content = taskDescription } ]
 
-            let! result = provider.CompleteAsync correlation prompt options
+            let! result = provider.CompleteAsync correlation prompt options System.Threading.CancellationToken.None
             // Parse the LLM response into structured grounding
             return
                 { Task = taskDescription
@@ -291,7 +291,8 @@ module LlmJudge =
                               (trace.Output |> Option.defaultValue "N/A")
                               traceDescription } ]
 
-                let! result = provider.CompleteAsync trace.Correlation prompt options
+                let! result =
+                    provider.CompleteAsync trace.Correlation prompt options System.Threading.CancellationToken.None
 
                 let verdict =
                     if result.Content.StartsWith("PASS") then

@@ -199,7 +199,14 @@ module ExecutionEnvironment =
                 |> capture.Redact
                 |> truncateUtf8 capture.MaxBytesPerStream
 
-            Artifact.create (agentContext.NextArtifactKey()) kind "text/plain; charset=utf-8" payload
+            Artifact.produced
+                agentContext.Correlation.ExecutionId
+                DateTimeOffset.UtcNow
+                []
+                (agentContext.NextArtifactKey())
+                kind
+                "text/plain; charset=utf-8"
+                payload
             |> agentContext.PublishArtifact
             |> _.GetAwaiter().GetResult()
 
@@ -1075,7 +1082,13 @@ module ExecutionEnvironment =
                     let imageArtifact =
                         try
                             JsonSerializer.Serialize(imageEvidence, jsonOptions)
-                            |> Artifact.create (agentContext.NextArtifactKey()) "container.image" "application/json"
+                            |> Artifact.produced
+                                agentContext.Correlation.ExecutionId
+                                DateTimeOffset.UtcNow
+                                []
+                                (agentContext.NextArtifactKey())
+                                "container.image"
+                                "application/json"
                         with error ->
                             releaseEgressLease ()
                             reraise ()
@@ -1091,7 +1104,10 @@ module ExecutionEnvironment =
                                       Claims = lease.Claims }
 
                                 JsonSerializer.Serialize(evidence, jsonOptions)
-                                |> Artifact.create
+                                |> Artifact.produced
+                                    agentContext.Correlation.ExecutionId
+                                    DateTimeOffset.UtcNow
+                                    []
                                     (agentContext.NextArtifactKey())
                                     "container.network"
                                     "application/json"

@@ -257,11 +257,7 @@ module private EventRedaction =
     let optionalText = Option.map text
     let textMap = Map.map (fun _ -> text)
 
-    let artifact (artifact: Artifact) =
-        { artifact with
-            Kind = text artifact.Kind
-            ContentType = text artifact.ContentType
-            Payload = text artifact.Payload }
+    let artifact (artifact: Artifact) = artifact
 
     let failure (failure: ToolFailure) =
         { failure with

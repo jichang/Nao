@@ -353,6 +353,224 @@ type PostgresKnowledgeIndexTests() =
     [<TestMethod>]
     [<TestCategory("ExternalDatabase")>]
     [<TestCategory("Container")>]
+    member _.``PostgreSQL adapters drive authorized hybrid retrieval and verified citations``() =
+        match connectionString with
+        | None -> Assert.Inconclusive "Set NAO_TEST_POSTGRES to run PostgreSQL retrieval qualification."
+        | Some connectionString ->
+            let schema = "nao_qualification_" + Guid.NewGuid().ToString("N").Substring(0, 16)
+            let vectorConfig = PgvectorIndexConfig.create schema 8 32
+            let lexicalConfig = PostgresLexicalIndexConfig.create schema "pg_catalog.simple"
+            use dataSource = PostgresKnowledgeDataSource.create connectionString
+
+            try
+                let vectorIndex =
+                    PgvectorKnowledgeIndex.createAsync dataSource profile vectorConfig CancellationToken.None
+                    |> _.GetAwaiter().GetResult()
+
+                let lexicalIndex =
+                    PostgresLexicalKnowledgeIndex.createAsync dataSource lexicalConfig CancellationToken.None
+                    |> _.GetAwaiter().GetResult()
+
+                let owner = authorization ownerUser [] Set.empty
+
+                let relevant, relevantSourceId, relevantChunkId =
+                    createRecord
+                        owner
+                        "qualified-release-policy"
+                        "The release policy requires two reviewers."
+                        "policy"
+                        KnowledgeIndexAccess.ownerOnly
+                        [| 1.0; 0.0; 0.0 |]
+
+                let unrelated, _, _ =
+                    createRecord
+                        owner
+                        "qualified-cafeteria-menu"
+                        "The cafeteria serves soup on Friday."
+                        "menu"
+                        KnowledgeIndexAccess.ownerOnly
+                        [| 0.0; 1.0; 0.0 |]
+
+                let vectorRecords = [ relevant; unrelated ]
+
+                vectorIndex.ApplyAsync
+                    owner
+                    (KnowledgeIndexMutation.create namespaceName vectorRecords [] None [])
+                    CancellationToken.None
+                |> _.GetAwaiter().GetResult()
+                |> ignore
+
+                let documents = vectorRecords |> List.map VectorIndexRecord.document
+
+                lexicalIndex.ApplyAsync
+                    owner
+                    (KnowledgeIndexMutation.create namespaceName documents [] None [])
+                    CancellationToken.None
+                |> _.GetAwaiter().GetResult()
+                |> ignore
+
+                let embedder: KnowledgeQueryEmbedder =
+                    { Profile = profile
+                      EmbedQueriesAsync =
+                        fun _ request _ ->
+                            let embeddings =
+                                request
+                                |> KnowledgeQueryEmbeddingRequest.inputs
+                                |> List.map (fun input ->
+                                    KnowledgeQueryEmbedding.create
+                                        (KnowledgeQueryEmbeddingInput.contentHash input)
+                                        [| 1.0; 0.0; 0.0 |])
+
+                            KnowledgeQueryEmbeddingResult.create
+                                embeddings
+                                (KnowledgeQueryEmbeddingUsage.create 1 embeddings.Length 0m)
+                            |> Task.FromResult }
+
+                let retrievalConfig =
+                    KnowledgeHybridRetrievalConfig.create
+                        KnowledgeReciprocalRankFusionConfig.defaultConfig
+                        (KnowledgeRetrievalDiversityConfig.unrestricted 4)
+                        None
+                        None
+
+                let retrievalRequest authorization =
+                    KnowledgeRetrievalRequest.create
+                        "release policy reviewers"
+                        authorization
+                        namespaceName
+                        KnowledgeIndexFilter.none
+                        KnowledgeTaskIntent.KnowledgeSeeking
+                        KnowledgeRetrievalStrategy.Hybrid
+                        KnowledgeQueryTransformationStrategy.None
+                        (KnowledgeRetrievalLimits.create 100 200 2 2 4)
+                        (KnowledgeRetrievalBudget.create (TimeSpan.FromSeconds 5.0) 0 1 10 0m)
+
+                let retrieve authorization =
+                    KnowledgeHybridRetrievalPipeline.executeAsync
+                        None
+                        lexicalIndex
+                        embedder
+                        vectorIndex
+                        retrievalConfig
+                        (retrievalRequest authorization)
+                        CancellationToken.None
+                    |> _.GetAwaiter().GetResult()
+
+                let retrieval =
+                    match retrieve owner with
+                    | KnowledgeHybridRetrievalResult.Retrieved value -> value
+                    | KnowledgeHybridRetrievalResult.Skipped reason ->
+                        invalidOp $"Production retrieval qualification was unexpectedly skipped: {reason}"
+
+                let candidates =
+                    retrieval
+                    |> KnowledgeHybridRetrieval.candidates
+                    |> KnowledgeRetrievalCandidates.candidates
+
+                let firstDocument = candidates |> List.head |> KnowledgeScoredCandidate.document
+
+                Assert.AreEqual(relevantChunkId, KnowledgeIndexDocument.chunkId firstDocument)
+                Assert.AreEqual(relevantSourceId, KnowledgeIndexDocument.sourceId firstDocument)
+
+                let reranking =
+                    KnowledgeRerankingExecutor.executeAsync
+                        (KnowledgeScoreBasedReranker.create KnowledgeScoreBasedRerankerConfig.defaultConfig)
+                        (KnowledgeRerankRequest.create
+                            (KnowledgeHybridRetrieval.candidates retrieval)
+                            1
+                            (KnowledgeRerankBudget.create (TimeSpan.FromSeconds 1.0) 0 0 0m))
+                        CancellationToken.None
+                    |> _.GetAwaiter().GetResult()
+
+                let context =
+                    match
+                        KnowledgeContextAssembler.assemble
+                            owner
+                            (KnowledgeContextAssemblyConfig.create
+                                (UnicodeWordTokenizer.create ())
+                                (KnowledgeContextSourcePreferencePolicy.create
+                                    KnowledgeContextSourcePreferencePriority.AuthorityThenCurrent)
+                                KnowledgeContextSafetyPolicy.strict
+                                200
+                                1
+                                1
+                                1)
+                            reranking
+                    with
+                    | KnowledgeContextAssemblyResult.Assembled value -> value
+                    | KnowledgeContextAssemblyResult.Insufficient(reason, _) ->
+                        invalidOp $"Production retrieval context was unexpectedly insufficient: {reason}"
+
+                let contextCitation =
+                    context
+                    |> KnowledgeAssembledContext.items
+                    |> List.exactlyOne
+                    |> KnowledgeContextItem.citation
+
+                let referenceId = KnowledgeGroundedCitationReferenceId.parse "qualified-reference"
+
+                let reference =
+                    KnowledgeGroundedCitationReference.create
+                        referenceId
+                        (KnowledgeContextCitation.marker contextCitation)
+                        (KnowledgeContextCitation.chunkId contextCitation)
+
+                let answer = "The release policy requires two reviewers."
+
+                let claim =
+                    KnowledgeGroundedClaim.create
+                        answer
+                        (KnowledgeGroundedClaimId.parse "qualified-claim")
+                        0
+                        answer.Length
+                        KnowledgeGroundedClaimPresentation.GeneratedInterpretation
+                        [ referenceId ]
+                        (Confidence.create 1.0)
+
+                let proposal =
+                    KnowledgeGroundedAnswerProposal.create answer [ claim ] [ reference ] (Confidence.create 1.0)
+
+                match
+                    KnowledgeGroundedCitationVerifier.verify
+                        context
+                        (KnowledgeGroundedGenerationResult.ProposedAnswer proposal)
+                with
+                | KnowledgeGroundedVerificationResult.VerifiedAnswer verified ->
+                    let citation =
+                        verified
+                        |> KnowledgeVerifiedGroundedAnswer.claims
+                        |> List.exactlyOne
+                        |> KnowledgeVerifiedClaim.citations
+                        |> List.exactlyOne
+                        |> KnowledgeVerifiedCitation.contextCitation
+
+                    Assert.AreEqual(relevantSourceId, KnowledgeContextCitation.sourceId citation)
+                    Assert.AreEqual(relevantChunkId, KnowledgeContextCitation.chunkId citation)
+                | result -> Assert.Fail $"Expected verified PostgreSQL-backed citation, received {result}."
+
+                let outsider = authorization (UserId.parse "outsider") [] Set.empty
+
+                match retrieve outsider with
+                | KnowledgeHybridRetrievalResult.Retrieved value ->
+                    Assert.AreEqual(
+                        0,
+                        value
+                        |> KnowledgeHybridRetrieval.candidates
+                        |> KnowledgeRetrievalCandidates.candidates
+                        |> List.length
+                    )
+                | KnowledgeHybridRetrievalResult.Skipped reason ->
+                    Assert.Fail $"Unauthorized retrieval was unexpectedly skipped rather than empty: {reason}"
+            finally
+                use connection = new NpgsqlConnection(connectionString)
+                connection.Open()
+                use command = connection.CreateCommand()
+                command.CommandText <- $"DROP SCHEMA IF EXISTS \"{schema}\" CASCADE"
+                command.ExecuteNonQuery() |> ignore
+
+    [<TestMethod>]
+    [<TestCategory("ExternalDatabase")>]
+    [<TestCategory("Container")>]
     member _.``PostgreSQL full text applies ACL filters ranking and deletion inside the query boundary``() =
         match connectionString with
         | None -> Assert.Inconclusive "Set NAO_TEST_POSTGRES to run PostgreSQL integration tests."
@@ -793,6 +1011,238 @@ type PostgresKnowledgeIndexTests() =
 
                 verify vectorReport
                 verify lexicalReport
+            finally
+                use connection = new NpgsqlConnection(connectionString)
+                connection.Open()
+                use command = connection.CreateCommand()
+                command.CommandText <- $"DROP SCHEMA IF EXISTS \"{schema}\" CASCADE"
+                command.ExecuteNonQuery() |> ignore
+
+    [<TestMethod>]
+    [<TestCategory("ExternalDatabase")>]
+    [<TestCategory("Container")>]
+    member _.``Managed PostgreSQL indexes preserve incremental lifecycle through backup and restore``() =
+        match connectionString with
+        | None -> Assert.Inconclusive "Set NAO_TEST_POSTGRES to run PostgreSQL lifecycle integration tests."
+        | Some connectionString ->
+            let schema = "nao_test_" + Guid.NewGuid().ToString("N").Substring(0, 16)
+            let vectorConfig = PgvectorIndexConfig.create schema 8 32
+            let lexicalConfig = PostgresLexicalIndexConfig.create schema "pg_catalog.simple"
+            use dataSource = PostgresKnowledgeDataSource.create connectionString
+
+            try
+                let managedVector =
+                    PgvectorKnowledgeIndex.createManaged dataSource profile vectorConfig
+
+                let managedLexical =
+                    PostgresLexicalKnowledgeIndex.createManaged dataSource lexicalConfig
+
+                Assert.AreEqual(
+                    KnowledgeIndexCreationResult.Created,
+                    managedVector.Management.EnsureCreatedAsync CancellationToken.None
+                    |> _.GetAwaiter().GetResult()
+                )
+
+                Assert.AreEqual(
+                    KnowledgeIndexCreationResult.Created,
+                    managedLexical.Management.EnsureCreatedAsync CancellationToken.None
+                    |> _.GetAwaiter().GetResult()
+                )
+
+                Assert.AreEqual(
+                    KnowledgeIndexCreationResult.AlreadyExists,
+                    managedVector.Management.EnsureCreatedAsync CancellationToken.None
+                    |> _.GetAwaiter().GetResult()
+                )
+
+                let owner = authorization ownerUser [] Set.empty
+
+                let first, firstSourceId, firstChunkId =
+                    createRecord
+                        owner
+                        "lifecycle-first"
+                        "alpha lifecycle original"
+                        "original"
+                        KnowledgeIndexAccess.ownerOnly
+                        [| 1.0; 0.0; 0.0 |]
+
+                let second, _, secondChunkId =
+                    createRecord
+                        owner
+                        "lifecycle-second"
+                        "beta lifecycle retained"
+                        "retained"
+                        KnowledgeIndexAccess.ownerOnly
+                        [| 0.0; 1.0; 0.0 |]
+
+                let vectorRecords = [ first; second ]
+                let lexicalRecords = vectorRecords |> List.map VectorIndexRecord.document
+
+                managedVector.Index.ApplyAsync
+                    owner
+                    (KnowledgeIndexMutation.create namespaceName vectorRecords [] None [])
+                    CancellationToken.None
+                |> _.GetAwaiter().GetResult()
+                |> ignore
+
+                managedLexical.Index.ApplyAsync
+                    owner
+                    (KnowledgeIndexMutation.create namespaceName lexicalRecords [] None [])
+                    CancellationToken.None
+                |> _.GetAwaiter().GetResult()
+                |> ignore
+
+                managedVector.Index.ApplyAsync
+                    owner
+                    (KnowledgeIndexMutation.create namespaceName [ first ] [] None [])
+                    CancellationToken.None
+                |> _.GetAwaiter().GetResult()
+                |> ignore
+
+                managedLexical.Index.ApplyAsync
+                    owner
+                    (KnowledgeIndexMutation.create namespaceName [ VectorIndexRecord.document first ] [] None [])
+                    CancellationToken.None
+                |> _.GetAwaiter().GetResult()
+                |> ignore
+
+                Assert.AreEqual(
+                    2,
+                    query owner managedVector.Index [| 1.0; 0.0; 0.0 |] KnowledgeIndexFilter.none
+                    |> List.length
+                )
+
+                let vectorBackup =
+                    managedVector.Management.BackupAsync owner namespaceName CancellationToken.None
+                    |> _.GetAwaiter().GetResult()
+
+                let lexicalBackup =
+                    managedLexical.Management.BackupAsync owner namespaceName CancellationToken.None
+                    |> _.GetAwaiter().GetResult()
+
+                CollectionAssert.AreEqual(
+                    vectorRecords
+                    |> List.sortBy (VectorIndexRecord.document >> KnowledgeIndexDocument.chunkId)
+                    |> List.toArray,
+                    KnowledgeIndexBackup.records vectorBackup |> List.toArray
+                )
+
+                CollectionAssert.AreEqual(
+                    lexicalRecords |> List.sortBy KnowledgeIndexDocument.chunkId |> List.toArray,
+                    KnowledgeIndexBackup.records lexicalBackup |> List.toArray
+                )
+
+                let replacement, _, replacementChunkId =
+                    createRecord
+                        owner
+                        "lifecycle-first"
+                        "gamma lifecycle replacement"
+                        "replacement"
+                        KnowledgeIndexAccess.ownerOnly
+                        [| 0.0; 0.0; 1.0 |]
+
+                let sourceFilter =
+                    KnowledgeIndexFilter.create [ firstSourceId ] [] Map.empty None None None None
+
+                managedVector.Index.ApplyAsync
+                    owner
+                    (KnowledgeIndexMutation.create namespaceName [ replacement ] [] (Some sourceFilter) [])
+                    CancellationToken.None
+                |> _.GetAwaiter().GetResult()
+                |> ignore
+
+                managedLexical.Index.ApplyAsync
+                    owner
+                    (KnowledgeIndexMutation.create
+                        namespaceName
+                        [ VectorIndexRecord.document replacement ]
+                        []
+                        (Some sourceFilter)
+                        [])
+                    CancellationToken.None
+                |> _.GetAwaiter().GetResult()
+                |> ignore
+
+                managedVector.Index.ApplyAsync
+                    owner
+                    (KnowledgeIndexMutation.create namespaceName [] [ secondChunkId ] None [])
+                    CancellationToken.None
+                |> _.GetAwaiter().GetResult()
+                |> ignore
+
+                managedLexical.Index.ApplyAsync
+                    owner
+                    (KnowledgeIndexMutation.create namespaceName [] [ secondChunkId ] None [])
+                    CancellationToken.None
+                |> _.GetAwaiter().GetResult()
+                |> ignore
+
+                let changed =
+                    query owner managedVector.Index [| 0.0; 0.0; 1.0 |] KnowledgeIndexFilter.none
+
+                Assert.AreEqual(1, changed.Length)
+
+                Assert.AreEqual(
+                    replacementChunkId,
+                    changed
+                    |> List.exactlyOne
+                    |> VectorIndexHit.document
+                    |> KnowledgeIndexDocument.chunkId
+                )
+
+                Assert.AreEqual(
+                    0,
+                    lexicalQuery owner managedLexical.Index "alpha OR beta" KnowledgeIndexFilter.none
+                    |> List.length
+                )
+
+                let vectorRestore =
+                    managedVector.Management.RestoreAsync owner vectorBackup CancellationToken.None
+                    |> _.GetAwaiter().GetResult()
+
+                let lexicalRestore =
+                    managedLexical.Management.RestoreAsync owner lexicalBackup CancellationToken.None
+                    |> _.GetAwaiter().GetResult()
+
+                Assert.AreEqual(2L, KnowledgeIndexRebuildResult.currentRecords vectorRestore)
+                Assert.AreEqual(2L, KnowledgeIndexRebuildResult.currentRecords lexicalRestore)
+
+                let restoredVector =
+                    query owner managedVector.Index [| 1.0; 0.0; 0.0 |] KnowledgeIndexFilter.none
+
+                CollectionAssert.AreEquivalent(
+                    [| firstChunkId; secondChunkId |],
+                    restoredVector
+                    |> List.map (VectorIndexHit.document >> KnowledgeIndexDocument.chunkId)
+                    |> List.toArray
+                )
+
+                Assert.AreEqual(
+                    2,
+                    lexicalQuery owner managedLexical.Index "alpha OR beta" KnowledgeIndexFilter.none
+                    |> List.length
+                )
+
+                let vectorHealth =
+                    managedVector.Management.CheckHealthAsync CancellationToken.None
+                    |> _.GetAwaiter().GetResult()
+
+                let lexicalHealth =
+                    managedLexical.Management.CheckHealthAsync CancellationToken.None
+                    |> _.GetAwaiter().GetResult()
+
+                Assert.AreEqual(KnowledgeIndexHealthStatus.Healthy, KnowledgeIndexHealth.status vectorHealth)
+                Assert.AreEqual(Some 2L, KnowledgeIndexHealth.searchableRecords vectorHealth)
+                Assert.AreEqual(KnowledgeIndexHealthStatus.Healthy, KnowledgeIndexHealth.status lexicalHealth)
+                Assert.AreEqual(Some 2L, KnowledgeIndexHealth.searchableRecords lexicalHealth)
+
+                let outsider = authorization (UserId.parse "lifecycle-outsider") [] Set.empty
+
+                Assert.ThrowsExactly<UnauthorizedAccessException>(fun () ->
+                    managedVector.Management.RestoreAsync outsider vectorBackup CancellationToken.None
+                    |> _.GetAwaiter().GetResult()
+                    |> ignore)
+                |> ignore
             finally
                 use connection = new NpgsqlConnection(connectionString)
                 connection.Open()

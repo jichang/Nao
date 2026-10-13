@@ -537,3 +537,58 @@ module PgvectorKnowledgeIndex =
                    QueryAsync = queryAsync dataSource profile config }
                 : KnowledgeVectorIndex)
         }
+
+    let createManaged
+        (dataSource: NpgsqlDataSource)
+        (profile: EmbeddingCapabilityDescriptor)
+        (config: PgvectorIndexConfig)
+        : ManagedKnowledgeVectorIndex =
+        if isNull dataSource then
+            nullArg (nameof dataSource)
+
+        let profile = EmbeddingCapabilityDescriptor.validate profile
+
+        let index: KnowledgeVectorIndex =
+            { ApplyAsync = applyAsync dataSource profile config
+              QueryAsync = queryAsync dataSource profile config }
+
+        let schema = PgvectorIndexConfig.schema config
+        let tableName = PgvectorIndexConfig.tableName profile
+        let sourceStateTable = sourceStateTableName tableName
+
+        let schemaRevision =
+            [ "postgres-pgvector-v1"
+              EmbeddingProfileId.value profile.ProfileId
+              string profile.Dimensions
+              metricName profile.DistanceMetric
+              normalizationName profile.Normalization ]
+            |> String.concat ":"
+            |> ContentHash.computeText
+
+        let readRecord (reader: NpgsqlDataReader) =
+            let values = reader.GetFieldValue<Vector>(25).ToArray() |> Array.map float
+
+            VectorIndexRecord.restore (readDocument reader) profile values
+
+        { Index = index
+          Management =
+            { EnsureCreatedAsync =
+                PostgresIndexManagement.ensureCreatedAsync
+                    dataSource
+                    schema
+                    tableName
+                    (initializeAsync dataSource profile config)
+              CheckHealthAsync =
+                PostgresIndexManagement.checkHealthAsync dataSource schema tableName sourceStateTable schemaRevision
+              PlanMigrationAsync = fun _ -> Task.FromResult None
+              MigrateAsync = PostgresIndexManagement.unsupportedMigrationAsync
+              RebuildAsync = KnowledgeIndexRebuild.vectorAsync index
+              BackupAsync =
+                PostgresIndexManagement.backupAsync
+                    dataSource
+                    schema
+                    tableName
+                    sourceStateTable
+                    (selectColumns + ", embedding")
+                    readRecord
+              RestoreAsync = PostgresIndexManagement.restoreAsync (KnowledgeIndexRebuild.vectorAsync index) } }

@@ -10,23 +10,6 @@ open Nao.Knowledge
 open Npgsql
 open NpgsqlTypes
 
-[<CLIMutable>]
-type internal PostgresSourceLocation =
-    { ByteOffset: int64
-      ByteLength: int64
-      CharacterOffset: int
-      CharacterLength: int
-      Page: Nullable<int>
-      LineStart: Nullable<int>
-      LineEnd: Nullable<int>
-      Path: string }
-
-[<CLIMutable>]
-type internal PostgresTrustAssessment =
-    { Level: string
-      Basis: string
-      AssessedAt: DateTimeOffset }
-
 module internal PostgresIndexSupport =
     let quoted (value: string) = "\"" + value + "\""
     let qualified schema table = quoted schema + "." + quoted table
@@ -202,16 +185,15 @@ module internal PostgresIndexSupport =
     let sourceLocationsJson (locations: SourceLocation list) =
         locations
         |> List.map (fun location ->
-            let row: PostgresSourceLocation =
-                { ByteOffset = location.ByteOffset
-                  ByteLength = location.ByteLength
-                  CharacterOffset = location.CharacterOffset
-                  CharacterLength = location.CharacterLength
-                  Page = location.Page |> Option.map Nullable |> Option.defaultValue (Nullable())
-                  LineStart = location.LineStart |> Option.map Nullable |> Option.defaultValue (Nullable())
-                  LineEnd = location.LineEnd |> Option.map Nullable |> Option.defaultValue (Nullable())
-                  Path = location.Path |> Option.defaultValue null }
-
+            let row = Dictionary<string, obj>()
+            row.Add("byteOffset", box location.ByteOffset)
+            row.Add("byteLength", box location.ByteLength)
+            row.Add("characterOffset", box location.CharacterOffset)
+            row.Add("characterLength", box location.CharacterLength)
+            row.Add("page", location.Page |> Option.map box |> Option.defaultValue null)
+            row.Add("lineStart", location.LineStart |> Option.map box |> Option.defaultValue null)
+            row.Add("lineEnd", location.LineEnd |> Option.map box |> Option.defaultValue null)
+            row.Add("path", location.Path |> Option.map box |> Option.defaultValue null)
             row)
         |> List.toArray
         |> JsonSerializer.Serialize
@@ -232,21 +214,53 @@ module internal PostgresIndexSupport =
         | value -> invalidOp $"PostgreSQL index contains unsupported knowledge trust level '{value}'."
 
     let trustAssessmentJson (assessment: TrustAssessment) =
-        let row: PostgresTrustAssessment =
-            { Level = trustLevelValue assessment.Level
-              Basis = assessment.Basis
-              AssessedAt = assessment.AssessedAt }
-
+        let row = Dictionary<string, obj>()
+        row.Add("level", box (trustLevelValue assessment.Level))
+        row.Add("basis", box assessment.Basis)
+        row.Add("assessedAt", box assessment.AssessedAt)
         JsonSerializer.Serialize row
 
+    let private requiredProperty (name: string) (element: JsonElement) =
+        match element.TryGetProperty name with
+        | true, value -> value
+        | false, _ -> invalidOp $"PostgreSQL index JSON evidence is missing required property '{name}'."
+
+    let private requiredString name element =
+        (requiredProperty name element).GetString()
+
+    let private requiredInt name element =
+        (requiredProperty name element).GetInt32()
+
+    let private requiredInt64 name element =
+        (requiredProperty name element).GetInt64()
+
+    let private optionalInt (name: string) (element: JsonElement) =
+        let value = requiredProperty name element
+
+        if value.ValueKind = JsonValueKind.Null then
+            None
+        else
+            Some(value.GetInt32())
+
+    let private optionalString (name: string) (element: JsonElement) =
+        let value = requiredProperty name element
+
+        if value.ValueKind = JsonValueKind.Null then
+            None
+        else
+            Some(value.GetString())
+
     let private readTrustAssessment (reader: NpgsqlDataReader) ordinal =
-        let row =
-            JsonSerializer.Deserialize<PostgresTrustAssessment>(reader.GetString ordinal)
+        use document = JsonDocument.Parse(reader.GetString ordinal)
+        let root = document.RootElement
 
-        if isNull (box row) then
-            invalidOp "A searchable knowledge document has null trust-assessment evidence."
+        if root.ValueKind <> JsonValueKind.Object then
+            invalidOp "A searchable knowledge document has malformed trust-assessment evidence."
 
-        TrustAssessment.create (parseTrustLevel row.Level) row.Basis row.AssessedAt
+        TrustAssessment.create
+            (requiredString "level" root |> parseTrustLevel)
+            (requiredString "basis" root)
+            ((requiredProperty "assessedAt" root).GetDateTimeOffset())
 
     let addIdentityParameters (command: NpgsqlCommand) (authorization: AuthorizationScope) =
         let identity = AuthorizationScope.identity authorization
@@ -344,34 +358,28 @@ module internal PostgresIndexSupport =
             |> Seq.map (fun pair -> pair.Key, pair.Value)
             |> Map.ofSeq
 
-        let serializedLocations =
-            JsonSerializer.Deserialize<PostgresSourceLocation array>(reader.GetString 22)
+        use locationDocument = JsonDocument.Parse(reader.GetString 22)
+        let serializedLocations = locationDocument.RootElement
 
-        if isNull serializedLocations then
-            invalidOp "A searchable knowledge document has null source-location evidence."
+        if serializedLocations.ValueKind <> JsonValueKind.Array then
+            invalidOp "A searchable knowledge document has malformed source-location evidence."
 
         let locations =
-            serializedLocations
-            |> Array.map (fun location ->
+            serializedLocations.EnumerateArray()
+            |> Seq.map (fun location ->
+                if location.ValueKind <> JsonValueKind.Object then
+                    invalidOp "A searchable knowledge document contains malformed source-location evidence."
+
                 SourceLocation.create
-                    location.ByteOffset
-                    location.ByteLength
-                    location.CharacterOffset
-                    location.CharacterLength
-                    (if location.Page.HasValue then
-                         Some location.Page.Value
-                     else
-                         None)
-                    (if location.LineStart.HasValue then
-                         Some location.LineStart.Value
-                     else
-                         None)
-                    (if location.LineEnd.HasValue then
-                         Some location.LineEnd.Value
-                     else
-                         None)
-                    (if isNull location.Path then None else Some location.Path))
-            |> List.ofArray
+                    (requiredInt64 "byteOffset" location)
+                    (requiredInt64 "byteLength" location)
+                    (requiredInt "characterOffset" location)
+                    (requiredInt "characterLength" location)
+                    (optionalInt "page" location)
+                    (optionalInt "lineStart" location)
+                    (optionalInt "lineEnd" location)
+                    (optionalString "path" location))
+            |> List.ofSeq
 
         KnowledgeIndexDocument.restore
             (reader.GetString(8) |> KnowledgeIndexNamespace.parse)
