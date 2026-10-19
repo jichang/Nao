@@ -6,12 +6,22 @@ open Nao.Agents
 /// Aggregate report of an evaluation run
 type EvalReport =
     {
+        /// Nao-owned report contract version.
+        SchemaVersion: int
         /// Stable evaluation-run identity
         Id: Guid
         /// Retention owner
         Owner: AuthorizationIdentity
         /// Dataset revision evaluated by this report
         DatasetId: Guid
+        /// Monotonic dataset revision.
+        DatasetRevision: int
+        /// Canonical SHA-256 identity of the complete dataset specification.
+        DatasetContentSha256: string
+        /// Complete executable configuration used for this run.
+        Configuration: EvalExecutableConfiguration
+        /// Execution mode, seed, fixture identity, and scheduling settings.
+        Reproducibility: EvalReproducibility
         /// Name of the evaluation run
         Name: string
         /// When the evaluation was run
@@ -42,6 +52,8 @@ and TagSummary =
       AverageScore: float }
 
 module EvalReport =
+    [<Literal>]
+    let CurrentSchemaVersion = 1
 
     /// Generate a report from a list of results
     let fromResults (run: EvalRun) (name: string) (results: EvalResult list) : EvalReport =
@@ -65,9 +77,14 @@ module EvalReport =
             else
                 results |> List.averageBy (fun r -> float r.LatencyMs)
 
-        { Id = run.Id
+        { SchemaVersion = CurrentSchemaVersion
+          Id = run.Id
           Owner = run.Owner
           DatasetId = run.DatasetId
+          DatasetRevision = run.DatasetRevision
+          DatasetContentSha256 = run.DatasetContentSha256
+          Configuration = run.Configuration
+          Reproducibility = run.Reproducibility
           Name = name
           RunAt = run.StartedAt
           TotalCases = results.Length
@@ -91,7 +108,11 @@ module EvalReport =
 
         let tagBreakdown =
             cases
-            |> List.collect (fun c -> c.Tags |> List.map (fun tag -> (tag, c.Id)))
+            |> List.collect (fun case ->
+                case
+                |> EvalCase.labels
+                |> Seq.map (fun label -> label, EvalCase.id case)
+                |> Seq.toList)
             |> List.groupBy fst
             |> List.map (fun (tag, pairs) ->
                 let caseIds = pairs |> List.map snd

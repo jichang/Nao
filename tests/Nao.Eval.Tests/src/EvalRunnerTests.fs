@@ -52,14 +52,54 @@ type EvalRunnerTests() =
 
     let owner = AuthorizationScope.identity authorization
 
+    let adapterComponent name =
+        EvalComponentIdentity.create name "test" name
+
+    let specification =
+        let agentIds =
+            [ "echo"; "fixed"; "identity"; "blocked"; "slow"; "cancel"; "counting" ]
+
+        EvalExecutionSpecification.create
+            (agentIds |> List.map (fun id -> id, adapterComponent id) |> Map.ofList)
+            (adapterComponent "prompt")
+            (adapterComponent "response-protocol")
+            []
+            (Some(adapterComponent "provider"))
+            (Some(adapterComponent "model"))
+            (adapterComponent "harness")
+            [ adapterComponent "policy" ]
+            []
+
+    let runtime = EvalRuntime.system 17
+
     let execution =
         EvalExecutionConfig.create
             authorization
             AgentContext.unrestrictedForTests
             EtclovgConfig.Default
             SandboxConfig.Default
+            specification
+            EvalExecutionMode.PinnedMock
+            runtime
 
     let defaultConfig = EvalRunnerConfig.create execution
+
+    let runFor dataset (agent: Agent) (evaluators: Evaluator list) =
+        let reproducibility =
+            EvalReproducibility.create
+                execution.Mode
+                runtime
+                { MaximumParallelism = 1
+                  StopOnFirstFailure = false }
+
+        EvalRun.create
+            (EvalDataset.owner dataset)
+            (EvalDataset.id dataset)
+            (EvalDataset.revision dataset)
+            (EvalDataset.contentSha256 dataset)
+            (EvalExecutionSpecification.resolve agent.Metadata.Id (evaluators |> List.map _.Identity) specification)
+            reproducibility
+            runtime
 
     [<TestMethod>]
     member _.``Every evaluation mode binds agent and evaluator to host authority``() =
@@ -95,12 +135,12 @@ type EvalRunnerTests() =
                     Task.FromResult "answer")
 
         let evaluator =
-            Evaluator.create "identity" (fun context case actual ->
+            Evaluator.deterministic "identity" "test" "identity" true "Test evaluator." (fun context case actual ->
                 Assert.AreEqual(authorization, context.Authorization)
                 Assert.AreEqual(principal, AuthorizationScope.principal context.Authorization)
                 Assert.AreEqual(observed.[context.Correlation.ExecutionId], context.Correlation)
                 Assert.AreEqual(cancellation.Token, context.CancellationToken)
-                Assert.AreEqual("input", case.Input)
+                Assert.AreEqual("input", EvalCase.input case)
                 Assert.AreEqual("answer", actual)
                 Task.FromResult(EvalVerdict.Pass, "ok"))
 
@@ -122,16 +162,25 @@ type EvalRunnerTests() =
         let config = EvalRunnerConfig.create execution
 
         let dataset =
-            EvalDataset.create owner "identity" [ for index in 1..3 -> EvalCase.create (string index) "input" "answer" ]
+            EvalDataset.repository
+                owner
+                "identity"
+                [ for index in 1..3 -> EvalCase.repository (string index) "input" "answer" ]
 
-        let run = EvalRun.create owner dataset.Id
+        let run = runFor dataset agent [ evaluator ]
 
         let single =
-            EvalRunner.runCaseAsync execution run evaluator agent dataset.Cases.Head cancellation.Token
+            EvalRunner.runCaseAsync execution run evaluator agent (EvalDataset.cases dataset).Head cancellation.Token
             |> _.Result
 
         let light =
-            EvalRunner.runCaseLightAsync execution run evaluator agent dataset.Cases.Head cancellation.Token
+            EvalRunner.runCaseLightAsync
+                execution
+                run
+                evaluator
+                agent
+                (EvalDataset.cases dataset).Head
+                cancellation.Token
             |> _.Result
 
         let sequential =
@@ -199,9 +248,9 @@ type EvalRunnerTests() =
         let config = EvalRunnerConfig.create execution
         let agent = TestAgents.fixedResponse "answer"
         let evaluator = ExactMatch.evaluator
-        let case = EvalCase.create "case" "input" "answer"
-        let dataset = EvalDataset.create otherOwner "foreign" [ case ]
-        let run = EvalRun.create otherOwner dataset.Id
+        let case = EvalCase.repository "case" "input" "answer"
+        let dataset = EvalDataset.repository otherOwner "foreign" [ case ]
+        let run = runFor dataset agent [ evaluator ]
         let token = CancellationToken.None
 
         let calls: (unit -> Task) list =
@@ -210,12 +259,11 @@ type EvalRunnerTests() =
               (fun () -> EvalRunner.runDatasetAsync config evaluator agent dataset token :> Task)
               (fun () ->
                   EvalRunner.runDatasetAsync { config with MaxParallelism = 3 } evaluator agent dataset token :> Task)
-              (fun () -> EvalRunner.runDatasetAsync config evaluator agent { dataset with Cases = [] } token :> Task)
+              (fun () -> EvalRunner.runDatasetAsync config evaluator agent dataset token :> Task)
               (fun () -> EvalRunner.runWithMultipleEvaluatorsAsync config [ evaluator ] agent dataset token :> Task)
-              (fun () ->
-                  EvalRunner.runWithMultipleEvaluatorsAsync config [] agent { dataset with Cases = [] } token :> Task)
+              (fun () -> EvalRunner.runWithMultipleEvaluatorsAsync config [] agent dataset token :> Task)
               (fun () -> EvalRunner.compareAgentsAsync config evaluator [ "agent", agent ] dataset token :> Task)
-              (fun () -> EvalRunner.compareAgentsAsync config evaluator [] { dataset with Cases = [] } token :> Task) ]
+              (fun () -> EvalRunner.compareAgentsAsync config evaluator [] dataset token :> Task) ]
 
         for call in calls do
             Assert.ThrowsExactlyAsync<UnauthorizedAccessException>(fun () -> call ())
@@ -238,31 +286,34 @@ type EvalRunnerTests() =
                 ))
 
         let agent = TestAgents.fixedResponse "42"
-        let case = EvalCase.create "correlated" "question" "42"
-        let dataset = EvalDataset.create owner "correlation" [ case ]
-        let run = EvalRun.create owner dataset.Id
+        let case = EvalCase.repository "correlated" "question" "42"
+        let dataset = EvalDataset.repository owner "correlation" [ case ]
+        let evaluator = LlmJudge.create provider
+        let run = runFor dataset agent [ evaluator ]
 
         let result =
-            EvalRunner.runCaseLightAsync execution run (LlmJudge.create provider) agent case CancellationToken.None
+            EvalRunner.runCaseLightAsync execution run evaluator agent case CancellationToken.None
             |> _.Result
 
         Assert.IsTrue(observed.Value.IsSome)
         Assert.AreEqual(result.ExecutionId, observed.Value.Value.ExecutionId)
+        Assert.AreEqual(EvaluatorAuthority.Probabilistic, result.EvaluatorAuthority)
+        Assert.IsTrue(result.RationaleIsUntrusted)
 
     [<TestMethod>]
     member _.``RunCaseAsync evaluates a single case``() =
         let agent = TestAgents.fixedResponse "The answer is 42"
-        let case = EvalCase.create "q1" "What is the answer?" "42"
+        let case = EvalCase.repository "q1" "What is the answer?" "42"
         let evaluator = Contains.evaluator
-        let dataset = EvalDataset.create owner "single" [ case ]
-        let run = EvalRun.create owner dataset.Id
+        let dataset = EvalDataset.repository owner "single" [ case ]
+        let run = runFor dataset agent [ evaluator ]
 
         let result =
             (EvalRunner.runCaseAsync execution run evaluator agent case CancellationToken.None).Result
 
         Assert.AreEqual("q1", result.CaseId)
         Assert.AreEqual(owner, result.Owner)
-        Assert.AreEqual(dataset.Id, result.DatasetId)
+        Assert.AreEqual(EvalDataset.id dataset, result.DatasetId)
         Assert.AreEqual(run.Id, result.RunId)
         Assert.AreNotEqual(ExecutionId.ofGuid System.Guid.Empty, result.ExecutionId)
         Assert.AreEqual(EvalVerdict.Pass, result.Verdict)
@@ -273,12 +324,12 @@ type EvalRunnerTests() =
         let agent = TestAgents.echo "Reply"
 
         let dataset =
-            EvalDataset.create
+            EvalDataset.repository
                 owner
                 "basic"
-                [ EvalCase.create "c1" "hello" "hello" |> EvalCase.withTags [ "greeting" ]
-                  EvalCase.create "c2" "world" "world" |> EvalCase.withTags [ "greeting" ]
-                  EvalCase.create "c3" "test" "missing" |> EvalCase.withTags [ "other" ] ]
+                [ EvalCase.repository "c1" "hello" "hello" |> EvalCase.withLabels [ "greeting" ]
+                  EvalCase.repository "c2" "world" "world" |> EvalCase.withLabels [ "greeting" ]
+                  EvalCase.repository "c3" "test" "missing" |> EvalCase.withLabels [ "other" ] ]
 
         let evaluator = Contains.evaluator
 
@@ -295,12 +346,12 @@ type EvalRunnerTests() =
         let agent = TestAgents.fixedResponse "hello world"
 
         let dataset =
-            EvalDataset.create
+            EvalDataset.repository
                 owner
                 "parallel"
-                [ EvalCase.create "p1" "a" "hello"
-                  EvalCase.create "p2" "b" "hello"
-                  EvalCase.create "p3" "c" "hello" ]
+                [ EvalCase.repository "p1" "a" "hello"
+                  EvalCase.repository "p2" "b" "hello"
+                  EvalCase.repository "p3" "c" "hello" ]
 
         let evaluator = Contains.evaluator
         let config = EvalRunnerConfig.withParallelism 3 execution
@@ -317,7 +368,7 @@ type EvalRunnerTests() =
         let agent2 = TestAgents.fixedResponse "I don't know"
 
         let dataset =
-            EvalDataset.create owner "comparison" [ EvalCase.create "w1" "What's the weather?" "sunny" ]
+            EvalDataset.repository owner "comparison" [ EvalCase.repository "w1" "What's the weather?" "sunny" ]
 
         let evaluator = Contains.evaluator
 
@@ -341,7 +392,7 @@ type EvalRunnerTests() =
         let agent = TestAgents.fixedResponse "42"
 
         let dataset =
-            EvalDataset.create owner "format-test" [ EvalCase.create "f1" "question" "42" ]
+            EvalDataset.repository owner "format-test" [ EvalCase.repository "f1" "question" "42" ]
 
         let evaluator = ExactMatch.evaluator
 
@@ -358,12 +409,12 @@ type EvalRunnerTests() =
         let agent = TestAgents.echo "Reply"
 
         let dataset =
-            EvalDataset.create
+            EvalDataset.repository
                 owner
                 "tags"
-                [ EvalCase.create "t1" "hello" "hello" |> EvalCase.withTags [ "math" ]
-                  EvalCase.create "t2" "world" "world" |> EvalCase.withTags [ "math" ]
-                  EvalCase.create "t3" "test" "nope" |> EvalCase.withTags [ "general" ] ]
+                [ EvalCase.repository "t1" "hello" "hello" |> EvalCase.withLabels [ "math" ]
+                  EvalCase.repository "t2" "world" "world" |> EvalCase.withLabels [ "math" ]
+                  EvalCase.repository "t3" "test" "nope" |> EvalCase.withLabels [ "general" ] ]
 
         let evaluator = Contains.evaluator
 
@@ -388,7 +439,7 @@ type EvalRunnerTests() =
                 Task.FromResult "unexpected")
 
         let evaluator =
-            Evaluator.create "blocked-evaluator" (fun _ _ _ ->
+            Evaluator.deterministic "blocked-evaluator" "test" "blocked" true "Test evaluator." (fun _ _ _ ->
                 evaluatorExecuted <- true
                 Task.FromResult(EvalVerdict.Pass, "unexpected"))
 
@@ -407,9 +458,9 @@ type EvalRunnerTests() =
                         PolicyEngine = Some(PolicyEngine.create (TimeSpan.FromSeconds 1.0) [ policy ])
                         AuditLog = Some(TestAudit.create ()) } }
 
-        let case = EvalCase.create "blocked" "question" "answer"
-        let dataset = EvalDataset.create owner "blocked" [ case ]
-        let run = EvalRun.create owner dataset.Id
+        let case = EvalCase.repository "blocked" "question" "answer"
+        let dataset = EvalDataset.repository owner "blocked" [ case ]
+        let run = runFor dataset agent [ evaluator ]
 
         let result =
             EvalRunner.runCaseLightAsync blockedExecution run evaluator agent case CancellationToken.None
@@ -461,9 +512,9 @@ type EvalRunnerTests() =
             EtclovgHarness.runAsync configuredExecution.Harness context agent request
             |> _.Result
 
-        let case = EvalCase.create "parity" input "executed: SAME REQUEST"
-        let dataset = EvalDataset.create owner "parity" [ case ]
-        let run = EvalRun.create owner dataset.Id
+        let case = EvalCase.repository "parity" input "executed: SAME REQUEST"
+        let dataset = EvalDataset.repository owner "parity" [ case ]
+        let run = runFor dataset agent [ ExactMatch.evaluator ]
 
         let evalResult =
             EvalRunner.runCaseLightAsync configuredExecution run ExactMatch.evaluator agent case CancellationToken.None
@@ -482,8 +533,8 @@ type EvalRunnerTests() =
                     return "late"
                 })
 
-        let case = EvalCase.create "timeout" "question" "answer"
-        let dataset = EvalDataset.create owner "timeout" [ case ]
+        let case = EvalCase.repository "timeout" "question" "answer"
+        let dataset = EvalDataset.repository owner "timeout" [ case ]
 
         let config =
             { defaultConfig with
@@ -511,9 +562,9 @@ type EvalRunnerTests() =
         let tailCount = Random.Shared.Next(2, 7)
 
         let cases =
-            [ for index in 0..tailCount -> EvalCase.create (sprintf "cancel-%d" index) "input" "late" ]
+            [ for index in 0..tailCount -> EvalCase.repository (sprintf "cancel-%d" index) "input" "late" ]
 
-        let dataset = EvalDataset.create owner "caller-cancellation" cases
+        let dataset = EvalDataset.repository owner "caller-cancellation" cases
 
         let report =
             EvalRunner.runDatasetAsync defaultConfig ExactMatch.evaluator agent dataset cancellation.Token
@@ -529,23 +580,17 @@ type EvalRunnerTests() =
         use cancellation = new CancellationTokenSource()
 
         let evaluator =
-            Evaluator.create "cancel-evaluator" (fun _ _ _ ->
+            Evaluator.deterministic "cancel-evaluator" "test" "cancel" true "Test evaluator." (fun _ _ _ ->
                 cancellation.Cancel()
                 Task.Delay(TimeSpan.FromSeconds 5.0).ContinueWith(fun _ -> EvalVerdict.Pass, "late"))
 
-        let case = EvalCase.create "cancel-evaluator" "input" "output"
-        let dataset = EvalDataset.create owner "cancel-evaluator" [ case ]
-        let run = EvalRun.create owner dataset.Id
+        let case = EvalCase.repository "cancel-evaluator" "input" "output"
+        let dataset = EvalDataset.repository owner "cancel-evaluator" [ case ]
+        let agent = TestAgents.fixedResponse "output"
+        let run = runFor dataset agent [ evaluator ]
 
         Assert.ThrowsExactlyAsync<TaskCanceledException>(fun () ->
-            EvalRunner.runCaseLightAsync
-                execution
-                run
-                evaluator
-                (TestAgents.fixedResponse "output")
-                case
-                cancellation.Token
-            :> Task)
+            EvalRunner.runCaseLightAsync execution run evaluator agent case cancellation.Token :> Task)
         |> _.Wait()
 
     [<TestMethod>]
@@ -560,10 +605,10 @@ type EvalRunnerTests() =
         let tailCount = Random.Shared.Next(2, 7)
 
         let cases =
-            EvalCase.create "first" "wrong" "expected"
-            :: [ for index in 1..tailCount -> EvalCase.create (sprintf "tail-%d" index) "expected" "expected" ]
+            EvalCase.repository "first" "wrong" "expected"
+            :: [ for index in 1..tailCount -> EvalCase.repository (sprintf "tail-%d" index) "expected" "expected" ]
 
-        let dataset = EvalDataset.create owner "stop-first" cases
+        let dataset = EvalDataset.repository owner "stop-first" cases
 
         let config =
             { defaultConfig with
@@ -584,7 +629,8 @@ type EvalRunnerTests() =
                 MaxParallelism = 2
                 StopOnFirstFailure = true }
 
-        let dataset = EvalDataset.create owner "invalid-stop-first" []
+        let dataset =
+            EvalDataset.repository owner "invalid-stop-first" [ EvalCase.repository "case" "input" "output" ]
 
         Assert.ThrowsExactlyAsync<ArgumentException>(fun () ->
             EvalRunner.runDatasetAsync

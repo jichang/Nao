@@ -7,6 +7,8 @@
 
   <ItemGroup>
     <Compile Include="src/Core/EvalCase.fs" />
+    <Compile Include="src/Core/EvalConfiguration.fs" />
+    <Compile Include="src/Core/EvalReproducibility.fs" />
     <Compile Include="src/Core/EvalResult.fs" />
     <Compile Include="src/Core/Evaluator.fs" />
     <Compile Include="src/Datasets/SafetyDataset.fs" />
@@ -17,19 +19,25 @@
     <Compile Include="src/Evaluators/ExactMatch.fs" />
     <Compile Include="src/Evaluators/Contains.fs" />
     <Compile Include="src/Evaluators/Regex.fs" />
+    <Compile Include="src/Evaluators/DeterministicExecution.fs" />
     <Compile Include="src/Evaluators/LlmJudge.fs" />
     <Compile Include="src/Evaluators/Composite.fs" />
     <Compile Include="src/Evaluators/VerificationJudge.fs" />
+    <Compile Include="src/Evaluators/JudgeQuality.fs" />
     <Compile Include="src/Evaluators/KnowledgeRetrievalComparison.fs" />
     <Compile Include="src/Evaluators/KnowledgeHybridRetrievalEvaluation.fs" />
     <Compile Include="src/Evaluators/KnowledgeGroundedGenerationEvaluation.fs" />
     <Compile Include="src/Evaluators/KnowledgeQualityRegression.fs" />
+    <Compile Include="src/Evaluators/EvalReleaseGate.fs" />
     <Compile Include="src/Evaluators/KnowledgeRetrievalReleaseQualification.fs" />
     <Compile Include="src/Evaluators/KnowledgeGroundedReleaseQualification.fs" />
     <Compile Include="src/Evaluators/KnowledgeGroundedProductionQualification.fs" />
     <Compile Include="src/Running/EvalReport.fs" />
+    <Compile Include="src/Running/EvalReleaseProjection.fs" />
     <Compile Include="src/Running/EvalArchive.fs" />
     <Compile Include="src/Running/EvalRunner.fs" />
+    <Compile Include="src/Running/EvalReproduction.fs" />
+    <Compile Include="src/Running/ProductionEvaluation.fs" />
   </ItemGroup>
 
   <ItemGroup>

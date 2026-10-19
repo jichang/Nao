@@ -156,6 +156,7 @@ module ExecutionId =
 
 module CorrelationId =
     let generate () = CorrelationId(Guid.NewGuid())
+    let ofGuid value = CorrelationId value
     let value (CorrelationId value) = value
 
     let tryParse (value: string) =

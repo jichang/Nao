@@ -12,92 +12,92 @@ This workstream connects production execution, telemetry, replay, evaluation, re
 - [x] Dataset execution and report generation exist.
 - [x] Traces, spans, metrics, token usage, execution journals, and regression primitives exist.
 - [x] In-memory and persistent observability implementations exist.
-- [ ] Evaluation runs use the same complete harness configuration as production.
+- [x] Evaluation runs use the same complete harness configuration as production.
 - [ ] Standard external telemetry export and continuous drift workflows exist.
 
 ## EVAL-01 — Versioned evaluation specification
 
-- [ ] Define versioned dataset, case, turn, expected behavior, evaluator, and report contracts.
-- [ ] Record dataset revision and content hash.
-- [ ] Record agent, prompt, response protocol, tool, provider, model, harness, policy, knowledge-index, and evaluator versions.
-- [ ] Support expected answer, properties, tool calls, forbidden actions, artifacts, citations, budgets, and terminal states.
-- [ ] Support deterministic setup and teardown fixtures.
-- [ ] Define redaction rules for production-derived examples.
-- [ ] Define case ownership, review status, labels, and expiry.
+- [x] Define versioned dataset, case, turn, expected behavior, evaluator, and report contracts.
+- [x] Record dataset revision and content hash.
+- [x] Record agent, prompt, response protocol, tool, provider, model, harness, policy, knowledge-index, and evaluator versions.
+- [x] Support expected answer, properties, tool calls, forbidden actions, artifacts, citations, budgets, and terminal states.
+- [x] Support deterministic setup and teardown fixtures.
+- [x] Define redaction rules for production-derived examples.
+- [x] Define case ownership, review status, labels, and expiry.
 
 **Acceptance criteria**
 
-- [ ] A report fully identifies the executable configuration that produced it.
-- [ ] Dataset mutation creates a new identifiable revision.
-- [ ] Sensitive production data cannot enter a dataset without explicit sanitization and review.
+- [x] A report fully identifies the executable configuration that produced it.
+- [x] Dataset mutation creates a new identifiable revision.
+- [x] Sensitive production data cannot enter a dataset without explicit sanitization and review.
 
 ## EVAL-02 — Harness parity and reproducibility
 
-- [ ] Execute cases through the same harness entry point as production.
-- [ ] Support pinned live-provider, mock-provider, and recorded-replay modes.
-- [ ] Record random seeds and scheduling settings.
-- [ ] Provide deterministic clocks and IDs for tests where needed.
-- [ ] Capture tool and provider fixtures with schema/version metadata.
-- [ ] Verify stop-on-first-failure and cancellation semantics.
-- [ ] Distinguish nondeterministic variance from regression.
-- [ ] Generate a portable reproduction bundle.
+- [x] Execute cases through the same harness entry point as production.
+- [x] Support pinned live-provider, mock-provider, and recorded-replay modes.
+- [x] Record random seeds and scheduling settings.
+- [x] Provide deterministic clocks and IDs for tests where needed.
+- [x] Capture tool and provider fixtures with schema/version metadata.
+- [x] Verify stop-on-first-failure and cancellation semantics.
+- [x] Distinguish nondeterministic variance from regression.
+- [x] Generate a portable reproduction bundle.
 
 **Acceptance criteria**
 
-- [ ] Recorded mode runs without external network access.
-- [ ] Repeated deterministic runs produce equivalent results.
-- [ ] A failed CI case can be reproduced locally from its bundle.
+- [x] Recorded mode runs without external network access.
+- [x] Repeated deterministic runs produce equivalent results.
+- [x] A failed CI case can be reproduced locally from its bundle.
 
 ## EVAL-03 — Evaluator quality
 
-- [ ] Define deterministic evaluators before using LLM judges where possible.
-- [ ] Add structured-output validation, schema validation, tool-sequence, artifact, citation, policy, and resource evaluators.
-- [ ] Add retrieval metrics and groundedness evaluators.
-- [ ] Calibrate LLM judges against human-labeled sets.
-- [ ] Measure inter-rater agreement and judge stability.
-- [ ] Detect position, verbosity, model-family, and self-preference bias.
-- [ ] Support multiple judges and aggregation policies for high-risk gates.
-- [ ] Record judge rationale as untrusted evidence, not ground truth.
+- [x] Define deterministic evaluators before using LLM judges where possible.
+- [x] Add structured-output validation, schema validation, tool-sequence, artifact, citation, policy, and resource evaluators.
+- [x] Add retrieval metrics and groundedness evaluators.
+- [x] Calibrate LLM judges against human-labeled sets.
+- [x] Measure inter-rater agreement and judge stability.
+- [x] Detect position, verbosity, model-family, and self-preference bias.
+- [x] Support multiple judges and aggregation policies for high-risk gates.
+- [x] Record judge rationale as untrusted evidence, not ground truth.
 
 **Acceptance criteria**
 
-- [ ] Every release-blocking evaluator has documented reliability and failure semantics.
-- [ ] Judge upgrades require calibration against the prior version.
-- [ ] Deterministic validation cannot be overridden by a favorable probabilistic score.
+- [x] Every release-blocking evaluator has documented reliability and failure semantics.
+- [x] Judge upgrades require calibration against the prior version.
+- [x] Deterministic validation cannot be overridden by a favorable probabilistic score.
 
 ## EVAL-04 — Regression and release gates
 
-- [ ] Define gates for quality, safety, success rate, policy compliance, retrieval, latency, token use, and cost.
-- [ ] Support absolute thresholds and change-from-baseline thresholds.
-- [ ] Add statistical confidence intervals and minimum sample-size rules.
-- [ ] Segment regressions by scenario, provider, model, language, source, and tenant policy.
-- [ ] Define baseline creation, review, promotion, retention, and rollback.
-- [ ] Prevent failed cases from disappearing through baseline replacement.
-- [ ] Publish reviewable report artifacts in CI.
-- [ ] Add scheduled full suites and fast pull-request suites.
+- [x] Define gates for quality, safety, success rate, policy compliance, retrieval, latency, token use, and cost.
+- [x] Support absolute thresholds and change-from-baseline thresholds.
+- [x] Add statistical confidence intervals and minimum sample-size rules.
+- [x] Segment regressions by scenario, provider, model, language, source, and tenant policy.
+- [x] Define baseline creation, review, promotion, retention, and rollback.
+- [x] Prevent failed cases from disappearing through baseline replacement.
+- [x] Publish reviewable report artifacts in CI.
+- [x] Add scheduled full suites and fast pull-request suites.
 
 **Acceptance criteria**
 
-- [ ] CI fails predictably when a configured threshold is crossed.
-- [ ] Baseline promotion is explicit and leaves an audit trail.
-- [ ] Reports separate correctness regressions from infrastructure failures.
+- [x] CI fails predictably when a configured threshold is crossed.
+- [x] Baseline promotion is explicit and leaves an audit trail.
+- [x] Reports separate correctness regressions from infrastructure failures.
 
 ## EVAL-05 — Production feedback and drift
 
-- [ ] Sample production traces using configurable privacy-aware policies.
-- [ ] Capture explicit user feedback and correlate it with execution evidence.
-- [ ] Cluster failures, denials, retries, abandonments, and low-confidence outcomes.
-- [ ] Convert selected failures into reviewed regression cases.
-- [ ] Detect model, prompt, retrieval, cost, latency, and traffic-distribution drift.
-- [ ] Define alerts and escalation thresholds.
-- [ ] Support shadow, canary, and A/B evaluation without leaking tenant data.
-- [ ] Close resolved incidents with permanent regression cases where appropriate.
+- [x] Sample production traces using configurable privacy-aware policies.
+- [x] Capture explicit user feedback and correlate it with execution evidence.
+- [x] Cluster failures, denials, retries, abandonments, and low-confidence outcomes.
+- [x] Convert selected failures into reviewed regression cases.
+- [x] Detect model, prompt, retrieval, cost, latency, and traffic-distribution drift.
+- [x] Define alerts and escalation thresholds.
+- [x] Support shadow, canary, and A/B evaluation without leaking tenant data.
+- [x] Close resolved incidents with permanent regression cases where appropriate.
 
 **Acceptance criteria**
 
-- [ ] Production-derived cases preserve consent, redaction, and retention constraints.
-- [ ] Drift alerts identify the changed dimension and affected segment.
-- [ ] User feedback can be traced to the exact tested configuration.
+- [x] Production-derived cases preserve consent, redaction, and retention constraints.
+- [x] Drift alerts identify the changed dimension and affected segment.
+- [x] User feedback can be traced to the exact tested configuration.
 
 ## OBS-01 — Unified telemetry model
 

@@ -17,57 +17,90 @@ module Composite =
 
     /// Create a composite evaluator using the requested combination mode.
     let create mode evaluators =
-        Evaluator.create (sprintf "Composite(%A)" mode) (fun context (case: EvalCase) (actual: string) ->
-            task {
-                let! results =
-                    evaluators
-                    |> List.map (fun evaluator -> evaluator.EvaluateAsync context case actual)
-                    |> fun tasks -> System.Threading.Tasks.Task.WhenAll(tasks)
+        let configuration =
+            evaluators
+            |> List.map (fun evaluator ->
+                let identity = evaluator.Identity
 
-                let results = results |> Array.toList
+                String.concat
+                    ":"
+                    [ EvalComponentIdentity.name identity
+                      EvalComponentIdentity.version identity
+                      EvalComponentIdentity.configurationSha256 identity ])
+            |> String.concat "|"
+            |> sprintf "mode=%A|evaluators=%s" mode
 
-                match mode with
-                | CompositeMode.All ->
-                    let allPass = results |> List.forall (fun (v, _) -> v.Passed)
+        let authority =
+            if
+                evaluators
+                |> List.forall (fun evaluator -> evaluator.Authority = EvaluatorAuthority.Deterministic)
+            then
+                EvaluatorAuthority.Deterministic
+            else
+                EvaluatorAuthority.Probabilistic
 
-                    if allPass then
-                        return (EvalVerdict.Pass, "All evaluators passed")
-                    else
-                        let failures =
-                            results
-                            |> List.filter (fun (v, _) -> not v.Passed)
-                            |> List.map snd
-                            |> String.concat "; "
+        let construct =
+            match authority with
+            | EvaluatorAuthority.Deterministic -> Evaluator.deterministic
+            | EvaluatorAuthority.Probabilistic -> Evaluator.probabilistic
 
+        construct
+            (sprintf "Composite(%A)" mode)
+            "1"
+            configuration
+            (evaluators |> List.exists _.Reliability.ReleaseBlocking)
+            "Aggregates child verdicts; probabilistic membership makes the aggregate probabilistic."
+            (fun context (case: EvalCase) (actual: string) ->
+                task {
+                    let! results =
+                        evaluators
+                        |> List.map (fun evaluator -> evaluator.EvaluateAsync context case actual)
+                        |> fun tasks -> System.Threading.Tasks.Task.WhenAll(tasks)
+
+                    let results = results |> Array.toList
+
+                    match mode with
+                    | CompositeMode.All ->
+                        let allPass = results |> List.forall (fun (v, _) -> v.Passed)
+
+                        if allPass then
+                            return (EvalVerdict.Pass, "All evaluators passed")
+                        else
+                            let failures =
+                                results
+                                |> List.filter (fun (v, _) -> not v.Passed)
+                                |> List.map snd
+                                |> String.concat "; "
+
+                            let avgScore = results |> List.averageBy (fun (v, _) -> v.Score)
+                            return (EvalVerdict.Partial avgScore, sprintf "Some evaluators failed: %s" failures)
+
+                    | CompositeMode.Any ->
+                        let anyPass = results |> List.exists (fun (v, _) -> v.Passed)
+
+                        if anyPass then
+                            let passing =
+                                results
+                                |> List.filter (fun (v, _) -> v.Passed)
+                                |> List.map snd
+                                |> String.concat "; "
+
+                            return (EvalVerdict.Pass, sprintf "Passed: %s" passing)
+                        else
+                            let reasons = results |> List.map snd |> String.concat "; "
+                            return (EvalVerdict.Fail, sprintf "No evaluator passed: %s" reasons)
+
+                    | CompositeMode.Average ->
                         let avgScore = results |> List.averageBy (fun (v, _) -> v.Score)
-                        return (EvalVerdict.Partial avgScore, sprintf "Some evaluators failed: %s" failures)
-
-                | CompositeMode.Any ->
-                    let anyPass = results |> List.exists (fun (v, _) -> v.Passed)
-
-                    if anyPass then
-                        let passing =
-                            results
-                            |> List.filter (fun (v, _) -> v.Passed)
-                            |> List.map snd
-                            |> String.concat "; "
-
-                        return (EvalVerdict.Pass, sprintf "Passed: %s" passing)
-                    else
                         let reasons = results |> List.map snd |> String.concat "; "
-                        return (EvalVerdict.Fail, sprintf "No evaluator passed: %s" reasons)
 
-                | CompositeMode.Average ->
-                    let avgScore = results |> List.averageBy (fun (v, _) -> v.Score)
-                    let reasons = results |> List.map snd |> String.concat "; "
+                        let verdict =
+                            if avgScore >= 0.8 then EvalVerdict.Pass
+                            elif avgScore <= 0.2 then EvalVerdict.Fail
+                            else EvalVerdict.Partial avgScore
 
-                    let verdict =
-                        if avgScore >= 0.8 then EvalVerdict.Pass
-                        elif avgScore <= 0.2 then EvalVerdict.Fail
-                        else EvalVerdict.Partial avgScore
-
-                    return (verdict, sprintf "Average score: %.2f (%s)" avgScore reasons)
-            })
+                        return (verdict, sprintf "Average score: %.2f (%s)" avgScore reasons)
+                })
 
     let all evaluators = create CompositeMode.All evaluators
 

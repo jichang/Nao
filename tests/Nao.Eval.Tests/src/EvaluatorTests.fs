@@ -21,6 +21,23 @@ module private CapturingProvider =
             ))
 
 module private Evaluation =
+    let execution correlation =
+        { Correlation = correlation
+          Status = ExecutionTerminalStatus.Succeeded
+          Outputs = { Response = Some ""; Artifacts = [] }
+          Usage = ResourceUsage.Zero
+          Evidence =
+            { Trace = None
+              Metrics = None
+              Judgement = None
+              Regression = None
+              AuditEntries = 0 }
+          PolicyDecisions =
+            { PolicyViolations = []
+              PolicyEvaluations = []
+              ConstitutionViolations = []
+              ConstitutionDisposition = ConstitutionDisposition.NotEvaluated } }
+
     let context () =
         let principal =
             SecurityPrincipal.createAuthenticated
@@ -32,10 +49,13 @@ module private Evaluation =
                 (Map.ofList [ "private-claim", "private-claim-value" ])
                 AuthenticationStrength.MultiFactor
 
+        let correlation = CorrelationContext.root ()
+
         { Authorization =
             AuthorizationScope.tryCreate principal None (WorkspaceId.parse "eval-workspace") None
             |> Option.get
-          Correlation = CorrelationContext.root ()
+          Correlation = correlation
+          Execution = execution correlation
           CancellationToken = System.Threading.CancellationToken.None }
 
     let evaluate (evaluator: Evaluator) case actual =
@@ -48,19 +68,19 @@ type ExactMatchTests() =
 
     [<TestMethod>]
     member _.``ExactMatch passes when output matches expected``() =
-        let case = EvalCase.create "test1" "input" "hello world"
+        let case = EvalCase.repository "test1" "input" "hello world"
         let (verdict, _) = (evaluate ExactMatch.evaluator case "Hello World").Result
         Assert.AreEqual(EvalVerdict.Pass, verdict)
 
     [<TestMethod>]
     member _.``ExactMatch fails when output differs``() =
-        let case = EvalCase.create "test2" "input" "hello"
+        let case = EvalCase.repository "test2" "input" "hello"
         let (verdict, _) = (evaluate ExactMatch.evaluator case "goodbye").Result
         Assert.AreEqual(EvalVerdict.Fail, verdict)
 
     [<TestMethod>]
     member _.``ExactMatch case sensitive respects casing``() =
-        let case = EvalCase.create "test3" "input" "Hello"
+        let case = EvalCase.repository "test3" "input" "Hello"
         let (verdict, _) = (evaluate ExactMatch.caseSensitive case "hello").Result
         Assert.AreEqual(EvalVerdict.Fail, verdict)
 
@@ -69,7 +89,7 @@ type ContainsTests() =
 
     [<TestMethod>]
     member _.``Contains passes when output includes expected``() =
-        let case = EvalCase.create "test1" "input" "weather"
+        let case = EvalCase.repository "test1" "input" "weather"
 
         let (verdict, _) =
             (evaluate Contains.evaluator case "The weather today is sunny").Result
@@ -78,7 +98,7 @@ type ContainsTests() =
 
     [<TestMethod>]
     member _.``Contains fails when output lacks expected``() =
-        let case = EvalCase.create "test2" "input" "rain"
+        let case = EvalCase.repository "test2" "input" "rain"
 
         let (verdict, _) = (evaluate Contains.evaluator case "The weather is sunny").Result
 
@@ -87,7 +107,7 @@ type ContainsTests() =
     [<TestMethod>]
     member _.``ContainsAll gives partial score for partial matches``() =
         let evaluator = Contains.all [ "hello"; "world"; "foo" ]
-        let case = EvalCase.create "test3" "input" ""
+        let case = EvalCase.repository "test3" "input" ""
         let (verdict, _) = (evaluate evaluator case "hello world").Result
 
         match verdict with
@@ -97,21 +117,21 @@ type ContainsTests() =
     [<TestMethod>]
     member _.``ContainsAll passes when all keywords present``() =
         let evaluator = Contains.all [ "hello"; "world" ]
-        let case = EvalCase.create "test4" "input" ""
+        let case = EvalCase.repository "test4" "input" ""
         let (verdict, _) = (evaluate evaluator case "hello beautiful world").Result
         Assert.AreEqual(EvalVerdict.Pass, verdict)
 
     [<TestMethod>]
     member _.``ContainsAny passes when any keyword present``() =
         let evaluator = Contains.any [ "cat"; "dog"; "fish" ]
-        let case = EvalCase.create "test5" "input" ""
+        let case = EvalCase.repository "test5" "input" ""
         let (verdict, _) = (evaluate evaluator case "I have a dog").Result
         Assert.AreEqual(EvalVerdict.Pass, verdict)
 
     [<TestMethod>]
     member _.``ContainsAny fails when no keywords present``() =
         let evaluator = Contains.any [ "cat"; "dog"; "fish" ]
-        let case = EvalCase.create "test6" "input" ""
+        let case = EvalCase.repository "test6" "input" ""
         let (verdict, _) = (evaluate evaluator case "I have a bird").Result
         Assert.AreEqual(EvalVerdict.Fail, verdict)
 
@@ -121,7 +141,7 @@ type RegexTests() =
     [<TestMethod>]
     member _.``Regex passes when pattern matches``() =
         let evaluator = RegexEval.matches @"\d+\.\d+"
-        let case = EvalCase.create "test1" "input" ""
+        let case = EvalCase.repository "test1" "input" ""
 
         let (verdict, _) =
             (evaluate evaluator case "The temperature is 72.5 degrees").Result
@@ -131,7 +151,7 @@ type RegexTests() =
     [<TestMethod>]
     member _.``Regex fails when pattern does not match``() =
         let evaluator = RegexEval.matches @"^\d+$"
-        let case = EvalCase.create "test2" "input" ""
+        let case = EvalCase.repository "test2" "input" ""
         let (verdict, _) = (evaluate evaluator case "not a number").Result
         Assert.AreEqual(EvalVerdict.Fail, verdict)
 
@@ -148,7 +168,7 @@ type LlmJudgeTests() =
             CapturingProvider.create """{"score":5,"reason":"correct"}""" capturedPrompt capturedCorrelation
 
         let evaluator = LlmJudge.create provider
-        let case = EvalCase.create "judge" "question" "answer"
+        let case = EvalCase.repository "judge" "question" "answer"
 
         let verdict, reason = evaluator.EvaluateAsync context case "answer" |> _.Result
 
@@ -169,12 +189,27 @@ type LlmJudgeTests() =
             CapturingProvider.create """{"score":5}""" capturedPrompt capturedCorrelation
 
         let evaluator = LlmJudge.create provider
-        let case = EvalCase.create "judge" "question" "answer"
+        let case = EvalCase.repository "judge" "question" "answer"
 
         let verdict, reason = evaluate evaluator case "answer" |> _.Result
 
         Assert.AreEqual(EvalVerdict.Fail, verdict)
         StringAssert.StartsWith(reason, "Parse error:")
+
+    [<TestMethod>]
+    member _.``Out of range judge score fails instead of being clamped``() =
+        let capturedPrompt = ref ""
+        let capturedCorrelation = ref None
+
+        let provider =
+            CapturingProvider.create """{"score":6,"reason":"invalid"}""" capturedPrompt capturedCorrelation
+
+        let verdict, reason =
+            evaluate (LlmJudge.create provider) (EvalCase.repository "judge" "question" "answer") "answer"
+            |> _.Result
+
+        Assert.AreEqual(EvalVerdict.Fail, verdict)
+        StringAssert.Contains(reason, "score must be between 1 and 5")
 
 [<TestClass>]
 type VerificationJudgeTests() =
@@ -191,7 +226,7 @@ type VerificationJudgeTests() =
                       JudgeName = "quality" })
 
         let evaluator = VerificationJudge.fromJudge judge "agent"
-        let case = EvalCase.create "judge" "question" "reference"
+        let case = EvalCase.repository "judge" "question" "reference"
 
         let verdict, reason = evaluate evaluator case "answer" |> _.Result
 
@@ -207,7 +242,7 @@ type CompositeTests() =
         let mutable count = 0
 
         let capture name =
-            Evaluator.create name (fun actualContext _ _ ->
+            Evaluator.deterministic name "test" name true "Test evaluator." (fun actualContext _ _ ->
                 Assert.AreEqual(context, actualContext)
                 System.Threading.Interlocked.Increment(&count) |> ignore
                 Task.FromResult(EvalVerdict.Pass, "ok"))
@@ -216,7 +251,7 @@ type CompositeTests() =
             Composite.all [ capture "first"; Composite.any [ capture "second" ] ]
 
         let verdict, _ =
-            composite.EvaluateAsync context (EvalCase.create "case" "input" "answer") "answer"
+            composite.EvaluateAsync context (EvalCase.repository "case" "input" "answer") "answer"
             |> _.Result
 
         Assert.AreEqual(EvalVerdict.Pass, verdict)
@@ -232,18 +267,18 @@ type CompositeTests() =
                 CancellationToken = cancellation.Token }
 
         let evaluator =
-            Evaluator.create "must-not-run" (fun _ _ _ ->
+            Evaluator.deterministic "must-not-run" "test" "must-not-run" true "Test evaluator." (fun _ _ _ ->
                 Assert.Fail "Cancelled evaluator must not execute."
                 Task.FromResult(EvalVerdict.Pass, "unexpected"))
 
         Assert.ThrowsExactlyAsync<System.OperationCanceledException>(fun () ->
-            evaluator.EvaluateAsync context (EvalCase.create "case" "input" "answer") "answer" :> Task)
+            evaluator.EvaluateAsync context (EvalCase.repository "case" "input" "answer") "answer" :> Task)
         |> _.Wait()
 
     [<TestMethod>]
     member _.``Composite All passes when all evaluators pass``() =
         let evaluator = Composite.all [ Contains.all [ "hello" ]; RegexEval.matches @"\w+" ]
-        let case = EvalCase.create "test1" "input" ""
+        let case = EvalCase.repository "test1" "input" ""
         let (verdict, _) = (evaluate evaluator case "hello world").Result
         Assert.AreEqual(EvalVerdict.Pass, verdict)
 
@@ -252,7 +287,7 @@ type CompositeTests() =
         let evaluator =
             Composite.all [ Contains.all [ "hello" ]; Contains.all [ "missing" ] ]
 
-        let case = EvalCase.create "test2" "input" ""
+        let case = EvalCase.repository "test2" "input" ""
         let (verdict, _) = (evaluate evaluator case "hello world").Result
 
         match verdict with
@@ -264,7 +299,7 @@ type CompositeTests() =
         let evaluator =
             Composite.any [ Contains.all [ "missing" ]; Contains.all [ "hello" ] ]
 
-        let case = EvalCase.create "test3" "input" ""
+        let case = EvalCase.repository "test3" "input" ""
         let (verdict, _) = (evaluate evaluator case "hello world").Result
         Assert.AreEqual(EvalVerdict.Pass, verdict)
 
@@ -275,7 +310,7 @@ type CompositeTests() =
                 [ Contains.all [ "hello"; "world" ] // Both present -> 1.0
                   Contains.all [ "foo"; "bar" ] ] // Neither present -> 0.0
 
-        let case = EvalCase.create "test4" "input" ""
+        let case = EvalCase.repository "test4" "input" ""
         let (verdict, _) = (evaluate evaluator case "hello world").Result
 
         match verdict with

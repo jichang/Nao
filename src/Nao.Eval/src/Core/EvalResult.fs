@@ -22,6 +22,12 @@ type EvalVerdict =
         | Partial s -> s >= 0.5
         | Fail -> false
 
+[<RequireQualifiedAccess>]
+type EvalResultOutcome =
+    | Succeeded
+    | CorrectnessFailure
+    | InfrastructureFailure
+
 /// The result of evaluating a single case
 type EvalResult =
     {
@@ -47,6 +53,12 @@ type EvalResult =
         LatencyMs: int64
         /// Evaluator that produced this result
         EvaluatorName: string
+        /// Deterministic proof or probabilistic evidence classification.
+        EvaluatorAuthority: EvaluatorAuthority
+        /// Probabilistic rationales are always untrusted evidence.
+        RationaleIsUntrusted: bool
+        /// Separates evaluated behavior regressions from harness and dependency failures.
+        Outcome: EvalResultOutcome
         /// Timestamp of evaluation
         Timestamp: DateTimeOffset
         /// Optional execution trace for deeper analysis and regression detection
@@ -64,12 +76,20 @@ type EvalRun =
     { Id: Guid
       Owner: AuthorizationIdentity
       DatasetId: Guid
+      DatasetRevision: int
+      DatasetContentSha256: string
+      Configuration: EvalExecutableConfiguration
+      Reproducibility: EvalReproducibility
       StartedAt: DateTimeOffset }
 
 [<RequireQualifiedAccess>]
 module EvalRun =
-    let create owner datasetId =
-        { Id = Guid.NewGuid()
+    let create owner datasetId datasetRevision datasetContentSha256 configuration reproducibility runtime =
+        { Id = EvalRuntime.guid (sprintf "run|%O|%d" datasetId datasetRevision) runtime
           Owner = owner
           DatasetId = datasetId
-          StartedAt = DateTimeOffset.UtcNow }
+          DatasetRevision = datasetRevision
+          DatasetContentSha256 = datasetContentSha256
+          Configuration = configuration
+          Reproducibility = reproducibility
+          StartedAt = EvalRuntime.utcNow runtime }

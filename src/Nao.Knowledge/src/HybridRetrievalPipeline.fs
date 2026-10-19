@@ -317,7 +317,16 @@ module KnowledgeHybridRetrievalPipeline =
                               GraphExpansion = graphExpansion
                               Candidates = candidates
                               Usage = usage }
-            with :? OperationCanceledException as error when
-                timeout.IsCancellationRequested && not cancellationToken.IsCancellationRequested ->
+            with
+            | :? TimeoutException as error when
+                timer.Elapsed
+                >= KnowledgeRetrievalBudget.maximumDuration (KnowledgeRetrievalRequest.budget request)
+                && not cancellationToken.IsCancellationRequested
+                ->
+                timeout.Cancel()
+                return raise (TimeoutException("Hybrid retrieval exceeded its aggregate duration budget.", error))
+            | :? OperationCanceledException as error when
+                timeout.IsCancellationRequested && not cancellationToken.IsCancellationRequested
+                ->
                 return raise (TimeoutException("Hybrid retrieval exceeded its aggregate duration budget.", error))
         }

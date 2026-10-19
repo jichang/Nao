@@ -35,6 +35,9 @@ module private EvalArchiveState =
         PlatformFailure.fromException PlatformFailureBoundary.Storage None error
 
     let validateReport (report: EvalReport) =
+        if report.SchemaVersion <> EvalReport.CurrentSchemaVersion then
+            invalidArg (nameof report) "Unsupported evaluation report schema version."
+
         if report.Results |> List.exists (fun result -> result.Owner <> report.Owner) then
             invalidArg (nameof report) "Every evaluation result must match its report owner."
 
@@ -56,8 +59,8 @@ module private EvalArchiveState =
             let mutable deleted = 0
 
             for dataset in datasets.Values |> Seq.toArray do
-                if dataset.Owner = owner && before dataset.CreatedAt then
-                    if datasets.Remove((dataset.Owner, dataset.Id)) then
+                if EvalDataset.owner dataset = owner && before (EvalDataset.createdAt dataset) then
+                    if datasets.Remove((EvalDataset.owner dataset, EvalDataset.id dataset)) then
                         deleted <- deleted + 1
 
             for report in reports.Values |> Seq.toArray do
@@ -69,9 +72,24 @@ module private EvalArchiveState =
 
         let apply event =
             match event with
-            | EvalArchiveEvent.SaveDataset dataset -> datasets.[(dataset.Owner, dataset.Id)] <- dataset
+            | EvalArchiveEvent.SaveDataset dataset ->
+                datasets.[(EvalDataset.owner dataset, EvalDataset.id dataset)] <- dataset
             | EvalArchiveEvent.SaveReport report ->
                 validateReport report
+
+                match datasets.TryGetValue((report.Owner, report.DatasetId)) with
+                | true, dataset when
+                    EvalDataset.revision dataset = report.DatasetRevision
+                    && EvalDataset.contentSha256 dataset = report.DatasetContentSha256
+                    ->
+                    ()
+                | true, _ ->
+                    invalidArg
+                        (nameof report)
+                        "Evaluation report dataset revision and content hash must match the archived dataset."
+                | false, _ ->
+                    invalidArg (nameof report) "Evaluation reports require their exact dataset revision to be archived."
+
                 reports.[(report.Owner, report.Id)] <- report
             | EvalArchiveEvent.DeleteOwner owner -> delete owner (fun _ -> true) |> ignore
             | EvalArchiveEvent.DeleteExpired(owner, cutoff) ->
@@ -81,7 +99,7 @@ module private EvalArchiveState =
 
         let saveDatasetAsync authorization (dataset: EvalDataset) =
             task {
-                AuthorizationScope.requireOwner dataset.Owner authorization
+                AuthorizationScope.requireOwner (EvalDataset.owner dataset) authorization
 
                 lock gate (fun () ->
                     let event = EvalArchiveEvent.SaveDataset dataset

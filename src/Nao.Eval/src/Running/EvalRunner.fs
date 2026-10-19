@@ -12,17 +12,35 @@ type EvalExecutionConfig =
       CreateAgentContext: unit -> AgentContext
       Harness: EtclovgConfig
       Sandbox: SandboxConfig
+      Specification: EvalExecutionSpecification
+      Mode: EvalExecutionMode
+      Runtime: EvalRuntime
       PolicyVersions: Map<string, string>
       DependencyVersions: Map<string, string> }
 
 [<RequireQualifiedAccess>]
 module EvalExecutionConfig =
 
-    let create authorization createAgentContext harness sandbox =
+    let create authorization createAgentContext harness sandbox specification mode runtime =
+        match mode with
+        | EvalExecutionMode.PinnedLive -> EvalExecutionSpecification.requirePinnedLiveDependencies specification
+        | _ -> ()
+
+        match mode, harness.ReplayFixtures with
+        | EvalExecutionMode.RecordedReplay _, None
+        | EvalExecutionMode.PinnedLive, None
+        | EvalExecutionMode.PinnedMock, None -> ()
+        | EvalExecutionMode.RecordedReplay _, Some _ ->
+            invalidArg (nameof harness) "Recorded evaluation fixtures are owned by the execution mode."
+        | _, Some _ -> invalidArg (nameof harness) "Live and mock evaluation modes cannot install replay fixtures."
+
         { Authorization = authorization
           CreateAgentContext = createAgentContext
           Harness = harness
           Sandbox = sandbox
+          Specification = specification
+          Mode = mode
+          Runtime = runtime
           PolicyVersions = Map.empty
           DependencyVersions = Map.empty }
 
@@ -59,6 +77,13 @@ module EvalRunnerConfig =
 /// The evaluation runner: runs cases against an agent and scores them
 module EvalRunner =
 
+    let private harness execution =
+        match execution.Mode with
+        | EvalExecutionMode.RecordedReplay fixtures ->
+            { execution.Harness with
+                ReplayFixtures = Some(EvalRecordedFixtureSet.toReplayFixtures fixtures) }
+        | _ -> execution.Harness
+
     let private sandboxForCase timeoutPerCaseMs (sandbox: SandboxConfig) =
         match timeoutPerCaseMs with
         | None -> sandbox
@@ -79,51 +104,78 @@ module EvalRunner =
         (evaluator: Evaluator)
         (agent: Agent)
         (case: EvalCase)
+        caseOrdinal
+        evaluatorOrdinal
         (cancellationToken: CancellationToken)
         : Task<EvalResult> =
         task {
             AuthorizationScope.requireOwner run.Owner execution.Authorization
-            let sw = Stopwatch.StartNew()
-            let context = execution.CreateAgentContext()
+            let startedAt = EvalRuntime.utcNow execution.Runtime
+
+            let purpose =
+                sprintf "case|%s|%d|%d" (EvalCase.id case) caseOrdinal evaluatorOrdinal
+
+            let context =
+                { execution.CreateAgentContext() with
+                    Correlation = EvalRuntime.correlation purpose execution.Runtime }
 
             let request =
                 ExecutionRequest.create
                     execution.Authorization
-                    (TurnId.generate ())
+                    (execution.Runtime
+                     |> EvalRuntime.guid (purpose + "|turn")
+                     |> _.ToString("N")
+                     |> TurnId.parse)
                     (run.Id.ToString("N"))
                     agent.Metadata.Id
-                    case.Input
+                    (EvalCase.input case)
                     (sandboxForCase timeoutPerCaseMs execution.Sandbox)
                     execution.PolicyVersions
                     execution.DependencyVersions
                     context.Correlation
 
-            let! executionResult = EtclovgHarness.runAsync execution.Harness context agent request cancellationToken
+            let! executionResult = EtclovgHarness.runAsync (harness execution) context agent request cancellationToken
+            let completedAt = EvalRuntime.utcNow execution.Runtime
 
-            sw.Stop()
-
-            let! output, verdict, reason =
+            let! output, verdict, reason, outcome =
                 task {
                     match executionResult.Status, executionResult.Outputs.Response with
                     | ExecutionTerminalStatus.Succeeded, Some output ->
                         let evaluationContext =
                             { Authorization = execution.Authorization
                               Correlation = executionResult.Correlation
+                              Execution = executionResult
                               CancellationToken = cancellationToken }
 
                         let! verdict, reason =
                             evaluator.EvaluateAsync evaluationContext case output
                             |> _.WaitAsync(cancellationToken)
 
-                        return output, verdict, reason
+                        let outcome =
+                            if verdict = EvalVerdict.Fail then
+                                EvalResultOutcome.CorrectnessFailure
+                            else
+                                EvalResultOutcome.Succeeded
+
+                        return output, verdict, reason, outcome
                     | ExecutionTerminalStatus.Succeeded, None ->
-                        return "", EvalVerdict.Fail, "Execution succeeded without producing a response."
+                        return
+                            "",
+                            EvalVerdict.Fail,
+                            "Execution succeeded without producing a response.",
+                            EvalResultOutcome.InfrastructureFailure
+                    | (ExecutionTerminalStatus.Denied _ | ExecutionTerminalStatus.LimitExceeded _) as status, _ ->
+                        let correlationId =
+                            executionResult.Correlation.ExecutionId |> ExecutionId.serialize |> Some
+
+                        let failure = status.ToPlatformFailure correlationId
+                        return "", EvalVerdict.Fail, failure.Message, EvalResultOutcome.CorrectnessFailure
                     | status, _ ->
                         let correlationId =
                             executionResult.Correlation.ExecutionId |> ExecutionId.serialize |> Some
 
                         let failure = status.ToPlatformFailure correlationId
-                        return "", EvalVerdict.Fail, failure.Message
+                        return "", EvalVerdict.Fail, failure.Message, EvalResultOutcome.InfrastructureFailure
                 }
 
             let trace =
@@ -133,29 +185,32 @@ module EvalRunner =
                     None
 
             return
-                ({ Id = Guid.NewGuid()
+                ({ Id = EvalRuntime.guid (purpose + "|result") execution.Runtime
                    Owner = run.Owner
                    DatasetId = run.DatasetId
                    RunId = run.Id
                    ExecutionId = executionResult.Correlation.ExecutionId
-                   CaseId = case.Id
+                   CaseId = EvalCase.id case
                    ActualOutput = output
                    Verdict = verdict
                    Reason = reason
-                   LatencyMs = sw.ElapsedMilliseconds
-                   EvaluatorName = evaluator.Name
-                   Timestamp = DateTimeOffset.UtcNow
+                   LatencyMs = max 0L (int64 (completedAt - startedAt).TotalMilliseconds)
+                   EvaluatorName = Evaluator.name evaluator
+                   EvaluatorAuthority = evaluator.Authority
+                   RationaleIsUntrusted = evaluator.Authority = EvaluatorAuthority.Probabilistic
+                   Outcome = outcome
+                   Timestamp = completedAt
                    ExecutionTrace = trace }
                 : EvalResult)
         }
 
     /// Run a single eval case against an agent with a given evaluator.
     let runCaseAsync execution run evaluator agent case cancellationToken =
-        runCase true None execution run evaluator agent case cancellationToken
+        runCase true None execution run evaluator agent case 0 0 cancellationToken
 
     /// Run a single eval case without trace capture (lightweight)
     let runCaseLightAsync execution run evaluator agent case cancellationToken =
-        runCase false None execution run evaluator agent case cancellationToken
+        runCase false None execution run evaluator agent case 0 0 cancellationToken
 
     /// Run all cases in a dataset against an agent
     let runDatasetAsync
@@ -166,7 +221,7 @@ module EvalRunner =
         (cancellationToken: CancellationToken)
         : Task<EvalReport> =
         task {
-            AuthorizationScope.requireOwner dataset.Owner config.Execution.Authorization
+            AuthorizationScope.requireOwner (EvalDataset.owner dataset) config.Execution.Authorization
 
             if config.MaxParallelism > 1 && config.StopOnFirstFailure then
                 invalidArg
@@ -174,7 +229,29 @@ module EvalRunner =
                     "StopOnFirstFailure requires sequential execution because parallel cases may already be running."
 
             let results = ResizeArray<EvalResult>()
-            let run = EvalRun.create dataset.Owner dataset.Id
+
+            let configuration =
+                EvalExecutionSpecification.resolve
+                    agent.Metadata.Id
+                    [ evaluator.Identity ]
+                    config.Execution.Specification
+
+            let reproducibility =
+                EvalReproducibility.create
+                    config.Execution.Mode
+                    config.Execution.Runtime
+                    { MaximumParallelism = config.MaxParallelism
+                      StopOnFirstFailure = config.StopOnFirstFailure }
+
+            let run =
+                EvalRun.create
+                    (EvalDataset.owner dataset)
+                    (EvalDataset.id dataset)
+                    (EvalDataset.revision dataset)
+                    (EvalDataset.contentSha256 dataset)
+                    configuration
+                    reproducibility
+                    config.Execution.Runtime
 
             let runCase =
                 if config.CaptureTraces then
@@ -185,9 +262,9 @@ module EvalRunner =
             if config.MaxParallelism <= 1 then
                 let mutable continueRunning = true
 
-                for case in dataset.Cases do
+                for caseOrdinal, case in EvalDataset.cases dataset |> List.indexed do
                     if continueRunning then
-                        let! result = runCase evaluator agent case cancellationToken
+                        let! result = runCase evaluator agent case caseOrdinal 0 cancellationToken
                         results.Add result
 
                         let shouldStop =
@@ -200,13 +277,13 @@ module EvalRunner =
                 let semaphore = new System.Threading.SemaphoreSlim(config.MaxParallelism)
 
                 let tasks =
-                    dataset.Cases
-                    |> List.map (fun case ->
+                    EvalDataset.cases dataset
+                    |> List.mapi (fun caseOrdinal case ->
                         task {
                             do! semaphore.WaitAsync(cancellationToken)
 
                             try
-                                let! result = runCase evaluator agent case cancellationToken
+                                let! result = runCase evaluator agent case caseOrdinal 0 cancellationToken
                                 lock results (fun () -> results.Add result)
                             finally
                                 semaphore.Release() |> ignore
@@ -214,7 +291,12 @@ module EvalRunner =
 
                 do! Task.WhenAll(tasks) :> Task
 
-            return EvalReport.fromCasesAndResults run dataset.Name dataset.Cases (results |> Seq.toList)
+            return
+                EvalReport.fromCasesAndResults
+                    run
+                    (EvalDataset.name dataset)
+                    (EvalDataset.cases dataset)
+                    (results |> Seq.toList)
         }
 
     /// Run cases with multiple evaluators and combine results
@@ -226,9 +308,31 @@ module EvalRunner =
         (cancellationToken: CancellationToken)
         : Task<EvalReport> =
         task {
-            AuthorizationScope.requireOwner dataset.Owner config.Execution.Authorization
+            AuthorizationScope.requireOwner (EvalDataset.owner dataset) config.Execution.Authorization
             let results = ResizeArray<EvalResult>()
-            let run = EvalRun.create dataset.Owner dataset.Id
+
+            let configuration =
+                EvalExecutionSpecification.resolve
+                    agent.Metadata.Id
+                    (evaluators |> List.map _.Identity)
+                    config.Execution.Specification
+
+            let reproducibility =
+                EvalReproducibility.create
+                    config.Execution.Mode
+                    config.Execution.Runtime
+                    { MaximumParallelism = config.MaxParallelism
+                      StopOnFirstFailure = config.StopOnFirstFailure }
+
+            let run =
+                EvalRun.create
+                    (EvalDataset.owner dataset)
+                    (EvalDataset.id dataset)
+                    (EvalDataset.revision dataset)
+                    (EvalDataset.contentSha256 dataset)
+                    configuration
+                    reproducibility
+                    config.Execution.Runtime
 
             let runCase =
                 if config.CaptureTraces then
@@ -236,13 +340,18 @@ module EvalRunner =
                 else
                     runCase false config.TimeoutPerCaseMs config.Execution run
 
-            for case in dataset.Cases do
-                for evaluator in evaluators do
+            for caseOrdinal, case in EvalDataset.cases dataset |> List.indexed do
+                for evaluatorOrdinal, evaluator in evaluators |> List.indexed do
                     if not cancellationToken.IsCancellationRequested then
-                        let! result = runCase evaluator agent case cancellationToken
+                        let! result = runCase evaluator agent case caseOrdinal evaluatorOrdinal cancellationToken
                         results.Add result
 
-            return EvalReport.fromCasesAndResults run dataset.Name dataset.Cases (results |> Seq.toList)
+            return
+                EvalReport.fromCasesAndResults
+                    run
+                    (EvalDataset.name dataset)
+                    (EvalDataset.cases dataset)
+                    (results |> Seq.toList)
         }
 
     /// Compare two agents on the same dataset
@@ -254,7 +363,7 @@ module EvalRunner =
         (cancellationToken: CancellationToken)
         : Task<(string * EvalReport) list> =
         task {
-            AuthorizationScope.requireOwner dataset.Owner config.Execution.Authorization
+            AuthorizationScope.requireOwner (EvalDataset.owner dataset) config.Execution.Authorization
             let mutable reports = []
 
             for (name, agent) in agents do
@@ -265,7 +374,7 @@ module EvalRunner =
                     reports
                     @ [ (name,
                          { report with
-                             Name = sprintf "%s - %s" dataset.Name name }) ]
+                             Name = sprintf "%s - %s" (EvalDataset.name dataset) name }) ]
 
             return reports
         }

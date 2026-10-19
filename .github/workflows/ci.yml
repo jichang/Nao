@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    - cron: '17 3 * * *'
   workflow_dispatch:
 
 permissions:
@@ -78,6 +80,34 @@ jobs:
           --no-build
           --settings tests/security.runsettings
           --filter "TestCategory=Isolation"
+
+      - name: Run fast evaluation release gates
+        if: github.event_name != 'schedule'
+        run: >
+          dotnet test tests/Nao.Eval.Tests/Nao.Eval.Tests.fsproj
+          -c Release
+          --no-build
+          --filter "TestCategory=EvalFast"
+          --logger "trx;LogFileName=evaluation-fast.trx"
+          --results-directory artifacts/evaluation/fast
+
+      - name: Run full scheduled evaluation release gates
+        if: github.event_name == 'schedule'
+        run: >
+          dotnet test tests/Nao.Eval.Tests/Nao.Eval.Tests.fsproj
+          -c Release
+          --no-build
+          --filter "TestCategory=EvalFull"
+          --logger "trx;LogFileName=evaluation-full.trx"
+          --results-directory artifacts/evaluation/full
+
+      - name: Upload evaluation gate reports
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: evaluation-gate-reports
+          path: artifacts/evaluation
+          if-no-files-found: error
 
       - name: Test with coverage
         shell: bash

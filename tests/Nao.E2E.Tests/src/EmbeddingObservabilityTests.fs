@@ -183,23 +183,61 @@ type EmbeddingObservabilityTests() =
                 | _ -> false)
         )
 
+        let evaluator =
+            Evaluator.deterministic "pass" "test" "pass" true "Test evaluator." (fun _ _ _ ->
+                Task.FromResult(EvalVerdict.Pass, "observed"))
+
+        let evalCase = EvalCase.repository "embedding-eval" "embed the document" "1"
+
+        let dataset =
+            EvalDataset.repository (AuthorizationScope.identity authorization) "embedding" [ evalCase ]
+
+        let adapterComponent name =
+            EvalComponentIdentity.create name "test" name
+
+        let specification =
+            EvalExecutionSpecification.create
+                (Map [ agent.Metadata.Id, adapterComponent agent.Metadata.Id ])
+                (adapterComponent "prompt")
+                (adapterComponent "response-protocol")
+                []
+                (Some(adapterComponent "provider"))
+                (Some(adapterComponent "model"))
+                (adapterComponent "harness")
+                []
+                []
+
         let evalExecution =
-            EvalExecutionConfig.create authorization (fun () -> context (CorrelationContext.root ())) harness sandbox
+            let runtime = EvalRuntime.system 23
+
+            EvalExecutionConfig.create
+                authorization
+                (fun () -> context (CorrelationContext.root ()))
+                harness
+                sandbox
+                specification
+                EvalExecutionMode.PinnedMock
+                runtime
 
         let evalRun =
-            EvalRun.create (AuthorizationScope.identity authorization) (Guid.NewGuid())
+            let reproducibility =
+                EvalReproducibility.create
+                    evalExecution.Mode
+                    evalExecution.Runtime
+                    { MaximumParallelism = 1
+                      StopOnFirstFailure = false }
 
-        let evaluator =
-            Evaluator.create "pass" (fun _ _ _ -> Task.FromResult(EvalVerdict.Pass, "observed"))
+            EvalRun.create
+                (EvalDataset.owner dataset)
+                (EvalDataset.id dataset)
+                (EvalDataset.revision dataset)
+                (EvalDataset.contentSha256 dataset)
+                (EvalExecutionSpecification.resolve agent.Metadata.Id [ evaluator.Identity ] specification)
+                reproducibility
+                evalExecution.Runtime
 
         let evalResult =
-            EvalRunner.runCaseAsync
-                evalExecution
-                evalRun
-                evaluator
-                agent
-                (EvalCase.create "embedding-eval" "embed the document" "1")
-                CancellationToken.None
+            EvalRunner.runCaseAsync evalExecution evalRun evaluator agent evalCase CancellationToken.None
             |> _.GetAwaiter().GetResult()
 
         Assert.IsTrue(

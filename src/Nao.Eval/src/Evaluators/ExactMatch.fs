@@ -8,22 +8,28 @@ module ExactMatch =
 
     /// Create an exact-match evaluator with configurable case sensitivity.
     let create caseSensitive =
-        Evaluator.create "ExactMatch" (fun _correlation (case: EvalCase) (actual: string) ->
-            task {
-                match case.Expected with
-                | Some expected ->
-                    let matches =
-                        if caseSensitive then
-                            actual.Trim() = expected.Trim()
-                        else
-                            String.Equals(actual.Trim(), expected.Trim(), StringComparison.OrdinalIgnoreCase)
+        Evaluator.deterministic
+            "ExactMatch"
+            "1"
+            (sprintf "case-sensitive=%b" caseSensitive)
+            true
+            "Fails when the expected answer is absent or the normalized text does not match."
+            (fun _correlation (case: EvalCase) (actual: string) ->
+                task {
+                    match (EvalCase.expectedBehavior case).Answer with
+                    | Some expected ->
+                        let matches =
+                            if caseSensitive then
+                                actual.Trim() = expected.Trim()
+                            else
+                                String.Equals(actual.Trim(), expected.Trim(), StringComparison.OrdinalIgnoreCase)
 
-                    if matches then
-                        return (EvalVerdict.Pass, "Output exactly matches expected")
-                    else
-                        return (EvalVerdict.Fail, sprintf "Expected '%s' but got '%s'" expected actual)
-                | None -> return (EvalVerdict.Fail, "ExactMatch requires an expected value")
-            })
+                        if matches then
+                            return (EvalVerdict.Pass, "Output exactly matches expected")
+                        else
+                            return (EvalVerdict.Fail, sprintf "Expected '%s' but got '%s'" expected actual)
+                    | None -> return (EvalVerdict.Fail, "ExactMatch requires an expected value")
+                })
 
     /// Case-insensitive exact matching.
     let evaluator = create false

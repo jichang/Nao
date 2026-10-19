@@ -46,7 +46,7 @@ module LlmJudge =
 
     let private buildPrompt config (case: EvalCase) (actual: string) =
         let expectedPart =
-            match case.Expected with
+            match (EvalCase.expectedBehavior case).Answer with
             | Some exp -> sprintf "\n\nReference Answer:\n%s" exp
             | None -> ""
 
@@ -67,58 +67,77 @@ Respond with ONLY a JSON object in this exact format:
 Where score is a number on the scale described above."""
             config.Criteria
             config.ScaleDescription
-            case.Input
+            (EvalCase.input case)
             expectedPart
             actual
             (LlmJudgeResponse.example ())
 
     let private parseScore (response: string) =
-        try
-            let parsed = LlmJudgeResponse.deserialize response
+        if String.IsNullOrWhiteSpace response then
+            0.0, "Parse error: judge response is required."
+        else
+            try
+                let parsed = LlmJudgeResponse.deserialize response
 
-            if isNull parsed || not parsed.Score.HasValue then
-                raise (JsonException("score is required and must be a number."))
+                if isNull parsed || not parsed.Score.HasValue then
+                    raise (JsonException("score is required and must be a number."))
 
-            if String.IsNullOrWhiteSpace parsed.Reason then
-                raise (JsonException("reason is required and must be a non-empty string."))
+                if parsed.Score.Value < 1.0 || parsed.Score.Value > 5.0 then
+                    raise (JsonException("score must be between 1 and 5."))
 
-            // Normalize to 0-1 scale (assuming 1-5 scale by default)
-            let normalized = (parsed.Score.Value - 1.0) / 4.0 |> max 0.0 |> min 1.0
-            (normalized, parsed.Reason)
-        with ex ->
-            (0.0, sprintf "Parse error: %s" ex.Message)
+                if String.IsNullOrWhiteSpace parsed.Reason then
+                    raise (JsonException("reason is required and must be a non-empty string."))
+
+                let normalized = (parsed.Score.Value - 1.0) / 4.0
+                normalized, parsed.Reason
+            with :? JsonException as error ->
+                0.0, sprintf "Parse error: %s" error.Message
 
     /// Create an evaluator from the complete judge configuration.
     let withConfig config =
-        Evaluator.create "LlmJudge" (fun context (case: EvalCase) (actual: string) ->
-            task {
-                let prompt = buildPrompt config case actual
+        let configuration =
+            sprintf
+                "provider=%s|options=%A|criteria=%s|scale=%s"
+                (LlmProvider.name config.Provider)
+                config.Options
+                config.Criteria
+                config.ScaleDescription
 
-                let system =
-                    Prompt.render
-                        { Prompt.Empty with
-                            Role = "You are a precise evaluation judge."
-                            OutputFormat = OutputFormat.Schema "JSON" }
+        Evaluator.probabilistic
+            "LlmJudge"
+            "1"
+            configuration
+            false
+            "Malformed judge output fails; favorable scores remain untrusted and cannot override deterministic failures."
+            (fun context (case: EvalCase) (actual: string) ->
+                task {
+                    let prompt = buildPrompt config case actual
 
-                let conversation =
-                    [ { Role = System; Content = system }; { Role = User; Content = prompt } ]
+                    let system =
+                        Prompt.render
+                            { Prompt.Empty with
+                                Role = "You are a precise evaluation judge."
+                                OutputFormat = OutputFormat.Schema "JSON" }
 
-                let! result =
-                    config.Provider.CompleteAsync
-                        context.Correlation
-                        conversation
-                        config.Options
-                        context.CancellationToken
+                    let conversation =
+                        [ { Role = System; Content = system }; { Role = User; Content = prompt } ]
 
-                let (score, reason) = parseScore result.Content
+                    let! result =
+                        config.Provider.CompleteAsync
+                            context.Correlation
+                            conversation
+                            config.Options
+                            context.CancellationToken
 
-                let verdict =
-                    if score >= 0.8 then EvalVerdict.Pass
-                    elif score <= 0.2 then EvalVerdict.Fail
-                    else EvalVerdict.Partial score
+                    let (score, reason) = parseScore result.Content
 
-                return (verdict, reason)
-            })
+                    let verdict =
+                        if score >= 0.8 then EvalVerdict.Pass
+                        elif score <= 0.2 then EvalVerdict.Fail
+                        else EvalVerdict.Partial score
+
+                    return (verdict, reason)
+                })
 
     let create provider =
         LlmJudgeConfig.Default provider |> withConfig

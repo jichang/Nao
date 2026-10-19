@@ -4,19 +4,47 @@ Quality, safety, latency, reliability, and cost are runtime properties. Nao's ev
 
 ## Current evaluation model
 
-`Nao.Eval` provides evaluation cases, datasets, functional `Evaluator` records, runners, and reports. Built-in modules construct and compose evaluators without implementation classes.
+`Nao.Eval` provides schema-versioned evaluation cases, datasets, functional `Evaluator` records,
+runners, and reports. Cases contain ordered role-bearing turns, structured expected behavior,
+governance metadata, and provenance. Datasets have positive revisions and canonical SHA-256
+content identities. Built-in modules construct and compose evaluators without implementation
+classes.
 
 ```fsharp
-// Evaluations use the same explicit harness and sandbox policy as production execution.
+let identity name version configuration =
+    EvalComponentIdentity.create name version configuration
+
+let specification =
+    EvalExecutionSpecification.create
+        (Map [ "math-agent", identity "math-agent" "3" "agent configuration" ])
+        (identity "math-prompt" "7" "prompt text")
+        (identity "text" "1" "response protocol")
+        []
+        (Some(identity "openai-compatible" "1" "provider configuration"))
+        (Some(identity "model-name" "2026-10" "model options"))
+        (identity "etclovg" "1" "harness configuration")
+        [ identity "production-policy" "4" "policy configuration" ]
+        []
+
 let execution =
-    EvalExecutionConfig.create authorization createAgentContext harnessConfig sandboxConfig
+    EvalExecutionConfig.create
+        authorization
+        createAgentContext
+        harnessConfig
+        sandboxConfig
+        specification
+        EvalExecutionMode.PinnedLive
+        (EvalRuntime.system 20261015)
+
 let config = EvalRunnerConfig.create execution
 
 let dataset =
-  EvalDataset.create
-    (AuthorizationScope.identity authorization)
-    "math"
-    [ EvalCase.create "1" "2+2" "4" ]
+    EvalDataset.create
+        (AuthorizationScope.identity authorization)
+        "math"
+        1
+        [ EvalCase.repository "1" "2+2" "4" ]
+        []
 
 let evaluator = ExactMatch.evaluator
 
@@ -28,6 +56,56 @@ let! report =
         dataset
         cancellationToken
 ```
+
+`EvalExecutionSpecification` pins every executable component that can influence a result: agent,
+prompt, response protocol, tools, provider, model, harness, policies, and knowledge indexes.
+Evaluators carry their own version and configuration hash. The runner resolves these identities
+into `EvalExecutableConfiguration`, and every report records that configuration together with the
+dataset ID, revision, and content hash. An agent without a pinned identity is rejected before
+execution.
+
+`EvalExpectedBehavior` supports reference answers, named properties, required tool calls,
+forbidden actions, artifacts, citations, resource budgets, and allowed terminal states. Dataset
+fixtures contain ordered, versioned setup and teardown operations whose inputs are represented by
+content hashes. This makes the specification portable without embedding fixture secrets in the
+dataset.
+
+Case governance records an owner, labels, review status, optional expiry, and source. A
+production-derived case can only be constructed with `EvalSanitizationReview`, which requires the
+sanitizer, timestamp, applied redaction rules, and exact matching approval evidence. Repository
+cases are explicitly marked `RepositoryAuthored`; callers must not use that provenance for
+production-derived content.
+
+`EvalDataset.revise` preserves dataset identity, increments the revision, and recomputes the
+content hash across all governed case and fixture fields. `EvalDataset.restore` and the evaluation
+archive verify that hash. Reports can only be archived after their exact dataset revision is
+present, and mismatched revision or content identity is rejected.
+
+## Harness parity and reproduction
+
+Every evaluation mode invokes `EtclovgHarness.runAsync`; there is no evaluator-only execution
+path. `EvalExecutionMode` declares one of three host-selected modes:
+
+- `PinnedLive` uses the pinned provider/model configuration and rejects installed replay fixtures.
+- `PinnedMock` uses pinned host mock components and rejects installed replay fixtures.
+- `RecordedReplay` owns a versioned `EvalRecordedFixtureSet` and installs its exact provider and
+  tool fixtures into the ordinary harness. Missing or mismatched dependency fixtures fail closed
+  in the harness, so recorded mode cannot fall through to live network or tool access.
+
+`EvalRuntime` records a random seed and supplies run, turn, execution, correlation, result, and
+timestamp identity. Production runs use `EvalRuntime.system`; deterministic tests and local
+reproduction use `EvalRuntime.deterministic`. Reports retain the seed, deterministic flag,
+maximum parallelism, stop-on-first-failure setting, mode, and fixture schema/format versions.
+
+`EvalRunComparison.compare` compares semantic case outcomes only after proving exact dataset and
+executable-configuration identity. A changed deterministic run is a regression; a changed run
+where either side is nondeterministic is reported separately as nondeterministic variance.
+
+`EvalReproductionBundle` contains the complete dataset, exact executable configuration, failing
+case identities, evaluator identity, seed, timestamp, scheduling, and versioned recorded
+fixtures. Its JSON form validates dataset and fixture identities when loaded. Local replay also
+requires the supplied agent, evaluator, and execution specification to exactly match the bundle
+before running through the harness in recorded deterministic mode.
 
 Built-in evaluation approaches include exact match, containment, regular expressions, composites, verification, and LLM judges. Verification uses immutable `Judge` records; `VerificationJudge.fromJudge` adapts one to an `Evaluator`, while `Nao.Agents.LlmJudge.create` constructs the execution-trace judge without a class or interface implementation.
 
@@ -48,6 +126,27 @@ Prefer deterministic evaluation whenever the property can be checked directly:
 - Resource and cost bounds
 
 Use LLM judges for genuinely semantic properties. A release-blocking judge should be calibrated against human labels and checked for model-family, order, verbosity, and self-preference bias.
+
+Every `Evaluator` declares `EvaluatorAuthority.Deterministic` or `Probabilistic` plus mandatory
+release-blocking status and failure semantics. `EvaluationContext` includes the complete harness
+`ExecutionResult`, while `EvalResult` records evaluator authority and explicitly marks
+probabilistic rationale as untrusted evidence.
+
+`DeterministicExecution` validates the structured response and caller-owned schema together with
+expected properties, tool order/count/argument hashes, artifacts, citations, forbidden actions,
+resource budgets, and terminal states. Missing evidence fails closed. Prefer this evaluator before
+any semantic judge when a property is mechanically observable.
+
+`HighRiskEvaluation` runs deterministic validators first. Any deterministic failure blocks the
+result without invoking judges. Only after deterministic success does it aggregate multiple
+probabilistic judges using unanimous, majority, or minimum-average-score policy. Thus a favorable
+judge can never override invalid protocol, policy, citation, artifact, tool, or resource evidence.
+
+`JudgeCalibration` consumes human-labeled repeated observations and measures accuracy, Cohen's
+kappa, stability, position bias, verbosity bias, candidate model-family pass rates, and
+self-preference bias. `JudgeUpgradeQualification` requires a candidate judge to meet configured
+sample, accuracy, agreement, stability, bias, and regression thresholds against the prior judge
+before promotion.
 
 `SafetyDatasets.adversarialMultilingualV1` provides the first repository-owned output-safety
 corpus. Its cases include explicit safe or unsafe human labels, normalized language tags,
@@ -178,6 +277,26 @@ Evaluation gates can cover:
 
 Gates should support absolute thresholds, baseline deltas, minimum sample sizes, confidence intervals, segmentation, and explicit baseline promotion.
 
+`EvalReleaseGate` is the generic release boundary for quality, safety, success, policy
+compliance, retrieval, latency, tokens, and cost. Metric keys are either overall or one exact
+scenario, provider, model, language, source, or tenant-policy segment. Each threshold owns its
+absolute bound, tolerated baseline delta, minimum sample size, and confidence level. Proportions
+use Wilson intervals; sampled continuous values require dispersion evidence and use a normal
+interval. Missing metrics or insufficient evidence fail closed.
+
+Release snapshots bind the exact dataset content and executable configuration. Correctness
+regressions and infrastructure failures remain separate evidence and both block promotion.
+`EvalReleaseProjection` derives quality, functional success, latency, scenario success, and typed
+failure evidence directly from the canonical `EvalReport`; callers add domain metrics such as
+safety, policy compliance, retrieval, tokens, and cost without replacing canonical metrics.
+`EvalBaselineRegistry` separates proposal, independent review, and promotion; retains immutable
+baseline versions and audit events; supports explicit rollback to any retained baseline; and
+permanently unions failed case identities observed by proposals so replacing a baseline cannot
+erase regression history. `EvalReleaseArtifact` emits reviewable JSON gate evidence.
+
+CI runs the `EvalFast` profile for pull requests and pushes and the `EvalFull` profile on the
+scheduled workflow. Both publish TRX gate reports even when a gate fails.
+
 ## Continuous evaluation
 
 The target operational loop is:
@@ -193,6 +312,41 @@ Production traces and feedback
 ```
 
 Production-derived data requires consent, tenant isolation, redaction, retention, and review before becoming a dataset. `TurnStore` and `FeedbackStore` require the complete authenticated scope for access, deletion, and strict retention cutoff. Their durable payloads contain no authorization identity or authentication evidence, and deleting either source does not erase already-derived datasets governed by their own policy.
+
+`EvalProductionSamplingPolicy` governs deterministic trace sampling by policy identity, private
+salt, sample rate, consent-record hash, retention duration, allowed production signals, and a
+versioned redactor. Captured observations contain only redacted input, output, and optional
+feedback plus removed-value counts and applied-rule evidence. They bind the originating turn and
+execution to the complete `EvalExecutableConfiguration`. Raw feedback comments do not enter the
+evaluation candidate.
+
+Explicit negative `Feedback` is joined to its exact `TurnRecord`; mismatched turns fail.
+Failures, denials, retries, abandonments, low-confidence results, and negative feedback share one
+typed observation model. Clustering groups only observations with the same signal, typed segment
+map, and executable configuration, preventing unlike deployments or tenant-policy slices from
+being merged.
+
+Selected observations enter `EvalProductionCandidate` under their original ownership boundary.
+Proposal requires the owning authenticated scope. Review must be independent while remaining in
+the same tenant, group, workspace, and session boundary. Successful review constructs the normal
+version-1 `EvalCase` with matching approval and sanitization evidence, consent lineage, sampling
+policy, observation identity, and execution identity.
+
+`EvalDriftDetection` evaluates model, prompt, retrieval, cost, latency, and traffic-distribution
+observations. Every alert retains the changed dimension, exact affected segment, baseline and
+current executable configurations, magnitude, warning or critical severity, and the
+rule-configured notify, release-block, or rollback action. Scalar observations enforce direction
+and minimum samples; traffic drift uses total variation distance over normalized distributions.
+
+`EvalExperiment` provides deterministic shadow, canary, and A/B assignment. Assignment hashes a
+private salt, scoped ownership identity, and execution identity into an opaque cohort identifier;
+evidence contains no prompt, response, feedback, claims, or credentials. Shadow traffic keeps one
+primary and one or more zero-allocation shadow configurations, while canary and A/B allocations
+must total 10,000 basis points.
+
+Production incidents cannot close on an explanation alone. `EvalProductionIncident.close`
+requires an approved production-derived regression case, preserving the incident as permanent,
+executable regression coverage.
 
 Production retrieval failures use an explicit candidate workflow. Capture requires authenticated
 ownership, a consent-record hash, retention deadline, and a versioned query redactor. The

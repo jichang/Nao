@@ -65,31 +65,68 @@ type EvalArchiveTests() =
             cleanup path
 
     let dataset authorization id createdAt name =
-        { EvalDataset.create
-              (AuthorizationScope.identity authorization)
-              name
-              [ EvalCase.create "case" "input" "expected" ] with
-            Id = id
-            CreatedAt = createdAt }
+        EvalDataset.createAt
+            id
+            (AuthorizationScope.identity authorization)
+            createdAt
+            name
+            1
+            [ EvalCase.repository "case" "input" "expected" ]
+            []
 
-    let report authorization datasetId id runAt name =
+    let adapterComponent name =
+        EvalComponentIdentity.create name "test" name
+
+    let configuration =
+        { Agent = adapterComponent "agent"
+          Prompt = adapterComponent "prompt"
+          ResponseProtocol = adapterComponent "response-protocol"
+          Tools = []
+          Provider = Some(adapterComponent "provider")
+          Model = Some(adapterComponent "model")
+          Harness = adapterComponent "harness"
+          Policies = []
+          KnowledgeIndexes = []
+          Evaluators = [ adapterComponent "evaluator" ] }
+
+    let reproducibility =
+        { RandomSeed = 1
+          Deterministic = true
+          Scheduling =
+            { MaximumParallelism = 1
+              StopOnFirstFailure = false }
+          Mode = "pinned-mock"
+          FixtureSchemaVersion = None
+          FixtureFormatVersion = None }
+
+    let report (dataset: EvalDataset) id runAt name =
         let run =
             { Id = id
-              Owner = AuthorizationScope.identity authorization
-              DatasetId = datasetId
+              Owner = EvalDataset.owner dataset
+              DatasetId = EvalDataset.id dataset
+              DatasetRevision = EvalDataset.revision dataset
+              DatasetContentSha256 = EvalDataset.contentSha256 dataset
+              Configuration = configuration
+              Reproducibility = reproducibility
               StartedAt = runAt }
 
         EvalReport.fromResults run name []
 
-    let resultReport authorization datasetId runId executionId =
+    let resultReport (dataset: EvalDataset) runId executionId =
         let run =
-            { EvalRun.create (AuthorizationScope.identity authorization) datasetId with
-                Id = runId }
+            { Id = runId
+              Owner = EvalDataset.owner dataset
+              DatasetId = EvalDataset.id dataset
+              DatasetRevision = EvalDataset.revision dataset
+              DatasetContentSha256 = EvalDataset.contentSha256 dataset
+              Configuration = configuration
+              Reproducibility = reproducibility
+              StartedAt = DateTimeOffset.UtcNow }
 
         let result: EvalResult =
             { Id = Guid.NewGuid()
               Owner = run.Owner
-              DatasetId = datasetId
+              DatasetId = EvalDataset.id dataset
               RunId = run.Id
               ExecutionId = executionId
               CaseId = "case"
@@ -98,6 +135,9 @@ type EvalArchiveTests() =
               Reason = "ok"
               LatencyMs = 1L
               EvaluatorName = "test"
+              EvaluatorAuthority = EvaluatorAuthority.Deterministic
+              RationaleIsUntrusted = false
+              Outcome = EvalResultOutcome.Succeeded
               Timestamp = run.StartedAt
               ExecutionTrace = None }
 
@@ -132,16 +172,16 @@ type EvalArchiveTests() =
                 do!
                     archive.SaveReportAsync
                         scopeA
-                        (report scopeA sharedDatasetId (Guid.NewGuid()) (cutoff.AddTicks(-1L)) "old")
+                        (report boundaryDataset (Guid.NewGuid()) (cutoff.AddTicks(-1L)) "old")
 
-                do! archive.SaveReportAsync scopeA (report scopeA sharedDatasetId (Guid.NewGuid()) cutoff "boundary")
+                do! archive.SaveReportAsync scopeA (report boundaryDataset (Guid.NewGuid()) cutoff "boundary")
 
                 do!
                     archive.SaveReportAsync
                         scopeA
-                        (report scopeA sharedDatasetId (Guid.NewGuid()) (cutoff.AddMinutes 1) "recent")
+                        (report boundaryDataset (Guid.NewGuid()) (cutoff.AddMinutes 1) "recent")
 
-                do! archive.SaveReportAsync scopeB (report scopeB sharedDatasetId (Guid.NewGuid()) cutoff "other")
+                do! archive.SaveReportAsync scopeB (report otherDataset (Guid.NewGuid()) cutoff "other")
 
                 let reloaded = make ()
                 Assert.AreEqual(Some boundaryDataset, reloaded.GetDatasetAsync scopeA sharedDatasetId |> _.Result)
@@ -175,7 +215,7 @@ type EvalArchiveTests() =
                 let datasetId, runId = Guid.NewGuid(), Guid.NewGuid()
                 let executionId = ExecutionId.generate ()
                 let ownDataset = dataset scopeA datasetId DateTimeOffset.UtcNow "own"
-                let ownReport = resultReport scopeA datasetId runId executionId
+                let ownReport = resultReport ownDataset runId executionId
                 do! archive.SaveDatasetAsync scopeA ownDataset
                 do! archive.SaveReportAsync scopeA ownReport
 
@@ -199,7 +239,7 @@ type EvalArchiveTests() =
                     Assert.AreEqual(Ok 0, deleted)
 
                     let otherDataset = dataset other datasetId DateTimeOffset.UtcNow "other"
-                    let otherReport = resultReport other datasetId runId executionId
+                    let otherReport = resultReport otherDataset runId executionId
                     do! current.SaveDatasetAsync other otherDataset
                     do! current.SaveReportAsync other otherReport
                     let reloaded = make ()
@@ -225,9 +265,10 @@ type EvalArchiveTests() =
     member _.RejectsResultsOutsideReportIdentityAcrossBackends() =
         withArchives (fun make ->
             let archive = make ()
+            let record = dataset scopeA (Guid.NewGuid()) DateTimeOffset.UtcNow "valid"
 
-            let valid =
-                resultReport scopeA (Guid.NewGuid()) (Guid.NewGuid()) (ExecutionId.generate ())
+            let valid = resultReport record (Guid.NewGuid()) (ExecutionId.generate ())
+            archive.SaveDatasetAsync scopeA record |> _.GetAwaiter().GetResult()
 
             let result = valid.Results.Head
 
@@ -248,12 +289,20 @@ type EvalArchiveTests() =
         withArchives (fun make ->
             let archive = make ()
 
+            let expectedDataset =
+                dataset scopeA (Guid.NewGuid()) DateTimeOffset.UtcNow "expected"
+
+            let distractorDataset =
+                dataset scopeA (Guid.NewGuid()) DateTimeOffset.UtcNow "distractor"
+
             let expected =
-                resultReport scopeA (Guid.NewGuid()) (Guid.NewGuid()) (ExecutionId.generate ())
+                resultReport expectedDataset (Guid.NewGuid()) (ExecutionId.generate ())
 
             let distractor =
-                resultReport scopeA (Guid.NewGuid()) (Guid.NewGuid()) (ExecutionId.generate ())
+                resultReport distractorDataset (Guid.NewGuid()) (ExecutionId.generate ())
 
+            archive.SaveDatasetAsync scopeA expectedDataset |> _.GetAwaiter().GetResult()
+            archive.SaveDatasetAsync scopeA distractorDataset |> _.GetAwaiter().GetResult()
             archive.SaveReportAsync scopeA expected |> _.GetAwaiter().GetResult()
             archive.SaveReportAsync scopeA distractor |> _.GetAwaiter().GetResult()
             let reloaded = make ()
@@ -275,7 +324,7 @@ type EvalArchiveTests() =
             let record = dataset scopeA (Guid.NewGuid()) DateTimeOffset.UtcNow "dataset"
             archive.SaveDatasetAsync scopeA record |> _.GetAwaiter().GetResult()
 
-            archive.SaveReportAsync scopeA (resultReport scopeA record.Id (Guid.NewGuid()) (ExecutionId.generate ()))
+            archive.SaveReportAsync scopeA (resultReport record (Guid.NewGuid()) (ExecutionId.generate ()))
             |> _.GetAwaiter().GetResult()
 
             archive.DeleteOwnerAsync scopeA |> _.GetAwaiter().GetResult() |> ignore
@@ -306,17 +355,23 @@ type EvalArchiveTests() =
 
             try
                 Assert.ThrowsExactlyAsync<UnauthorizedAccessException>(fun () ->
-                    archive.SaveDatasetAsync scopeA { original with Name = "uncommitted" })
+                    archive.SaveDatasetAsync
+                        scopeA
+                        (dataset scopeA (EvalDataset.id original) (EvalDataset.createdAt original) "uncommitted"))
                 |> _.Wait()
 
                 let deleted = archive.DeleteOwnerAsync scopeA |> _.GetAwaiter().GetResult()
                 Assert.IsTrue(Result.isError deleted)
-                Assert.AreEqual(Some original, archive.GetDatasetAsync scopeA original.Id |> _.Result)
+                Assert.AreEqual(Some original, archive.GetDatasetAsync scopeA (EvalDataset.id original) |> _.Result)
             finally
                 Directory.Delete path
                 File.Move(backup, path)
 
-            Assert.AreEqual(Some original, (EvalArchives.file path).GetDatasetAsync scopeA original.Id |> _.Result)
+            Assert.AreEqual(
+                Some original,
+                (EvalArchives.file path).GetDatasetAsync scopeA (EvalDataset.id original)
+                |> _.Result
+            )
         finally
             if File.Exists backup then
                 File.Delete backup

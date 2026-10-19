@@ -191,7 +191,8 @@ Configuration objects are not proof of enforcement. Do not describe process or c
 Permissive fixtures exist only in the non-packable `Nao.Testing` project, which is referenced
 only by test projects; they are absent from production packages. Production source must
 construct `AgentContext` through its governed host boundary, populate `EtclovgConfig` explicitly,
-and pass explicit harness and sandbox policy to `EvalExecutionConfig.create`. Dependency policy
+and pass explicit harness, sandbox policy, and a complete versioned `EvalExecutionSpecification`
+to `EvalExecutionConfig.create`. Dependency policy
 rejects every production reference to `Nao.Testing`, and CI enforces the source boundary with:
 
 ```bash

@@ -13,10 +13,13 @@
   <ItemGroup>
     <Compile Include="src/MSTestSettings.fs" />
     <Compile Include="src/EvaluatorTests.fs" />
+    <Compile Include="src/EvalQualityTests.fs" />
     <Compile Include="src/SafetyDatasetTests.fs" />
     <Compile Include="src/SafetyMetricsTests.fs" />
     <Compile Include="src/EvalRunnerTests.fs" />
     <Compile Include="src/EvalArchiveTests.fs" />
+    <Compile Include="src/EvalSpecificationTests.fs" />
+    <Compile Include="src/EvalReproductionTests.fs" />
     <Compile Include="src/KnowledgeRetrievalComparisonTests.fs" />
     <Compile Include="src/KnowledgeEvaluationDatasetTests.fs" />
     <Compile Include="src/KnowledgeAdversarialDatasetTests.fs" />
@@ -24,6 +27,8 @@
     <Compile Include="src/KnowledgeHybridRetrievalEvaluationTests.fs" />
     <Compile Include="src/KnowledgeGroundedGenerationEvaluationTests.fs" />
     <Compile Include="src/KnowledgeQualityRegressionTests.fs" />
+    <Compile Include="src/EvalReleaseGateTests.fs" />
+    <Compile Include="src/ProductionEvaluationTests.fs" />
     <Compile Include="src/KnowledgeRetrievalReleaseQualificationTests.fs" />
     <Compile Include="src/KnowledgeGroundedReleaseQualificationTests.fs" />
   </ItemGroup>
