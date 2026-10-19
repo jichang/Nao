@@ -512,27 +512,31 @@ type EtclovgObservabilityTests() =
         let correlation = CorrelationContext.root ()
 
         // Simulate a multi-step agent execution
-        metrics.Record scope (MetricRecord.llmCall correlation startedAt 500 200 150L) // First LLM call: routing decision
+        metrics.Record scope (MetricRecord.llmCall correlation startedAt (ProviderTokenUsage.Split(500, 200)) 150L)
 
         metrics.Record scope (MetricRecord.toolCall correlation (startedAt.AddSeconds 1) "get_stock_price" 25L true)
 
-        metrics.Record scope (MetricRecord.llmCall correlation (startedAt.AddSeconds 2) 800 300 200L) // Second LLM call: format response
-        metrics.Record scope (MetricRecord.llmCall correlation (startedAt.AddSeconds 3) 200 100 100L) // Third: summarize
+        metrics.Record
+            scope
+            (MetricRecord.llmCall correlation (startedAt.AddSeconds 2) (ProviderTokenUsage.Split(800, 300)) 200L)
+
+        metrics.Record
+            scope
+            (MetricRecord.llmCall correlation (startedAt.AddSeconds 3) (ProviderTokenUsage.Split(200, 100)) 100L)
 
         let summary = metrics.GetMetrics scope
         Assert.AreEqual(3, summary.TotalLlmCalls)
-        Assert.AreEqual(1500, summary.TotalInputTokens)
-        Assert.AreEqual(600, summary.TotalOutputTokens)
+        Assert.AreEqual(Some 1500, summary.TotalInputTokens)
+        Assert.AreEqual(Some 600, summary.TotalOutputTokens)
         Assert.AreEqual(1, summary.TotalToolCalls)
         Assert.AreEqual(150.0, summary.AvgLatencyMs)
 
-        let costModel: CostModel =
-            { InputCostPer1K = 0.0025m
-              OutputCostPer1K = 0.01m }
+        let costModel = CostModel.create "e2e-pricing" "1" 0.0025m 0.01m
 
         let cost = metrics.EstimateCost scope costModel
-        Assert.IsTrue(cost > 0m)
-        Assert.AreEqual(0.00975m, cost)
+        Assert.IsTrue(cost |> Option.exists (fun value -> value.AmountUsd > 0m))
+        Assert.AreEqual(Some 0.00975m, cost |> Option.map _.AmountUsd)
+        Assert.AreEqual(Some "e2e-pricing", cost |> Option.map _.PricingId)
 
     [<TestMethod>]
     member _.ResilienceWithRetryAndFallback() =

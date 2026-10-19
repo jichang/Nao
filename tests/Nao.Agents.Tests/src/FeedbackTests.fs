@@ -85,7 +85,7 @@ type TurnRecorderTests() =
         let recorder = TurnRecorder.create ("turn", correlation, "agent", "hello")
 
         let eventScope =
-            EventScope.Create("user", "session", "", "workspace", "turn", "user/session", correlation)
+            EventScope.Create("tenant", "user", "session", "", "workspace", "turn", "user/session", correlation)
 
         EventConsumer.handleAsync (TurnProgress(eventScope, ToolInvoked("search", "query"))) recorder.Consumer
         |> _.Wait()

@@ -106,6 +106,7 @@ type IsolatedParsingTests() =
               Input = DocumentParserWorkerProtocol.serializeRequest parserRequest
               ExecutionId = "execution"
               CorrelationId = "correlation"
+              CausationExecutionId = None
               Attempt = 1
               Principal =
                 Some(SecurityPrincipal.create (TenantId.parse "parser-tenant") (UserId.parse "parser-user") [])

@@ -128,8 +128,14 @@ type SessionDeletionTests() =
             conversations.SaveAsync (owner sessionB) "default" [||] |> _.Wait()
             memories.SaveAsync (owner sessionA) (memory "a" "one") |> _.Wait()
             memories.SaveAsync (owner sessionB) (memory "b" "two") |> _.Wait()
-            metrics.Record (owner sessionA) (MetricRecord.llmCall correlation DateTimeOffset.UtcNow 10 5 20L)
-            metrics.Record (owner sessionB) (MetricRecord.llmCall correlation DateTimeOffset.UtcNow 20 10 30L)
+
+            metrics.Record
+                (owner sessionA)
+                (MetricRecord.llmCall correlation DateTimeOffset.UtcNow (ProviderTokenUsage.Split(10, 5)) 20L)
+
+            metrics.Record
+                (owner sessionB)
+                (MetricRecord.llmCall correlation DateTimeOffset.UtcNow (ProviderTokenUsage.Split(20, 10)) 30L)
 
             traces.SaveAsync (owner sessionA) (Verification.startTrace correlation "agent" "a")
             |> _.Wait()

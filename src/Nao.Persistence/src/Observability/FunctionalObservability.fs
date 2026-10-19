@@ -12,7 +12,6 @@ module private ObservabilityRedaction =
 
     let spanStatus =
         function
-        | SpanStatus.Error message -> SpanStatus.Error(redact message)
         | status -> status
 
     let span (span: Span) =
@@ -106,7 +105,7 @@ module private TracerState =
                 let span =
                     { Id = SpanId(Guid.NewGuid())
                       Correlation = correlation
-                      TraceId = TraceId(Guid.NewGuid())
+                      TraceId = TraceId.ofCorrelation correlation.CorrelationId
                       ParentSpanId = None
                       OperationName = operationName
                       StartTime = DateTimeOffset.UtcNow
@@ -202,7 +201,7 @@ module InMemoryMetricsCollector =
                 retained
                 |> Array.choose (fun metric ->
                     match metric.Payload with
-                    | MetricPayload.LlmCall(input, output, latency) -> Some(input, output, latency)
+                    | MetricPayload.LlmCall(tokens, latency) -> Some(tokens, latency)
                     | _ -> None)
 
             let toolCalls =
@@ -220,11 +219,43 @@ module InMemoryMetricsCollector =
                         Some(inputTokens, latency, cost)
                     | _ -> None)
 
-            let inputs = llmCalls |> Array.sumBy (fun (input, _, _) -> input)
-            let outputs = llmCalls |> Array.sumBy (fun (_, output, _) -> output)
+            let splitTokens =
+                llmCalls
+                |> Array.choose (fun (tokens, _) ->
+                    match tokens with
+                    | ProviderTokenUsage.Split(input, output) -> Some(input, output)
+                    | ProviderTokenUsage.Aggregate _
+                    | ProviderTokenUsage.Unavailable -> None)
+
+            let reportedTotals =
+                llmCalls
+                |> Array.choose (fun (tokens, _) ->
+                    match tokens with
+                    | ProviderTokenUsage.Split(input, output) -> Some(input + output)
+                    | ProviderTokenUsage.Aggregate total -> Some total
+                    | ProviderTokenUsage.Unavailable -> None)
+
+            let inputs =
+                if splitTokens.Length = llmCalls.Length then
+                    Some(splitTokens |> Array.sumBy fst)
+                else
+                    None
+
+            let outputs =
+                if splitTokens.Length = llmCalls.Length then
+                    Some(splitTokens |> Array.sumBy snd)
+                else
+                    None
+
+            let providerTokens =
+                if reportedTotals.Length = llmCalls.Length then
+                    Some(Array.sum reportedTotals)
+                else
+                    None
+
             let embeddingInputs = embeddingCalls |> Array.sumBy (fun (input, _, _) -> input)
             let embeddingCost = embeddingCalls |> Array.sumBy (fun (_, _, cost) -> cost)
-            let sorted = llmCalls |> Array.map (fun (_, _, latency) -> latency) |> Array.sort
+            let sorted = llmCalls |> Array.map snd |> Array.sort
             let llmWait = sorted |> Array.sum
             let embeddingWait = embeddingCalls |> Array.sumBy (fun (_, latency, _) -> latency)
             let toolTime = toolCalls |> Array.sum
@@ -251,7 +282,7 @@ module InMemoryMetricsCollector =
             let usage: ResourceUsage =
                 { LlmCalls = llmCalls.Length
                   EmbeddingCalls = embeddingCalls.Length
-                  TotalTokens = inputs + outputs + embeddingInputs
+                  TotalTokens = (providerTokens |> Option.defaultValue 0) + embeddingInputs
                   ToolCalls = toolCalls.Length
                   EstimatedCostUsd = embeddingCost
                   ElapsedTime = duration }
@@ -261,6 +292,7 @@ module InMemoryMetricsCollector =
               TotalEmbeddingCalls = embeddingCalls.Length
               TotalInputTokens = inputs
               TotalOutputTokens = outputs
+              TotalProviderTokens = providerTokens
               TotalEmbeddingInputTokens = embeddingInputs
               TotalCostUsd = embeddingCost
               TotalEmbeddingCostUsd = embeddingCost
@@ -298,9 +330,16 @@ module InMemoryMetricsCollector =
             fun scope model ->
                 let aggregate = metrics scope
 
-                decimal aggregate.TotalInputTokens / 1000m * model.InputCostPer1K
-                + decimal aggregate.TotalOutputTokens / 1000m * model.OutputCostPer1K
-                + aggregate.TotalEmbeddingCostUsd
+                Option.map2
+                    (fun input output ->
+                        { PricingId = CostModel.pricingId model
+                          PricingVersion = CostModel.version model
+                          AmountUsd =
+                            decimal input / 1000m * CostModel.inputCostPer1K model
+                            + decimal output / 1000m * CostModel.outputCostPer1K model
+                            + aggregate.TotalEmbeddingCostUsd })
+                    aggregate.TotalInputTokens
+                    aggregate.TotalOutputTokens
           DeleteScopeAsync = fun scope -> delete scope (fun _ -> true)
           DeleteExpiredAsync = fun scope before -> delete scope (fun metric -> metric.Timestamp < before) }
 

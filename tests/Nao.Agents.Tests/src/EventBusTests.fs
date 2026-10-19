@@ -30,6 +30,7 @@ type EventBusTests() =
 
     let scope () =
         EventScope.Create(
+            tenantId = "tenant",
             userId = "dev",
             sessionId = "s1",
             conversationId = "c1",
@@ -197,10 +198,10 @@ type EventBusTests() =
         let consumer = FeedbackEventConsumer.create authorizationFor (fun _ -> root)
 
         let scopeA =
-            EventScope.Create("dev", "s1", "c1", "ws", "turn-a", "dev/s1", CorrelationContext.root ())
+            EventScope.Create("tenant", "dev", "s1", "c1", "ws", "turn-a", "dev/s1", CorrelationContext.root ())
 
         let scopeB =
-            EventScope.Create("dev", "s2", "c1", "ws", "turn-b", "dev/s2", CorrelationContext.root ())
+            EventScope.Create("tenant", "dev", "s2", "c1", "ws", "turn-b", "dev/s2", CorrelationContext.root ())
 
         EventConsumer.handleAsync (TurnCompleted(scopeA, sampleTurn ())) consumer.Consumer
         |> _.Wait()

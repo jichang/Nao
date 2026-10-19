@@ -84,7 +84,7 @@ Workstreams may overlap after their interface contracts are stable. Ontology and
 
 ### R3 — Measurable and resilient platform
 
-- [ ] Complete production-critical work in [Evaluation and observability](roadmap/03-evaluation-observability.md).
+- [x] Complete production-critical work in [Evaluation and observability](roadmap/03-evaluation-observability.md).
 - [ ] Complete production-critical work in [Providers and distributed runtime](roadmap/04-providers-runtime.md).
 - [ ] A turn is traceable across runtime, agent, provider, tool, storage, policy, and evaluation.
 - [ ] Provider failures and model changes have controlled, observable behavior.

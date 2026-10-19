@@ -13,6 +13,9 @@ module TraceId =
     let generate () = TraceId(Guid.NewGuid())
     let value (TraceId value) = value
 
+    let ofCorrelation correlationId =
+        TraceId(CorrelationId.value correlationId)
+
     let tryParse (value: string) =
         match Guid.TryParse value with
         | true, id -> Some(TraceId id)
@@ -43,7 +46,7 @@ module SpanId =
 [<RequireQualifiedAccess>]
 type SpanStatus =
     | Ok
-    | Error of message: string
+    | Error of category: TelemetryErrorCategory
     | Cancelled
 
 /// A single span in a distributed trace

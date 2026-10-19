@@ -101,69 +101,69 @@ This workstream connects production execution, telemetry, replay, evaluation, re
 
 ## OBS-01 — Unified telemetry model
 
-- [ ] Define standard attributes for tenant, workspace, session, turn, execution, agent, tool, provider, model, and storage operation.
-- [ ] Propagate trace and correlation context across Orleans and external process boundaries.
-- [ ] Define span structure for harness stages, orchestration rounds, provider calls, tool calls, retrieval, reasoners, and persistence.
-- [ ] Define canonical counters, histograms, and gauges.
-- [ ] Track provider-reported token splits without inventing unavailable data.
-- [ ] Track cost using versioned caller-owned pricing.
-- [ ] Add structured error and terminal-state dimensions with bounded cardinality.
-- [ ] Avoid user content in metric labels.
+- [x] Define standard attributes for tenant, workspace, session, turn, execution, agent, tool, provider, model, and storage operation.
+- [x] Propagate trace and correlation context across Orleans and external process boundaries.
+- [x] Define span structure for harness stages, orchestration rounds, provider calls, tool calls, retrieval, reasoners, and persistence.
+- [x] Define canonical counters, histograms, and gauges.
+- [x] Track provider-reported token splits without inventing unavailable data.
+- [x] Track cost using versioned caller-owned pricing.
+- [x] Add structured error and terminal-state dimensions with bounded cardinality.
+- [x] Avoid user content in metric labels.
 
 **Acceptance criteria**
 
-- [ ] One turn can be followed end-to-end through all participating components.
-- [ ] Retries and delegated work preserve parent/causation relationships.
-- [ ] Telemetry schemas have compatibility tests.
+- [x] One turn can be followed end-to-end through all participating components.
+- [x] Retries and delegated work preserve parent/causation relationships.
+- [x] Telemetry schemas have compatibility tests.
 
 ## OBS-02 — OpenTelemetry and external backends
 
-- [ ] Implement OpenTelemetry trace export.
-- [ ] Implement OpenTelemetry metrics export.
-- [ ] Integrate structured logs with trace/span correlation.
-- [ ] Support OTLP over documented transports.
-- [ ] Add Prometheus-compatible metric exposure where appropriate.
-- [ ] Define exporter queue, batching, retry, drop, and shutdown behavior.
-- [ ] Ensure telemetry failure cannot block critical execution indefinitely.
-- [ ] Provide local collector configuration and reference dashboards.
+- [x] Implement OpenTelemetry trace export.
+- [x] Implement OpenTelemetry metrics export.
+- [x] Integrate structured logs with trace/span correlation.
+- [x] Support OTLP over documented transports.
+- [x] Add Prometheus-compatible metric exposure where appropriate.
+- [x] Define exporter queue, batching, retry, drop, and shutdown behavior.
+- [x] Ensure telemetry failure cannot block critical execution indefinitely.
+- [x] Provide local collector configuration and reference dashboards.
 
 **Acceptance criteria**
 
-- [ ] A reference deployment exports traces, metrics, and logs to standard tools.
-- [ ] Exporter backpressure has bounded memory and documented data-loss behavior.
-- [ ] Graceful shutdown flushes within a configured deadline.
+- [x] A reference deployment exports traces, metrics, and logs to standard tools.
+- [x] Exporter backpressure has bounded memory and documented data-loss behavior.
+- [x] Graceful shutdown flushes within a configured deadline.
 
 ## OBS-03 — Privacy, security, and retention
 
-- [ ] Classify telemetry fields by sensitivity.
-- [ ] Redact secrets, credentials, personal data, and protected content before export.
-- [ ] Configure content capture separately from operational metadata.
-- [ ] Apply tenant-specific retention and regional routing policies.
-- [ ] Encrypt telemetry in transit and at rest through deployment adapters.
-- [ ] Restrict audit-log mutation and deletion according to policy.
-- [ ] Add canary-secret and synthetic-PII leakage tests.
-- [ ] Make sampling decisions trace-consistent.
+- [x] Classify telemetry fields by sensitivity.
+- [x] Redact secrets, credentials, personal data, and protected content before export.
+- [x] Configure content capture separately from operational metadata.
+- [x] Apply tenant-specific retention and regional routing policies.
+- [x] Encrypt telemetry in transit and at rest through deployment adapters.
+- [x] Restrict audit-log mutation and deletion according to policy.
+- [x] Add canary-secret and synthetic-PII leakage tests.
+- [x] Make sampling decisions trace-consistent.
 
 **Acceptance criteria**
 
-- [ ] Sensitive fixtures do not appear in exported telemetry.
-- [ ] Tenant retention and access restrictions are enforced.
-- [ ] Audit evidence records redaction without retaining the removed value.
+- [x] Sensitive fixtures do not appear in exported telemetry.
+- [x] Tenant retention and access restrictions are enforced.
+- [x] Audit evidence records redaction without retaining the removed value.
 
 ## OBS-04 — Operational diagnostics
 
-- [ ] Add liveness, readiness, startup, and dependency health contracts.
-- [ ] Report provider, storage, queue, knowledge-index, and reasoner health independently.
-- [ ] Add saturation signals for provider limits, execution workers, Orleans grains, storage pools, and telemetry queues.
-- [ ] Add dashboards for success, latency, cost, tokens, retries, circuit states, policy blocks, retrieval quality, and evaluation drift.
-- [ ] Define actionable alerts and runbook links.
-- [ ] Add diagnostic snapshots that exclude secrets and protected content.
+- [x] Add liveness, readiness, startup, and dependency health contracts.
+- [x] Report provider, storage, queue, knowledge-index, and reasoner health independently.
+- [x] Add saturation signals for provider limits, execution workers, Orleans grains, storage pools, and telemetry queues.
+- [x] Add dashboards for success, latency, cost, tokens, retries, circuit states, policy blocks, retrieval quality, and evaluation drift.
+- [x] Define actionable alerts and runbook links.
+- [x] Add diagnostic snapshots that exclude secrets and protected content.
 
 ### Exit criteria for evaluation and observability
 
-- [ ] EVAL-01 through EVAL-05 are complete for release-critical scenarios.
-- [ ] OBS-01 through OBS-04 are complete for supported deployments.
-- [ ] Pull requests, scheduled runs, and production drift feed one versioned quality system.
-- [ ] Telemetry privacy and reliability tests pass.
+- [x] EVAL-01 through EVAL-05 are complete for release-critical scenarios.
+- [x] OBS-01 through OBS-04 are complete for supported deployments.
+- [x] Pull requests, scheduled runs, and production drift feed one versioned quality system.
+- [x] Telemetry privacy and reliability tests pass.
 
 [Back to roadmap](../roadmap.md)

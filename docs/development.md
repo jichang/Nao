@@ -75,6 +75,7 @@ Dependencies point inward from runtimes and adapters to core contracts:
 | `Nao.Eval` | Evaluation implementation | `Nao.Agents` |
 | `Nao.Knowledge` | Source-backed knowledge and retrieval contracts | `Nao.Agents` |
 | `Nao.Knowledge.Postgres` | Optional PostgreSQL vector and full-text knowledge indexes | `Nao.Agents`, `Nao.Knowledge` |
+| `Nao.Telemetry.OpenTelemetry` | Optional OpenTelemetry and Prometheus export adapter | `Nao.Agents` |
 | `Nao.Persistence.Infrastructure` | Provider-neutral ADO.NET, serialization, events, and backend selection contracts | `Nao.Agents` |
 | `Nao.Persistence.Memory` | Memory storage implementations | `Nao.Agents`, `Nao.Persistence.Infrastructure` |
 | `Nao.Persistence.Observability` | Trace, metric, audit, and journal implementations | `Nao.Agents`, `Nao.Persistence.Infrastructure` |
@@ -128,7 +129,7 @@ The supported solution uses these primary test categories:
 |---|---|---|
 | Unit | `Nao.Agents.Tests`, `Nao.Protocols.Tests` | In-process contract and behavior checks |
 | Knowledge unit | `Nao.Knowledge.Tests` | Source, version, lineage, lifecycle, citation, and retrieval contracts |
-| Integration | `Nao.Identity.Oidc.Tests`, `Nao.Knowledge.Postgres.Tests`, `Nao.Persistence.Tests`, `Nao.Providers.Tests`, `Nao.Runtime.Orleans.Tests` | Identity-adapter, external knowledge-index, storage, provider-adapter, and runtime checks |
+| Integration | `Nao.Identity.Oidc.Tests`, `Nao.Knowledge.Postgres.Tests`, `Nao.Telemetry.OpenTelemetry.Tests`, `Nao.Persistence.Tests`, `Nao.Providers.Tests`, `Nao.Runtime.Orleans.Tests` | Identity-adapter, external knowledge-index, telemetry-export, storage, provider-adapter, and runtime checks |
 | End-to-end | `Nao.E2E.Tests` | Full harness and orchestration flows using local fakes |
 | Evaluation | `Nao.Eval.Tests` | Evaluation runner, metric, and report behavior |
 | Security | MSTest `Security` category within an owning project | Permission, policy, isolation, and tenant-boundary checks |

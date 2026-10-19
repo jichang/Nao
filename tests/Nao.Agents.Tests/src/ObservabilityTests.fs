@@ -49,11 +49,11 @@ type TraceTests() =
     member _.EndSpanWithError() =
         let tracer = InMemory.tracer ()
         let span = tracer.StartTrace scope correlation "op"
-        tracer.EndSpan scope span (SpanStatus.Error "failed")
+        tracer.EndSpan scope span (SpanStatus.Error TelemetryErrorCategory.Internal)
         let traces = tracer.GetTrace scope span.TraceId
 
         match traces.[0].Status with
-        | SpanStatus.Error msg -> Assert.AreEqual("failed", msg)
+        | SpanStatus.Error category -> Assert.AreEqual(TelemetryErrorCategory.Internal, category)
         | _ -> Assert.Fail("Expected error status")
 
     [<TestMethod>]
@@ -101,12 +101,16 @@ type MetricsTests() =
     [<TestMethod>]
     member _.RecordLlmCallTracksTokensAndCalls() =
         let collector = InMemory.metrics ()
-        collector.Record scope (MetricRecord.llmCall correlation timestamp 100 50 200L)
-        collector.Record scope (MetricRecord.llmCall correlation (timestamp.AddSeconds 1) 200 100 300L)
+        collector.Record scope (MetricRecord.llmCall correlation timestamp (ProviderTokenUsage.Split(100, 50)) 200L)
+
+        collector.Record
+            scope
+            (MetricRecord.llmCall correlation (timestamp.AddSeconds 1) (ProviderTokenUsage.Split(200, 100)) 300L)
+
         let metrics = collector.GetMetrics scope
         Assert.AreEqual(2, metrics.TotalLlmCalls)
-        Assert.AreEqual(300, metrics.TotalInputTokens)
-        Assert.AreEqual(150, metrics.TotalOutputTokens)
+        Assert.AreEqual(Some 300, metrics.TotalInputTokens)
+        Assert.AreEqual(Some 150, metrics.TotalOutputTokens)
 
     [<TestMethod>]
     member _.RecordToolCallTracksCount() =
@@ -133,31 +137,142 @@ type MetricsTests() =
     [<TestMethod>]
     member _.AvgLatencyCalculatedCorrectly() =
         let collector = InMemory.metrics ()
-        collector.Record scope (MetricRecord.llmCall correlation timestamp 100 50 100L)
-        collector.Record scope (MetricRecord.llmCall correlation (timestamp.AddSeconds 1) 100 50 300L)
+        collector.Record scope (MetricRecord.llmCall correlation timestamp (ProviderTokenUsage.Split(100, 50)) 100L)
+
+        collector.Record
+            scope
+            (MetricRecord.llmCall correlation (timestamp.AddSeconds 1) (ProviderTokenUsage.Split(100, 50)) 300L)
+
         let metrics = collector.GetMetrics scope
         Assert.AreEqual(200.0, metrics.AvgLatencyMs)
 
     [<TestMethod>]
     member _.EstimateCostUsesModel() =
         let collector = InMemory.metrics ()
-        collector.Record scope (MetricRecord.llmCall correlation timestamp 1000 500 100L)
+        collector.Record scope (MetricRecord.llmCall correlation timestamp (ProviderTokenUsage.Split(1000, 500)) 100L)
 
-        let model: CostModel =
-            { InputCostPer1K = 0.0025m
-              OutputCostPer1K = 0.01m }
+        let model = CostModel.create "test-pricing" "1" 0.0025m 0.01m
 
         let cost = collector.EstimateCost scope model
-        Assert.AreEqual(0.0075m, cost)
+
+        Assert.AreEqual(
+            Some
+                { PricingId = "test-pricing"
+                  PricingVersion = "1"
+                  AmountUsd = 0.0075m },
+            cost
+        )
+
+    [<TestMethod>]
+    member _.ProviderTokenFidelityDoesNotInventUnavailableSplits() =
+        let collector = InMemory.metrics ()
+
+        collector.Record scope (MetricRecord.llmCall correlation timestamp (ProviderTokenUsage.Aggregate 150) 100L)
+
+        let aggregateOnly = collector.GetMetrics scope
+        Assert.AreEqual(None, aggregateOnly.TotalInputTokens)
+        Assert.AreEqual(None, aggregateOnly.TotalOutputTokens)
+        Assert.AreEqual(Some 150, aggregateOnly.TotalProviderTokens)
+
+        let pricing = CostModel.create "test-pricing" "1" 0.001m 0.002m
+        Assert.AreEqual(None, collector.EstimateCost scope pricing)
+
+        collector.Record
+            scope
+            (MetricRecord.llmCall correlation (timestamp.AddSeconds 1.0) ProviderTokenUsage.Unavailable 100L)
+
+        Assert.AreEqual(None, (collector.GetMetrics scope).TotalProviderTokens)
 
     [<TestMethod>]
     member _.ZeroMetricsOnFreshCollector() =
         let collector = InMemory.metrics ()
         let metrics = collector.GetMetrics scope
         Assert.AreEqual(0, metrics.TotalLlmCalls)
-        Assert.AreEqual(0, metrics.TotalInputTokens)
+        Assert.AreEqual(Some 0, metrics.TotalInputTokens)
         Assert.AreEqual(0, metrics.TotalToolCalls)
         Assert.AreEqual(0.0, metrics.AvgLatencyMs)
+
+[<TestClass>]
+type TelemetrySchemaTests() =
+    let authorization =
+        SecurityPrincipal.create (TenantId.parse "tenant") (UserId.parse "user") []
+        |> fun principal ->
+            AuthorizationScope.tryCreate
+                principal
+                None
+                (WorkspaceId.parse "workspace")
+                (Some(SessionId.parse "session"))
+            |> Option.get
+
+    [<TestMethod>]
+    member _.SchemaV1NamesAndBoundedDimensionsRemainStable() =
+        Assert.AreEqual(1, TelemetrySchema.CurrentVersion)
+
+        CollectionAssert.AreEqual(
+            [| "nao.execution.count"
+               "nao.execution.duration"
+               "nao.provider.call.count"
+               "nao.provider.call.duration"
+               "nao.provider.token.count"
+               "nao.tool.call.count"
+               "nao.tool.call.duration"
+               "nao.retrieval.duration"
+               "nao.persistence.operation.duration"
+               "nao.execution.active"
+               "nao.health.status"
+               "nao.health.check.duration"
+               "nao.saturation.utilization"
+               "nao.saturation.rejected"
+               "nao.provider.cost"
+               "nao.provider.retry.count"
+               "nao.circuit.state"
+               "nao.policy.block.count"
+               "nao.retrieval.quality"
+               "nao.evaluation.drift" |],
+            TelemetryInstrument.definitions
+            |> List.map TelemetryInstrument.name
+            |> List.toArray
+        )
+
+        let point =
+            { Name = "nao.execution.active"
+              Value = 1.0
+              Labels = Map.ofList [ TelemetryAttribute.AgentId, "agent" ] }
+
+        MetricRecord.custom (CorrelationContext.root ()) DateTimeOffset.UtcNow point
+        |> ignore
+
+        Assert.ThrowsExactly<ArgumentException>(fun () ->
+            MetricRecord.custom
+                (CorrelationContext.root ())
+                DateTimeOffset.UtcNow
+                { point with
+                    Labels = Map.ofList [ "user.content", "sensitive prompt" ] }
+            |> ignore)
+        |> ignore
+
+    [<TestMethod>]
+    member _.ExecutionAttributesAndTraceIdentityPreserveLineageWithoutContent() =
+        let root = CorrelationContext.root ()
+        let delegated = CorrelationContext.delegateFrom root
+        let retry = CorrelationContext.retry delegated
+
+        let attributes =
+            TelemetryAttributes.execution authorization (TurnId.parse "turn") "agent" retry
+
+        Assert.AreEqual(
+            ExecutionId.serialize delegated.ExecutionId,
+            attributes.[TelemetryAttribute.CausationExecutionId]
+        )
+
+        Assert.AreEqual("2", attributes.[TelemetryAttribute.Attempt])
+        Assert.IsFalse(attributes |> Map.containsKey "input")
+
+        let tracer = InMemory.tracer ()
+        let rootSpan = tracer.StartTrace authorization root TelemetrySpan.Harness
+        let delegatedSpan = tracer.StartTrace authorization delegated TelemetrySpan.Harness
+        Assert.AreEqual(rootSpan.TraceId, delegatedSpan.TraceId)
+        Assert.AreEqual(TraceId.ofCorrelation root.CorrelationId, rootSpan.TraceId)
 
 [<TestClass>]
 type ResilienceTests() =

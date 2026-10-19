@@ -18,6 +18,7 @@
     <Compile Include="src/PublishingConversationStoreTests.fs" />
     <Compile Include="src/ConversationContextRenderTests.fs" />
     <Compile Include="src/OrchestratorObservabilityTests.fs" />
+    <Compile Include="src/TelemetryPropagationTests.fs" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Nao.Testing\Nao.Testing.fsproj" />

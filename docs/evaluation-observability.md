@@ -371,6 +371,38 @@ The JSONL archive persists ownership metadata and deletion tombstones without se
 
 Nao provides parent/child traces, metrics, token usage, execution journals, and resilience primitives.
 
+`TelemetrySchema` fixes the unreleased version-1 vocabulary. Standard attributes cover tenant,
+workspace, session, turn, execution, correlation, causation, retry attempt, agent, tool,
+provider, model, storage system, storage operation, terminal state, and error category. Harness,
+harness-stage, orchestration-round, provider, tool, retrieval, reasoner, and persistence span
+names are stable constants rather than caller-defined strings.
+
+Harness traces use the correlation ID as their trace identity. Delegated and retried executions
+therefore remain in one trace while `ExecutionId`, `CausationId`, and `Attempt` preserve their
+lineage. The Orleans `ProcessAsync` and `ProcessWithContextAsync` contracts now require an
+`OrleansCorrelationContext`; they no longer create a disconnected correlation root inside the
+grain. The version-1 worker protocol carries execution, correlation, causation, and attempt
+identity and reconstructs the exact `ExecutionContext` in the worker.
+
+Canonical instruments define execution, provider, token, tool, retrieval, persistence, and
+active-execution counters, histograms, and gauges. Custom observations must use one of these
+instruments and only its bounded label allowlist. Prompt, response, tool input, and other user
+content are not valid metric labels. Production harness spans record input lengths rather than
+input content.
+
+Provider token evidence is `Split`, `Aggregate`, or `Unavailable`. Aggregate execution metrics
+expose input and output totals only when every provider call reported both values, and expose a
+provider total only when every call reported at least an aggregate. Missing evidence remains
+`None`; it is never converted to zero. Input/output budget checks fail closed when splits are
+unavailable.
+
+`CostModel.create` requires a caller-owned pricing identity and version. `EstimateCost` succeeds
+only when all required token splits are available and returns `CostEstimate` with the pricing
+identity, pricing version, and USD amount. Provider adapters do not own or silently update prices.
+
+Span failures use the bounded `TelemetryErrorCategory` taxonomy, and root harness spans record the
+bounded `TelemetryTerminalState`. Arbitrary exception messages no longer become error dimensions.
+
 `TraceStore` supports counted deletion for one `AgentId` and strict retention purge by `StartedAt`. In-memory traces are removed directly; file and ADO.NET stores persist tombstones so deleted traces remain absent after replay. These tombstones are logical deletion, not physical erasure of the underlying append-only payloads.
 
 `ExecutionJournal` requires stable record, session-workflow, and turn identity and supports counted owner/cutoff deletion. Retention must preserve records while compensation is still possible; coordinated session destruction deletes the session journal before clearing runtime identity.
@@ -386,12 +418,10 @@ Metrics capture actual LLM calls, latency, and provider-reported usage. Nao pres
 
 ```fsharp
 let metrics = InMemory.metrics ()
-let pricing =
-    { InputCostPer1K = inputPrice
-      OutputCostPer1K = outputPrice }
+let pricing = CostModel.create "host-pricing" "2026-10" inputPrice outputPrice
 
-let cost = metrics.EstimateCost pricing
-let summary = metrics.GetMetrics()
+let cost = metrics.EstimateCost authorization pricing
+let summary = metrics.GetMetrics authorization
 ```
 
 Pricing remains host-owned because model prices vary by deployment and change independently of the framework.
@@ -427,20 +457,162 @@ One user turn should be traceable across Orleans, the harness, orchestration, pr
 
 ## External telemetry
 
-Standard OpenTelemetry trace and metric export, structured-log correlation, OTLP transport, Prometheus exposure, dashboards, and operational alerts remain roadmap work.
+`Nao.Telemetry.OpenTelemetry` subscribes to the backend-neutral `EventBus` and projects
+`ObservabilityCaptured` signals into OpenTelemetry activities, instruments, and structured logs.
+Activity trace IDs preserve Nao correlation IDs, local child spans preserve their parent
+relationship, and logs are emitted with the active activity so OTLP backends receive trace and
+span correlation.
 
-Exporters require bounded queues, batching, retry/drop policy, graceful shutdown, and protection against telemetry failures blocking execution.
+Hosts create one exporter, subscribe its consumer, and shut it down before disposing the backend:
+
+```fsharp
+let endpoints =
+    { Traces = Uri "https://telemetry.eu-west.example/v1/traces"
+      Metrics = Uri "https://telemetry.eu-west.example/v1/metrics"
+      Logs = Uri "https://telemetry.eu-west.example/v1/logs" }
+
+let otlp =
+    { Endpoints = endpoints
+      Transport = OtlpTransport.HttpProtobuf
+      Headers = None }
+
+let destination =
+    TelemetryDestination.create
+        "eu-west"
+        (Some otlp)
+        TelemetryTransportSecurity.RequireTls
+        (TelemetryAtRestEncryption.BackendManaged "production-telemetry-key")
+
+let tenantPolicy tenantId =
+    Some(
+        TelemetryTenantPolicy.create
+            tenantId
+            "eu-west"
+            (TimeSpan.FromHours 24)
+            TelemetryContentCapture.Disabled
+            0.1
+    )
+
+let privacy =
+    TelemetryPrivacyConfiguration.create
+        tenantPolicy
+        privateSamplingSalt
+        recordRedactionEvidenceAsync
+        (fun () -> DateTimeOffset.UtcNow)
+
+let exportConfig =
+    TelemetryExportConfiguration.create
+        "nao-host"
+        "1.0.0"
+        (Map [ "deployment.environment.name", "development" ])
+        (Map [ "eu-west", destination ])
+        privacy
+        2048
+        3
+        (TimeSpan.FromMilliseconds 25)
+        2048
+        512
+        (TimeSpan.FromSeconds 5)
+        (TimeSpan.FromSeconds 10)
+        (TimeSpan.FromSeconds 15)
+
+use exporter = OpenTelemetryExporter.create exportConfig
+EventBus.subscribe exporter.Consumer eventBus
+
+// Before host services and the event bus are disposed:
+let! shutdown = exporter.ShutdownAsync cancellationToken
+```
+
+The ingress channel uses `TryWrite`; agent execution never waits for an exporter. When the
+configured capacity is exhausted, the newest signal is dropped and `Statistics.Dropped`
+increments. One reader preserves accepted signal order. Sink conversion failures retry with
+bounded exponential backoff and then increment `Statistics.Failed`. OpenTelemetry trace and log
+processors have bounded queues and batches; metric export uses the configured periodic deadline.
+Exporter or collector retry cannot make Nao's in-process memory unbounded.
+
+`ShutdownAsync` stops accepting signals, drains accepted work, force-flushes trace and metric
+providers, and shuts down within the configured deadline. It returns `TimedOut` and cancels the
+pump when that deadline expires. Hosts should alert on dropped/failed statistics and treat them as
+explicit telemetry loss, never as an execution failure.
+
+`ScrapePrometheus` returns a Prometheus-compatible projection of canonical Nao instruments for
+hosts that expose their own authenticated scrape endpoint. OTLP metrics remain the preferred
+multi-tenant production path.
+
+The local reference deployment in [`deploy/observability`](../deploy/observability/) runs an OTLP
+collector with gRPC and HTTP/protobuf receivers, Tempo, Prometheus, Loki, and provisioned Grafana
+data sources and dashboards:
+
+```bash
+docker compose -f deploy/observability/docker-compose.yml up
+```
+
+Use `http://localhost:3000` for Grafana and `http://localhost:9090` for Prometheus. The collector
+receives OTLP on ports `4317` and `4318`. The reference stack is for local development; production
+hosts must supply authenticated, encrypted endpoints and deployment-specific retention controls.
 
 ## Privacy
 
-Operational metadata and captured content need separate controls. Telemetry must:
+Every `EventScope` carries the tenant identity derived from the host-authenticated authorization
+scope. Export policy never infers tenancy from user, session, or storage keys.
 
-- Redact secrets and protected data before export
-- Avoid user content in metric labels
-- Apply tenant retention and regional policy
-- Keep sampling decisions trace-consistent
-- Restrict audit mutation
-- Record redaction without retaining removed values
+`TelemetryAttributes.sensitivity` classifies standard fields as operational metadata or
+identifiers and treats unknown attributes as protected content. `TelemetryContentCapture` is
+configured independently:
+
+- `Disabled` replaces protected values with `[CONTENT_DISABLED]`.
+- `Redacted` permits content only after credential, bearer-token, email, and phone patterns are
+  removed.
+
+Known execution-local secrets are already removed at the event-bus boundary. The exporter applies
+its independent privacy pass afterward, so canary credentials and synthetic personal data are
+removed even when they were not registered as resolved Nao secrets. Redaction evidence contains
+only rule IDs, removal counts, tenant/execution/correlation identity, region, and capture mode; it
+never contains the removed value. If evidence recording fails, export fails and follows the
+bounded exporter retry/failure path rather than producing unaudited telemetry.
+
+`TelemetryTenantPolicy` selects the destination region, maximum export age, content mode, and
+sampling ratio. Missing or mismatched tenant policy fails closed. Events older than the tenant
+export-age window are discarded before export. Sampling hashes the private sampling salt with the
+correlation ID, so every signal in one trace receives the same decision across processes.
+`PrivacyStatistics` reports redacted, sampled-out, expired, and missing-policy counts.
+
+Production `TelemetryDestination` values require HTTPS endpoints and backend-managed at-rest
+encryption identity. Plain HTTP and volatile-only destinations require the explicit
+`LocalDevelopment` mode; external destinations cannot claim volatile-only storage. Each tenant
+policy routes only to its configured regional destination. The destination operator must enforce
+the corresponding physical retention period, including replicas and backups; the adapter's
+maximum export age prevents stale data from entering that backend but does not delete remote data.
+
+Audit entries remain append-only. Exact-scope subject erasure uses `DeleteScopeAsync`; scheduled
+retention deletion additionally requires `AuditRetentionAuthorization`, the
+`nao.audit.retention.manage` role, and multi-factor or phishing-resistant authentication.
+
+## Operational diagnostics
+
+`OperationalHealthCheck` defines cancellation-aware liveness, readiness, startup, and dependency
+probes without reusing the agent preflight `ReadinessCheck` contract. Each result uses bounded
+state and reason values and identifies one host, provider, storage system, queue, knowledge index,
+or reasoner. Host adapters map liveness to process viability, startup to initialization
+completion, readiness to admission safety, and dependency checks to the independently named
+dependencies.
+
+`SaturationSignal` reports current usage, capacity, and rejected work independently for provider
+limits, execution workers, Orleans grains, storage pools, and telemetry queues.
+`OperationalTelemetry` projects health and saturation into canonical bounded-label metrics.
+Health projection writes all three state series on every observation so a recovered component
+clears its previous unhealthy series.
+
+`DiagnosticSnapshot` contains only typed health and saturation observations. It has no prompt,
+message, tool input/output, arbitrary metadata, exception, or credential field, and rejects
+duplicate component observations. Hosts may expose snapshots only through their authenticated
+administrative surface.
+
+The reference Grafana dashboard covers execution success, latency, cost, tokens, retries, circuit
+states, policy blocks, retrieval quality, evaluation drift, health, and saturation. Prometheus
+rules include actionable component-health, saturation, execution-failure, provider-latency, and
+evaluation-drift alerts. Each alert links to the
+[operational runbooks](operations-runbooks.md).
 
 ## Roadmap
 

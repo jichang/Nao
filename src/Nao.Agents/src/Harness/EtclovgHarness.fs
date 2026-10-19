@@ -93,6 +93,7 @@ module EtclovgHarness =
                 sprintf "%s/%s" userId sessionId
 
         EventScope.Create(
+            (request.Authorization |> AuthorizationScope.tenantId |> TenantId.value),
             userId,
             sessionId,
             request.ConversationId,
@@ -929,32 +930,41 @@ module EtclovgHarness =
                         let rootSpan =
                             config.Tracer
                             |> Option.map (fun t ->
-                                let s =
-                                    t.StartTrace
-                                        request.Authorization
-                                        execCtx.Correlation
-                                        (sprintf "harness:%s" agent.Metadata.Name)
+                                let s = t.StartTrace request.Authorization execCtx.Correlation TelemetrySpan.Harness
 
                                 t.SetAttributes
                                     request.Authorization
                                     s
-                                    (Map.ofList
-                                        [ "agent.name", agent.Metadata.Name
-                                          "input", effectiveInput
-                                          "execution.id", ExecutionId.serialize execCtx.ExecutionId ])
+                                    (TelemetryAttributes.execution
+                                        request.Authorization
+                                        request.TurnId
+                                        request.AgentId
+                                        execCtx.Correlation)
 
                                 s)
+
+                        let endRootSpan terminalState errorCategory status =
+                            match rootSpan, config.Tracer with
+                            | Some span, Some tracer ->
+                                tracer.SetAttributes
+                                    request.Authorization
+                                    span
+                                    (Map.ofList
+                                        [ TelemetryAttribute.TerminalState, TelemetryTerminalState.value terminalState
+                                          TelemetryAttribute.ErrorCategory, TelemetryErrorCategory.value errorCategory ])
+
+                                tracer.EndSpan request.Authorization span status
+                            | _ -> ()
 
                         // === T: Tool Protocol — Record available tools in span ===
                         match config.ToolProtocol, rootSpan, config.Tracer with
                         | Some protocol, Some span, Some tracer ->
                             let! tools = protocol.ListTools()
-                            let toolNames = tools |> List.map (fun t -> t.Name) |> String.concat ","
 
                             tracer.SetAttributes
                                 request.Authorization
                                 span
-                                (Map.ofList [ "tools.available", toolNames; "tools.count", string tools.Length ])
+                                (Map.ofList [ "nao.tool.available_count", string tools.Length ])
                         | _ -> ()
 
                         // === E: Execution — Run agent within sandbox ===
@@ -963,7 +973,7 @@ module EtclovgHarness =
                         let execSpan =
                             match rootSpan, config.Tracer with
                             | Some parent, Some tracer ->
-                                let s = tracer.StartSpan request.Authorization parent "agent.execute"
+                                let s = tracer.StartSpan request.Authorization parent TelemetrySpan.HarnessStage
 
                                 tracer.SetAttributes
                                     request.Authorization
@@ -1108,14 +1118,20 @@ module EtclovgHarness =
                             match executionOutcome with
                             | Ok(Ok _) -> tracer.EndSpan request.Authorization s SpanStatus.Ok
                             | Ok(Error limit) ->
-                                tracer.EndSpan request.Authorization s (SpanStatus.Error(sprintf "%A" limit))
+                                tracer.EndSpan
+                                    request.Authorization
+                                    s
+                                    (SpanStatus.Error TelemetryErrorCategory.ResourceLimit)
                             | Error status ->
                                 let failure =
                                     status.ToPlatformFailure(
                                         request.Correlation.ExecutionId |> ExecutionId.serialize |> Some
                                     )
 
-                                tracer.EndSpan request.Authorization s (SpanStatus.Error failure.Message)
+                                tracer.EndSpan
+                                    request.Authorization
+                                    s
+                                    (SpanStatus.Error(TelemetryErrorCategory.ofPlatform failure.Category))
                         | _ -> ()
 
                         match executionOutcome with
@@ -1134,10 +1150,19 @@ module EtclovgHarness =
                             | Some store -> do! store.SaveAsync request.Authorization trace
                             | None -> ()
 
-                            match rootSpan, config.Tracer with
-                            | Some span, Some tracer ->
-                                tracer.EndSpan request.Authorization span (SpanStatus.Error failure.Message)
-                            | _ -> ()
+                            let errorCategory = TelemetryErrorCategory.ofPlatform failure.Category
+
+                            endRootSpan
+                                (match status with
+                                 | ExecutionTerminalStatus.Cancelled -> TelemetryTerminalState.Cancelled
+                                 | ExecutionTerminalStatus.TimedOut -> TelemetryTerminalState.TimedOut
+                                 | ExecutionTerminalStatus.Denied _ -> TelemetryTerminalState.Denied
+                                 | ExecutionTerminalStatus.LimitExceeded _ -> TelemetryTerminalState.LimitExceeded
+                                 | ExecutionTerminalStatus.Indeterminate _ -> TelemetryTerminalState.Indeterminate
+                                 | ExecutionTerminalStatus.Failed _ -> TelemetryTerminalState.Failed
+                                 | ExecutionTerminalStatus.Succeeded -> TelemetryTerminalState.Succeeded)
+                                errorCategory
+                                (SpanStatus.Error errorCategory)
 
                             return
                                 stoppedResult
@@ -1166,13 +1191,10 @@ module EtclovgHarness =
                             | Some store -> do! store.SaveAsync request.Authorization trace
                             | None -> ()
                             // End root span on failure
-                            match rootSpan, config.Tracer with
-                            | Some s, Some tracer ->
-                                tracer.EndSpan
-                                    request.Authorization
-                                    s
-                                    (SpanStatus.Error(sprintf "Limit exceeded: %A" limitExceeded))
-                            | _ -> ()
+                            endRootSpan
+                                TelemetryTerminalState.LimitExceeded
+                                TelemetryErrorCategory.ResourceLimit
+                                (SpanStatus.Error TelemetryErrorCategory.ResourceLimit)
 
                             return
                                 failResult
@@ -1337,10 +1359,10 @@ module EtclovgHarness =
                                 let! _ =
                                     AgentLifecycle.failAsync agent.Metadata.Id (exn "Constitution violation") _startedLc
 
-                                match rootSpan, config.Tracer with
-                                | Some s, Some tracer ->
-                                    tracer.EndSpan request.Authorization s (SpanStatus.Error "Constitution violation")
-                                | _ -> ()
+                                endRootSpan
+                                    TelemetryTerminalState.Denied
+                                    TelemetryErrorCategory.Authorization
+                                    (SpanStatus.Error TelemetryErrorCategory.Authorization)
 
                                 let violationIds = constitutionViolations |> List.map _.RuleId
 
@@ -1426,9 +1448,9 @@ module EtclovgHarness =
                                         s
                                         "harness.complete"
                                         (Map.ofList [ "response.length", string response.Length ])
-
-                                    tracer.EndSpan request.Authorization s SpanStatus.Ok
                                 | _ -> ()
+
+                                endRootSpan TelemetryTerminalState.Succeeded TelemetryErrorCategory.None SpanStatus.Ok
 
                                 EventBus.publishAsync
                                     (NaoEvent.TurnProgress(scope, ProgressSignal.AnswerProduced response))

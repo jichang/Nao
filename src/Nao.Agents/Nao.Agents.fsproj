@@ -65,10 +65,12 @@
     <!-- Trace types are referenced by the orchestrator (per-tool spans), so they must
          be compiled before it. -->
     <Compile Include="src/Observability/ExecutionJournal.fs" />
+    <Compile Include="src/Observability/TelemetrySchema.fs" />
     <Compile Include="src/Observability/Trace.fs" />
     <!-- The orchestrator/harness publish turn progress onto the durable event bus, so the
          event envelope (Events.fs) and every type it aggregates must compile before them. -->
     <Compile Include="src/Observability/Metrics.fs" />
+    <Compile Include="src/Observability/OperationalDiagnostics.fs" />
     <Compile Include="src/Observability/ExecutionInstrumentation.fs" />
     <Compile Include="src/Verification/Verification.fs" />
     <!-- G: Governance & Security -->

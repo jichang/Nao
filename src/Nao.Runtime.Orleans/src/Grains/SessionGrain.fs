@@ -109,6 +109,49 @@ type SessionStartOptions() =
     [<Id(5u)>]
     member val RuntimeMode: string = "" with get, set
 
+/// Trace and execution lineage crossing the Orleans grain boundary.
+[<GenerateSerializer>]
+type OrleansCorrelationContext() =
+    [<Id(0u)>]
+    member val ExecutionId: string = "" with get, set
+
+    [<Id(1u)>]
+    member val CorrelationId: string = "" with get, set
+
+    [<Id(2u)>]
+    member val CausationExecutionId: string = "" with get, set
+
+    [<Id(3u)>]
+    member val Attempt: int = 0 with get, set
+
+[<RequireQualifiedAccess>]
+module OrleansCorrelationContext =
+    let fromDomain (correlation: CorrelationContext) =
+        let envelope = OrleansCorrelationContext()
+        envelope.ExecutionId <- ExecutionId.serialize correlation.ExecutionId
+        envelope.CorrelationId <- CorrelationId.serialize correlation.CorrelationId
+
+        envelope.CausationExecutionId <-
+            correlation.CausationId
+            |> Option.map ExecutionId.serialize
+            |> Option.defaultValue ""
+
+        envelope.Attempt <- correlation.Attempt
+        envelope
+
+    let toDomain (value: OrleansCorrelationContext) =
+        if isNull (box value) || value.Attempt <= 0 then
+            invalidArg (nameof value) "Orleans correlation context is missing or invalid."
+
+        { ExecutionId = ExecutionId.parse value.ExecutionId
+          CorrelationId = CorrelationId.parse value.CorrelationId
+          CausationId =
+            if String.IsNullOrWhiteSpace value.CausationExecutionId then
+                None
+            else
+                Some(ExecutionId.parse value.CausationExecutionId)
+          Attempt = value.Attempt }
+
 module internal SessionAuthorization =
     let tryCreateScope
         (principal: SecurityPrincipal)
@@ -159,14 +202,19 @@ type ISessionGrain =
     abstract member StartAsync: options: SessionStartOptions -> Task<bool>
 
     /// Process user input through the ETCLOVG harness until completion or caller cancellation.
-    abstract member ProcessAsync: input: string * cancellationToken: CancellationToken -> Task<string>
+    abstract member ProcessAsync:
+        input: string * correlation: OrleansCorrelationContext * cancellationToken: CancellationToken -> Task<string>
 
     /// Process user input where the LLM prompt and the persisted/display text differ:
     /// `llmInput` (with embedded attachment content) is what the agent sees, while only
     /// `displayText` plus `attachmentNames` are stored in the transcript. Caller cancellation
     /// flows through the grain boundary into the harness.
     abstract member ProcessWithContextAsync:
-        llmInput: string * displayText: string * attachmentNames: string[] * cancellationToken: CancellationToken ->
+        llmInput: string *
+        displayText: string *
+        attachmentNames: string[] *
+        correlation: OrleansCorrelationContext *
+        cancellationToken: CancellationToken ->
             Task<string>
 
     /// Id of the most recently processed turn (empty if none). Use to attach feedback.
@@ -267,6 +315,7 @@ type SessionGrain
         let sessionKey = sprintf "%s/%s" info.UserId info.SessionId
 
         EventScope.Create(
+            info.TenantId,
             info.UserId,
             info.SessionId,
             info.ActiveConversation,
@@ -561,6 +610,7 @@ type SessionGrain
         (llmInput: string)
         (displayText: string)
         (attachmentNames: string[])
+        (correlation: CorrelationContext)
         (cancellationToken: CancellationToken)
         : Task<string> =
         task {
@@ -590,7 +640,6 @@ type SessionGrain
                         ConversationContextRender.withHistory 8 (activeConversation().Messages) llmInput
 
                     let turnId = TurnId.generate () |> TurnId.value
-                    let correlation = CorrelationContext.root ()
                     let turnScope = makeScope turnId correlation
                     // The recorder must exist before the agent is built so it can subscribe to the
                     // event bus and capture this turn's whole execution (rounds, tool calls,
@@ -927,16 +976,24 @@ type SessionGrain
                             return true
             }
 
-        member _.ProcessAsync(input: string, cancellationToken: CancellationToken) : Task<string> =
-            processCoreAsync input input [||] cancellationToken
+        member _.ProcessAsync
+            (input: string, correlation: OrleansCorrelationContext, cancellationToken: CancellationToken)
+            : Task<string> =
+            processCoreAsync input input [||] (OrleansCorrelationContext.toDomain correlation) cancellationToken
 
         member _.ProcessWithContextAsync
-            (llmInput: string, displayText: string, attachmentNames: string[], cancellationToken: CancellationToken)
-            : Task<string> =
+            (
+                llmInput: string,
+                displayText: string,
+                attachmentNames: string[],
+                correlation: OrleansCorrelationContext,
+                cancellationToken: CancellationToken
+            ) : Task<string> =
             processCoreAsync
                 llmInput
                 displayText
                 (if isNull attachmentNames then [||] else attachmentNames)
+                (OrleansCorrelationContext.toDomain correlation)
                 cancellationToken
 
         member _.GetLastTurnIdAsync() : Task<string> =

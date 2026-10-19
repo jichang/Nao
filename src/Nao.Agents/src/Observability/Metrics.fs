@@ -4,14 +4,40 @@ open System
 open System.Threading
 open System.Threading.Tasks
 
-/// Cost model for LLM provider pricing
+/// Versioned caller-owned LLM pricing. Prices are never embedded in provider adapters.
 type CostModel =
-    {
-        /// Cost per 1K input tokens in USD
-        InputCostPer1K: decimal
-        /// Cost per 1K output tokens in USD
-        OutputCostPer1K: decimal
-    }
+    private
+        { PricingId: string
+          Version: string
+          InputCostPer1K: decimal
+          OutputCostPer1K: decimal }
+
+[<RequireQualifiedAccess>]
+module CostModel =
+    let create pricingId version inputCostPer1K outputCostPer1K =
+        if String.IsNullOrWhiteSpace pricingId || pricingId <> pricingId.Trim() then
+            invalidArg (nameof pricingId) "Pricing identity must be canonical and non-blank."
+
+        if String.IsNullOrWhiteSpace version || version <> version.Trim() then
+            invalidArg (nameof version) "Pricing version must be canonical and non-blank."
+
+        if inputCostPer1K < 0m || outputCostPer1K < 0m then
+            invalidArg (nameof inputCostPer1K) "Token prices cannot be negative."
+
+        { PricingId = pricingId
+          Version = version
+          InputCostPer1K = inputCostPer1K
+          OutputCostPer1K = outputCostPer1K }
+
+    let pricingId value = value.PricingId
+    let version value = value.Version
+    let inputCostPer1K value = value.InputCostPer1K
+    let outputCostPer1K value = value.OutputCostPer1K
+
+type CostEstimate =
+    { PricingId: string
+      PricingVersion: string
+      AmountUsd: decimal }
 
 /// A single metrics data point
 type MetricPoint =
@@ -24,10 +50,17 @@ type MetricPoint =
         Labels: Map<string, string>
     }
 
+/// Provider-reported usage fidelity. Missing splits are never represented as zero.
+[<RequireQualifiedAccess>]
+type ProviderTokenUsage =
+    | Split of inputTokens: int * outputTokens: int
+    | Aggregate of totalTokens: int
+    | Unavailable
+
 /// One accepted metric observation.
 [<RequireQualifiedAccess>]
 type MetricPayload =
-    | LlmCall of inputTokens: int * outputTokens: int * latencyMs: int64
+    | LlmCall of tokens: ProviderTokenUsage * latencyMs: int64
     | EmbeddingCall of
         profileId: string *
         batchId: string *
@@ -47,11 +80,21 @@ type MetricRecord =
       Payload: MetricPayload }
 
 module MetricRecord =
-    let llmCall correlation timestamp inputTokens outputTokens latencyMs : MetricRecord =
+    let llmCall correlation timestamp tokens latencyMs : MetricRecord =
+        match tokens with
+        | ProviderTokenUsage.Split(inputTokens, outputTokens) when inputTokens < 0 || outputTokens < 0 ->
+            invalidArg (nameof tokens) "Provider token splits cannot be negative."
+        | ProviderTokenUsage.Aggregate totalTokens when totalTokens < 0 ->
+            invalidArg (nameof tokens) "Provider aggregate token usage cannot be negative."
+        | _ -> ()
+
+        if latencyMs < 0L then
+            invalidArg (nameof latencyMs) "Provider latency cannot be negative."
+
         { Id = Guid.NewGuid()
           Correlation = correlation
           Timestamp = timestamp
-          Payload = MetricPayload.LlmCall(inputTokens, outputTokens, latencyMs) }
+          Payload = MetricPayload.LlmCall(tokens, latencyMs) }
 
     let toolCall correlation timestamp toolName durationMs success : MetricRecord =
         { Id = Guid.NewGuid()
@@ -85,6 +128,13 @@ module MetricRecord =
             ) }
 
     let custom correlation timestamp point : MetricRecord =
+        let instrument =
+            TelemetryInstrument.tryFind point.Name
+            |> Option.defaultWith (fun () ->
+                invalidArg (nameof point) "Custom metrics must use a canonical telemetry instrument.")
+
+        TelemetryAttributes.validateMetricLabels instrument point.Labels |> ignore
+
         { Id = Guid.NewGuid()
           Correlation = correlation
           Timestamp = timestamp
@@ -99,10 +149,12 @@ type ExecutionMetrics =
         TotalLlmCalls: int
         /// Total embedding batches executed
         TotalEmbeddingCalls: int
-        /// Total input tokens consumed
-        TotalInputTokens: int
-        /// Total output tokens generated
-        TotalOutputTokens: int
+        /// Total input tokens when every provider call reported a split.
+        TotalInputTokens: int option
+        /// Total output tokens when every provider call reported a split.
+        TotalOutputTokens: int option
+        /// Total provider tokens when every provider call reported at least an aggregate.
+        TotalProviderTokens: int option
         /// Total embedding input tokens consumed
         TotalEmbeddingInputTokens: int
         /// Total estimated cost in USD
@@ -129,8 +181,9 @@ type ExecutionMetrics =
         { Usage = ResourceUsage.Zero
           TotalLlmCalls = 0
           TotalEmbeddingCalls = 0
-          TotalInputTokens = 0
-          TotalOutputTokens = 0
+          TotalInputTokens = Some 0
+          TotalOutputTokens = Some 0
+          TotalProviderTokens = Some 0
           TotalEmbeddingInputTokens = 0
           TotalCostUsd = 0m
           TotalEmbeddingCostUsd = 0m
@@ -161,8 +214,8 @@ type MetricsCollector =
         GetMetrics: AuthorizationScope -> ExecutionMetrics
         /// Get observations produced by one execution in one authenticated scope
         GetByExecution: AuthorizationScope -> ExecutionId -> MetricRecord list
-        /// Calculate one authenticated scope's cost using a cost model
-        EstimateCost: AuthorizationScope -> CostModel -> decimal
+        /// Calculate cost only when every provider call reported input/output splits.
+        EstimateCost: AuthorizationScope -> CostModel -> CostEstimate option
         /// Delete every metric observation in one authenticated scope
         DeleteScopeAsync: AuthorizationScope -> Task<Result<int, PlatformFailure>>
         /// Delete observations in one authenticated scope before a strict cutoff

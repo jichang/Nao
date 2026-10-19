@@ -65,6 +65,15 @@ module ExecutionInstrumentation =
     let internal embeddingCalls context =
         lock context.EmbeddingCalls (fun () -> List.ofSeq context.EmbeddingCalls)
 
+    let tryStartSpan operationName =
+        match current.Value with
+        | Some context ->
+            match context.Tracer, context.ParentSpan with
+            | Some tracer, Some parent ->
+                Some(context.Authorization, tracer, tracer.StartSpan context.Authorization parent operationName)
+            | _ -> None
+        | None -> None
+
     let beginEmbeddingCall (descriptor: EmbeddingCallDescriptor) =
         let descriptor: EmbeddingCallDescriptor =
             { descriptor with
@@ -179,6 +188,6 @@ module ExecutionInstrumentation =
         tryEnd handle (fun () ->
             match handle.Authorization, handle.Tracer, handle.Span with
             | Some authorization, Some tracer, Some span ->
-                tracer.EndSpan authorization span (SpanStatus.Error(string category))
+                tracer.EndSpan authorization span (SpanStatus.Error(TelemetryErrorCategory.ofPlatform category))
             | _ -> ())
         |> ignore

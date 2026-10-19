@@ -13,11 +13,13 @@ type WorkerProtocolTests() =
         """{"tenantId":"tenant","subjectId":"user","impersonatedUserId":null,"impersonationReason":null,"serviceId":"api","serviceDelegations":[],"groupIds":["engineering"],"roles":["operator"],"claims":{"region":"private-region"},"authenticationStrength":"MultiFactor"}"""
 
     let executionId = "11111111-1111-1111-1111-111111111111"
+    let correlationId = "22222222-2222-2222-2222-222222222222"
+    let causationId = "33333333-3333-3333-3333-333333333333"
 
     let message kind principal required =
         let node =
             JsonNode.Parse(
-                """{"protocolVersion":0,"kind":"","agentId":"test","authorityAgentId":"test","input":"model input","output":"","error":"","executionId":"","correlationId":"","attempt":1,"processId":0,"enforceFileSystemPolicy":false,"allowedPaths":[],"secrets":{},"maxLlmCalls":10,"maxEmbeddingCalls":10,"maxTotalTokens":100,"maxCostUsd":"1","maxToolCalls":10,"limit":"","llmCalls":0,"embeddingCalls":0,"totalTokens":0,"estimatedCostUsd":"0","toolCalls":0,"principal":null,"agentLineage":[],"requirePrincipal":false}"""
+                """{"protocolVersion":0,"kind":"","agentId":"test","authorityAgentId":"test","input":"model input","output":"","error":"","executionId":"","correlationId":"","causationExecutionId":"","attempt":1,"processId":0,"enforceFileSystemPolicy":false,"allowedPaths":[],"secrets":{},"maxLlmCalls":10,"maxEmbeddingCalls":10,"maxTotalTokens":100,"maxCostUsd":"1","maxToolCalls":10,"limit":"","llmCalls":0,"embeddingCalls":0,"totalTokens":0,"estimatedCostUsd":"0","toolCalls":0,"principal":null,"agentLineage":[],"requirePrincipal":false}"""
             )
             |> Option.ofObj
             |> Option.defaultWith (fun () -> invalidOp "Worker protocol fixture must be a JSON object.")
@@ -27,9 +29,12 @@ type WorkerProtocolTests() =
         node["principal"] <- JsonValue.Create "__principal__"
         node["requirePrincipal"] <- JsonValue.Create(required: bool)
 
-        if required then
+        if kind = "execute" then
             node["executionId"] <- JsonValue.Create executionId
+            node["correlationId"] <- JsonValue.Create correlationId
+            node["causationExecutionId"] <- JsonValue.Create causationId
 
+        if required then
             node["agentLineage"] <- JsonNode.Parse(sprintf """[{"agentId":"test","executionId":"%s"}]""" executionId)
 
         node.ToJsonString().Replace("\"__principal__\"", principal)
@@ -83,6 +88,7 @@ type WorkerProtocolTests() =
                 invoked <- true
                 Assert.AreEqual(Some expected, request.Principal)
                 Assert.AreEqual("test", request.AuthorityAgentId)
+                Assert.AreEqual(Some causationId, request.CausationExecutionId)
 
                 Assert.AreEqual(
                     [ { AgentId = "test"

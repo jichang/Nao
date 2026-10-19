@@ -1,0 +1,140 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "panels": [
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "id": 1,
+      "targets": [
+        { "expr": "sum(rate(nao_execution_count_total[5m])) by (nao_terminal_state)", "refId": "A" }
+      ],
+      "title": "Execution rate by terminal state",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "id": 2,
+      "targets": [
+        {
+          "expr": "sum(rate(nao_provider_call_duration_milliseconds_sum[5m])) / sum(rate(nao_provider_call_duration_milliseconds_count[5m]))",
+          "refId": "A"
+        }
+      ],
+      "title": "Provider mean latency",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "id": 3,
+      "targets": [
+        { "expr": "sum(rate(nao_provider_token_count_total[5m])) by (nao_token_type)", "refId": "A" }
+      ],
+      "title": "Provider token rate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "id": 4,
+      "targets": [
+        { "expr": "{service_name=~\".+\"} | json", "refId": "A" }
+      ],
+      "title": "Correlated telemetry logs",
+      "type": "logs"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 16 },
+      "id": 5,
+      "targets": [
+        { "expr": "sum(rate(nao_provider_cost_USD_total[5m]))", "refId": "A" }
+      ],
+      "title": "Estimated provider cost rate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 16 },
+      "id": 6,
+      "targets": [
+        { "expr": "sum(rate(nao_provider_retry_count_total[5m]))", "refId": "A" }
+      ],
+      "title": "Provider retry rate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 16 },
+      "id": 7,
+      "targets": [
+        { "expr": "max(nao_circuit_state) by (nao_operational_component, nao_operational_component_name, nao_circuit_state)", "refId": "A" }
+      ],
+      "title": "Circuit states",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 24 },
+      "id": 8,
+      "targets": [
+        { "expr": "sum(rate(nao_policy_block_count_total[5m])) by (nao_policy_category)", "refId": "A" }
+      ],
+      "title": "Policy block rate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 24 },
+      "id": 9,
+      "targets": [
+        { "expr": "avg(nao_retrieval_quality) by (nao_retrieval_strategy, nao_quality_metric)", "refId": "A" }
+      ],
+      "title": "Retrieval quality",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 24 },
+      "id": 10,
+      "targets": [
+        { "expr": "max(nao_evaluation_drift) by (nao_quality_metric)", "refId": "A" }
+      ],
+      "title": "Evaluation drift",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 32 },
+      "id": 11,
+      "targets": [
+        { "expr": "max(nao_health_status) by (nao_health_probe, nao_operational_component, nao_operational_component_name, nao_health_state)", "refId": "A" }
+      ],
+      "title": "Component health",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 32 },
+      "id": 12,
+      "targets": [
+        { "expr": "max(nao_saturation_utilization) by (nao_operational_component, nao_operational_component_name)", "refId": "A" }
+      ],
+      "title": "Resource saturation",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 41,
+  "tags": ["nao", "observability"],
+  "templating": { "list": [] },
+  "time": { "from": "now-1h", "to": "now" },
+  "title": "Nao overview",
+  "uid": "nao-overview",
+  "version": 1
+}

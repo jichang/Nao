@@ -8,25 +8,44 @@ open System.Threading.Tasks
 /// per turn by the session grain) so each signal is attributed to the turn that produced it.
 module private Observability =
 
-    let buildScope (sessionKey: string) (turnId: string) (correlation: CorrelationContext) : EventScope =
+    let buildScope
+        (authorization: AuthorizationScope)
+        (sessionKey: string)
+        (turnId: string)
+        (correlation: CorrelationContext)
+        : EventScope =
         let userId, sessionId =
             match sessionKey.IndexOf('/') with
             | i when i >= 0 -> sessionKey.Substring(0, i), sessionKey.Substring(i + 1)
             | _ -> sessionKey, sessionKey
 
-        EventScope.Create(userId, sessionId, "", "", turnId, sessionKey, correlation)
+        let identity = AuthorizationScope.identity authorization
+
+        EventScope.Create(
+            TenantId.value identity.TenantId,
+            userId,
+            sessionId,
+            "",
+            WorkspaceId.value identity.WorkspaceId,
+            turnId,
+            sessionKey,
+            correlation
+        )
 
     /// Fire-and-forget publish for the synchronous (unit-returning) sinks. Safe to ignore:
     /// reads always go to the wrapped backing store, and InMemoryEventBus isolates a failing
     /// consumer, so a subscriber can never break the producer's turn.
     let emit
         (bus: EventBus)
+        (authorization: AuthorizationScope)
         (sessionKey: string)
         (turnId: string)
         (correlation: CorrelationContext)
         (signal: ObservabilitySignal)
         =
-        EventBus.publishAsync (ObservabilityCaptured(buildScope sessionKey turnId correlation, signal)) bus
+        EventBus.publishAsync
+            (ObservabilityCaptured(buildScope authorization sessionKey turnId correlation, signal))
+            bus
         |> ignore
 
 /// Functional publishing decorators for observability capabilities.
@@ -35,25 +54,25 @@ module private Publishing =
         { StartTrace =
             fun scope activeCorrelation operationName ->
                 let span = inner.StartTrace scope activeCorrelation operationName
-                Observability.emit bus sessionKey turnId activeCorrelation (SpanStarted span)
+                Observability.emit bus scope sessionKey turnId activeCorrelation (SpanStarted span)
                 span
           StartSpan =
             fun scope parentSpan operationName ->
                 let span = inner.StartSpan scope parentSpan operationName
-                Observability.emit bus sessionKey turnId span.Correlation (SpanStarted span)
+                Observability.emit bus scope sessionKey turnId span.Correlation (SpanStarted span)
                 span
           EndSpan =
             fun scope span status ->
                 inner.EndSpan scope span status
-                Observability.emit bus sessionKey turnId span.Correlation (SpanEnded(span, status))
+                Observability.emit bus scope sessionKey turnId span.Correlation (SpanEnded(span, status))
           AddEvent =
             fun scope span name attributes ->
                 inner.AddEvent scope span name attributes
-                Observability.emit bus sessionKey turnId span.Correlation (SpanEventAdded(span, name, attributes))
+                Observability.emit bus scope sessionKey turnId span.Correlation (SpanEventAdded(span, name, attributes))
           SetAttributes =
             fun scope span attributes ->
                 inner.SetAttributes scope span attributes
-                Observability.emit bus sessionKey turnId span.Correlation (SpanAttributesSet(span, attributes))
+                Observability.emit bus scope sessionKey turnId span.Correlation (SpanAttributesSet(span, attributes))
           GetTrace = inner.GetTrace
           GetByExecution = inner.GetByExecution }
 
@@ -61,7 +80,7 @@ module private Publishing =
         { Record =
             fun scope record ->
                 inner.Record scope record
-                Observability.emit bus sessionKey turnId correlation (MetricRecorded record)
+                Observability.emit bus scope sessionKey turnId correlation (MetricRecorded record)
           GetMetrics = inner.GetMetrics
           GetByExecution = inner.GetByExecution
           EstimateCost = inner.EstimateCost
@@ -77,7 +96,7 @@ module private Publishing =
                     do!
                         EventBus.publishAsync
                             (ObservabilityCaptured(
-                                Observability.buildScope sessionKey turnId correlation,
+                                Observability.buildScope scope sessionKey turnId correlation,
                                 ExecutionRecorded record
                             ))
                             bus
@@ -94,7 +113,7 @@ module private Publishing =
                     do!
                         EventBus.publishAsync
                             (ObservabilityCaptured(
-                                Observability.buildScope sessionKey turnId correlation,
+                                Observability.buildScope scope sessionKey turnId correlation,
                                 ExecutionReverted recordId
                             ))
                             bus
@@ -112,7 +131,10 @@ module private Publishing =
 
                 do!
                     EventBus.publishAsync
-                        (ObservabilityCaptured(Observability.buildScope sessionKey turnId correlation, TraceSaved trace))
+                        (ObservabilityCaptured(
+                            Observability.buildScope scope sessionKey turnId correlation,
+                            TraceSaved trace
+                        ))
                         bus
             }
 
@@ -131,7 +153,7 @@ module private Publishing =
                 do!
                     EventBus.publishAsync
                         (ObservabilityCaptured(
-                            Observability.buildScope sessionKey turnId correlation,
+                            Observability.buildScope scope sessionKey turnId correlation,
                             AuditRecorded entry
                         ))
                         bus

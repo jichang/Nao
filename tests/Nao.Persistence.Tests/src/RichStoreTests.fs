@@ -617,8 +617,7 @@ type MetricsTests() =
                     (MetricRecord.llmCall
                         correlation
                         (cutoff.AddMinutes(float index))
-                        (index * 10)
-                        (index * 5)
+                        (ProviderTokenUsage.Split(index * 10, index * 5))
                         (int64 (index * 20)))
 
             first.Record
@@ -639,18 +638,18 @@ type MetricsTests() =
                 (MetricRecord.custom
                     correlation
                     (cutoff.AddTicks(-1L))
-                    { Name = "old"
+                    { Name = "nao.execution.active"
                       Value = 1.0
-                      Labels = Map.empty })
+                      Labels = Map.ofList [ TelemetryAttribute.AgentId, "test-agent" ] })
 
             first.Record
                 ownerA
                 (MetricRecord.custom
                     correlation
                     cutoff
-                    { Name = "boundary"
+                    { Name = "nao.execution.active"
                       Value = 2.0
-                      Labels = Map.empty })
+                      Labels = Map.ofList [ TelemetryAttribute.AgentId, "test-agent" ] })
 
             first.Record ownerB (MetricRecord.toolCall correlation cutoff "search" 30L true)
 
@@ -659,8 +658,8 @@ type MetricsTests() =
             let expectedInput = [ 1..llmCount ] |> List.sumBy (fun index -> index * 10)
             let expectedOutput = [ 1..llmCount ] |> List.sumBy (fun index -> index * 5)
             Assert.AreEqual(llmCount, metricsA.TotalLlmCalls)
-            Assert.AreEqual(expectedInput, metricsA.TotalInputTokens)
-            Assert.AreEqual(expectedOutput, metricsA.TotalOutputTokens)
+            Assert.AreEqual(Some expectedInput, metricsA.TotalInputTokens)
+            Assert.AreEqual(Some expectedOutput, metricsA.TotalOutputTokens)
             Assert.AreEqual(1, metricsA.TotalEmbeddingCalls)
             Assert.AreEqual(17, metricsA.TotalEmbeddingInputTokens)
             Assert.AreEqual(0.004m, metricsA.TotalEmbeddingCostUsd)
@@ -688,7 +687,10 @@ type MetricsTests() =
             Assert.AreEqual(0, (afterDeletion.GetMetrics ownerA).TotalLlmCalls)
             Assert.AreEqual(0, (afterDeletion.GetMetrics ownerB).TotalToolCalls)
 
-            afterDeletion.Record ownerA (MetricRecord.llmCall correlation (cutoff.AddDays 1) 7 3 11L)
+            afterDeletion.Record
+                ownerA
+                (MetricRecord.llmCall correlation (cutoff.AddDays 1) (ProviderTokenUsage.Split(7, 3)) 11L)
+
             Assert.AreEqual(1, ((make ()).GetMetrics ownerA).TotalLlmCalls)
         }
 
@@ -720,14 +722,19 @@ type MetricsTests() =
         let path = Path.Combine(dir, "metrics", identityKey + ".jsonl")
         let collector = MetricsCollectors.file dir
         let correlation = CorrelationContext.root ()
-        let original = MetricRecord.llmCall correlation DateTimeOffset.UtcNow 10 5 20L
+
+        let original =
+            MetricRecord.llmCall correlation DateTimeOffset.UtcNow (ProviderTokenUsage.Split(10, 5)) 20L
+
         collector.Record scope original
         File.AppendAllText(path, "{invalid" + Environment.NewLine)
         let before = File.ReadAllBytes path
 
         let error =
             Assert.ThrowsExactly<InvalidDataException>(fun () ->
-                collector.Record scope (MetricRecord.llmCall correlation DateTimeOffset.UtcNow 20 10 30L))
+                collector.Record
+                    scope
+                    (MetricRecord.llmCall correlation DateTimeOffset.UtcNow (ProviderTokenUsage.Split(20, 10)) 30L))
 
         StringAssert.Contains(error.Message, "metrics/" + identityKey)
         StringAssert.Contains(error.Message, "event 2")

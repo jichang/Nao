@@ -42,6 +42,7 @@ module private TestOrchestrator =
 type OrchestratorObservabilityTests() =
     let scope =
         EventScope.Create(
+            "tenant",
             "user",
             "session",
             "conversation",
@@ -161,11 +162,45 @@ type OrchestratorObservabilityTests() =
         let executionSpans =
             tracer.GetByExecution authorized context.Correlation.ExecutionId
 
-        Assert.IsTrue(executionSpans.Length >= 2)
+        Assert.IsTrue(executionSpans.Length >= 5)
 
         Assert.IsTrue(
             executionSpans
             |> List.forall (fun span -> span.Correlation = context.Correlation)
+        )
+
+        Assert.IsTrue(
+            executionSpans
+            |> List.exists (fun span -> span.OperationName = TelemetrySpan.Harness)
+        )
+
+        Assert.IsTrue(
+            executionSpans
+            |> List.exists (fun span -> span.OperationName = TelemetrySpan.OrchestrationRound)
+        )
+
+        Assert.IsTrue(
+            executionSpans
+            |> List.exists (fun span -> span.OperationName = TelemetrySpan.ProviderCall)
+        )
+
+        Assert.IsTrue(
+            executionSpans
+            |> List.exists (fun span -> span.OperationName = TelemetrySpan.ToolCall)
+        )
+
+        let rootSpan =
+            executionSpans
+            |> List.find (fun span -> span.OperationName = TelemetrySpan.Harness)
+
+        Assert.AreEqual(TraceId.ofCorrelation context.Correlation.CorrelationId, rootSpan.TraceId)
+        Assert.AreEqual("turn", rootSpan.Attributes.[TelemetryAttribute.TurnId])
+        Assert.AreEqual("test", rootSpan.Attributes.[TelemetryAttribute.AgentId])
+
+        Assert.IsTrue(
+            executionSpans
+            |> List.collect (fun span -> span.Attributes |> Map.keys |> Seq.toList)
+            |> List.forall (fun key -> key <> "input" && key <> "tool.input")
         )
 
         Assert.AreEqual(1, history.Length)

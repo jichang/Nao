@@ -38,6 +38,7 @@
     <Compile Include="src/OrchestrationEngineeringTests.fs" />
     <Compile Include="src/LifecycleTests.fs" />
     <Compile Include="src/ObservabilityTests.fs" />
+    <Compile Include="src/OperationalDiagnosticsTests.fs" />
     <Compile Include="src/VerificationTests.fs" />
     <Compile Include="src/GovernanceTests.fs" />
     <Compile Include="src/ConstitutionQuarantineTests.fs" />

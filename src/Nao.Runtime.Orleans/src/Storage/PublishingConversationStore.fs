@@ -89,7 +89,16 @@ module PublishingConversationStore =
             |> Option.map _.Correlation
             |> Option.defaultWith CorrelationContext.root
 
-        EventScope.Create(userId, sessionId, conversationName, workspaceId, turnId, sessionKey, correlation)
+        EventScope.Create(
+            AuthorizationScope.tenantId authorization |> TenantId.value,
+            userId,
+            sessionId,
+            conversationName,
+            workspaceId,
+            turnId,
+            sessionKey,
+            correlation
+        )
 
     let create (bus: EventBus) (inner: ConversationStore) : ConversationStore =
         let appendAsync

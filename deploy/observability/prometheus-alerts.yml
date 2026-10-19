@@ -1,0 +1,47 @@
+groups:
+  - name: nao-operational
+    rules:
+      - alert: NaoComponentUnhealthy
+        expr: max by (nao_operational_component, nao_operational_component_name) (nao_health_status{nao_health_state="unhealthy"}) > 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Nao dependency or host health is unhealthy
+          runbook_url: https://github.com/jichang/Nao/blob/main/docs/operations-runbooks.md#component-unhealthy
+
+      - alert: NaoResourceSaturated
+        expr: max by (nao_operational_component, nao_operational_component_name) (nao_saturation_utilization) > 0.9
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Nao resource utilization remains above 90 percent
+          runbook_url: https://github.com/jichang/Nao/blob/main/docs/operations-runbooks.md#resource-saturation
+
+      - alert: NaoExecutionFailureRateHigh
+        expr: sum(rate(nao_execution_count_total{nao_terminal_state=~"failed|cancelled"}[10m])) / clamp_min(sum(rate(nao_execution_count_total[10m])), 0.001) > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: More than five percent of Nao executions are failing
+          runbook_url: https://github.com/jichang/Nao/blob/main/docs/operations-runbooks.md#execution-failures
+
+      - alert: NaoProviderLatencyHigh
+        expr: sum(rate(nao_provider_call_duration_milliseconds_sum[10m])) / clamp_min(sum(rate(nao_provider_call_duration_milliseconds_count[10m])), 0.001) > 30000
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Mean provider latency exceeds 30 seconds
+          runbook_url: https://github.com/jichang/Nao/blob/main/docs/operations-runbooks.md#provider-latency
+
+      - alert: NaoEvaluationDriftDetected
+        expr: max by (nao_quality_metric) (nao_evaluation_drift) > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: A governed evaluation drift signal is active
+          runbook_url: https://github.com/jichang/Nao/blob/main/docs/operations-runbooks.md#evaluation-drift

@@ -1,4 +1,5 @@
 <Solution>
+  <Folder Name="/src/" />
   <Folder Name="/src/Framework/">
     <Project Path="src/Nao.Agents/Nao.Agents.fsproj" />
     <Project Path="src/Nao.Agents.Worker/Nao.Agents.Worker.fsproj" />
@@ -21,8 +22,10 @@
     <Project Path="src/Nao.Runtime.Orleans/Nao.Runtime.Orleans.fsproj" />
     <Project Path="src/Nao.Runtime.Orleans.Codegen/Nao.Runtime.Orleans.Codegen.csproj" />
     <Project Path="src/Nao.Documents/Nao.Documents.fsproj" />
+    <Project Path="src/Nao.Telemetry.OpenTelemetry/Nao.Telemetry.OpenTelemetry.fsproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/Nao.Telemetry.OpenTelemetry.Tests/Nao.Telemetry.OpenTelemetry.Tests.fsproj" />
     <Project Path="tests/Nao.Testing/Nao.Testing.fsproj" />
     <Project Path="tests/Nao.Agents.Tests/Nao.Agents.Tests.fsproj" />
     <Project Path="tests/Nao.E2E.Tests/Nao.E2E.Tests.fsproj" />

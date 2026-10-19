@@ -61,7 +61,10 @@ type ObservabilityServicesTests() =
 
         let authorization = scope "s1"
         let services = observability.ServicesFor "dev/s1" "" correlation
-        services.Metrics.Value.Record authorization (MetricRecord.llmCall correlation DateTimeOffset.UtcNow 10 20 5L)
+
+        services.Metrics.Value.Record
+            authorization
+            (MetricRecord.llmCall correlation DateTimeOffset.UtcNow (ProviderTokenUsage.Split(10, 20)) 5L)
 
         // The write still reaches the real backing store (reads stay correct).
         let key =
@@ -82,11 +85,14 @@ type ObservabilityServicesTests() =
         let correlation = CorrelationContext.root ()
 
         let services = observability.ServicesFor "dev/s1" "" correlation
-        services.Metrics.Value.Record (scope "s1") (MetricRecord.llmCall correlation DateTimeOffset.UtcNow 10 20 5L)
+
+        services.Metrics.Value.Record
+            (scope "s1")
+            (MetricRecord.llmCall correlation DateTimeOffset.UtcNow (ProviderTokenUsage.Split(10, 20)) 5L)
 
         // The write is teed to the bus as an ObservabilityCaptured event.
         match signals () with
-        | [ MetricRecorded { Payload = MetricPayload.LlmCall(i, o, l) } ] ->
+        | [ MetricRecorded { Payload = MetricPayload.LlmCall(ProviderTokenUsage.Split(i, o), l) } ] ->
             Assert.AreEqual(10, i)
             Assert.AreEqual(20, o)
             Assert.AreEqual(5L, l)
@@ -107,6 +113,7 @@ type ObservabilityServicesTests() =
 
         match List.ofSeq received with
         | [ ObservabilityCaptured(scope, MetricRecorded { Payload = MetricPayload.ToolCall("search", 3L, true) }) ] ->
+            Assert.AreEqual("tenant", scope.TenantId)
             Assert.AreEqual("dev/s1", scope.SessionKey)
             Assert.AreEqual("dev", scope.UserId)
             Assert.AreEqual("s1", scope.SessionId)
@@ -139,11 +146,11 @@ type ObservabilityServicesTests() =
 
         (observability.ServicesFor "dev/s1" "" correlation1).Metrics.Value.Record
             (scope "s1")
-            (MetricRecord.llmCall correlation1 DateTimeOffset.UtcNow 1 1 1L)
+            (MetricRecord.llmCall correlation1 DateTimeOffset.UtcNow (ProviderTokenUsage.Split(1, 1)) 1L)
 
         (observability.ServicesFor "dev/s2" "" correlation2).Metrics.Value.Record
             (scope "s2")
-            (MetricRecord.llmCall correlation2 DateTimeOffset.UtcNow 1 1 1L)
+            (MetricRecord.llmCall correlation2 DateTimeOffset.UtcNow (ProviderTokenUsage.Split(1, 1)) 1L)
 
         let key1 =
             AuthorizationScope.identity (scope "s1") |> AuthorizationIdentity.storageKey

@@ -1,0 +1,4 @@
+group Test
+MSTest
+OpenTelemetry
+OpenTelemetry.Extensions.Hosting

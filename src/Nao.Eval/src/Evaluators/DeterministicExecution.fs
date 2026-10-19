@@ -214,14 +214,20 @@ module DeterministicExecution =
               | _ -> ()
 
               match budgets.MaximumInputTokens, execution.Evidence.Metrics with
-              | Some maximum, Some metrics when metrics.TotalInputTokens > maximum ->
-                  yield sprintf "input tokens %d exceed %d" metrics.TotalInputTokens maximum
+              | Some maximum, Some metrics ->
+                  match metrics.TotalInputTokens with
+                  | Some actual when actual > maximum -> yield sprintf "input tokens %d exceed %d" actual maximum
+                  | None -> yield "input-token budget cannot be verified without a provider-reported split"
+                  | _ -> ()
               | Some _, None -> yield "input-token budget cannot be verified without metrics"
               | _ -> ()
 
               match budgets.MaximumOutputTokens, execution.Evidence.Metrics with
-              | Some maximum, Some metrics when metrics.TotalOutputTokens > maximum ->
-                  yield sprintf "output tokens %d exceed %d" metrics.TotalOutputTokens maximum
+              | Some maximum, Some metrics ->
+                  match metrics.TotalOutputTokens with
+                  | Some actual when actual > maximum -> yield sprintf "output tokens %d exceed %d" actual maximum
+                  | None -> yield "output-token budget cannot be verified without a provider-reported split"
+                  | _ -> ()
               | Some _, None -> yield "output-token budget cannot be verified without metrics"
               | _ -> () ]
 

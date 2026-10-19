@@ -29,6 +29,7 @@ type WorkerExecutionRequest =
         Input: string
         ExecutionId: string
         CorrelationId: string
+        CausationExecutionId: string option
         Attempt: int
         /// Host authorization metadata, never appended to model input.
         Principal: SecurityPrincipal option
@@ -54,6 +55,7 @@ type internal WorkerMessage() =
     member val Error = "" with get, set
     member val ExecutionId = "" with get, set
     member val CorrelationId = "" with get, set
+    member val CausationExecutionId = "" with get, set
     member val Attempt = 0 with get, set
     member val Principal: SecurityPrincipal option = None with get, set
     member val AgentLineage: AgentAuthority array = Array.empty with get, set
@@ -242,6 +244,7 @@ module WorkerProtocol =
         fields.Add("error", box message.Error)
         fields.Add("executionId", box message.ExecutionId)
         fields.Add("correlationId", box message.CorrelationId)
+        fields.Add("causationExecutionId", box message.CausationExecutionId)
         fields.Add("attempt", box message.Attempt)
         fields.Add("principal", message.Principal |> Option.map (serializePrincipal >> box) |> Option.toObj)
         fields.Add("agentLineage", box (message.AgentLineage |> Array.map serializeAuthority))
@@ -278,6 +281,7 @@ module WorkerProtocol =
             message.Error <- root.GetProperty("error").GetString()
             message.ExecutionId <- root.GetProperty("executionId").GetString()
             message.CorrelationId <- root.GetProperty("correlationId").GetString()
+            message.CausationExecutionId <- root.GetProperty("causationExecutionId").GetString()
             message.Attempt <- root.GetProperty("attempt").GetInt32()
 
             if message.Kind = Execute then
@@ -389,6 +393,12 @@ module WorkerProtocol =
         value.Input <- input
         value.ExecutionId <- ExecutionId.serialize context.ExecutionId
         value.CorrelationId <- context.Correlation.CorrelationId |> CorrelationId.value |> string
+
+        value.CausationExecutionId <-
+            context.Correlation.CausationId
+            |> Option.map ExecutionId.serialize
+            |> Option.defaultValue ""
+
         value.Attempt <- context.Correlation.Attempt
         value.Principal <- agentContext.Authorization |> Option.map AuthorizationScope.principal
 
@@ -466,10 +476,21 @@ module WorkerProtocol =
                 MaxCostUsd = Decimal.Parse(message.MaxCostUsd, Globalization.CultureInfo.InvariantCulture)
                 MaxToolCalls = message.MaxToolCalls }
 
+        let correlation =
+            { ExecutionId = ExecutionId.parse message.ExecutionId
+              CorrelationId = CorrelationId.parse message.CorrelationId
+              CausationId =
+                if String.IsNullOrWhiteSpace message.CausationExecutionId then
+                    None
+                else
+                    Some(ExecutionId.parse message.CausationExecutionId)
+              Attempt = message.Attempt }
+
         let context =
-            ExecutionContext.Create
+            ExecutionContext.CreateWithCorrelation
                 { SandboxConfig.Default with
                     Limits = limits }
+                correlation
 
         let requireAvailable operation =
             match operation () with
@@ -513,6 +534,7 @@ module WorkerProtocol =
               Input = message.Input
               ExecutionId = message.ExecutionId
               CorrelationId = message.CorrelationId
+              CausationExecutionId = correlation.CausationId |> Option.map ExecutionId.serialize
               Attempt = message.Attempt
               Principal = message.Principal
               AgentLineage = message.AgentLineage |> List.ofArray

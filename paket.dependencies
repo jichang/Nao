@@ -20,6 +20,9 @@ nuget RtfPipe
 nuget System.Text.Encoding.CodePages
 nuget Newtonsoft.Json
 nuget YamlDotNet
+nuget OpenTelemetry
+nuget OpenTelemetry.Exporter.OpenTelemetryProtocol
+nuget OpenTelemetry.Extensions.Hosting
 nuget Avalonia
 nuget Avalonia.Desktop
 nuget Avalonia.Themes.Fluent
@@ -35,3 +38,5 @@ group Test
   nuget coverlet.collector
   nuget MSTest
   nuget Microsoft.Orleans.TestingHost
+  nuget OpenTelemetry 1.20
+  nuget OpenTelemetry.Extensions.Hosting 1.20

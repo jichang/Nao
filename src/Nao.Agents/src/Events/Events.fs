@@ -10,6 +10,8 @@ open Nao.Agents
 /// storage strategy (per session, per category, per workspace, ...) needs no producer change.
 type EventScope =
     {
+        /// Owning tenant from the host-authenticated authorization scope.
+        TenantId: string
         /// Owning user (grain key prefix).
         UserId: string
         /// Session id (grain key suffix).
@@ -30,6 +32,7 @@ type EventScope =
 
     static member Create
         (
+            tenantId: string,
             userId: string,
             sessionId: string,
             conversationId: string,
@@ -38,7 +41,11 @@ type EventScope =
             sessionKey: string,
             correlation: CorrelationContext
         ) : EventScope =
-        { UserId = userId
+        if String.IsNullOrWhiteSpace tenantId || tenantId <> tenantId.Trim() then
+            invalidArg (nameof tenantId) "Event tenant identity must be canonical and non-blank."
+
+        { TenantId = tenantId
+          UserId = userId
           SessionId = sessionId
           ConversationId = conversationId
           WorkspaceKey = workspaceKey
@@ -49,7 +56,7 @@ type EventScope =
 
     /// An empty scope, used for library/test contexts that run an agent outside a session.
     static member CreateEmpty() : EventScope =
-        EventScope.Create("", "", "", "", "", "", CorrelationContext.root ())
+        EventScope.Create("unscoped", "", "", "", "", "", "", CorrelationContext.root ())
 
 /// One process step (a tool call or sub-agent delegation) of an assistant turn, in a
 /// transport-neutral shape so the conversation event stream carries no storage-layer types.
@@ -270,7 +277,7 @@ module private EventRedaction =
 
     let spanStatus =
         function
-        | SpanStatus.Error message -> SpanStatus.Error(text message)
+        | SpanStatus.Error category -> SpanStatus.Error category
         | status -> status
 
     let span (span: Span) =

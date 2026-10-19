@@ -87,7 +87,9 @@ module private AuditState =
                 |> Seq.length
                 |> Task.FromResult
           DeleteScopeAsync = fun scope -> delete scope (fun _ -> true)
-          DeleteExpiredAsync = fun scope before -> delete scope (fun entry -> entry.Timestamp < before) }
+          DeleteExpiredAsync =
+            fun authorization before ->
+                delete (AuditRetentionAuthorization.scope authorization) (fun entry -> entry.Timestamp < before) }
 
 module InMemoryAuditLog =
     let create () : AuditLog = AuditState.create Seq.empty
@@ -133,12 +135,16 @@ module PersistentAuditLog =
             let events =
                 store.LoadAll() |> List.mapi (fun index line -> decode context (index + 1) line)
 
+            let restored = ResizeArray<AuditEntry>()
+
             for event in events do
                 match event with
-                | AuditEvent.Accepted entry -> inner.RecordAsync scope entry |> _.GetAwaiter().GetResult()
-                | AuditEvent.DeleteScope -> inner.DeleteScopeAsync scope |> _.GetAwaiter().GetResult() |> ignore
-                | AuditEvent.DeleteExpired before ->
-                    inner.DeleteExpiredAsync scope before |> _.GetAwaiter().GetResult() |> ignore
+                | AuditEvent.Accepted entry -> restored.Add entry
+                | AuditEvent.DeleteScope -> restored.Clear()
+                | AuditEvent.DeleteExpired before -> restored.RemoveAll(fun entry -> entry.Timestamp < before) |> ignore
+
+            for entry in restored do
+                inner.RecordAsync scope entry |> _.GetAwaiter().GetResult()
 
             store, inner
 
@@ -188,12 +194,14 @@ module PersistentAuditLog =
                             |> Result.defaultWith (fun failure -> raise (InvalidOperationException failure.Message)))
                         AuditEvent.DeleteScope)
           DeleteExpiredAsync =
-            fun scope before ->
+            fun authorization before ->
                 protect (fun () ->
+                    let scope = AuditRetentionAuthorization.scope authorization
+
                     mutate
                         scope
                         (fun inner ->
-                            inner.DeleteExpiredAsync scope before
+                            inner.DeleteExpiredAsync authorization before
                             |> _.GetAwaiter().GetResult()
                             |> Result.defaultWith (fun failure -> raise (InvalidOperationException failure.Message)))
                         (AuditEvent.DeleteExpired before)) }

@@ -117,7 +117,7 @@ type MetricsAuthorizationTests() =
                 [ (fun () -> MetricsCollectors.file root)
                   (fun () -> MetricsCollectors.ado factory) ] do
                 let metrics = make ()
-                metrics.Record owner (MetricRecord.llmCall correlation timestamp 10 5 20L)
+                metrics.Record owner (MetricRecord.llmCall correlation timestamp (ProviderTokenUsage.Split(10, 5)) 20L)
                 Assert.AreEqual(1, ((make ()).GetMetrics sameOwner).TotalLlmCalls)
 
             let path = Path.Combine(root, "metrics", key owner + ".jsonl")
@@ -167,9 +167,9 @@ type MetricsAuthorizationTests() =
                       |> _.GetAwaiter().GetResult()
                       |> ignore) ] do
                 let metrics = make ()
-                metrics.Record foreign (MetricRecord.llmCall correlation timestamp 1 1 1L)
+                metrics.Record foreign (MetricRecord.llmCall correlation timestamp (ProviderTokenUsage.Split(1, 1)) 1L)
                 corrupt ()
-                metrics.Record owner (MetricRecord.llmCall correlation timestamp 2 2 2L)
+                metrics.Record owner (MetricRecord.llmCall correlation timestamp (ProviderTokenUsage.Split(2, 2)) 2L)
                 Assert.AreEqual(1, ((make ()).GetMetrics owner).TotalLlmCalls)
 
                 Assert.ThrowsExactly<InvalidDataException>(fun () -> metrics.GetMetrics foreign |> ignore)
@@ -194,11 +194,11 @@ type MetricsAuthorizationTests() =
 
         let correlation = CorrelationContext.root ()
         let metrics = make ()
-        metrics.Record owner (MetricRecord.llmCall correlation timestamp 1 1 1L)
+        metrics.Record owner (MetricRecord.llmCall correlation timestamp (ProviderTokenUsage.Split(1, 1)) 1L)
         failAppend <- true
 
         Assert.ThrowsExactly<IOException>(fun () ->
-            metrics.Record owner (MetricRecord.llmCall correlation timestamp 2 2 2L))
+            metrics.Record owner (MetricRecord.llmCall correlation timestamp (ProviderTokenUsage.Split(2, 2)) 2L))
         |> ignore
 
         Assert.AreEqual(1, (metrics.GetMetrics owner).TotalLlmCalls)

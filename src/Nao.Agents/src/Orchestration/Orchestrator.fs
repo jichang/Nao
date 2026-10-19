@@ -62,7 +62,6 @@ module Orchestrator =
         let id = config.Id
         let eventBus = config.Bus
         let eventScope = config.Scope
-        let traceContext: (AuthorizationScope * Tracer * Span) option = None
 
         let report (signal: ProgressSignal) =
             EventBus.publishAsync (NaoEvent.TurnProgress(eventScope, signal)) eventBus
@@ -78,26 +77,17 @@ module Orchestrator =
             (toolInput: string)
             (round: int)
             : (AuthorizationScope * Tracer * Span) option =
-            match traceContext with
-            | Some(scope, tracer, parent) ->
-                let span = tracer.StartSpan scope parent "tool.invoke"
-
-                let trimmedInput =
-                    if String.IsNullOrEmpty toolInput then
-                        ""
-                    elif toolInput.Length > 1000 then
-                        toolInput.Substring(0, 1000) + "…"
-                    else
-                        toolInput
+            match ExecutionInstrumentation.tryStartSpan TelemetrySpan.ToolCall with
+            | Some(scope, tracer, span) ->
 
                 tracer.SetAttributes
                     scope
                     span
                     (Map.ofList
-                        [ "tool.name", toolName
-                          "tool.input", trimmedInput
-                          "agent.name", config.Name
-                          "round", string round ])
+                        [ TelemetryAttribute.ToolName, toolName
+                          "nao.tool.input_length", string toolInput.Length
+                          TelemetryAttribute.AgentId, config.Id
+                          "nao.orchestration.round", string round ])
 
                 Some(scope, tracer, span)
             | None -> None
@@ -121,10 +111,15 @@ module Orchestrator =
         /// LLM planning step is always traced even when a custom orchestrator adds no spans of its
         /// own. Returns None when no tracer is wired.
         let startRoundSpan (round: int) : (AuthorizationScope * Tracer * Span) option =
-            match traceContext with
-            | Some(scope, tracer, parent) ->
-                let span = tracer.StartSpan scope parent "agent.plan"
-                tracer.SetAttributes scope span (Map.ofList [ "agent.name", config.Name; "round", string round ])
+            match ExecutionInstrumentation.tryStartSpan TelemetrySpan.OrchestrationRound with
+            | Some(scope, tracer, span) ->
+                tracer.SetAttributes
+                    scope
+                    span
+                    (Map.ofList
+                        [ TelemetryAttribute.AgentId, config.Id
+                          "nao.orchestration.round", string round ])
+
                 Some(scope, tracer, span)
             | None -> None
 
@@ -181,18 +176,18 @@ module Orchestrator =
                 let roundSpan = startRoundSpan round
 
                 let startLlmSpan (attempt: int) (messageCount: int) : (AuthorizationScope * Tracer * Span) option =
-                    match traceContext with
-                    | Some(scope, tracer, parent) ->
-                        let span = tracer.StartSpan scope parent "llm.call"
+                    match ExecutionInstrumentation.tryStartSpan TelemetrySpan.ProviderCall with
+                    | Some(scope, tracer, span) ->
 
                         tracer.SetAttributes
                             scope
                             span
                             (Map.ofList
-                                [ "agent.name", config.Name
-                                  "round", string round
-                                  "attempt", string attempt
-                                  "messages.count", string messageCount ])
+                                [ TelemetryAttribute.AgentId, config.Id
+                                  TelemetryAttribute.ProviderName, config.Provider.Name()
+                                  "nao.orchestration.round", string round
+                                  TelemetryAttribute.Attempt, string attempt
+                                  "nao.provider.message_count", string messageCount ])
 
                         Some(scope, tracer, span)
                     | None -> None
@@ -214,17 +209,10 @@ module Orchestrator =
                         tracer.EndSpan scope child status
                     | None -> ()
 
-                let recordMetrics (usage: TokenUsage option) (elapsedMs: int64) =
-                    let inputTokens, outputTokens =
-                        usage
-                        |> Option.map (fun usage -> usage.InputTokens, usage.OutputTokens)
-                        |> Option.defaultValue (0, 0)
-
+                let recordMetrics tokens elapsedMs =
                     match RuntimeMetrics.get (), authorization with
                     | Some metrics, Some scope ->
-                        metrics.Record
-                            scope
-                            (MetricRecord.llmCall correlation DateTimeOffset.UtcNow inputTokens outputTokens elapsedMs)
+                        metrics.Record scope (MetricRecord.llmCall correlation DateTimeOffset.UtcNow tokens elapsedMs)
                     | Some _, None ->
                         raise (
                             UnauthorizedAccessException
@@ -312,12 +300,25 @@ module Orchestrator =
 
                             started.Stop()
                             endLlmSpan span SpanStatus.Ok result.Content.Length started.ElapsedMilliseconds
-                            recordMetrics result.Usage started.ElapsedMilliseconds
+
+                            let tokens =
+                                match result.Usage, result.TokensUsed with
+                                | Some usage, _ -> ProviderTokenUsage.Split(usage.InputTokens, usage.OutputTokens)
+                                | None, Some total -> ProviderTokenUsage.Aggregate total
+                                | None, None -> ProviderTokenUsage.Unavailable
+
+                            recordMetrics tokens started.ElapsedMilliseconds
                             return idempotencyKey, result
                         with ex ->
                             started.Stop()
-                            endLlmSpan span (SpanStatus.Error ex.Message) 0 started.ElapsedMilliseconds
-                            recordMetrics None started.ElapsedMilliseconds
+
+                            endLlmSpan
+                                span
+                                (SpanStatus.Error TelemetryErrorCategory.Dependency)
+                                0
+                                started.ElapsedMilliseconds
+
+                            recordMetrics ProviderTokenUsage.Unavailable started.ElapsedMilliseconds
                             return raise ex
                     }
 
@@ -419,7 +420,7 @@ module Orchestrator =
 
                     return working, prepared.ParseActions
                 with ex ->
-                    endRoundSpan roundSpan (SpanStatus.Error ex.Message) Map.empty
+                    endRoundSpan roundSpan (SpanStatus.Error TelemetryErrorCategory.Internal) Map.empty
                     return raise ex
             }
 
@@ -531,7 +532,7 @@ module Orchestrator =
 
                                             endToolSpan
                                                 toolSpan
-                                                (SpanStatus.Error(sprintf "%A failed for %s" failure.Kind toolName))
+                                                (SpanStatus.Error TelemetryErrorCategory.Dependency)
                                                 Map.empty
                                     | None ->
                                         let err =

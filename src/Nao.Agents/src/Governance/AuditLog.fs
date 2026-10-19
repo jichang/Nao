@@ -47,6 +47,36 @@ and [<RequireQualifiedAccess>] AuditAction =
     | ConstitutionEvaluation of ruleId: string
     | LifecycleTransition of fromState: string * toState: string
 
+type AuditRetentionAuthorization =
+    private
+        { Scope: AuthorizationScope
+          AuthorizedAt: DateTimeOffset }
+
+[<RequireQualifiedAccess>]
+module AuditRetentionAuthorization =
+    [<Literal>]
+    let RequiredRole = "nao.audit.retention.manage"
+
+    let authorize scope =
+        let principal = AuthorizationScope.principal scope
+        let roles = SecurityPrincipal.roles principal
+        let strength = SecurityPrincipal.authenticationStrength principal
+
+        if not (Set.contains RequiredRole roles) then
+            raise (UnauthorizedAccessException $"Audit retention requires role '{RequiredRole}'.")
+
+        if
+            strength <> AuthenticationStrength.MultiFactor
+            && strength <> AuthenticationStrength.PhishingResistant
+        then
+            raise (UnauthorizedAccessException "Audit retention requires multi-factor authentication.")
+
+        { Scope = scope
+          AuthorizedAt = DateTimeOffset.UtcNow }
+
+    let scope authorization = authorization.Scope
+    let authorizedAt authorization = authorization.AuthorizedAt
+
 /// Functional audit logging operations.
 type AuditLog =
     {
@@ -61,7 +91,7 @@ type AuditLog =
         /// Delete every audit entry in an authenticated scope
         DeleteScopeAsync: AuthorizationScope -> Task<Result<int, PlatformFailure>>
         /// Delete audit entries in an authenticated scope that precede a retention cutoff
-        DeleteExpiredAsync: AuthorizationScope -> DateTimeOffset -> Task<Result<int, PlatformFailure>>
+        DeleteExpiredAsync: AuditRetentionAuthorization -> DateTimeOffset -> Task<Result<int, PlatformFailure>>
     }
 
 module AuditLog =

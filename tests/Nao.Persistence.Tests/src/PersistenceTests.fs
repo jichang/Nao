@@ -17,6 +17,20 @@ let private memoryScope session =
     AuthorizationScope.tryCreate principal None (WorkspaceId.parse "workspace") (Some(SessionId.parse session))
     |> Option.get
 
+let private auditRetentionScope session =
+    let principal =
+        SecurityPrincipal.createAuthenticated
+            (TenantId.parse "tenant")
+            (UserId.parse "user")
+            None
+            []
+            [ AuditRetentionAuthorization.RequiredRole ]
+            Map.empty
+            AuthenticationStrength.MultiFactor
+
+    AuthorizationScope.tryCreate principal None (WorkspaceId.parse "workspace") (Some(SessionId.parse session))
+    |> Option.get
+
 let private memoryKey scope =
     AuthorizationScope.identity scope |> AuthorizationIdentity.storageKey
 
@@ -67,7 +81,7 @@ type SecretRedactionPersistenceTests() =
 
                 let span = tracer.StartTrace scope correlation $"operation:{canary}"
                 tracer.SetAttributes scope span (Map.ofList [ "value", canary ])
-                tracer.EndSpan scope span (SpanStatus.Error $"error:{canary}")
+                tracer.EndSpan scope span (SpanStatus.Error TelemetryErrorCategory.Internal)
 
                 do!
                     journal.RecordAsync
@@ -109,7 +123,7 @@ type SecretRedactionPersistenceTests() =
         let span = tracer.GetByExecution scope correlation.ExecutionId |> List.exactlyOne
         Assert.AreEqual("operation:[REDACTED]", span.OperationName)
         Assert.AreEqual("[REDACTED]", span.Attributes.["value"])
-        Assert.AreEqual(SpanStatus.Error "error:[REDACTED]", span.Status)
+        Assert.AreEqual(SpanStatus.Error TelemetryErrorCategory.Internal, span.Status)
 
         let record =
             journal.GetByExecutionAsync scope correlation.ExecutionId
@@ -165,7 +179,7 @@ type SecretRedactionPersistenceTests() =
 
                     let span = tracer.StartTrace scope correlation $"operation:{canary}"
                     tracer.SetAttributes scope span (Map.ofList [ canary, canary ])
-                    tracer.EndSpan scope span (SpanStatus.Error canary)
+                    tracer.EndSpan scope span (SpanStatus.Error TelemetryErrorCategory.Internal)
 
                     do!
                         journal.RecordAsync
@@ -951,11 +965,41 @@ let private runAuditRoundTrip (scope: AuthorizationScope) (log: AuditLog) =
 type AuditLogTests() =
 
     [<TestMethod>]
+    member _.AuditRetentionRequiresAdministrativeRoleAndMultiFactorAuthentication() =
+        let ordinary = memoryScope "audit-ordinary"
+
+        Assert.ThrowsExactly<UnauthorizedAccessException>(fun () ->
+            AuditRetentionAuthorization.authorize ordinary |> ignore)
+        |> ignore
+
+        let singleFactorPrincipal =
+            SecurityPrincipal.createAuthenticated
+                (TenantId.parse "tenant")
+                (UserId.parse "user")
+                None
+                []
+                [ AuditRetentionAuthorization.RequiredRole ]
+                Map.empty
+                AuthenticationStrength.SingleFactor
+
+        let singleFactor =
+            AuthorizationScope.tryCreate
+                singleFactorPrincipal
+                None
+                (WorkspaceId.parse "workspace")
+                (Some(SessionId.parse "audit-single-factor"))
+            |> Option.get
+
+        Assert.ThrowsExactly<UnauthorizedAccessException>(fun () ->
+            AuditRetentionAuthorization.authorize singleFactor |> ignore)
+        |> ignore
+
+    [<TestMethod>]
     member _.AuditLogPurgesByScopeAcrossBackends() =
         let dir = tempDir ()
         let factory, databasePath = sqliteFactory ()
         let backends = [ AuditLogs.inMemory (); AuditLogs.file dir; AuditLogs.ado factory ]
-        let ownerA = memoryScope "audit-a"
+        let ownerA = auditRetentionScope "audit-a"
         let ownerB = memoryScope "audit-b"
 
         try
@@ -980,7 +1024,9 @@ type AuditLogTests() =
                 for _ in 1..otherCount do
                     log.RecordAsync ownerB (entry agent (cutoff.AddMinutes(-1.0))) |> _.Wait()
 
-                match log.DeleteExpiredAsync ownerA cutoff |> _.Result with
+                let retention = AuditRetentionAuthorization.authorize ownerA
+
+                match log.DeleteExpiredAsync retention cutoff |> _.Result with
                 | Error failure -> Assert.Fail(failure.Message)
                 | Ok deleted -> Assert.AreEqual(expiredCount, deleted)
 
