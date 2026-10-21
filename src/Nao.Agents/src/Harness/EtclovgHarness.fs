@@ -127,6 +127,33 @@ module EtclovgHarness =
                   Phase = phase
                   RecordedAt = DateTimeOffset.UtcNow }
 
+    let private terminalFailure =
+        function
+        | ExecutionTerminalStatus.Succeeded -> None
+        | ExecutionTerminalStatus.Failed error
+        | ExecutionTerminalStatus.Denied error -> Some error.Message
+        | ExecutionTerminalStatus.Cancelled -> Some "Execution cancelled"
+        | ExecutionTerminalStatus.TimedOut -> Some "Execution timed out"
+        | ExecutionTerminalStatus.LimitExceeded limit -> Some(sprintf "Resource limit exceeded: %A" limit)
+        | ExecutionTerminalStatus.Indeterminate message -> Some message
+
+    let private saveTerminalOutcome (config: EtclovgConfig) (request: ExecutionRequest) (result: ExecutionResult) =
+        match config.ExecutionJournal with
+        | None -> Task.CompletedTask
+        | Some journal ->
+            journal.Outcomes.Save
+                request.Authorization
+                { Id = Guid.NewGuid()
+                  IdempotencyKey = request.IdempotencyKey
+                  Correlation = result.Correlation
+                  TurnId = request.TurnId |> TurnId.value
+                  AgentId = request.AgentId
+                  Phase = checkpointPhase result.Status
+                  Response = result.Outputs.Response
+                  Artifacts = result.Outputs.Artifacts
+                  Failure = terminalFailure result.Status
+                  RecordedAt = DateTimeOffset.UtcNow }
+
     let private failResult
         (harnessError: HarnessError)
         (correlation: CorrelationContext)
@@ -1494,7 +1521,18 @@ module EtclovgHarness =
 
                 match decision with
                 | ResumeDecision.Stop message ->
-                    let result = indeterminateResult config agent request message
+                    let result =
+                        indeterminateResult config agent request message |> ExecutionResult.redactResult
+
+                    match config.ExecutionJournal with
+                    | Some journal ->
+                        let! existing =
+                            journal.Outcomes.TryGetByIdempotencyKey request.Authorization request.IdempotencyKey
+
+                        if existing.IsNone then
+                            do! saveTerminalOutcome config request result
+                    | None -> ()
+
                     do! saveCheckpoint config request HarnessCheckpointPhase.Indeterminate
                     return result
                 | ResumeDecision.Execute ->
@@ -1509,9 +1547,11 @@ module EtclovgHarness =
                             deadline.Token
                         )
 
-                    let! result =
+                    let! rawResult =
                         runAgentAsync config agentContext agent request None execution.Token cancellationToken
 
+                    let result = ExecutionResult.redactResult rawResult
+                    do! saveTerminalOutcome config request result
                     do! saveCheckpoint config request (checkpointPhase result.Status)
-                    return ExecutionResult.redactResult result
+                    return result
             })

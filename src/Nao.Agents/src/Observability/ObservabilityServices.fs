@@ -122,7 +122,8 @@ module private Publishing =
           DeleteScopeAsync = inner.DeleteScopeAsync
           DeleteExpiredAsync = inner.DeleteExpiredAsync
           SideEffects = inner.SideEffects
-          Checkpoints = inner.Checkpoints }
+          Checkpoints = inner.Checkpoints
+          Outcomes = inner.Outcomes }
 
     let traceStore sessionKey turnId correlation bus (inner: TraceStore) : TraceStore =
         let saveAsync scope trace =

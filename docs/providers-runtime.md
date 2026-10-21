@@ -226,74 +226,218 @@ unrelated endpoints or sessions.
 `Nao.Runtime.Orleans` currently supplies:
 
 - `SessionGrain` for persisted session execution
-- `SessionDirectoryGrain` for session discovery
-- `WorkspaceRegistry` for compiled workspace definitions
+- tenant/workspace/user-scoped `SessionDirectoryGrain` for session discovery
+- tenant-scoped `GroupDirectoryGrain` for organizational membership and governance
+- tenant-partitioned `WorkspaceCatalog` for immutable compiled workspace versions
 - Conversation/session persistence integrations
-- Workspace selection and switching
+- canonical tenant/workspace/user/session grain addresses
 
 ```fsharp
-let registry =
-    WorkspaceRegistry.fromWorkspaces [
-        ("team-a",
-         { WorkspaceDefinitions.Empty with
-             Agents = [ teamAAgent ]
-             Tools = teamATools })
-        ("team-b",
-         { WorkspaceDefinitions.Empty with
-             Agents = [ teamBAgent ]
-             Tools = teamBTools })
-    ]
+let tenantId = TenantId.parse "tenant-a"
+
+let dependencies =
+    [ { Kind = WorkspaceDependencyKind.Provider
+        Id = "openai-primary"
+        Version = "2026.10" }
+      { Kind = WorkspaceDependencyKind.Policy
+        Id = "default-model-policy"
+        Version = "1" } ]
+
+let availableDependencies =
+    dependencies
+    |> List.map (fun dependency -> dependency.Kind, dependency.Id, dependency.Version)
+    |> Set.ofList
+
+let catalog = WorkspaceCatalog.create availableDependencies
+let identity = WorkspaceVersionId.create "team-a" "2026.1"
+
+let registration =
+    WorkspaceRegistration.create
+        identity
+        "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        "1"
+        dependencies
+        { WorkspaceDefinitions.Empty with
+            Agents = [ teamAAgent ]
+            Tools = teamATools }
+
+catalog.Register(tenantId, registration)
 ```
 
-Agents and tools are compiled registrations. The runtime does not dynamically execute JSON definitions or load arbitrary untrusted assemblies.
+Agents and tools are compiled registrations. Each registration has a canonical `<name>@<version>`
+identity, an exact SHA-256 content digest, runtime and state-schema compatibility, and declared
+provider, policy, schema, migration, and worker-extension dependencies. Registration validates
+these contracts and rejects duplicate agent or tool identities before the version enters the
+catalog. Catalog entries cannot be replaced or removed, so retirement cannot make code unavailable
+to a pinned session. The runtime does not dynamically execute JSON definitions or load arbitrary
+untrusted assemblies.
+
+Workspace version identity is immutable within a session because it is part of the grain key;
+changing versions creates a differently addressed session rather than mutating the existing grain.
 
 ## Sessions and state
 
 Runtime-owned state keeps agents stateless per call:
 
 1. Resolve the session and workspace.
-2. Load persisted conversation, grants, and runtime state.
-3. Construct the execution context.
-4. Run the harness and selected agent.
-5. Persist a committed outcome.
+2. Validate the caller-supplied stable turn identity and request fingerprint.
+3. Persist an accepted turn intent before any governed execution.
+4. Reconcile the external transcript and recover any terminal harness outcome.
+5. Run the harness only when no durable outcome exists.
+6. Persist the terminal outcome, transcript, lineage references, and session transition.
 
-Production completion requires explicit semantics for idempotency, concurrent turns, checkpoints, retries, deletion, archival, migration, and restart recovery.
+`ExecuteTurnAsync` is the only turn-execution entry point. A retry must reuse the same `TurnId`,
+input, conversation, agent, attachments, and correlation. Reusing a turn ID with changed content is
+rejected. A completed turn returns its persisted result without invoking providers or tools again.
+The grain is non-reentrant for mutation; only `GetLiveStepsAsync` is explicitly interleavable.
+
+The harness writes a redacted terminal outcome keyed by its stable idempotency key before returning.
+After activation, a formerly running turn becomes interrupted. Its next identical request first
+recovers that outcome; when no terminal outcome exists, existing side-effect journals decide whether
+re-execution is safe or must be quarantined.
+
+Session state records monotonic turn sequence, permission-grant evidence, artifact identities, and
+trace execution identities. Memory, grants, artifacts, traces, transcripts, and journals remain
+partitioned by the same authenticated owner scope. Conversation and execution-journal envelopes
+carry contiguous sequence numbers; stale conversation commits fail explicitly.
+
+Lifecycle is explicit: active, paused, or archived. Hosts configure archive and deletion
+eligibility timestamps, invoke `EvaluateLifecycleAsync` from their durable scheduler, and can place
+or clear a persisted legal hold. Activation also applies overdue archival. Archived sessions cannot
+resume or execute, and destruction fails until the deletion timestamp is reached and no legal hold
+exists. Nao deliberately does not register a destructive Orleans reminder: scheduler retries remain
+host-observable and deletion still requires an authenticated grain call.
 
 ## Tenancy status
 
-Session records contain grouping metadata, but the organizational `GroupDirectoryGrain` described by older documentation is not present in current source. Group membership, roles, quotas, lifecycle, and authorization therefore remain planned rather than advertised current capabilities.
+Runtime grain keys are version-1 addresses whose components are independently Base64URL encoded.
+Session and directory workspace components must be canonical `<name>@<version>` identities:
 
-Tenant, user, workspace, session, and execution identity must eventually be enforced at grain entry points, storage partitions, retrieval boundaries, telemetry, and administration.
+- Session: `v1/<tenant>/<workspace-version>/<user>/<session>`
+- Session directory: `v1/<tenant>/<workspace-version>/<user>`
+- Group directory: `v1/<tenant>/<group>`
+- Workspace lifecycle route: `v1/<tenant>/<workspace-name>`
+
+The runtime accepts only the exact canonical shape; there is no legacy `user/session` alias.
+Session and directory entry points derive authorization from the grain address and the
+host-authenticated principal. Persisted session roots, conversations, messages, directory state,
+directory entries, groups, members, and conversation streams carry explicit owner fields and are
+validated against that address before protected state is returned.
+
+`GroupDirectoryGrain` implements owner, administrator, and member roles; active, suspended, and
+retired lifecycle states; an explicit default workspace version; and positive session, concurrent
+execution, and monthly-token quota definitions. Group-scoped session startup requires both
+authenticated group membership and a matching persisted active membership. Runtime consumption
+enforcement for the quota definitions belongs to scheduling and durable execution work.
 
 ## Workspace lifecycle
 
-A production workspace lifecycle needs:
+The workspace lifecycle consists of an immutable compiled catalog and a durable tenant-scoped
+`WorkspaceLifecycleGrain` route. Together they provide:
 
-- Immutable version identity
-- Validation before registration
-- Agent, tool, provider, policy, and schema compatibility
+- Canonical immutable version identity and content digest
+- Runtime, state-schema, and provider/policy/schema/migration/worker dependency metadata
+- Validation against a host-supplied dependency manifest before catalog registration
+- Exact session resolution of retained versions
+- Code-defined or explicitly addressed process-worker extensions only
 - Staged rollout, canary, promotion, rollback, and retirement
-- Session pinning or explicit migration
-- Safe handling of active sessions using older versions
+- Deterministic canary selection from a stable session stickiness key
+- Optimistic route revisions for every mutation
+- Rollback only to a previously active, retained version
+- Durable lifecycle audit delivery through a persisted idempotent outbox
 
-Any future extension discovery must include signature, trust, compatibility, dependency, and isolation policies. Arbitrary assembly loading into the runtime process is not a safe plugin model.
+Lifecycle mutation requires the tenant-scoped `nao.workspace.manage` role and multi-factor or
+phishing-resistant authentication. Invalid or unavailable catalog registrations cannot enter a
+route. Promotion changes only routing for new session addresses: existing sessions keep the exact
+workspace version embedded in their key. Retirement removes a version from routing eligibility but
+never removes its compiled catalog entry, so pinned sessions retain their execution environment.
+
+Nao has no assembly-scanning plugin path. Extensions are trusted host-compiled values or stable
+process-worker references covered by an exact validated worker dependency. Any future external
+bundle discovery must additionally enforce signature, publisher trust, compatibility, dependency,
+and isolation policies before it can produce such a registration.
 
 ## Cluster operations
 
-Multi-silo production support requires tests and guidance for:
+`RuntimeClusterProfile` recognizes two fail-closed operating profiles:
 
-- Placement and tenant affinity
-- Silo failure and rolling restart
-- Network partition and storage degradation
-- Admission control and backpressure
-- Grain activation and queue saturation
-- Scaling signals
-- Recovery objectives
-- Upgrade compatibility
+- `DevelopmentSingleSilo`: exactly one localhost silo with in-memory grain storage. This profile is
+  disposable and carries no durability or availability guarantee.
+- `ProductionSingleRegion`: at least three silos with ADO.NET membership and ADO.NET grain storage.
+  The host must supply a region, deployment compatibility identity, and explicit maximum data-loss
+  and recovery-time objectives. A rolling upgrade cannot change the operating mode, region, or
+  deployment compatibility identity.
+
+No memory-storage or localhost-membership combination is accepted as production. The production
+profile assumes a highly available database endpoint, provider-supported backups, tested restore,
+and connection-pool health integrated into readiness.
+
+`RuntimePlacement` filters unhealthy or full silos before considering placement. Requests declare
+tenant identity, preferred region and zone, resource class, shared or dedicated-tenant isolation,
+and deployment compatibility. A dedicated request can select only a silo assigned to that tenant.
+Among compatible candidates, utilization is considered before deterministic tenant affinity.
+
+`RuntimeAdmissionController` bounds session activations and turn executions independently, with
+global and per-tenant active and queued capacities. Queues dispatch tenants round-robin. Full global
+or tenant queues return retryable structured resource-exhaustion failures; cancellation releases
+queued capacity. Session grains hold an activation lease for their activation lifetime and a turn
+lease only while new execution is required. Terminal replay and durable outcome recovery do not
+consume provider execution capacity.
+
+Membership loss, durable-storage degradation, and rolling-drain state reject new work explicitly
+instead of accepting work that cannot be committed. Admission snapshots produce standard Orleans
+grain saturation signals for active, queued, capacity, and rejection counts. A scaling
+recommendation requests scale-out at 80 percent active utilization, whenever work is queued, or
+after any rejection; scale-in requires every pool below 25 percent with no queue.
+
+The test cluster loads the real generated Orleans contract manifest. Two-silo integration tests
+kill the silo hosting a tenant-keyed health activation and require that identity to reactivate on
+the survivor. A separate rolling-restart test stops and restarts the serving silo and verifies
+tenant routing afterward. Unit tests cover placement isolation, compatibility, bounded overload,
+round-robin tenant dispatch, cancellation, membership loss, storage degradation, drain behavior,
+and rolling-upgrade compatibility.
+
+Single-region recovery preserves acknowledged turns through the RUN-02 accepted-intent, external
+terminal-outcome, sequenced transcript, and terminal-ledger protocol. Recovery objectives are
+deployment inputs rather than universal constants because database topology and backup cadence
+determine the achievable values. Operators must qualify their configured objectives with restore
+and failover drills.
+
+Multi-region is optional and currently supports only an operator-designed active/passive strategy:
+replicate the membership-independent durable stores and database backups, fence the failed write
+region, restore or promote storage, then start a new single-region cluster with the same deployment
+compatibility identity. Concurrent multi-region writers, cross-region Orleans membership, and
+automatic conflict resolution are not supported.
 
 ## Administration
 
-Provider, workspace, policy, quota, session, and health administration belongs to an authenticated control plane. Mutations require authorization, optimistic concurrency, dry-run validation, impact previews, propagation across silos, and audit evidence.
+`RuntimeAdministrationGrain` is the tenant-keyed control-plane boundary for provider, workspace,
+policy, quota, session, and health administration. Hosts own UI and transport authentication, then
+pass the resulting `SecurityPrincipal`; agent `AuthorizationScope` is deliberately not accepted.
+Every call is tenant-scoped. Mutations reject impersonation and require multi-factor or
+phishing-resistant authentication plus either `nao.control.admin` or the resource-specific
+`nao.control.<kind>.manage` role.
+
+Administrative requests carry a caller-stable operation ID, resource identity, action, expected
+revision, and canonical non-secret parameters. `PreviewAsync` validates the same request and
+returns current and target revisions, affected resource identities, and warnings without changing
+state. `MutateAsync` rejects stale revisions. Reusing an operation ID with changed content also
+fails. Parameter values may contain secret references but raw password, token, API-key, or secret
+fields are rejected.
+
+Before invoking a host adapter, the grain persists a pending operation and its impact. Adapters
+must use the operation ID idempotently and acknowledge both application and propagation to all
+silo-facing observers. A failure leaves the operation pending for retry on the same call or grain
+reactivation. Only after apply, propagation, and durable idempotent audit recording does the grain
+publish the target resource revision. Audit evidence records parameter names and impact counts,
+never parameter values.
+
+Models, tools, agents, connectors, and tenants support only explicit `disable` and `enable`
+mutations and additionally require `nao.control.emergency`. Disablement is persisted in the
+tenant grain, so every silo reads one authoritative state. Session execution checks tenant, agent,
+and resolved tool disablement before invoking new work. Provider and connector host adapters must
+perform the equivalent model or connector check at their transport boundary. Terminal turn replay
+does not rerun work and remains available during disablement.
 
 ## Roadmap
 

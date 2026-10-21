@@ -95,7 +95,10 @@ let! history =
     AgentGroup.runAsync agentContext "Analyze this data" group
 ```
 
-A collaborative agent group is different from an organizational tenant/group directory. Current source supports the former; organizational group lifecycle is roadmap work.
+A collaborative agent group is different from an organizational tenant/group directory. The
+former coordinates agents during execution. `GroupDirectoryGrain` implements the latter with
+tenant-scoped membership, roles, default workspace, quota definitions, lifecycle, and
+authorization for group-scoped session startup.
 
 ## Agent-as-tool delegation
 

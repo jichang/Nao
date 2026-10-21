@@ -99,84 +99,84 @@ This workstream turns individual provider adapters and Orleans grains into a res
 
 ## RUN-01 — Runtime tenancy model
 
-- [ ] Define tenant, group, user, workspace, session, and execution hierarchy.
-- [ ] Implement or remove/document the currently advertised group-directory capability.
-- [ ] Define group membership, roles, default workspace, quotas, and lifecycle.
-- [ ] Enforce tenant/workspace scope in grain keys and storage partitions.
-- [ ] Validate authorization at grain entry points and downstream resource access.
-- [ ] Prevent caller-controlled IDs from selecting another tenant's grain.
-- [ ] Add cross-tenant isolation and enumeration tests.
+- [x] Define tenant, group, user, workspace, session, and execution hierarchy.
+- [x] Implement or remove/document the currently advertised group-directory capability.
+- [x] Define group membership, roles, default workspace, quotas, and lifecycle.
+- [x] Enforce tenant/workspace scope in grain keys and storage partitions.
+- [x] Validate authorization at grain entry points and downstream resource access.
+- [x] Prevent caller-controlled IDs from selecting another tenant's grain.
+- [x] Add cross-tenant isolation and enumeration tests.
 
 **Acceptance criteria**
 
-- [ ] Every persisted state object has an explicit tenant and owner scope.
-- [ ] Cross-tenant access fails before protected state is loaded or disclosed.
-- [ ] Group behavior in documentation matches implemented source and tests.
+- [x] Every persisted state object has an explicit tenant and owner scope.
+- [x] Cross-tenant access fails before protected state is loaded or disclosed.
+- [x] Group behavior in documentation matches implemented source and tests.
 
 ## RUN-02 — Session durability and concurrency
 
-- [ ] Define turn idempotency and duplicate-request behavior.
-- [ ] Define grain reentrancy and concurrent-message policy.
-- [ ] Persist turn intent and terminal outcome atomically or through recoverable state transitions.
-- [ ] Resume interrupted harness execution safely.
-- [ ] Define session retention, archival, deletion, and legal-hold behavior.
-- [ ] Persist grants, memory references, artifacts, and trace links consistently.
-- [ ] Add optimistic concurrency or sequence checks where external stores participate.
-- [ ] Test activation, deactivation, restart, and reminder/timer behavior.
+- [x] Define turn idempotency and duplicate-request behavior.
+- [x] Define grain reentrancy and concurrent-message policy.
+- [x] Persist turn intent and terminal outcome atomically or through recoverable state transitions.
+- [x] Resume interrupted harness execution safely.
+- [x] Define session retention, archival, deletion, and legal-hold behavior.
+- [x] Persist grants, memory references, artifacts, and trace links consistently.
+- [x] Add optimistic concurrency or sequence checks where external stores participate.
+- [x] Test activation, deactivation, restart, and reminder/timer behavior.
 
 **Acceptance criteria**
 
-- [ ] Retried requests cannot duplicate turns or durable side effects.
-- [ ] Sessions survive silo restart without losing committed state.
-- [ ] Deletion removes or tombstones every owned record according to policy.
+- [x] Retried requests cannot duplicate turns or durable side effects.
+- [x] Sessions survive silo restart without losing committed state.
+- [x] Deletion removes or tombstones every owned record according to policy.
 
 ## RUN-03 — Workspace lifecycle
 
-- [ ] Define immutable workspace version identity and compatibility metadata.
-- [ ] Validate agents, tools, providers, policies, schemas, and migrations before registration.
-- [ ] Support staged rollout, canary, promotion, rollback, and retirement.
-- [ ] Pin sessions to a workspace version or define explicit migration.
-- [ ] Prevent retired code from becoming unavailable while active sessions still require it.
-- [ ] Audit registration and activation changes.
-- [ ] Define safe extension discovery without arbitrary untrusted assembly loading.
+- [x] Define immutable workspace version identity and compatibility metadata.
+- [x] Validate agents, tools, providers, policies, schemas, and migrations before registration.
+- [x] Support staged rollout, canary, promotion, rollback, and retirement.
+- [x] Pin sessions to a workspace version or define explicit migration.
+- [x] Prevent retired code from becoming unavailable while active sessions still require it.
+- [x] Audit registration and activation changes.
+- [x] Define safe extension discovery without arbitrary untrusted assembly loading.
 
 **Acceptance criteria**
 
-- [ ] Workspace rollback restores a known compatible execution environment.
-- [ ] Existing sessions have deterministic behavior during version changes.
-- [ ] Invalid registrations never become routable.
+- [x] Workspace rollback restores a known compatible execution environment.
+- [x] Existing sessions have deterministic behavior during version changes.
+- [x] Invalid registrations never become routable.
 
 ## RUN-04 — Cluster reliability and scale
 
-- [ ] Define supported clustering and persistence configurations.
-- [ ] Add multi-silo integration tests.
-- [ ] Define placement for tenant affinity, locality, resource class, and isolation.
-- [ ] Test silo failure, rolling restart, network partition, and storage degradation.
-- [ ] Add queue and grain activation backpressure.
-- [ ] Define overload admission control.
-- [ ] Add capacity metrics and scaling signals.
-- [ ] Document single-region recovery objectives and optional multi-region strategy.
+- [x] Define supported clustering and persistence configurations.
+- [x] Add multi-silo integration tests.
+- [x] Define placement for tenant affinity, locality, resource class, and isolation.
+- [x] Test silo failure, rolling restart, network partition, and storage degradation.
+- [x] Add queue and grain activation backpressure.
+- [x] Define overload admission control.
+- [x] Add capacity metrics and scaling signals.
+- [x] Document single-region recovery objectives and optional multi-region strategy.
 
 **Acceptance criteria**
 
-- [ ] Supported failures do not lose acknowledged turns or violate tenant boundaries.
-- [ ] Overload produces bounded queues and explicit rejection rather than collapse.
-- [ ] Rolling upgrades preserve supported session compatibility.
+- [x] Supported failures do not lose acknowledged turns or violate tenant boundaries.
+- [x] Overload produces bounded queues and explicit rejection rather than collapse.
+- [x] Rolling upgrades preserve supported session compatibility.
 
 ## RUN-05 — Administration and control plane
 
-- [ ] Define authenticated APIs for provider, workspace, policy, quota, session, and health administration.
-- [ ] Separate control-plane authorization from ordinary agent execution.
-- [ ] Add optimistic concurrency and audit evidence to mutations.
-- [ ] Support dry-run validation and impact previews.
-- [ ] Add emergency disablement for models, tools, agents, connectors, and tenants.
-- [ ] Ensure administrative changes propagate consistently across silos.
+- [x] Define authenticated APIs for provider, workspace, policy, quota, session, and health administration.
+- [x] Separate control-plane authorization from ordinary agent execution.
+- [x] Add optimistic concurrency and audit evidence to mutations.
+- [x] Support dry-run validation and impact previews.
+- [x] Add emergency disablement for models, tools, agents, connectors, and tenants.
+- [x] Ensure administrative changes propagate consistently across silos.
 
 ### Exit criteria for providers and runtime
 
-- [ ] PRV-01 through PRV-05 are complete for supported providers.
-- [ ] RUN-01 through RUN-05 are complete for supported Orleans deployment modes.
-- [ ] Outage, overload, restart, upgrade, and cross-tenant tests pass.
-- [ ] Provider and runtime operations are observable and auditable.
+- [x] PRV-01 through PRV-05 are complete for supported providers.
+- [x] RUN-01 through RUN-05 are complete for supported Orleans deployment modes.
+- [x] Outage, overload, restart, upgrade, and cross-tenant tests pass.
+- [x] Provider and runtime operations are observable and auditable.
 
 [Back to roadmap](../roadmap.md)

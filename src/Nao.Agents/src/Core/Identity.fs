@@ -95,8 +95,6 @@ module WorkspaceId =
 
     let value (WorkspaceId value) = value
     let create = parse
-    let defaultId = parse "default"
-    let versioned key version = parse (sprintf "%s@%s" key version)
 
 module SessionId =
     let tryParse = TextIdentity.tryParse SessionId

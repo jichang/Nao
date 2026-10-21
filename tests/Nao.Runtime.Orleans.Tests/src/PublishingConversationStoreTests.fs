@@ -3,6 +3,7 @@ namespace Nao.Runtime.Orleans.Tests
 open System
 open System.IO
 open System.Text.Json
+open System.Threading
 open System.Threading.Tasks
 open Microsoft.VisualStudio.TestTools.UnitTesting
 open Nao.Agents
@@ -28,17 +29,17 @@ module private ConversationTestHelpers =
             (session |> Option.map SessionId.parse)
         |> Option.get
 
-    let owner = scope "tenant" "user" (Some "group") "workspace" (Some "session")
+    let owner = scope "tenant" "user" (Some "group") "workspace@1" (Some "session")
 
     let owners =
         [ owner
-          scope "other" "user" (Some "group") "workspace" (Some "session")
-          scope "tenant" "other" (Some "group") "workspace" (Some "session")
-          scope "tenant" "user" (Some "other") "workspace" (Some "session")
-          scope "tenant" "user" None "workspace" (Some "session")
-          scope "tenant" "user" (Some "group") "other" (Some "session")
-          scope "tenant" "user" (Some "group") "workspace" (Some "other")
-          scope "tenant" "user" (Some "group") "workspace" None ]
+          scope "other" "user" (Some "group") "workspace@1" (Some "session")
+          scope "tenant" "other" (Some "group") "workspace@1" (Some "session")
+          scope "tenant" "user" (Some "other") "workspace@1" (Some "session")
+          scope "tenant" "user" None "workspace@1" (Some "session")
+          scope "tenant" "user" (Some "group") "other@1" (Some "session")
+          scope "tenant" "user" (Some "group") "workspace@1" (Some "other")
+          scope "tenant" "user" (Some "group") "workspace@1" None ]
 
     let key authorization =
         AuthorizationScope.identity authorization |> AuthorizationIdentity.storageKey
@@ -195,7 +196,7 @@ type ConversationAuthorizationTests() =
         Assert.AreEqual([ parentId ], ArtifactLineage.parentArtifactIds lineage)
 
     [<TestMethod>]
-    member _.StreamKeyAndV1PayloadContainNoAuthorizationEvidence() =
+    member _.StreamKeyAndV1PayloadContainOnlyExplicitOwnerIdentity() =
         let directory = root ()
 
         try
@@ -210,21 +211,26 @@ type ConversationAuthorizationTests() =
             for payload in File.ReadAllLines path do
                 use document = JsonDocument.Parse payload
                 Assert.AreEqual(1, document.RootElement.GetProperty("Version").GetInt32())
+                let persistedOwner = document.RootElement.GetProperty("Owner")
+                Assert.AreEqual("tenant", persistedOwner.GetProperty("TenantId").GetString())
+                Assert.AreEqual("workspace@1", persistedOwner.GetProperty("WorkspaceId").GetString())
+                Assert.AreEqual("user", persistedOwner.GetProperty("UserId").GetString())
+
+                Assert.AreEqual(
+                    "session",
+                    persistedOwner.GetProperty("SessionId").EnumerateArray()
+                    |> Seq.last
+                    |> _.GetString()
+                )
 
                 for secret in
-                    [ "tenant"
-                      "user"
-                      "group"
-                      "workspace"
-                      "session"
+                    [ "group"
                       "private-service"
                       "private-role"
                       "private-claim"
                       "private-value"
                       "MultiFactor"
-                      "Authorization"
-                      "Owner"
-                      "SessionId" ] do
+                      "Authorization" ] do
                     Assert.IsFalse(payload.Contains secret)
         finally
             Directory.Delete(directory, true)
@@ -254,10 +260,104 @@ type ConversationAuthorizationTests() =
             Directory.Delete(directory, true)
 
     [<TestMethod>]
+    member _.PersistedOwnerMismatchFailsBeforeConversationDisclosure() =
+        let directory = root ()
+
+        try
+            let store = FileConversationStore.create directory
+
+            store.SaveAsync owner "default" [| message (CorrelationContext.root ()) "User" "secret" "turn" |]
+            |> _.Wait()
+
+            let path = Path.Combine(directory, "conversation", key owner + ".jsonl")
+            let payload = File.ReadAllText path
+
+            let corrupted =
+                payload.Replace("\"TenantId\":\"tenant\"", "\"TenantId\":\"other-tenant\"")
+
+            Assert.AreNotEqual(payload, corrupted)
+            File.WriteAllText(path, corrupted)
+
+            Assert.ThrowsExactly<InvalidDataException>(fun () ->
+                store.LoadAsync owner "default" |> _.GetAwaiter().GetResult() |> ignore)
+            |> ignore
+        finally
+            Directory.Delete(directory, true)
+
+    [<TestMethod>]
+    member _.ConversationSequenceGapFailsBeforeProjection() =
+        let directory = root ()
+
+        try
+            let store = FileConversationStore.create directory
+
+            store.SaveAsync owner "default" [| message (CorrelationContext.root ()) "User" "secret" "turn" |]
+            |> _.Wait()
+
+            let path = Path.Combine(directory, "conversation", key owner + ".jsonl")
+            let payload = File.ReadAllText path
+            let corrupted = payload.Replace("\"Sequence\":1", "\"Sequence\":2")
+            Assert.AreNotEqual(payload, corrupted)
+            File.WriteAllText(path, corrupted)
+
+            Assert.ThrowsExactly<InvalidDataException>(fun () ->
+                store.LoadAsync owner "default" |> _.GetAwaiter().GetResult() |> ignore)
+            |> ignore
+        finally
+            Directory.Delete(directory, true)
+
+    [<TestMethod>]
+    member _.ConcurrentConversationCommitsRejectTheStaleSequence() =
+        let lines = ResizeArray<string>()
+        use readsAligned = new Barrier(2)
+
+        let eventStore =
+            { Append =
+                fun expected payload ->
+                    lock lines (fun () ->
+                        let actual = int64 lines.Count
+
+                        if actual <> expected then
+                            raise (ConversationSequenceConflictException(expected, actual))
+
+                        lines.Add payload)
+              LoadAll =
+                fun () ->
+                    let snapshot = lock lines (fun () -> List.ofSeq lines)
+
+                    if snapshot.IsEmpty then
+                        readsAligned.SignalAndWait()
+
+                    snapshot }
+
+        let first = FileConversationStore.createPersistent (fun _ -> eventStore)
+        let second = FileConversationStore.createPersistent (fun _ -> eventStore)
+        let correlation = CorrelationContext.root ()
+
+        let commit store content =
+            task {
+                try
+                    do! store.SaveAsync owner "default" [| message correlation "User" content "turn" |]
+                    return true
+                with :? ConversationSequenceConflictException ->
+                    return false
+            }
+
+        let results =
+            Task.WhenAll(
+                Task.Run<bool>(Func<Task<bool>>(fun () -> commit first "first")),
+                Task.Run<bool>(Func<Task<bool>>(fun () -> commit second "second"))
+            )
+            |> _.GetAwaiter().GetResult()
+
+        CollectionAssert.AreEquivalent([| true; false |], results)
+        Assert.AreEqual(1, lines.Count)
+
+    [<TestMethod>]
     member _.UnsupportedVersionsAndFailedAppendsDoNotPublishState() =
         let unsupportedStore =
             FileConversationStore.createPersistent (fun _ ->
-                { Append = fun _ -> Assert.Fail("Unsupported stream must not append.")
+                { Append = fun _ _ -> Assert.Fail("Unsupported stream must not append.")
                   LoadAll = fun () -> [ """{"Version":99,"Event":"DeleteScope"}""" ] })
 
         Assert.ThrowsExactly<InvalidDataException>(fun () ->
@@ -271,7 +371,7 @@ type ConversationAuthorizationTests() =
 
         let eventStore =
             { Append =
-                fun line ->
+                fun _ line ->
                     if fail then
                         raise (IOException "failed")
                     else
@@ -320,7 +420,13 @@ type PublishingConversationStoreTests() =
             | [ ConversationCaptured(eventScope, MessagesAppended("default", messages)) ] ->
                 Assert.AreEqual("user", eventScope.UserId)
                 Assert.AreEqual("session", eventScope.SessionId)
-                Assert.AreEqual("workspace", eventScope.WorkspaceKey)
+                Assert.AreEqual("workspace@1", eventScope.WorkspaceKey)
+
+                Assert.AreEqual(
+                    RuntimeAddress.sessionFromScope owner |> Option.get |> RuntimeAddress.sessionKey,
+                    eventScope.SessionKey
+                )
+
                 Assert.AreEqual(correlation, messages.Head.Correlation)
             | events -> Assert.Fail(sprintf "Unexpected events: %A" events)
         finally

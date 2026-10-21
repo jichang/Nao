@@ -16,10 +16,18 @@ do not paste protected content into incident systems.
 
 1. Identify whether provider limits, execution workers, Orleans grains, storage pools, or telemetry
    queues are saturated.
-2. Check rejected-work signals and execution latency over the same interval.
-3. Reduce admission or scale the named resource. Do not increase an in-process queue without a
+2. For Orleans saturation, inspect the separate `session_activation` and `turn_execution` signals:
+   active plus queued work, configured capacity, rejection count, and the current scaling
+   recommendation. A nonzero rejection count is an overload event, not a normal queue condition.
+3. If cluster membership or durable storage is degraded, keep runtime admission fail-closed. Do not
+   override `MembershipUnavailable`, `StorageUnavailable`, or `Draining` to force new work through.
+4. During rolling maintenance, mark the silo draining, wait for active turn leases to reach zero,
+   stop it, deploy only a build with the same deployment compatibility identity, then return it to
+   healthy admission.
+5. Check rejected-work signals and execution latency over the same interval.
+6. Reduce admission or scale the named resource. Do not increase an in-process queue without a
    memory-capacity review.
-4. Confirm utilization remains below 80 percent after mitigation.
+7. Confirm utilization remains below 80 percent after mitigation.
 
 ## Execution failures
 
@@ -42,3 +50,18 @@ do not paste protected content into incident systems.
 2. Open the matching evaluation dataset, configuration identity, and production sample window.
 3. Reproduce the drift through the production-equivalent evaluation harness.
 4. Block release promotion or roll back when a release-critical gate regressed.
+
+## Emergency administrative disablement
+
+1. Authenticate with multi-factor or phishing-resistant evidence and both a control-plane
+   administration role and `nao.control.emergency`. Never use impersonated authority.
+2. Call `PreviewAsync` for the exact model, tool, agent, connector, or tenant identity and review
+   the affected resources and warnings. A preview does not change the resource revision.
+3. Call `MutateAsync` with a new stable operation ID and the previewed expected revision. Reuse that
+   operation ID only to retry the identical request.
+4. If propagation or audit delivery fails, do not submit a different mutation. Retry the pending
+   operation until the host adapter, all silo observers, and durable audit storage acknowledge it.
+5. Confirm `IsDisabledAsync` from more than one silo-facing client and verify new work fails closed.
+   Terminal turn replay remains available because it performs no new execution.
+6. Correct the incident, preview `enable`, and submit it against the current revision. Do not bypass
+   the control plane by changing process-local caches.

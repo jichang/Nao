@@ -75,6 +75,23 @@ type HarnessCheckpointJournal =
       GetByExecution: AuthorizationScope -> ExecutionId -> Task<HarnessCheckpoint list>
       GetByIdempotencyKey: AuthorizationScope -> IdempotencyKey -> Task<HarnessCheckpoint list> }
 
+/// Durable terminal value for recovering a completed logical harness execution.
+type HarnessTerminalOutcome =
+    { Id: Guid
+      IdempotencyKey: IdempotencyKey
+      Correlation: CorrelationContext
+      TurnId: string
+      AgentId: string
+      Phase: HarnessCheckpointPhase
+      Response: string option
+      Artifacts: Artifact list
+      Failure: string option
+      RecordedAt: DateTimeOffset }
+
+type HarnessOutcomeJournal =
+    { Save: AuthorizationScope -> HarnessTerminalOutcome -> Task
+      TryGetByIdempotencyKey: AuthorizationScope -> IdempotencyKey -> Task<HarnessTerminalOutcome option> }
+
 /// Exact recorded provider invocation used for deterministic replay.
 type ProviderReplayFixture =
     { Provider: string
@@ -121,7 +138,8 @@ type ExecutionJournal =
       DeleteScopeAsync: AuthorizationScope -> Task<Result<int, PlatformFailure>>
       DeleteExpiredAsync: AuthorizationScope -> DateTimeOffset -> Task<Result<int, PlatformFailure>>
       SideEffects: ToolSideEffectJournal
-      Checkpoints: HarnessCheckpointJournal }
+      Checkpoints: HarnessCheckpointJournal
+      Outcomes: HarnessOutcomeJournal }
 
 module internal RuntimeExecutionJournal =
     let private current = AsyncLocal<ExecutionJournal option>()

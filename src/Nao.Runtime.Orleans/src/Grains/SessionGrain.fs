@@ -77,6 +77,18 @@ type ConversationContext() =
     [<Id(3u)>]
     member val AgentName: string = "" with get, set
 
+    [<Id(4u)>]
+    member val TenantId: string = "" with get, set
+
+    [<Id(5u)>]
+    member val WorkspaceId: string = "" with get, set
+
+    [<Id(6u)>]
+    member val UserId: string = "" with get, set
+
+    [<Id(7u)>]
+    member val SessionId: string = "" with get, set
+
 /// Persistent state for a session grain
 [<GenerateSerializer>]
 type SessionGrainState() =
@@ -89,6 +101,39 @@ type SessionGrainState() =
     [<Id(5u)>]
     member val SchemaVersion: int = 0 with get, set
 
+    [<Id(6u)>]
+    member val TenantId: string = "" with get, set
+
+    [<Id(7u)>]
+    member val WorkspaceId: string = "" with get, set
+
+    [<Id(8u)>]
+    member val UserId: string = "" with get, set
+
+    [<Id(9u)>]
+    member val SessionId: string = "" with get, set
+
+    [<Id(10u)>]
+    member val Turns: ResizeArray<SessionTurnRecord> = ResizeArray() with get, set
+
+    [<Id(11u)>]
+    member val NextTurnSequence: int64 = 1L with get, set
+
+    [<Id(12u)>]
+    member val Lifecycle: string = SessionLifecyclePhase.Active with get, set
+
+    [<Id(13u)>]
+    member val ArchiveAfter: DateTimeOffset = DateTimeOffset.MaxValue with get, set
+
+    [<Id(14u)>]
+    member val DeleteAfter: DateTimeOffset = DateTimeOffset.MaxValue with get, set
+
+    [<Id(15u)>]
+    member val LegalHoldReason: string = "" with get, set
+
+    [<Id(16u)>]
+    member val ArchivedAt: DateTimeOffset = DateTimeOffset.MinValue with get, set
+
 /// Options for starting or reconfiguring a session
 [<GenerateSerializer>]
 type SessionStartOptions() =
@@ -98,9 +143,6 @@ type SessionStartOptions() =
     [<Id(1u)>]
     member val ToolNames: ResizeArray<string> = ResizeArray() with get, set
 
-    [<Id(2u)>]
-    member val WorkspaceKey: string = "default" with get, set
-
     [<Id(3u)>]
     member val GroupId: string = "" with get, set
 
@@ -109,73 +151,24 @@ type SessionStartOptions() =
     [<Id(5u)>]
     member val RuntimeMode: string = "" with get, set
 
-/// Trace and execution lineage crossing the Orleans grain boundary.
-[<GenerateSerializer>]
-type OrleansCorrelationContext() =
-    [<Id(0u)>]
-    member val ExecutionId: string = "" with get, set
-
-    [<Id(1u)>]
-    member val CorrelationId: string = "" with get, set
-
-    [<Id(2u)>]
-    member val CausationExecutionId: string = "" with get, set
-
-    [<Id(3u)>]
-    member val Attempt: int = 0 with get, set
-
-[<RequireQualifiedAccess>]
-module OrleansCorrelationContext =
-    let fromDomain (correlation: CorrelationContext) =
-        let envelope = OrleansCorrelationContext()
-        envelope.ExecutionId <- ExecutionId.serialize correlation.ExecutionId
-        envelope.CorrelationId <- CorrelationId.serialize correlation.CorrelationId
-
-        envelope.CausationExecutionId <-
-            correlation.CausationId
-            |> Option.map ExecutionId.serialize
-            |> Option.defaultValue ""
-
-        envelope.Attempt <- correlation.Attempt
-        envelope
-
-    let toDomain (value: OrleansCorrelationContext) =
-        if isNull (box value) || value.Attempt <= 0 then
-            invalidArg (nameof value) "Orleans correlation context is missing or invalid."
-
-        { ExecutionId = ExecutionId.parse value.ExecutionId
-          CorrelationId = CorrelationId.parse value.CorrelationId
-          CausationId =
-            if String.IsNullOrWhiteSpace value.CausationExecutionId then
-                None
-            else
-                Some(ExecutionId.parse value.CausationExecutionId)
-          Attempt = value.Attempt }
-
 module internal SessionAuthorization =
-    let tryCreateScope
-        (principal: SecurityPrincipal)
-        (grainUserId: string)
-        (grainSessionId: string)
-        (groupId: string)
-        (workspaceKey: string)
-        =
+    let tryCreateScope (principal: SecurityPrincipal) address (groupId: string) =
         let parsedGroupId =
             if String.IsNullOrWhiteSpace groupId then
                 Some None
             else
                 GroupId.tryParse groupId |> Option.map Some
 
-        match
-            UserId.tryParse grainUserId,
-            SessionId.tryParse grainSessionId,
-            parsedGroupId,
-            WorkspaceId.tryParse workspaceKey
-        with
-        | Some userId, Some sessionId, Some requestedGroupId, Some workspaceId when
-            userId = SecurityPrincipal.userId principal
+        match parsedGroupId with
+        | Some requestedGroupId when
+            SecurityPrincipal.tenantId principal = RuntimeAddress.sessionTenant address
+            && SecurityPrincipal.userId principal = RuntimeAddress.sessionUser address
             ->
-            AuthorizationScope.tryCreate principal requestedGroupId workspaceId (Some sessionId)
+            AuthorizationScope.tryCreate
+                principal
+                requestedGroupId
+                (RuntimeAddress.sessionWorkspace address)
+                (Some(RuntimeAddress.sessionId address))
         | _ -> None
 
     let matchesPersisted (info: SessionInfo) scope =
@@ -186,6 +179,7 @@ module internal SessionAuthorization =
             |> (=) info.GroupId
 
         info.TenantId = (AuthorizationScope.tenantId scope |> TenantId.value)
+        && info.WorkspaceKey = (AuthorizationScope.workspaceId scope |> WorkspaceId.value)
         && info.UserId = (AuthorizationScope.userId scope |> UserId.value)
         && info.SessionId = (AuthorizationScope.sessionId scope
                              |> Option.map SessionId.value
@@ -193,29 +187,32 @@ module internal SessionAuthorization =
         && groupMatches
 
 /// Orleans grain interface for a user session.
-/// Grain key format: "userId/sessionId"
+[<GenerateSerializer>]
+type OrleansMemoryEntry() =
+    [<Id(0u)>]
+    member val Key: string = "" with get, set
+
+    [<Id(1u)>]
+    member val Value: string = "" with get, set
+
+    [<Id(2u)>]
+    member val Timestamp: DateTimeOffset = DateTimeOffset.MinValue with get, set
+
+    [<Id(3u)>]
+    member val Tags: ResizeArray<string> = ResizeArray() with get, set
+
+/// Grain key format is produced by RuntimeAddress.sessionKey.
 /// The grain resolves agents/tools from the workspace registry.
 type ISessionGrain =
     inherit IGrainWithStringKey
 
-    /// Initialize the session with a specific agent, workspace, and optional tool overrides.
+    /// Initialize the tenant/workspace-scoped session with a specific agent and optional tool overrides.
     abstract member StartAsync: options: SessionStartOptions -> Task<bool>
 
-    /// Process user input through the ETCLOVG harness until completion or caller cancellation.
-    abstract member ProcessAsync:
-        input: string * correlation: OrleansCorrelationContext * cancellationToken: CancellationToken -> Task<string>
-
-    /// Process user input where the LLM prompt and the persisted/display text differ:
-    /// `llmInput` (with embedded attachment content) is what the agent sees, while only
-    /// `displayText` plus `attachmentNames` are stored in the transcript. Caller cancellation
-    /// flows through the grain boundary into the harness.
-    abstract member ProcessWithContextAsync:
-        llmInput: string *
-        displayText: string *
-        attachmentNames: string[] *
-        correlation: OrleansCorrelationContext *
-        cancellationToken: CancellationToken ->
-            Task<string>
+    /// Execute or recover one caller-identified logical turn. Reusing the turn id with the
+    /// same request returns its durable terminal result; changed input is rejected.
+    abstract member ExecuteTurnAsync:
+        request: SessionTurnRequest * cancellationToken: CancellationToken -> Task<SessionTurnResult>
 
     /// Id of the most recently processed turn (empty if none). Use to attach feedback.
     abstract member GetLastTurnIdAsync: unit -> Task<string>
@@ -230,9 +227,6 @@ type ISessionGrain =
     /// "positive" / "negative" / "neutral". Returns the rationales of any tool
     /// adjustments that were proposed and stored.
     abstract member SubmitFeedbackAsync: sentiment: string * comment: string -> Task<string array>
-
-    /// Switch to a different workspace (re-validates agent exists in new workspace)
-    abstract member SwitchWorkspaceAsync: workspaceKey: string -> Task<bool>
 
     /// Switch to a different agent within the current workspace
     abstract member SwitchAgentAsync: agentName: string -> Task<bool>
@@ -256,7 +250,7 @@ type ISessionGrain =
     abstract member SaveMemoryAsync: key: string * value: string -> Task
 
     /// Recall memories by key prefix
-    abstract member RecallMemoryAsync: key: string -> Task<MemoryEntry array>
+    abstract member RecallMemoryAsync: key: string -> Task<OrleansMemoryEntry array>
 
     /// Clear all memories
     abstract member ClearMemoriesAsync: unit -> Task
@@ -267,15 +261,32 @@ type ISessionGrain =
     /// Resume a paused session
     abstract member ResumeAsync: unit -> Task
 
+    /// Configure the earliest automatic archival and deletion eligibility timestamps.
+    abstract member ConfigureRetentionAsync: archiveAfter: DateTimeOffset * deleteAfter: DateTimeOffset -> Task
+
+    /// Apply time-based lifecycle transitions. Hosts call this from their durable scheduler.
+    abstract member EvaluateLifecycleAsync: now: DateTimeOffset -> Task<SessionLifecycleSnapshot>
+
+    /// Archive immediately; archived sessions are immutable and cannot resume.
+    abstract member ArchiveAsync: unit -> Task
+
+    /// Place the session under legal hold. The non-blank reason is persisted.
+    abstract member SetLegalHoldAsync: reason: string -> Task
+
+    /// Remove an existing legal hold.
+    abstract member ClearLegalHoldAsync: unit -> Task
+
+    abstract member GetLifecycleAsync: unit -> Task<SessionLifecycleSnapshot>
+
     /// Permanently destroy the session and all its data
     abstract member DestroyAsync: unit -> Task
 
-/// Self-contained session grain. Resolves workspaces from WorkspaceRegistry,
+/// Self-contained session grain. Resolves exact workspace versions from WorkspaceCatalog,
 /// manages multiple conversation contexts and memory through Orleans persistence.
 type SessionGrain
     (
         [<PersistentState("sessionState", "sessionStore")>] persistentState: IPersistentState<SessionGrainState>,
-        registry: WorkspaceRegistry,
+        catalog: WorkspaceCatalog,
         provider: LlmProvider,
         orchestratorFactory: OrchestratorFactory,
         conversationStore: ConversationStore,
@@ -287,14 +298,16 @@ type SessionGrain
         eventBus: EventBus,
         memoryStore: MemoryStore,
         memoryToolConfig: MemoryToolConfig,
+        admissionController: RuntimeAdmissionController,
         grainFactory: IGrainFactory
-    ) =
+    ) as this =
     inherit Grain()
 
     /// The recorder for the turn currently being processed (None when idle). Held so the
     /// reentrant `GetLiveStepsAsync` can surface in-progress steps for live UIs. Reads go
     /// through `recorder.Steps`, which is internally lock-protected.
     let mutable currentRecorder: TurnRecorder option = None
+    let mutable activationLease: RuntimeAdmissionLease option = None
 
     /// Per-session feedback store, resolved once from the grain key in OnActivateAsync so
     /// this session's annotations are written under sessions/<key>/. Observability services
@@ -304,15 +317,24 @@ type SessionGrain
     // ─── Workspace resolution ───
 
     let getWorkspace () : WorkspaceDefinitions option =
-        let key = WorkspaceId.create persistentState.State.Info.WorkspaceKey
-        registry.TryGet key
+        let info = persistentState.State.Info
+
+        catalog.TryGet(TenantId.parse info.TenantId, WorkspaceVersionId.parse info.WorkspaceKey)
+        |> Option.map _.Definitions
 
     /// Build the identity envelope carried by every emitted event. `actionId` is the turn
     /// the event is about. Producers never decide where data lands — a subscribed storage
     /// strategy routes it (per session, per category, ...) from this scope.
     let makeScope (actionId: string) (correlation: CorrelationContext) : EventScope =
         let info = persistentState.State.Info
-        let sessionKey = sprintf "%s/%s" info.UserId info.SessionId
+
+        let sessionKey =
+            RuntimeAddress.session
+                (TenantId.parse info.TenantId)
+                (info.WorkspaceKey |> WorkspaceVersionId.parse |> WorkspaceVersionId.workspaceId)
+                (UserId.parse info.UserId)
+                (SessionId.parse info.SessionId)
+            |> RuntimeAddress.sessionKey
 
         EventScope.Create(
             info.TenantId,
@@ -357,26 +379,52 @@ type SessionGrain
           PolicyConfirmationBroker = PolicyConfirmationBroker.unavailable
           Bus = eventBus }
 
-    // ─── Key parsing ───
+    let currentAddress () =
+        RuntimeAddress.tryParseSessionKey (this.GetPrimaryKeyString())
+        |> Option.defaultWith (fun () ->
+            raise (UnauthorizedAccessException "Invalid tenant/workspace/user/session grain key."))
 
-    let parseKey (key: string) =
-        match key.IndexOf('/') with
-        | -1 -> (key, "default")
-        | idx -> (key.Substring(0, idx), key.Substring(idx + 1))
+    let validatePersistedHierarchy (address: RuntimeSessionAddress) =
+        let owner = PersistedOwnerScope.session address
 
-    let tryCurrentScope workspaceKey =
+        let matches tenantId workspaceId userId sessionId =
+            tenantId = owner.TenantId
+            && workspaceId = owner.WorkspaceId
+            && userId = owner.UserId
+            && sessionId = owner.SessionId.Value
+
+        let rootMatches =
+            matches
+                persistentState.State.TenantId
+                persistentState.State.WorkspaceId
+                persistentState.State.UserId
+                persistentState.State.SessionId
+
+        let hierarchyMatches =
+            (persistentState.State.Conversations
+             |> Seq.forall (fun context ->
+                 matches context.TenantId context.WorkspaceId context.UserId context.SessionId
+                 && (context.Messages
+                     |> Seq.forall (fun message ->
+                         matches message.TenantId message.WorkspaceId message.UserId message.SessionId))))
+            && (persistentState.State.Turns
+                |> Seq.forall (fun turn -> matches turn.TenantId turn.WorkspaceId turn.UserId turn.SessionId))
+
+        if not rootMatches || not hierarchyMatches then
+            raise (UnauthorizedAccessException "Persisted session hierarchy does not match its grain key.")
+
+    let tryCurrentScope () =
         let info = persistentState.State.Info
+        let address = currentAddress ()
 
-        SessionAuthorization.tryCreateScope
-            (principalAccessor.Invoke())
-            info.UserId
-            info.SessionId
-            info.GroupId
-            workspaceKey
+        if persistentState.RecordExists then
+            validatePersistedHierarchy address
+
+        SessionAuthorization.tryCreateScope (principalAccessor.Invoke()) address info.GroupId
         |> Option.filter (SessionAuthorization.matchesPersisted info)
 
     let requireCurrentScope () =
-        match tryCurrentScope persistentState.State.Info.WorkspaceKey with
+        match tryCurrentScope () with
         | Some scope -> scope
         | None ->
             PlatformFailure.create
@@ -385,6 +433,26 @@ type SessionGrain
                 false
                 None
             |> PlatformFailure.raiseException
+
+    let lifecycleSnapshot () =
+        SessionLifecycle.snapshot
+            persistentState.State.Lifecycle
+            persistentState.State.ArchiveAfter
+            persistentState.State.DeleteAfter
+            persistentState.State.LegalHoldReason
+            persistentState.State.ArchivedAt
+
+    let applyLifecycle now =
+        if
+            persistentState.State.Lifecycle <> SessionLifecyclePhase.Archived
+            && now >= persistentState.State.ArchiveAfter
+        then
+            persistentState.State.Lifecycle <- SessionLifecyclePhase.Archived
+            persistentState.State.ArchivedAt <- now
+            persistentState.State.Info.IsActive <- false
+            true
+        else
+            false
 
     // ─── Conversation context management ───
 
@@ -398,7 +466,12 @@ type SessionGrain
             let ctx = ConversationContext()
             ctx.Name <- name
             ctx.CreatedAt <- DateTimeOffset.UtcNow
-            ctx.AgentName <- persistentState.State.Info.AgentName
+            let info = persistentState.State.Info
+            ctx.AgentName <- info.AgentName
+            ctx.TenantId <- info.TenantId
+            ctx.WorkspaceId <- info.WorkspaceKey
+            ctx.UserId <- info.UserId
+            ctx.SessionId <- info.SessionId
             persistentState.State.Conversations.Add(ctx)
             ctx
 
@@ -414,22 +487,26 @@ type SessionGrain
         record.Steps <- ResizeArray(pm.Steps)
         record.Attachments <- ResizeArray(pm.Attachments)
         record.Artifacts <- ResizeArray(pm.Artifacts)
+        let info = persistentState.State.Info
+        record.TenantId <- info.TenantId
+        record.WorkspaceId <- info.WorkspaceKey
+        record.UserId <- info.UserId
+        record.SessionId <- info.SessionId
         record
 
     let restoreActiveConversationAsync () =
         task {
             let ctx = activeConversation ()
+            let authorization = requireCurrentScope ()
+            let sessionId = persistentState.State.Info.SessionId
+            let convName = persistentState.State.Info.ActiveConversation
 
-            if ctx.Messages.Count = 0 then
-                let authorization = requireCurrentScope ()
-                let sessionId = persistentState.State.Info.SessionId
-                let convName = persistentState.State.Info.ActiveConversation
+            if not (String.IsNullOrEmpty sessionId) then
+                let! loaded = conversationStore.LoadAsync authorization convName
+                ctx.Messages.Clear()
 
-                if not (String.IsNullOrEmpty sessionId) then
-                    let! loaded = conversationStore.LoadAsync authorization convName
-
-                    for pm in loaded do
-                        ctx.Messages.Add(toMessageRecord pm)
+                for pm in loaded do
+                    ctx.Messages.Add(toMessageRecord pm)
         }
 
     /// Map a recorded process step onto its serializable storage form.
@@ -474,105 +551,131 @@ type SessionGrain
         task {
             let authorization = requireCurrentScope ()
             let ctx = activeConversation ()
-            let stepRecords = steps |> List.map toStepRecord
 
-            let artifactRecords =
-                artifacts
-                |> List.map (fun value ->
-                    let lineage = Artifact.lineage value
-                    let id = value |> Artifact.id |> ArtifactId.serialize
-                    let idempotencyKey = value |> Artifact.idempotencyKey |> IdempotencyKey.value
-                    let schemaVersion = value |> Artifact.schemaVersion |> ArtifactSchemaVersion.value
-                    let role = value |> Artifact.role |> ArtifactRole.serialize
-                    let address = value |> Artifact.address |> ArtifactAddress.value
-                    let contentHash = value |> Artifact.contentHash |> ArtifactContentHash.value
-                    let recordedBy = lineage |> ArtifactLineage.recordedBy |> ExecutionId.serialize
+            let existing =
+                ctx.Messages
+                |> Seq.filter (fun message -> message.TurnId = turnId)
+                |> Seq.toArray
 
-                    let parentArtifactIds =
-                        lineage
-                        |> ArtifactLineage.parentArtifactIds
-                        |> List.map ArtifactId.serialize
-                        |> List.toArray
+            if existing.Length > 0 then
+                if
+                    existing.Length <> 2
+                    || existing.[0].Role <> "User"
+                    || existing.[0].Content <> userInput
+                    || existing.[1].Role <> "Assistant"
+                    || existing.[1].Content <> response
+                then
+                    raise (
+                        InvalidDataException
+                            "A different transcript entry already exists for the durable turn identity."
+                    )
+            else
+                let stepRecords = steps |> List.map toStepRecord
 
-                    ArtifactRecord(
-                        Id = id,
-                        IdempotencyKey = idempotencyKey,
-                        SchemaVersion = schemaVersion,
-                        Role = role,
-                        Address = address,
-                        Kind = Artifact.kind value,
-                        ContentType = Artifact.contentType value,
-                        Payload = Artifact.payload value,
-                        ContentHash = contentHash,
-                        RecordedBy = recordedBy,
-                        RecordedAt = ArtifactLineage.recordedAt lineage,
-                        ParentArtifactIds = parentArtifactIds
-                    ))
+                let artifactRecords =
+                    artifacts
+                    |> List.map (fun value ->
+                        let lineage = Artifact.lineage value
+                        let id = value |> Artifact.id |> ArtifactId.serialize
+                        let idempotencyKey = value |> Artifact.idempotencyKey |> IdempotencyKey.value
+                        let schemaVersion = value |> Artifact.schemaVersion |> ArtifactSchemaVersion.value
+                        let role = value |> Artifact.role |> ArtifactRole.serialize
+                        let address = value |> Artifact.address |> ArtifactAddress.value
+                        let contentHash = value |> Artifact.contentHash |> ArtifactContentHash.value
+                        let recordedBy = lineage |> ArtifactLineage.recordedBy |> ExecutionId.serialize
 
-            let userRecord =
-                MessageRecord(
-                    Role = "User",
-                    Content = userInput,
-                    TurnId = turnId,
-                    Correlation = correlation,
-                    Attachments = ResizeArray(attachmentNames)
-                )
+                        let parentArtifactIds =
+                            lineage
+                            |> ArtifactLineage.parentArtifactIds
+                            |> List.map ArtifactId.serialize
+                            |> List.toArray
 
-            let assistantRecord =
-                MessageRecord(
-                    Role = "Assistant",
-                    Content = response,
-                    TurnId = turnId,
-                    Correlation = correlation,
-                    Steps = ResizeArray(stepRecords),
-                    Artifacts = ResizeArray(artifactRecords)
-                )
+                        ArtifactRecord(
+                            Id = id,
+                            IdempotencyKey = idempotencyKey,
+                            SchemaVersion = schemaVersion,
+                            Role = role,
+                            Address = address,
+                            Kind = Artifact.kind value,
+                            ContentType = Artifact.contentType value,
+                            Payload = Artifact.payload value,
+                            ContentHash = contentHash,
+                            RecordedBy = recordedBy,
+                            RecordedAt = ArtifactLineage.recordedAt lineage,
+                            ParentArtifactIds = parentArtifactIds
+                        ))
 
-            ctx.Messages.Add userRecord
-            ctx.Messages.Add assistantRecord
+                let info = persistentState.State.Info
 
-            let sessionId = persistentState.State.Info.SessionId
-            let convName = persistentState.State.Info.ActiveConversation
+                let userRecord =
+                    MessageRecord(
+                        Role = "User",
+                        Content = userInput,
+                        TurnId = turnId,
+                        Correlation = correlation,
+                        Attachments = ResizeArray(attachmentNames),
+                        TenantId = info.TenantId,
+                        WorkspaceId = info.WorkspaceKey,
+                        UserId = info.UserId,
+                        SessionId = info.SessionId
+                    )
 
-            if not (String.IsNullOrEmpty sessionId) then
-                let now = DateTimeOffset.UtcNow
+                let assistantRecord =
+                    MessageRecord(
+                        Role = "Assistant",
+                        Content = response,
+                        TurnId = turnId,
+                        Correlation = correlation,
+                        Steps = ResizeArray(stepRecords),
+                        Artifacts = ResizeArray(artifactRecords),
+                        TenantId = info.TenantId,
+                        WorkspaceId = info.WorkspaceKey,
+                        UserId = info.UserId,
+                        SessionId = info.SessionId
+                    )
 
-                let persisted =
-                    [| toPersistedMessage now correlation turnId "User" userInput [||] attachmentNames [||]
-                       toPersistedMessage
-                           now
-                           correlation
-                           turnId
-                           "Assistant"
-                           response
-                           (stepRecords |> List.toArray)
-                           [||]
-                           (artifactRecords |> List.toArray) |]
+                ctx.Messages.Add userRecord
+                ctx.Messages.Add assistantRecord
 
-                do! conversationStore.AppendAsync authorization convName persisted
+                let sessionId = persistentState.State.Info.SessionId
+                let convName = persistentState.State.Info.ActiveConversation
 
-                // Persist each sub-agent delegation as a nested child conversation, so the
-                // delegated work is browsable beneath its parent rather than only inlined as a
-                // step. One child conversation per delegation (uniquely keyed by turn + index).
-                let agentSteps = steps |> List.filter (fun s -> s.Kind = "agent")
-                let mutable idx = 0
+                if not (String.IsNullOrEmpty sessionId) then
+                    let now = DateTimeOffset.UtcNow
 
-                for s in agentSteps do
-                    idx <- idx + 1
+                    let persisted =
+                        [| toPersistedMessage now correlation turnId "User" userInput [||] attachmentNames [||]
+                           toPersistedMessage
+                               now
+                               correlation
+                               turnId
+                               "Assistant"
+                               response
+                               (stepRecords |> List.toArray)
+                               [||]
+                               (artifactRecords |> List.toArray) |]
 
-                    let title =
-                        if String.IsNullOrWhiteSpace s.Title then
-                            "agent"
-                        else
-                            s.Title
+                    do! conversationStore.AppendAsync authorization convName persisted
 
-                    let childName = sprintf "%s/%s-%s-%d" convName title turnId idx
+                    let agentSteps = steps |> List.filter (fun s -> s.Kind = "agent")
+                    let mutable idx = 0
 
-                    let childMsgs =
-                        [| toPersistedMessage now correlation turnId "User" s.Input [||] [||] [||]
-                           toPersistedMessage now correlation turnId "Assistant" s.Output [||] [||] [||] |]
+                    for s in agentSteps do
+                        idx <- idx + 1
 
-                    do! conversationStore.AppendAsync authorization childName childMsgs
+                        let title =
+                            if String.IsNullOrWhiteSpace s.Title then
+                                "agent"
+                            else
+                                s.Title
+
+                        let childName = sprintf "%s/%s-%s-%d" convName title turnId idx
+
+                        let childMsgs =
+                            [| toPersistedMessage now correlation turnId "User" s.Input [||] [||] [||]
+                               toPersistedMessage now correlation turnId "Assistant" s.Output [||] [||] [||] |]
+
+                        do! conversationStore.AppendAsync authorization childName childMsgs
         }
 
     // ─── Tool resolution ───
@@ -603,300 +706,499 @@ type SessionGrain
     let createAgentAsync (workspace: WorkspaceDefinitions) (name: string) : Task<Agent option> =
         findBuiltAgent workspace name |> Task.FromResult
 
-    /// Core turn processing. `llmInput` is the prompt the agent sees (may contain embedded
-    /// attachment content); `displayText` + `attachmentNames` are what gets persisted into
-    /// the rendered transcript so the file body is never stored or shown.
     let processCoreAsync
-        (llmInput: string)
-        (displayText: string)
-        (attachmentNames: string[])
-        (correlation: CorrelationContext)
+        (request: SessionTurnRequest)
         (cancellationToken: CancellationToken)
-        : Task<string> =
-        task {
-            let authorization = requireCurrentScope ()
-            let agentName = persistentState.State.Info.AgentName
+        : Task<SessionTurnResult> =
+        SessionTurnLedger.validateRequest request
+        let authorization = requireCurrentScope ()
+        let info = persistentState.State.Info
+        let agentName = info.AgentName
+        let correlation = OrleansCorrelationContext.toDomain request.Correlation
+        let turnId = request.TurnId
 
-            if String.IsNullOrEmpty(agentName) then
-                return "[Error] Session not started. Call StartAsync first."
-            elif not persistentState.State.Info.IsActive then
-                return "[Error] Session is paused. Call ResumeAsync first."
-            else
+        if String.IsNullOrEmpty(agentName) then
+            invalidOp "Session not started. Call StartAsync first."
 
+        if persistentState.State.Lifecycle <> SessionLifecyclePhase.Active then
+            invalidOp "Only an active session can execute a turn."
+
+        let workspace =
+            getWorkspace ()
+            |> Option.defaultWith (fun () -> invalidOp (sprintf "Workspace '%s' not available" info.WorkspaceKey))
+
+        let requestHash =
+            SessionTurnLedger.requestHash info.ActiveConversation agentName request
+
+        let existingTurn =
+            persistentState.State.Turns |> Seq.tryFind (fun turn -> turn.TurnId = turnId)
+
+        existingTurn
+        |> Option.iter (fun turn ->
+            if turn.RequestHash <> requestHash then
+                invalidArg (nameof request) "The turn identity is already bound to a different request.")
+
+        match existingTurn with
+        | Some turn when SessionTurnPhase.isTerminal turn.Phase -> Task.FromResult(SessionTurnLedger.toResult true turn)
+        | _ ->
+            task {
                 do! restoreActiveConversationAsync ()
 
-                match getWorkspace () with
-                | None -> return sprintf "[Error] Workspace '%s' not available" persistentState.State.Info.WorkspaceKey
-                | Some workspace ->
+                let turn, isNew =
+                    match existingTurn with
+                    | Some value -> value, false
+                    | None ->
+                        let owner = PersistedOwnerScope.fromAuthorization authorization
 
-                    let info = persistentState.State.Info
+                        let value =
+                            SessionTurnRecord(
+                                TenantId = owner.TenantId,
+                                WorkspaceId = owner.WorkspaceId,
+                                UserId = owner.UserId,
+                                SessionId = owner.SessionId.Value,
+                                TurnId = turnId,
+                                IdempotencyKey =
+                                    (IdempotencyKey.turn authorization info.ActiveConversation (TurnId.parse turnId)
+                                     |> IdempotencyKey.value),
+                                RequestHash = requestHash,
+                                ConversationName = info.ActiveConversation,
+                                AgentName = agentName,
+                                DisplayText = request.DisplayText,
+                                AttachmentNames = Array.copy request.AttachmentNames,
+                                Correlation = correlation,
+                                Phase = SessionTurnPhase.Accepted,
+                                AcceptedAt = DateTimeOffset.UtcNow,
+                                Sequence = persistentState.State.NextTurnSequence
+                            )
 
-                    let tools =
-                        resolveTools workspace (persistentState.State.Info.ToolNames |> Seq.toList)
+                        persistentState.State.NextTurnSequence <- persistentState.State.NextTurnSequence + 1L
 
-                    // The persisted display text remains the user's latest message; this expanded
-                    // input is only what the agent sees for resolving follow-ups.
-                    let contextualInput =
-                        ConversationContextRender.withHistory 8 (activeConversation().Messages) llmInput
+                        persistentState.State.Turns.Add value
+                        value, true
 
-                    let turnId = TurnId.generate () |> TurnId.value
-                    let turnScope = makeScope turnId correlation
-                    // The recorder must exist before the agent is built so it can subscribe to the
-                    // event bus and capture this turn's whole execution (rounds, tool calls,
-                    // delegations) — not just the harness-level final answer. It filters bus events
-                    // by `scope.ActionId = turnId`, so a shared bus never cross-talks between turns.
-                    let recorder = TurnRecorder.create (turnId, correlation, agentName, contextualInput)
-                    // Expose this turn's recorder so GetLiveStepsAsync can stream progress while
-                    // the harness runs; always clear it once the turn finishes (success or not).
-                    currentRecorder <- Some recorder
-                    // Flow the session/turn identity into tools so file operations and permission
-                    // requests can attribute their output to this session.
-                    let sessionKey = sprintf "%s/%s" info.UserId info.SessionId
+                if isNew then
+                    do! persistentState.WriteStateAsync()
 
-                    let policyVersions =
-                        Map.ofList [ PermissionPolicy.identity, PermissionPolicy.currentVersion ]
+                let tools =
+                    resolveTools workspace (persistentState.State.Info.ToolNames |> Seq.toList)
 
-                    let permissionDecisions = ResizeArray<PermissionDecisionEvidence>()
-                    let harnessServices = harnessServicesFactory.Invoke(sessionKey, turnId, correlation)
+                let executionTenant = TenantId.parse info.TenantId
 
-                    let grantRules (grants: PermissionGrant list) : PermissionRule list =
-                        grants
-                        |> List.map (fun grant ->
-                            { Id = grant.Id.ToString("N")
-                              AppliesTo = grant.Target
-                              Decision = PermissionDecision.Allow
-                              Scope = RuleScope.Session sessionKey
-                              CreatedAt = grant.GrantedAt })
+                do!
+                    RuntimeAdministrationDisablement.requireEnabledAsync
+                        grainFactory
+                        executionTenant
+                        AdministrativeResourceKind.Tenant
+                        info.TenantId
 
-                    let resolvePermission (access: ResourceAccess) (reason: string) (forceConfirm: bool) : Task<bool> =
-                        task {
-                            let requestedAt = DateTimeOffset.UtcNow
-                            let! activeGrants = permissionGrants.GetActiveAsync authorization requestedAt
-                            let applicable = ResourcePermission.applicable sessionKey (grantRules activeGrants)
-                            let target = ResourcePermission.targetForAccess access
+                do!
+                    RuntimeAdministrationDisablement.requireEnabledAsync
+                        grainFactory
+                        executionTenant
+                        AdministrativeResourceKind.Agent
+                        agentName
 
-                            let matchingGrants =
-                                activeGrants
-                                |> List.filter (fun grant -> ResourcePermission.targetCovers grant.Target target)
+                for tool in tools do
+                    do!
+                        RuntimeAdministrationDisablement.requireEnabledAsync
+                            grainFactory
+                            executionTenant
+                            AdministrativeResourceKind.Tool
+                            tool.Name
 
-                            let evidence decision basis grants =
-                                { Id = Guid.NewGuid()
+                // The persisted display text remains the user's latest message; this expanded
+                // input is only what the agent sees for resolving follow-ups.
+                let contextualInput =
+                    ConversationContextRender.withHistory 8 (activeConversation().Messages) request.LlmInput
+
+                let turnScope = makeScope turnId correlation
+                // The recorder must exist before the agent is built so it can subscribe to the
+                // event bus and capture this turn's whole execution (rounds, tool calls,
+                // delegations) — not just the harness-level final answer. It filters bus events
+                // by `scope.ActionId = turnId`, so a shared bus never cross-talks between turns.
+                let recorder = TurnRecorder.create (turnId, correlation, agentName, contextualInput)
+                // Flow the session/turn identity into tools so file operations and permission
+                // requests can attribute their output to this session.
+                let sessionKey = RuntimeAddress.sessionKey (currentAddress ())
+
+                let policyVersions =
+                    Map.ofList [ PermissionPolicy.identity, PermissionPolicy.currentVersion ]
+
+                let permissionDecisions = ResizeArray<PermissionDecisionEvidence>()
+                let harnessServices = harnessServicesFactory.Invoke(sessionKey, turnId, correlation)
+
+                let executionJournal =
+                    harnessServices.ExecutionJournal
+                    |> Option.defaultWith (fun () -> invalidOp "Durable session turns require an execution journal.")
+
+                let loadMemoryReferencesAsync executionId =
+                    task {
+                        let! records = executionJournal.GetByExecutionAsync authorization executionId
+
+                        return
+                            records
+                            |> List.filter (fun record -> record.ToolName = "memory_remember")
+                            |> List.map (_.IdempotencyKey >> IdempotencyKey.value)
+                            |> List.distinct
+                            |> List.toArray
+                    }
+
+                let! durableOutcome =
+                    executionJournal.Outcomes.TryGetByIdempotencyKey
+                        authorization
+                        (IdempotencyKey.parse turn.IdempotencyKey)
+
+                let recoverOutcomeAsync (outcome: HarnessTerminalOutcome) =
+                    task {
+                        if outcome.Phase = HarnessCheckpointPhase.Succeeded then
+                            let response =
+                                outcome.Response
+                                |> Option.defaultWith (fun () ->
+                                    raise (
+                                        InvalidDataException
+                                            "A successful durable harness outcome is missing its response."
+                                    ))
+
+                            do!
+                                appendTurnAsync
+                                    turn.DisplayText
+                                    turn.AttachmentNames
+                                    response
+                                    turnId
+                                    correlation
+                                    []
+                                    outcome.Artifacts
+
+                            turn.Phase <- SessionTurnPhase.Succeeded
+                            turn.Response <- response
+                            turn.CompletedAt <- outcome.RecordedAt
+
+                            turn.ArtifactIds <-
+                                outcome.Artifacts
+                                |> List.map (Artifact.id >> ArtifactId.serialize)
+                                |> List.toArray
+
+                            turn.TraceExecutionIds <- [| outcome.Correlation.ExecutionId |> ExecutionId.serialize |]
+
+                            let! memoryReferences = loadMemoryReferencesAsync outcome.Correlation.ExecutionId
+
+                            turn.MemoryKeys <- memoryReferences
+                            info.LastTurnId <- turnId
+                            info.LastActiveAt <- DateTimeOffset.UtcNow
+                        else
+                            turn.Phase <- SessionTurnPhase.Failed
+                            turn.Failure <- outcome.Failure |> Option.defaultValue "Execution failed."
+                            turn.CompletedAt <- outcome.RecordedAt
+
+                            turn.TraceExecutionIds <- [| outcome.Correlation.ExecutionId |> ExecutionId.serialize |]
+
+                            let! memoryReferences = loadMemoryReferencesAsync outcome.Correlation.ExecutionId
+
+                            turn.MemoryKeys <- memoryReferences
+
+                        do! persistentState.WriteStateAsync()
+                        return SessionTurnLedger.toResult true turn
+                    }
+
+                match durableOutcome with
+                | Some outcome ->
+                    let! result = recoverOutcomeAsync outcome
+                    raise (SessionTurnRecovered result)
+                | None -> ()
+
+                let! admission =
+                    RuntimeAdmissionController.acquireAsync
+                        RuntimeAdmissionClass.TurnExecution
+                        info.TenantId
+                        cancellationToken
+                        admissionController
+
+                use executionLease =
+                    match admission with
+                    | Ok lease -> lease :> IDisposable
+                    | Error failure ->
+                        failure
+                        |> RuntimeAdmissionFailure.toPlatformFailure
+                        |> PlatformFailureException
+                        |> raise
+
+                turn.Phase <- SessionTurnPhase.Running
+                turn.StartedAt <- DateTimeOffset.UtcNow
+                do! persistentState.WriteStateAsync()
+
+                let grantRules (grants: PermissionGrant list) : PermissionRule list =
+                    grants
+                    |> List.map (fun grant ->
+                        { Id = grant.Id.ToString("N")
+                          AppliesTo = grant.Target
+                          Decision = PermissionDecision.Allow
+                          Scope = RuleScope.Session sessionKey
+                          CreatedAt = grant.GrantedAt })
+
+                let resolvePermission (access: ResourceAccess) (reason: string) (forceConfirm: bool) : Task<bool> =
+                    task {
+                        let requestedAt = DateTimeOffset.UtcNow
+                        let! activeGrants = permissionGrants.GetActiveAsync authorization requestedAt
+                        let applicable = ResourcePermission.applicable sessionKey (grantRules activeGrants)
+                        let target = ResourcePermission.targetForAccess access
+
+                        let matchingGrants =
+                            activeGrants
+                            |> List.filter (fun grant -> ResourcePermission.targetCovers grant.Target target)
+
+                        let evidence decision basis grants =
+                            { Id = Guid.NewGuid()
+                              Access = access
+                              Decision = decision
+                              Basis = basis
+                              PolicyVersions = policyVersions
+                              Grants =
+                                grants
+                                |> List.map (fun (grant: PermissionGrant) ->
+                                    { Id = grant.Id
+                                      Version = grant.Version })
+                              EvaluatedAt = requestedAt }
+
+                        let recordEvidence evidence =
+                            task {
+                                match harnessServices.AuditLog with
+                                | Some audit ->
+                                    do!
+                                        audit.RecordAsync
+                                            authorization
+                                            (AuditLog.permissionDecision
+                                                agentName
+                                                evidence
+                                                (Some correlation.ExecutionId))
+
+                                    permissionDecisions.Add evidence
+
+                                    turn.PermissionGrantIds <-
+                                        Seq.append
+                                            turn.PermissionGrantIds
+                                            (evidence.Grants |> Seq.map (fun grant -> grant.Id.ToString("N")))
+                                        |> Seq.distinct
+                                        |> Seq.toArray
+
+                                    do! persistentState.WriteStateAsync()
+                                | None ->
+                                    return
+                                        raise (
+                                            GovernedExecutionException
+                                                "Permission decisions require a durable authenticated audit log."
+                                        )
+                            }
+
+                        if
+                            not forceConfirm
+                            && ResourcePermission.evaluateWith PermissionDecision.Deny applicable access = PermissionDecision.Allow
+                        then
+                            do!
+                                recordEvidence (
+                                    evidence
+                                        PermissionDecision.Allow
+                                        PermissionDecisionBasis.ReusableGrant
+                                        matchingGrants
+                                )
+
+                            return true
+                        else
+                            let permissionRequest =
+                                { Authorization = authorization
+                                  Correlation = correlation
                                   Access = access
-                                  Decision = decision
-                                  Basis = basis
-                                  PolicyVersions = policyVersions
-                                  Grants =
-                                    grants
-                                    |> List.map (fun (grant: PermissionGrant) ->
-                                        { Id = grant.Id
-                                          Version = grant.Version })
-                                  EvaluatedAt = requestedAt }
+                                  Reason = reason
+                                  ForceConfirmation = forceConfirm
+                                  RequestedAt = requestedAt
+                                  AllowedGrantScopes =
+                                    Set.ofList
+                                        [ PermissionGrantScope.Operation
+                                          PermissionGrantScope.Session
+                                          PermissionGrantScope.Workspace
+                                          PermissionGrantScope.Durable ] }
 
-                            let recordEvidence evidence =
-                                task {
-                                    match harnessServices.AuditLog with
-                                    | Some audit ->
-                                        do!
-                                            audit.RecordAsync
-                                                authorization
-                                                (AuditLog.permissionDecision
-                                                    agentName
-                                                    evidence
-                                                    (Some correlation.ExecutionId))
+                            let! approval = PermissionGate.resolve permissionBroker permissionRequest cancellationToken
 
-                                        permissionDecisions.Add evidence
-                                    | None ->
-                                        return
-                                            raise (
-                                                GovernedExecutionException
-                                                    "Permission decisions require a durable authenticated audit log."
-                                            )
-                                }
+                            match approval with
+                            | PermissionApproval.Approved grant when grant.Scope <> PermissionGrantScope.Operation ->
+                                let permissionGrant =
+                                    PermissionGrant.create grant.Scope target requestedAt grant.ExpiresAt
 
-                            if
-                                not forceConfirm
-                                && ResourcePermission.evaluateWith PermissionDecision.Deny applicable access = PermissionDecision.Allow
-                            then
+                                do! permissionGrants.SaveAsync authorization permissionGrant
+
                                 do!
                                     recordEvidence (
                                         evidence
                                             PermissionDecision.Allow
-                                            PermissionDecisionBasis.ReusableGrant
-                                            matchingGrants
+                                            (PermissionDecisionBasis.HostApproval grant.Scope)
+                                            [ permissionGrant ]
                                     )
 
                                 return true
-                            else
-                                let permissionRequest =
-                                    { Authorization = authorization
-                                      Correlation = correlation
-                                      Access = access
-                                      Reason = reason
-                                      ForceConfirmation = forceConfirm
-                                      RequestedAt = requestedAt
-                                      AllowedGrantScopes =
-                                        Set.ofList
-                                            [ PermissionGrantScope.Operation
-                                              PermissionGrantScope.Session
-                                              PermissionGrantScope.Workspace
-                                              PermissionGrantScope.Durable ] }
+                            | PermissionApproval.Approved grant ->
+                                do!
+                                    recordEvidence (
+                                        evidence
+                                            PermissionDecision.Allow
+                                            (PermissionDecisionBasis.HostApproval grant.Scope)
+                                            []
+                                    )
 
-                                let! approval =
-                                    PermissionGate.resolve permissionBroker permissionRequest cancellationToken
+                                return true
+                            | PermissionApproval.Denied ->
+                                do!
+                                    recordEvidence (
+                                        evidence PermissionDecision.Deny PermissionDecisionBasis.HostDenial []
+                                    )
 
-                                match approval with
-                                | PermissionApproval.Approved grant when grant.Scope <> PermissionGrantScope.Operation ->
-                                    let permissionGrant =
-                                        PermissionGrant.create grant.Scope target requestedAt grant.ExpiresAt
+                                return false
+                    }
 
-                                    do! permissionGrants.SaveAsync authorization permissionGrant
+                let artifacts = ResizeArray<Artifact>()
+                let grantedResources = ResizeArray<ResourceAccess>()
+                let permissionLock = new SemaphoreSlim(1, 1)
 
-                                    do!
-                                        recordEvidence (
-                                            evidence
-                                                PermissionDecision.Allow
-                                                (PermissionDecisionBasis.HostApproval grant.Scope)
-                                                [ permissionGrant ]
-                                        )
+                let requestPermission access reason forceConfirm =
+                    task {
+                        do! permissionLock.WaitAsync()
 
-                                    return true
-                                | PermissionApproval.Approved grant ->
-                                    do!
-                                        recordEvidence (
-                                            evidence
-                                                PermissionDecision.Allow
-                                                (PermissionDecisionBasis.HostApproval grant.Scope)
-                                                []
-                                        )
+                        try
+                            let! allowed = resolvePermission access reason forceConfirm
 
-                                    return true
-                                | PermissionApproval.Denied ->
-                                    do!
-                                        recordEvidence (
-                                            evidence PermissionDecision.Deny PermissionDecisionBasis.HostDenial []
-                                        )
+                            if allowed then
+                                lock grantedResources (fun () -> grantedResources.Add access)
 
-                                    return false
-                        }
+                            return allowed
+                        finally
+                            permissionLock.Release() |> ignore
+                    }
 
-                    let artifacts = ResizeArray<Artifact>()
-                    let grantedResources = ResizeArray<ResourceAccess>()
-                    let permissionLock = new SemaphoreSlim(1, 1)
+                let publishArtifact artifact : Task =
+                    (task {
+                        lock artifacts (fun () -> artifacts.Add artifact)
+                        do! EventBus.publishAsync (TurnProgress(turnScope, ArtifactPublished artifact)) eventBus
+                    }
+                    :> Task)
 
-                    let requestPermission access reason forceConfirm =
-                        task {
-                            do! permissionLock.WaitAsync()
+                let agentContext: AgentContext =
+                    { Correlation = correlation
+                      SessionKey = sessionKey
+                      TurnId = turnId
+                      ExecutionBoundary = ExecutionBoundary.HarnessRequired
+                      CancellationToken = cancellationToken
+                      NextToolCallKey = (fun () -> invalidOp "Tool keys are allocated by the execution harness.")
+                      NextArtifactKey = (fun () -> invalidOp "Artifact keys are allocated by the execution harness.")
+                      GetArtifacts = (fun () -> lock artifacts (fun () -> List.ofSeq artifacts))
+                      GetGrantedResources = (fun () -> lock grantedResources (fun () -> List.ofSeq grantedResources))
+                      RequestPermission = requestPermission
+                      RequestModelEligibility = (fun _ -> Task.FromResult false)
+                      PublishArtifact = publishArtifact
+                      Authorization = None }
 
-                            try
-                                let! allowed = resolvePermission access reason forceConfirm
+                currentRecorder <- Some recorder
 
-                                if allowed then
-                                    lock grantedResources (fun () -> grantedResources.Add access)
+                try
+                    // Subscribe the recorder for this turn's progress signals; detached in finally.
+                    EventBus.subscribe recorder.Consumer eventBus
+                    let! agentOpt = createAgentAsync workspace agentName
 
-                                return allowed
-                            finally
-                                permissionLock.Release() |> ignore
-                        }
-
-                    let publishArtifact artifact : Task =
-                        (task {
-                            lock artifacts (fun () -> artifacts.Add artifact)
-                            do! EventBus.publishAsync (TurnProgress(turnScope, ArtifactPublished artifact)) eventBus
-                        }
-                        :> Task)
-
-                    let agentContext: AgentContext =
-                        { Correlation = correlation
-                          SessionKey = sessionKey
-                          TurnId = turnId
-                          ExecutionBoundary = ExecutionBoundary.HarnessRequired
-                          CancellationToken = cancellationToken
-                          NextToolCallKey = (fun () -> invalidOp "Tool keys are allocated by the execution harness.")
-                          NextArtifactKey =
-                            (fun () -> invalidOp "Artifact keys are allocated by the execution harness.")
-                          GetArtifacts = (fun () -> lock artifacts (fun () -> List.ofSeq artifacts))
-                          GetGrantedResources =
-                            (fun () -> lock grantedResources (fun () -> List.ofSeq grantedResources))
-                          RequestPermission = requestPermission
-                          RequestModelEligibility = (fun _ -> Task.FromResult false)
-                          PublishArtifact = publishArtifact
-                          Authorization = None }
-
-                    try
-                        // Subscribe the recorder for this turn's progress signals; detached in finally.
-                        EventBus.subscribe recorder.Consumer eventBus
-                        let! agentOpt = createAgentAsync workspace agentName
-
-                        match agentOpt with
-                        | None ->
-                            return
+                    match agentOpt with
+                    | None ->
+                        return
+                            invalidOp (
                                 sprintf
-                                    "[Error] Agent '%s' not found in workspace '%s'"
+                                    "Agent '%s' not found in workspace '%s'"
                                     agentName
                                     persistentState.State.Info.WorkspaceKey
-                        | Some agent ->
-                            let harnessConfig = buildHarnessConfig workspace tools harnessServices
+                            )
+                    | Some agent ->
+                        let harnessConfig = buildHarnessConfig workspace tools harnessServices
 
-                            let request =
-                                ExecutionRequest.create
-                                    authorization
-                                    (TurnId.parse turnId)
-                                    info.ActiveConversation
-                                    agent.Metadata.Id
-                                    contextualInput
-                                    SandboxConfig.Default
-                                    policyVersions
-                                    Map.empty
+                        let request =
+                            ExecutionRequest.create
+                                authorization
+                                (TurnId.parse turnId)
+                                info.ActiveConversation
+                                agent.Metadata.Id
+                                contextualInput
+                                SandboxConfig.Default
+                                policyVersions
+                                Map.empty
+                                correlation
+
+                        let! result = EtclovgHarness.runAsync harnessConfig agentContext agent request cancellationToken
+
+                        match result.Status, result.Outputs.Response with
+                        | ExecutionTerminalStatus.Succeeded, Some response ->
+                            // Emit the completed turn; a subscribed storage strategy persists it
+                            // so feedback can later be analysed against it.
+                            let turnRecord =
+                                { TurnRecorder.snapshot recorder with
+                                    Output = response
+                                    PermissionDecisions = List.ofSeq permissionDecisions
+                                    PolicyEvaluations = result.PolicyDecisions.PolicyEvaluations }
+
+                            do! EventBus.publishAsync (TurnCompleted(makeScope turnId correlation, turnRecord)) eventBus
+
+                            // Persist a CLEAN, user-facing transcript: the display text (no embedded
+                            // attachment content) plus one assistant message carrying the process.
+                            do!
+                                appendTurnAsync
+                                    turn.DisplayText
+                                    turn.AttachmentNames
+                                    response
+                                    turnId
                                     correlation
+                                    (TurnRecorder.steps recorder)
+                                    (TurnRecorder.artifacts recorder)
 
-                            let! result =
-                                EtclovgHarness.runAsync harnessConfig agentContext agent request cancellationToken
+                            info.LastTurnId <- turnId
+                            info.LastActiveAt <- DateTimeOffset.UtcNow
+                            turn.Phase <- SessionTurnPhase.Succeeded
+                            turn.Response <- response
+                            turn.CompletedAt <- DateTimeOffset.UtcNow
 
-                            match result.Status, result.Outputs.Response with
-                            | ExecutionTerminalStatus.Succeeded, Some response ->
-                                // Emit the completed turn; a subscribed storage strategy persists it
-                                // so feedback can later be analysed against it.
-                                let turnRecord =
-                                    { TurnRecorder.snapshot recorder with
-                                        Output = response
-                                        PermissionDecisions = List.ofSeq permissionDecisions
-                                        PolicyEvaluations = result.PolicyDecisions.PolicyEvaluations }
+                            turn.PermissionGrantIds <-
+                                permissionDecisions
+                                |> Seq.collect _.Grants
+                                |> Seq.map (fun grant -> grant.Id.ToString("N"))
+                                |> Seq.distinct
+                                |> Seq.toArray
 
-                                do!
-                                    EventBus.publishAsync
-                                        (TurnCompleted(makeScope turnId correlation, turnRecord))
-                                        eventBus
+                            turn.ArtifactIds <-
+                                result.Outputs.Artifacts
+                                |> List.map (Artifact.id >> ArtifactId.serialize)
+                                |> List.toArray
 
-                                // Persist a CLEAN, user-facing transcript: the display text (no embedded
-                                // attachment content) plus one assistant message carrying the process.
-                                do!
-                                    appendTurnAsync
-                                        displayText
-                                        attachmentNames
-                                        response
-                                        turnId
-                                        correlation
-                                        (TurnRecorder.steps recorder)
-                                        (TurnRecorder.artifacts recorder)
+                            turn.TraceExecutionIds <- [| result.Correlation.ExecutionId |> ExecutionId.serialize |]
 
-                                info.LastTurnId <- turnId
+                            let! memoryReferences = loadMemoryReferencesAsync result.Correlation.ExecutionId
 
-                                persistentState.State.Info.LastActiveAt <- DateTimeOffset.UtcNow
-                                do! persistentState.WriteStateAsync()
-                                return response
+                            turn.MemoryKeys <- memoryReferences
 
-                            | _ ->
-                                let failure = result.Status.ToPlatformFailure(Some turnId)
+                            do! persistentState.WriteStateAsync()
+                            return SessionTurnLedger.toResult false turn
 
-                                return PlatformFailure.raiseException failure
-                    finally
-                        EventBus.unsubscribe recorder.Consumer eventBus
-                        currentRecorder <- None
-        }
+                        | _ ->
+                            let failure = result.Status.ToPlatformFailure(Some turnId)
+                            turn.Phase <- SessionTurnPhase.Failed
+                            turn.Failure <- failure.Message
+                            turn.CompletedAt <- DateTimeOffset.UtcNow
+                            turn.TraceExecutionIds <- [| result.Correlation.ExecutionId |> ExecutionId.serialize |]
+
+                            let! memoryReferences = loadMemoryReferencesAsync result.Correlation.ExecutionId
+
+                            turn.MemoryKeys <- memoryReferences
+
+                            do! persistentState.WriteStateAsync()
+                            return SessionTurnLedger.toResult false turn
+                finally
+                    EventBus.unsubscribe recorder.Consumer eventBus
+                    currentRecorder <- None
+            }
     // ─── Activation ───
 
-    /// Resolve this session's per-session observability and feedback stores from the grain
-    /// key ("userId/sessionId") so each session writes them under its own sessions/<key>/.
+    /// Resolve this session's per-session services from its tenant/workspace/user/session key.
     override this.OnActivateAsync(cancellationToken: System.Threading.CancellationToken) : Task =
         GrainStateVersion.prepare
             GrainStateVersion.SessionCurrent
@@ -906,29 +1208,65 @@ type SessionGrain
             (fun version -> persistentState.State.SchemaVersion <- version)
 
         let key = this.GetPrimaryKeyString()
+        let address = currentAddress ()
+
+        if persistentState.RecordExists then
+            validatePersistedHierarchy address
+
         feedback <- feedbackFactory.Invoke key
-        base.OnActivateAsync(cancellationToken)
+        let baseActivation = base.OnActivateAsync(cancellationToken)
+
+        task {
+            let mutable completed = false
+
+            try
+                let! admission =
+                    RuntimeAdmissionController.acquireAsync
+                        RuntimeAdmissionClass.SessionActivation
+                        (address |> RuntimeAddress.sessionTenant |> TenantId.value)
+                        cancellationToken
+                        admissionController
+
+                activationLease <-
+                    match admission with
+                    | Ok lease -> Some lease
+                    | Error failure ->
+                        failure
+                        |> RuntimeAdmissionFailure.toPlatformFailure
+                        |> PlatformFailureException
+                        |> raise
+
+                let mutable stateChanged = applyLifecycle DateTimeOffset.UtcNow
+
+                if SessionTurnLedger.recoverInterrupted persistentState.State.Turns then
+                    stateChanged <- true
+
+                if stateChanged then
+                    do! persistentState.WriteStateAsync()
+
+                do! baseActivation
+                completed <- true
+            finally
+                if not completed then
+                    activationLease |> Option.iter (fun lease -> (lease :> IDisposable).Dispose())
+
+                    activationLease <- None
+        }
+
+    override _.OnDeactivateAsync(reason, cancellationToken) =
+        activationLease |> Option.iter (fun lease -> (lease :> IDisposable).Dispose())
+        activationLease <- None
+        base.OnDeactivateAsync(reason, cancellationToken)
 
     // ─── Interface implementation ───
 
     interface ISessionGrain with
         member this.StartAsync(options: SessionStartOptions) : Task<bool> =
             task {
-                let (userId, sessionId) = parseKey (this.GetPrimaryKeyString())
-
-                let workspaceKey =
-                    if String.IsNullOrEmpty(options.WorkspaceKey) then
-                        "default"
-                    else
-                        options.WorkspaceKey
+                let address = currentAddress ()
 
                 let scope =
-                    SessionAuthorization.tryCreateScope
-                        (principalAccessor.Invoke())
-                        userId
-                        sessionId
-                        options.GroupId
-                        workspaceKey
+                    SessionAuthorization.tryCreateScope (principalAccessor.Invoke()) address options.GroupId
 
                 match scope with
                 | None -> return false
@@ -937,64 +1275,125 @@ type SessionGrain
                     && not (SessionAuthorization.matchesPersisted persistentState.State.Info scope)
                     ->
                     return false
+                | Some _ when
+                    persistentState.RecordExists
+                    && persistentState.State.Lifecycle = SessionLifecyclePhase.Archived
+                    ->
+                    return false
                 | Some scope ->
-                    match registry.TryGet(AuthorizationScope.workspaceId scope) with
+                    let workspaceIdentity =
+                        AuthorizationScope.workspaceId scope
+                        |> WorkspaceId.value
+                        |> WorkspaceVersionId.parse
+
+                    match catalog.TryGet(AuthorizationScope.tenantId scope, workspaceIdentity) with
                     | None -> return false
-                    | Some workspace ->
+                    | Some registration ->
+                        let workspace = registration.Definitions
 
-                        let agentName = options.AgentName
+                        let! groupAuthorized =
+                            match AuthorizationScope.groupId scope with
+                            | None -> Task.FromResult true
+                            | Some groupId ->
+                                task {
+                                    let groupKey =
+                                        RuntimeAddress.group (AuthorizationScope.tenantId scope) groupId
+                                        |> RuntimeAddress.groupKey
 
-                        if not (agentExists workspace agentName) then
+                                    let! groupState = grainFactory.GetGrain<IGroupDirectoryGrain>(groupKey).GetAsync()
+
+                                    let expectedTenantId = AuthorizationScope.tenantId scope |> TenantId.value
+
+                                    let expectedUserId = AuthorizationScope.userId scope |> UserId.value
+
+                                    let memberExists =
+                                        groupState.Members
+                                        |> Seq.exists (fun memberRecord ->
+                                            memberRecord.TenantId = expectedTenantId
+                                            && memberRecord.GroupId = GroupId.value groupId
+                                            && memberRecord.UserId = expectedUserId)
+
+                                    return
+                                        groupState.Lifecycle = GroupLifecycle.serialize GroupLifecycle.Active
+                                        && memberExists
+                                }
+
+                        if not groupAuthorized then
                             return false
                         else
-                            let info = persistentState.State.Info
-                            info.AgentName <- agentName
-                            info.TenantId <- AuthorizationScope.tenantId scope |> TenantId.value
-                            info.SessionId <- AuthorizationScope.sessionId scope |> Option.get |> SessionId.value
-                            info.UserId <- AuthorizationScope.userId scope |> UserId.value
 
-                            info.GroupId <-
-                                AuthorizationScope.groupId scope
-                                |> Option.map GroupId.value
-                                |> Option.defaultValue ""
+                            let agentName = options.AgentName
 
-                            info.WorkspaceKey <- AuthorizationScope.workspaceId scope |> WorkspaceId.value
-                            info.IsActive <- true
-                            info.ToolNames <- ResizeArray(options.ToolNames)
-                            info.RuntimeMode <- options.RuntimeMode
-                            info.ActiveConversation <- "default"
+                            if not (agentExists workspace agentName) then
+                                return false
+                            else
+                                let info = persistentState.State.Info
+                                info.AgentName <- agentName
+                                info.TenantId <- AuthorizationScope.tenantId scope |> TenantId.value
+                                info.SessionId <- AuthorizationScope.sessionId scope |> Option.get |> SessionId.value
+                                info.UserId <- AuthorizationScope.userId scope |> UserId.value
 
-                            if info.CreatedAt = DateTimeOffset.MinValue then
-                                info.CreatedAt <- DateTimeOffset.UtcNow
+                                info.GroupId <-
+                                    AuthorizationScope.groupId scope
+                                    |> Option.map GroupId.value
+                                    |> Option.defaultValue ""
 
-                            info.LastActiveAt <- DateTimeOffset.UtcNow
+                                info.WorkspaceKey <- AuthorizationScope.workspaceId scope |> WorkspaceId.value
+                                info.IsActive <- true
+                                persistentState.State.Lifecycle <- SessionLifecyclePhase.Active
+                                info.ToolNames <- ResizeArray(options.ToolNames)
+                                info.RuntimeMode <- options.RuntimeMode
+                                info.ActiveConversation <- "default"
 
-                            // Ensure default conversation exists
-                            getOrCreateConversation "default" |> ignore
+                                if info.CreatedAt = DateTimeOffset.MinValue then
+                                    info.CreatedAt <- DateTimeOffset.UtcNow
 
-                            do! persistentState.WriteStateAsync()
-                            return true
+                                info.LastActiveAt <- DateTimeOffset.UtcNow
+                                persistentState.State.TenantId <- info.TenantId
+                                persistentState.State.WorkspaceId <- info.WorkspaceKey
+                                persistentState.State.UserId <- info.UserId
+                                persistentState.State.SessionId <- info.SessionId
+
+                                getOrCreateConversation "default" |> ignore
+
+                                do! persistentState.WriteStateAsync()
+                                let entry = SessionDirectoryEntry()
+                                entry.TenantId <- info.TenantId
+                                entry.WorkspaceId <- info.WorkspaceKey
+                                entry.UserId <- info.UserId
+                                entry.SessionId <- info.SessionId
+                                entry.AgentName <- info.AgentName
+                                entry.CreatedAt <- info.CreatedAt
+                                entry.LastActiveAt <- info.LastActiveAt
+                                entry.IsActive <- true
+
+                                let directoryKey =
+                                    RuntimeAddress.directoryFromScope scope |> RuntimeAddress.directoryKey
+
+                                do! grainFactory.GetGrain<ISessionDirectoryGrain>(directoryKey).RegisterAsync entry
+
+                                return true
             }
 
-        member _.ProcessAsync
-            (input: string, correlation: OrleansCorrelationContext, cancellationToken: CancellationToken)
-            : Task<string> =
-            processCoreAsync input input [||] (OrleansCorrelationContext.toDomain correlation) cancellationToken
+        member _.ExecuteTurnAsync(request: SessionTurnRequest, cancellationToken: CancellationToken) =
+            task {
+                try
+                    return! processCoreAsync request cancellationToken
+                with
+                | SessionTurnRecovered result -> return result
+                | error ->
+                    match
+                        persistentState.State.Turns
+                        |> Seq.tryFind (fun turn ->
+                            turn.TurnId = request.TurnId && turn.Phase = SessionTurnPhase.Running)
+                    with
+                    | Some turn ->
+                        turn.Phase <- SessionTurnPhase.Interrupted
+                        do! persistentState.WriteStateAsync()
+                    | None -> ()
 
-        member _.ProcessWithContextAsync
-            (
-                llmInput: string,
-                displayText: string,
-                attachmentNames: string[],
-                correlation: OrleansCorrelationContext,
-                cancellationToken: CancellationToken
-            ) : Task<string> =
-            processCoreAsync
-                llmInput
-                displayText
-                (if isNull attachmentNames then [||] else attachmentNames)
-                (OrleansCorrelationContext.toDomain correlation)
-                cancellationToken
+                    return raise error
+            }
 
         member _.GetLastTurnIdAsync() : Task<string> =
             requireCurrentScope () |> ignore
@@ -1039,31 +1438,6 @@ type SessionGrain
 
                     do! feedback.SubmitFeedbackAsync (requireCurrentScope ()) fb
                     return [||]
-            }
-
-        member _.SwitchWorkspaceAsync(workspaceKey: string) : Task<bool> =
-            task {
-                let info = persistentState.State.Info
-
-                let scope = tryCurrentScope workspaceKey
-
-                match scope with
-                | None -> return false
-                | Some scope ->
-                    match registry.TryGet(AuthorizationScope.workspaceId scope) with
-                    | None -> return false
-                    | Some workspace ->
-                        let agentName = persistentState.State.Info.AgentName
-
-                        if not (String.IsNullOrEmpty(agentName)) && not (agentExists workspace agentName) then
-                            return false
-                        else
-                            persistentState.State.Info.WorkspaceKey <-
-                                AuthorizationScope.workspaceId scope |> WorkspaceId.value
-
-                            persistentState.State.Info.LastActiveAt <- DateTimeOffset.UtcNow
-                            do! persistentState.WriteStateAsync()
-                            return true
             }
 
         member _.SwitchAgentAsync(agentName: string) : Task<bool> =
@@ -1133,11 +1507,21 @@ type SessionGrain
                 do! memoryStore.SaveAsync authorization entry
             }
 
-        member _.RecallMemoryAsync(key: string) : Task<MemoryEntry array> =
+        member _.RecallMemoryAsync(key: string) : Task<OrleansMemoryEntry array> =
             task {
                 let authorization = requireCurrentScope ()
                 let! entries = memoryStore.RecallAsync authorization key
-                return entries |> List.toArray
+
+                return
+                    entries
+                    |> List.map (fun entry ->
+                        OrleansMemoryEntry(
+                            Key = entry.Key,
+                            Value = entry.Value,
+                            Timestamp = entry.Timestamp,
+                            Tags = ResizeArray(entry.Tags)
+                        ))
+                    |> List.toArray
             }
 
         member _.ClearMemoriesAsync() : Task =
@@ -1152,6 +1536,11 @@ type SessionGrain
         member _.PauseAsync() : Task =
             task {
                 requireCurrentScope () |> ignore
+
+                if persistentState.State.Lifecycle = SessionLifecyclePhase.Archived then
+                    invalidOp "An archived session cannot be paused."
+
+                persistentState.State.Lifecycle <- SessionLifecyclePhase.Paused
                 persistentState.State.Info.IsActive <- false
                 do! persistentState.WriteStateAsync()
             }
@@ -1159,15 +1548,86 @@ type SessionGrain
         member _.ResumeAsync() : Task =
             task {
                 requireCurrentScope () |> ignore
+
+                if persistentState.State.Lifecycle = SessionLifecyclePhase.Archived then
+                    invalidOp "An archived session cannot resume."
+
+                persistentState.State.Lifecycle <- SessionLifecyclePhase.Active
                 persistentState.State.Info.IsActive <- true
                 persistentState.State.Info.LastActiveAt <- DateTimeOffset.UtcNow
                 do! persistentState.WriteStateAsync()
             }
 
+        member _.ConfigureRetentionAsync(archiveAfter, deleteAfter) : Task =
+            task {
+                requireCurrentScope () |> ignore
+                SessionLifecycle.validateSchedule archiveAfter deleteAfter
+                persistentState.State.ArchiveAfter <- archiveAfter
+                persistentState.State.DeleteAfter <- deleteAfter
+                let changed = applyLifecycle DateTimeOffset.UtcNow
+
+                if changed || persistentState.RecordExists then
+                    do! persistentState.WriteStateAsync()
+            }
+
+        member _.EvaluateLifecycleAsync(now) : Task<SessionLifecycleSnapshot> =
+            task {
+                requireCurrentScope () |> ignore
+
+                if applyLifecycle now then
+                    do! persistentState.WriteStateAsync()
+
+                return lifecycleSnapshot ()
+            }
+
+        member _.ArchiveAsync() : Task =
+            task {
+                requireCurrentScope () |> ignore
+
+                if persistentState.State.Lifecycle <> SessionLifecyclePhase.Archived then
+                    persistentState.State.Lifecycle <- SessionLifecyclePhase.Archived
+                    persistentState.State.ArchivedAt <- DateTimeOffset.UtcNow
+                    persistentState.State.Info.IsActive <- false
+                    do! persistentState.WriteStateAsync()
+            }
+
+        member _.SetLegalHoldAsync(reason) : Task =
+            task {
+                requireCurrentScope () |> ignore
+
+                if String.IsNullOrWhiteSpace reason then
+                    invalidArg (nameof reason) "A legal hold requires a non-blank reason."
+
+                persistentState.State.LegalHoldReason <- SecretRedaction.redact reason
+                do! persistentState.WriteStateAsync()
+            }
+
+        member _.ClearLegalHoldAsync() : Task =
+            task {
+                requireCurrentScope () |> ignore
+                persistentState.State.LegalHoldReason <- ""
+                do! persistentState.WriteStateAsync()
+            }
+
+        member _.GetLifecycleAsync() : Task<SessionLifecycleSnapshot> =
+            requireCurrentScope () |> ignore
+            Task.FromResult(lifecycleSnapshot ())
+
         member this.DestroyAsync() : Task =
             task {
                 let authorization = requireCurrentScope ()
                 let grainKey = this.GetPrimaryKeyString()
+                let now = DateTimeOffset.UtcNow
+
+                if
+                    not (
+                        SessionLifecycle.deletionAllowed
+                            now
+                            persistentState.State.DeleteAfter
+                            persistentState.State.LegalHoldReason
+                    )
+                then
+                    invalidOp "Session deletion is blocked by retention policy or legal hold."
 
                 try
                     do! permissionGrants.DeleteScopeAsync authorization PermissionGrantScope.Session :> Task
@@ -1194,8 +1654,8 @@ type SessionGrain
                                 match deletionServices.ExecutionJournal with
                                 | Some journal -> journal.DeleteScopeAsync scope
                                 | None -> Task.FromResult(Ok 0))
-                            (fun userId sessionId ->
-                                grainFactory.GetGrain<ISessionDirectoryGrain>(userId).RemoveAsync sessionId)
+                            (fun directoryKey sessionId ->
+                                grainFactory.GetGrain<ISessionDirectoryGrain>(directoryKey).RemoveAsync sessionId)
                             persistentState.ClearStateAsync
                     with
                     | Ok() -> this.DeactivateOnIdle()
@@ -1208,5 +1668,6 @@ type SessionGrain
 
 module SessionGrain =
 
-    /// Build a grain key from userId and sessionId
-    let buildKey (userId: string) (sessionId: string) = sprintf "%s/%s" userId sessionId
+    let buildKey tenantId workspaceId userId sessionId =
+        RuntimeAddress.session tenantId workspaceId userId sessionId
+        |> RuntimeAddress.sessionKey

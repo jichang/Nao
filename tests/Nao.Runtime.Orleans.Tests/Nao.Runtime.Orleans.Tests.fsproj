@@ -12,7 +12,14 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="src/MSTestSettings.fs" />
+    <Compile Include="src/RuntimeTenancyTests.fs" />
+    <Compile Include="src/ClusterReliabilityTests.fs" />
+    <Compile Include="src/RuntimeAdministrationTests.fs" />
+    <Compile Include="src/MultiSiloReliabilityTests.fs" />
+    <Compile Include="src/WorkspaceLifecycleTests.fs" />
+    <Compile Include="src/SessionTurnLedgerTests.fs" />
     <Compile Include="src/GrainStateVersionTests.fs" />
+    <Compile Include="src/GroupGovernanceTests.fs" />
     <Compile Include="src/SessionAuthorizationTests.fs" />
     <Compile Include="src/SessionDeletionTests.fs" />
     <Compile Include="src/PublishingConversationStoreTests.fs" />
@@ -23,6 +30,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Nao.Testing\Nao.Testing.fsproj" />
     <ProjectReference Include="..\..\src\Nao.Runtime.Orleans\Nao.Runtime.Orleans.fsproj" />
+    <ProjectReference Include="..\..\src\Nao.Runtime.Orleans.Codegen\Nao.Runtime.Orleans.Codegen.csproj" />
     <ProjectReference Include="..\..\src\Nao.Agents\Nao.Agents.fsproj" />
     <ProjectReference Include="..\..\src\Nao.Persistence\Nao.Persistence.fsproj" />
   </ItemGroup>

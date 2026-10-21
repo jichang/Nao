@@ -70,18 +70,16 @@ module PublishingConversationStore =
 
         let userId = AuthorizationScope.userId authorization |> UserId.value
 
-        let sessionId =
-            AuthorizationScope.sessionId authorization
-            |> Option.map SessionId.value
-            |> Option.defaultValue ""
+        let sessionAddress =
+            RuntimeAddress.sessionFromScope authorization
+            |> Option.defaultWith (fun () ->
+                invalidArg
+                    (nameof authorization)
+                    "Conversation events require a complete tenant/workspace/user/session authorization scope.")
 
+        let sessionId = RuntimeAddress.sessionId sessionAddress |> SessionId.value
         let workspaceId = AuthorizationScope.workspaceId authorization |> WorkspaceId.value
-
-        let sessionKey =
-            if String.IsNullOrEmpty sessionId then
-                userId
-            else
-                sprintf "%s/%s" userId sessionId
+        let sessionKey = RuntimeAddress.sessionKey sessionAddress
 
         let correlation =
             messages

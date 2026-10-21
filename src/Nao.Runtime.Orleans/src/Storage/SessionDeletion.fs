@@ -23,18 +23,13 @@ type SessionDeletion =
 [<RequireQualifiedAccess>]
 module SessionDeletion =
     let request sessionKey authorization : SessionDeletionRequest =
-        let userId = AuthorizationScope.userId authorization |> UserId.value
-
-        let sessionId =
-            AuthorizationScope.sessionId authorization
-            |> Option.map SessionId.value
+        let expected =
+            RuntimeAddress.sessionFromScope authorization
+            |> Option.map RuntimeAddress.sessionKey
             |> Option.defaultWith (fun () ->
                 raise (System.UnauthorizedAccessException "Session deletion requires a session authorization scope."))
 
-        let matchesExplicitSession = sessionKey = sprintf "%s/%s" userId sessionId
-        let matchesDefaultSession = sessionId = "default" && sessionKey = userId
-
-        if not (matchesExplicitSession || matchesDefaultSession) then
+        if sessionKey <> expected then
             raise (System.UnauthorizedAccessException "Session deletion key does not match the authenticated scope.")
 
         { SessionKey = sessionKey
@@ -82,14 +77,16 @@ module SessionDeletion =
             match deletionFailure with
             | Some failure -> return Error failure
             | None ->
-                let userId = AuthorizationScope.userId request.Authorization |> UserId.value
-
                 let sessionId =
                     AuthorizationScope.sessionId request.Authorization
                     |> Option.get
                     |> SessionId.value
 
-                do! deletion.RemoveDirectoryEntryAsync userId sessionId
+                let directoryKey =
+                    RuntimeAddress.directoryFromScope request.Authorization
+                    |> RuntimeAddress.directoryKey
+
+                do! deletion.RemoveDirectoryEntryAsync directoryKey sessionId
                 do! deletion.ClearRuntimeStateAsync()
                 return Ok()
         }

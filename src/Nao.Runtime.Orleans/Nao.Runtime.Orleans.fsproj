@@ -5,12 +5,21 @@
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="src/Workspace/WorkspaceRegistry.fs" />
+    <Compile Include="src/Tenancy/RuntimeTenancy.fs" />
+    <Compile Include="src/Runtime/ClusterReliability.fs" />
+    <Compile Include="src/Runtime/Administration.fs" />
+    <Compile Include="src/Workspace/WorkspaceCatalog.fs" />
     <Compile Include="src/Storage/ConversationStore.fs" />
     <Compile Include="src/Storage/FileConversationStore.fs" />
     <Compile Include="src/Storage/PublishingConversationStore.fs" />
     <Compile Include="src/Storage/SessionDeletion.fs" />
+    <Compile Include="src/Grains/OrleansCorrelationContext.fs" />
     <Compile Include="src/Grains/GrainState.fs" />
+    <Compile Include="src/Grains/SessionTurnLedger.fs" />
+    <Compile Include="src/Grains/ClusterHealthGrain.fs" />
+    <Compile Include="src/Grains/RuntimeAdministrationGrain.fs" />
+    <Compile Include="src/Grains/GroupDirectoryGrain.fs" />
+    <Compile Include="src/Grains/WorkspaceLifecycleGrain.fs" />
     <Compile Include="src/Grains/SessionDirectoryGrain.fs" />
     <Compile Include="src/Grains/SessionGrain.fs" />
   </ItemGroup>

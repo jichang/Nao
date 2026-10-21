@@ -57,6 +57,18 @@ type MessageRecord() =
     [<Id(6u)>]
     member val Correlation: CorrelationContext = Unchecked.defaultof<_> with get, set
 
+    [<Id(7u)>]
+    member val TenantId: string = "" with get, set
+
+    [<Id(8u)>]
+    member val WorkspaceId: string = "" with get, set
+
+    [<Id(9u)>]
+    member val UserId: string = "" with get, set
+
+    [<Id(10u)>]
+    member val SessionId: string = "" with get, set
+
 /// Mapping between Orleans serializable records and domain types
 module GrainStateMapping =
 

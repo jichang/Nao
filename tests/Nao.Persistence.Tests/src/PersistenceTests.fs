@@ -657,6 +657,24 @@ let private runJournalRoundTrip scope (journal: ExecutionJournal) =
         let! logicalCheckpoints = journal.Checkpoints.GetByIdempotencyKey scope checkpoint.IdempotencyKey
         Assert.AreEqual([ checkpoint ], logicalCheckpoints)
 
+        let outcome: HarnessTerminalOutcome =
+            { Id = Guid.NewGuid()
+              IdempotencyKey = checkpoint.IdempotencyKey
+              Correlation = checkpoint.Correlation
+              TurnId = checkpoint.TurnId
+              AgentId = checkpoint.AgentId
+              Phase = HarnessCheckpointPhase.Succeeded
+              Response = Some "durable response"
+              Artifacts = []
+              Failure = None
+              RecordedAt = t0.AddSeconds 3.5 }
+
+        do! journal.Outcomes.Save scope outcome
+
+        let! recoveredOutcome = journal.Outcomes.TryGetByIdempotencyKey scope outcome.IdempotencyKey
+
+        Assert.AreEqual(Some outcome, recoveredOutcome)
+
         let transition: ToolSideEffectTransition =
             { Id = Guid.NewGuid()
               IdempotencyKey = r2.IdempotencyKey
@@ -703,7 +721,7 @@ let private runJournalRoundTrip scope (journal: ExecutionJournal) =
 
         match! journal.DeleteScopeAsync scope with
         | Error failure -> Assert.Fail(failure.Message)
-        | Ok deleted -> Assert.AreEqual(7, deleted)
+        | Ok deleted -> Assert.AreEqual(8, deleted)
 
         let! deletedTransitions = journal.SideEffects.GetByIdempotencyKey scope transition.IdempotencyKey
         Assert.IsTrue(deletedTransitions.IsEmpty)

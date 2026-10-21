@@ -26,6 +26,11 @@ module private JournalRedaction =
             Input = redact transition.Input
             Detail = transition.Detail |> SecretRedaction.redactOption }
 
+    let outcome (outcome: HarnessTerminalOutcome) =
+        { outcome with
+            Response = outcome.Response |> SecretRedaction.redactOption
+            Failure = outcome.Failure |> SecretRedaction.redactOption }
+
 module private ExecutionJournalState =
     let create () : ExecutionJournal =
         let records =
@@ -36,6 +41,9 @@ module private ExecutionJournalState =
 
         let sideEffects =
             System.Collections.Concurrent.ConcurrentDictionary<string * Guid, ToolSideEffectTransition>()
+
+        let outcomes =
+            System.Collections.Concurrent.ConcurrentDictionary<string * Guid, HarnessTerminalOutcome>()
 
         let ownerKey = AuthorizationScope.identity >> AuthorizationIdentity.storageKey
 
@@ -69,6 +77,7 @@ module private ExecutionJournalState =
                 removeMatching records (fun (record: ExecutionRecord) -> record.ExecutedAt)
                 removeMatching checkpoints (fun (checkpoint: HarnessCheckpoint) -> checkpoint.RecordedAt)
                 removeMatching sideEffects (fun (transition: ToolSideEffectTransition) -> transition.RecordedAt)
+                removeMatching outcomes (fun (outcome: HarnessTerminalOutcome) -> outcome.RecordedAt)
                 return Ok deleted
             }
 
@@ -111,6 +120,44 @@ module private ExecutionJournalState =
                     |> Seq.filter (fun checkpoint -> checkpoint.IdempotencyKey = idempotencyKey)
                     |> Seq.sortBy _.RecordedAt
                     |> Seq.toList
+                    |> Task.FromResult }
+
+        let outcomeJournal: HarnessOutcomeJournal =
+            { Save =
+                fun scope outcome ->
+                    let outcome = JournalRedaction.outcome outcome
+                    let owner = ownerKey scope
+
+                    let equivalent (existing: HarnessTerminalOutcome) =
+                        existing.IdempotencyKey = outcome.IdempotencyKey
+                        && existing.TurnId = outcome.TurnId
+                        && existing.AgentId = outcome.AgentId
+                        && existing.Phase = outcome.Phase
+                        && existing.Response = outcome.Response
+                        && existing.Artifacts = outcome.Artifacts
+                        && existing.Failure = outcome.Failure
+
+                    let existing =
+                        outcomes
+                        |> Seq.tryFind (fun pair ->
+                            fst pair.Key = owner && pair.Value.IdempotencyKey = outcome.IdempotencyKey)
+
+                    match existing with
+                    | Some pair when not (equivalent pair.Value) ->
+                        raise (
+                            InvalidOperationException
+                                "A different terminal outcome already exists for this execution idempotency key."
+                        )
+                    | Some _ -> Task.CompletedTask
+                    | None ->
+                        outcomes.[(owner, outcome.Id)] <- outcome
+                        Task.CompletedTask
+              TryGetByIdempotencyKey =
+                fun scope idempotencyKey ->
+                    owned scope outcomes
+                    |> Seq.filter (fun outcome -> outcome.IdempotencyKey = idempotencyKey)
+                    |> Seq.sortByDescending _.RecordedAt
+                    |> Seq.tryHead
                     |> Task.FromResult }
 
         { RecordAsync =
@@ -163,7 +210,8 @@ module private ExecutionJournalState =
           DeleteScopeAsync = fun scope -> delete scope None
           DeleteExpiredAsync = fun scope before -> delete scope (Some before)
           SideEffects = sideEffectJournal
-          Checkpoints = checkpointJournal }
+          Checkpoints = checkpointJournal
+          Outcomes = outcomeJournal }
 
 module InMemoryExecutionJournal =
     let create () : ExecutionJournal = ExecutionJournalState.create ()
@@ -174,11 +222,13 @@ type ExecutionJournalEvent =
     | RecordReverted of Guid
     | CheckpointAccepted of HarnessCheckpoint
     | SideEffectAccepted of ToolSideEffectTransition
+    | OutcomeAccepted of HarnessTerminalOutcome
     | DeleteScope
     | DeleteExpired of DateTimeOffset
 
 type ExecutionJournalDocument =
     { Version: int
+      Sequence: int64
       Event: ExecutionJournalEvent }
 
 module PersistentExecutionJournal =
@@ -186,7 +236,11 @@ module PersistentExecutionJournal =
         try
             let document = FSharpJson.deserialize<ExecutionJournalDocument> line
 
-            if isNull (box document) || document.Version <> 1 then
+            if
+                isNull (box document)
+                || document.Version <> 1
+                || document.Sequence <> int64 eventNumber
+            then
                 raise (System.Text.Json.JsonException("Expected execution-journal schema version 1."))
 
             document.Event
@@ -209,8 +263,9 @@ module PersistentExecutionJournal =
             let context = "execution-journal/" + key
             let store = openStore key
             let inner = InMemoryExecutionJournal.create ()
+            let lines = store.LoadAll()
 
-            store.LoadAll()
+            lines
             |> List.iteri (fun index line ->
                 let eventNumber = index + 1
 
@@ -224,6 +279,8 @@ module PersistentExecutionJournal =
                         inner.Checkpoints.Save scope checkpoint |> _.GetAwaiter().GetResult()
                     | ExecutionJournalEvent.SideEffectAccepted transition ->
                         inner.SideEffects.Save scope transition |> _.GetAwaiter().GetResult()
+                    | ExecutionJournalEvent.OutcomeAccepted outcome ->
+                        inner.Outcomes.Save scope outcome |> _.GetAwaiter().GetResult()
                     | ExecutionJournalEvent.DeleteScope ->
                         inner.DeleteScopeAsync scope |> _.GetAwaiter().GetResult() |> ignore
                     | ExecutionJournalEvent.DeleteExpired before ->
@@ -241,18 +298,25 @@ module PersistentExecutionJournal =
                         )
                     ))
 
-            store, inner
+            store, inner, int64 lines.Length
 
         let read scope operation =
             lock sync (fun () ->
-                let _, inner = load scope
+                let _, inner, _ = load scope
                 operation inner)
 
         let mutate scope operation event =
             lock sync (fun () ->
-                let store, inner = load scope
+                let store, inner, sequence = load scope
                 let result = operation inner
-                store.Append(FSharpJson.serialize { Version = 1; Event = event })
+
+                store.Append(
+                    FSharpJson.serialize
+                        { Version = 1
+                          Sequence = sequence + 1L
+                          Event = event }
+                )
+
                 result)
 
         let protect operation =
@@ -296,6 +360,22 @@ module PersistentExecutionJournal =
               GetByIdempotencyKey =
                 fun scope idempotencyKey ->
                     read scope (fun inner -> inner.Checkpoints.GetByIdempotencyKey scope idempotencyKey) }
+
+        let outcomeJournal: HarnessOutcomeJournal =
+            { Save =
+                fun scope outcome ->
+                    let outcome = JournalRedaction.outcome outcome
+
+                    task {
+                        mutate
+                            scope
+                            (fun inner -> inner.Outcomes.Save scope outcome |> _.GetAwaiter().GetResult())
+                            (ExecutionJournalEvent.OutcomeAccepted outcome)
+                    }
+                    :> Task
+              TryGetByIdempotencyKey =
+                fun scope idempotencyKey ->
+                    read scope (fun inner -> inner.Outcomes.TryGetByIdempotencyKey scope idempotencyKey) }
 
         { RecordAsync =
             fun scope record ->
@@ -342,7 +422,8 @@ module PersistentExecutionJournal =
                             |> Result.defaultWith (fun failure -> raise (InvalidOperationException failure.Message)))
                         (ExecutionJournalEvent.DeleteExpired before))
           SideEffects = sideEffectJournal
-          Checkpoints = checkpointJournal }
+          Checkpoints = checkpointJournal
+          Outcomes = outcomeJournal }
 
 module ExecutionJournals =
     let ado factory : ExecutionJournal =

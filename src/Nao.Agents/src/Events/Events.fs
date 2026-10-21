@@ -12,9 +12,9 @@ type EventScope =
     {
         /// Owning tenant from the host-authenticated authorization scope.
         TenantId: string
-        /// Owning user (grain key prefix).
+        /// Owning user.
         UserId: string
-        /// Session id (grain key suffix).
+        /// Session id.
         SessionId: string
         /// Active conversation within the session.
         ConversationId: string
@@ -22,7 +22,7 @@ type EventScope =
         WorkspaceKey: string
         /// The action that produced the event — the turn id.
         ActionId: string
-        /// Storage routing key — the full grain key ("userId/sessionId").
+        /// Storage routing key — the canonical tenant/workspace/user/session grain key.
         SessionKey: string
         /// Execution correlation for events emitted within a harness run.
         Correlation: CorrelationContext

@@ -231,6 +231,7 @@ type ExecutionJournalAuthorizationTests() =
             for payload in payloads @ (rows |> List.map snd) do
                 let document = FSharpJson.deserialize<ExecutionJournalDocument> payload
                 Assert.AreEqual(1, document.Version)
+                Assert.IsTrue(document.Sequence > 0L)
 
                 for secret in
                     [ "tenant"
@@ -313,6 +314,7 @@ type ExecutionJournalAuthorizationTests() =
 
         let unsupported: ExecutionJournalDocument =
             { Version = 99
+              Sequence = 1L
               Event = ExecutionJournalEvent.DeleteScope }
 
         let unsupportedStore =

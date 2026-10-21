@@ -18,11 +18,15 @@ type ConversationStoreEvent =
 
 type ConversationStoreDocument =
     { Version: int
+      Sequence: int64
+      Owner: PersistedOwnerScope
       Event: ConversationStoreEvent }
 
 type ConversationEventStore =
-    { Append: string -> unit
+    { Append: int64 -> string -> unit
       LoadAll: unit -> string list }
+
+exception ConversationSequenceConflictException of expected: int64 * actual: int64
 
 type private ConversationProjection =
     { Meta: ConversationMeta
@@ -42,12 +46,17 @@ module FileConversationStore =
     let private serialize value =
         JsonSerializer.Serialize(value, jsonOptions)
 
-    let private decode (path: string) eventNumber (line: string) =
+    let private decode (path: string) expectedOwner eventNumber (line: string) =
         try
             let document =
                 JsonSerializer.Deserialize<ConversationStoreDocument>(line, jsonOptions)
 
-            if isNull (box document) || document.Version <> 1 then
+            if
+                isNull (box document)
+                || document.Version <> 1
+                || document.Sequence <> int64 eventNumber
+                || document.Owner <> expectedOwner
+            then
                 raise (JsonException("Expected conversation-store schema version 1."))
 
             document.Event
@@ -95,13 +104,14 @@ module FileConversationStore =
         | ConversationStoreEvent.ConversationDeleted conversationName -> conversations.Remove conversationName |> ignore
         | ConversationStoreEvent.DeleteScope -> conversations.Clear()
 
-    let private load context (store: ConversationEventStore) =
+    let private load context owner (store: ConversationEventStore) =
         let conversations = Dictionary<string, ConversationProjection>()
+        let lines = store.LoadAll()
 
-        store.LoadAll()
-        |> List.iteri (fun index line -> decode context (index + 1) line |> applyEvent conversations)
+        lines
+        |> List.iteri (fun index line -> decode context owner (index + 1) line |> applyEvent conversations)
 
-        conversations
+        conversations, int64 lines.Length
 
     let createPersistent (openStore: AuthorizationScope -> ConversationEventStore) : ConversationStore =
         let gate = obj ()
@@ -111,14 +121,24 @@ module FileConversationStore =
                 let key = AuthorizationScope.identity scope |> AuthorizationIdentity.storageKey
                 let context = "conversation/" + key
                 let store = openStore scope
-                load context store |> ignore
-                let document: ConversationStoreDocument = { Version = 1; Event = event }
-                store.Append(serialize document))
+                let owner = PersistedOwnerScope.fromAuthorization scope
+                let _, sequence = load context owner store
+
+                let document: ConversationStoreDocument =
+                    { Version = 1
+                      Sequence = sequence + 1L
+                      Owner = owner
+                      Event = event }
+
+                store.Append sequence (serialize document))
 
         let read scope operation =
             lock gate (fun () ->
                 let key = AuthorizationScope.identity scope |> AuthorizationIdentity.storageKey
-                load ("conversation/" + key) (openStore scope) |> operation)
+
+                load ("conversation/" + key) (PersistedOwnerScope.fromAuthorization scope) (openStore scope)
+                |> fst
+                |> operation)
 
         { AppendAsync =
             fun scope conversationName messages ->
@@ -162,9 +182,27 @@ module FileConversationStore =
             let path = streamPath baseDir scope
 
             { Append =
-                fun line ->
+                fun expectedSequence line ->
                     Directory.CreateDirectory(Path.GetDirectoryName path) |> ignore
-                    File.AppendAllText(path, line + Environment.NewLine)
+
+                    use stream =
+                        new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None)
+
+                    use reader = new StreamReader(stream, leaveOpen = true)
+                    let mutable actualSequence = 0L
+
+                    while not reader.EndOfStream do
+                        if reader.ReadLine() |> String.IsNullOrWhiteSpace |> not then
+                            actualSequence <- actualSequence + 1L
+
+                    if actualSequence <> expectedSequence then
+                        raise (ConversationSequenceConflictException(expectedSequence, actualSequence))
+
+                    stream.Seek(0L, SeekOrigin.End) |> ignore
+                    use writer = new StreamWriter(stream, leaveOpen = true)
+                    writer.WriteLine line
+                    writer.Flush()
+                    stream.Flush(true)
               LoadAll =
                 fun () ->
                     if File.Exists path then

@@ -11,40 +11,51 @@ open Nao.Runtime.Orleans
 [<TestClass>]
 type SessionDeletionTests() =
 
-    let scope (sessionKey: string) =
-        let parts = sessionKey.Split([| '/' |], 2)
+    let tenantId = TenantId.parse "tenant"
 
-        let principal =
-            SecurityPrincipal.create (TenantId.parse "tenant") (UserId.parse parts.[0]) []
+    let workspaceId =
+        WorkspaceVersionId.create "workspace" "1" |> WorkspaceVersionId.workspaceId
 
-        AuthorizationScope.tryCreate principal None (WorkspaceId.parse "workspace") (Some(SessionId.parse parts.[1]))
+    let userId = UserId.parse "user"
+
+    let scope (sessionReference: string) =
+        let sessionId =
+            RuntimeAddress.tryParseSessionKey sessionReference
+            |> Option.map RuntimeAddress.sessionId
+            |> Option.defaultWith (fun () -> sessionReference.Split('/') |> Array.last |> SessionId.parse)
+
+        let principal = SecurityPrincipal.create tenantId userId []
+
+        AuthorizationScope.tryCreate principal None workspaceId (Some sessionId)
         |> Option.get
+
+    let sessionKey sessionId =
+        RuntimeAddress.session tenantId workspaceId userId (SessionId.parse sessionId)
+        |> RuntimeAddress.sessionKey
 
     [<TestMethod>]
     member _.RejectsDeletionKeyOutsideAuthenticatedScope() =
-        for key in [ "other/session"; "user/other-session" ] do
+        for key in
+            [ "user/session"
+              sessionKey "other-session"
+              (RuntimeAddress.session (TenantId.parse "other-tenant") workspaceId userId (SessionId.parse "session")
+               |> RuntimeAddress.sessionKey) ] do
             Assert.ThrowsExactly<UnauthorizedAccessException>(fun () ->
-                SessionDeletion.request key (scope "user/session") |> ignore)
+                SessionDeletion.request key (scope "session") |> ignore)
             |> ignore
 
-        let principal =
-            SecurityPrincipal.create (TenantId.parse "tenant") (UserId.parse "user") []
+        let principal = SecurityPrincipal.create tenantId userId []
 
         let workspaceScope =
-            AuthorizationScope.tryCreate principal None (WorkspaceId.parse "workspace") None
-            |> Option.get
+            AuthorizationScope.tryCreate principal None workspaceId None |> Option.get
 
         Assert.ThrowsExactly<UnauthorizedAccessException>(fun () ->
-            SessionDeletion.request "user/session" workspaceScope |> ignore)
+            SessionDeletion.request (sessionKey "session") workspaceScope |> ignore)
         |> ignore
 
     [<TestMethod>]
-    member _.DefaultSessionRoutingKeyMatchesOnlyTheDefaultScope() =
-        SessionDeletion.request "user" (scope "user/default") |> ignore
-
-        Assert.ThrowsExactly<UnauthorizedAccessException>(fun () ->
-            SessionDeletion.request "user" (scope "user/session") |> ignore)
-        |> ignore
+    member _.CanonicalSessionRoutingKeyMatchesCompleteScope() =
+        SessionDeletion.request (sessionKey "default") (scope "default") |> ignore
 
     [<TestMethod>]
     member _.MemoryDeletionReceivesCompleteTenantScope() =
@@ -57,7 +68,7 @@ type SessionDeletionTests() =
             AuthorizationScope.tryCreate
                 otherPrincipal
                 None
-                (WorkspaceId.parse "workspace")
+                (WorkspaceId.parse "workspace@1")
                 (Some(SessionId.parse "session"))
             |> Option.get
 
@@ -87,7 +98,7 @@ type SessionDeletionTests() =
                 (fun () -> System.Threading.Tasks.Task.CompletedTask)
 
         let result =
-            SessionDeletion.executeAsync (SessionDeletion.request "user/session" authorized) deletion
+            SessionDeletion.executeAsync (SessionDeletion.request (sessionKey "session") authorized) deletion
             |> _.Result
 
         Assert.AreEqual(Ok(), result)
@@ -107,8 +118,8 @@ type SessionDeletionTests() =
             let traces = InMemoryTraceStore.create ()
             let directoryEntries = HashSet<string>([ "session-a"; "session-b" ])
             let clearedStates = HashSet<string>()
-            let sessionA = "user-1/session-a"
-            let sessionB = "user-1/session-b"
+            let sessionA = sessionKey "session-a"
+            let sessionB = sessionKey "session-b"
             let owner = scope
 
             let journalKey session =
@@ -231,7 +242,7 @@ type SessionDeletionTests() =
                     runtimeCleared <- true
                     System.Threading.Tasks.Task.CompletedTask)
 
-        let request = SessionDeletion.request "user/session" (scope "user/session")
+        let request = SessionDeletion.request (sessionKey "session") (scope "session")
 
         let result = SessionDeletion.executeAsync request deletion |> _.Result
 
@@ -270,7 +281,7 @@ type SessionDeletionTests() =
                     runtimeCleared <- true
                     System.Threading.Tasks.Task.CompletedTask)
 
-        let request = SessionDeletion.request "user/session" (scope "user/session")
+        let request = SessionDeletion.request (sessionKey "session") (scope "session")
 
         let result = SessionDeletion.executeAsync request deletion |> _.Result
 
@@ -306,7 +317,7 @@ type SessionDeletionTests() =
                     runtimeCleared <- true
                     System.Threading.Tasks.Task.CompletedTask)
 
-        let request = SessionDeletion.request "user/session" (scope "user/session")
+        let request = SessionDeletion.request (sessionKey "session") (scope "session")
         let result = SessionDeletion.executeAsync request deletion |> _.Result
 
         Assert.AreEqual(Error failure, result)
@@ -337,7 +348,7 @@ type SessionDeletionTests() =
                     runtimeCleared <- true
                     System.Threading.Tasks.Task.CompletedTask)
 
-        let request = SessionDeletion.request "user/session" (scope "user/session")
+        let request = SessionDeletion.request (sessionKey "session") (scope "session")
 
         let result = SessionDeletion.executeAsync request deletion |> _.Result
 

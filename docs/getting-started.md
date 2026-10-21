@@ -218,16 +218,19 @@ security boundaries.
 Hosts register compiled agents and tools explicitly:
 
 ```fsharp
+let tenantId = TenantId.parse "tenant-a"
+
 let registry =
-    WorkspaceRegistry.fromWorkspaces [
-        ("default",
-         { WorkspaceDefinitions.Empty with
-             Agents = [ agent ]
-             Tools = tools })
-    ]
+    WorkspaceRegistry.fromWorkspaces
+        tenantId
+        [ ("default",
+           { WorkspaceDefinitions.Empty with
+               Agents = [ agent ]
+               Tools = tools }) ]
 ```
 
-The runtime intentionally does not load arbitrary agent assemblies or JSON-defined executable code.
+The registry partitions the same workspace identity by tenant. The runtime intentionally does not
+load arbitrary agent assemblies or JSON-defined executable code.
 
 ## Git hooks
 
