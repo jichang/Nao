@@ -13,6 +13,12 @@
   <ItemGroup>
     <Compile Include="src/MSTestSettings.fs" />
     <Compile Include="src/ProviderTests.fs" />
+    <Compile Include="src/ProviderCapabilityTests.fs" />
+    <Compile Include="src/ProviderConformanceTests.fs" />
+    <Compile Include="src/ProviderRoutingTests.fs" />
+    <Compile Include="src/ProviderSchedulingTests.fs" />
+    <Compile Include="src/ProviderResilienceTests.fs" />
+    <Compile Include="src/ProviderConfigurationControlPlaneTests.fs" />
     <Compile Include="src/EmbeddingProviderTests.fs" />
   </ItemGroup>
   <ItemGroup>

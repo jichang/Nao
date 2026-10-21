@@ -134,11 +134,17 @@ module Resilience =
         | RetryPolicy.Custom(_, getDelay) -> getDelay attempt
 
     let private shouldRetry (policy: RetryPolicy) (attempt: int) (ex: exn) : bool =
-        match policy with
-        | RetryPolicy.None -> false
-        | RetryPolicy.Fixed(maxRetries, _) -> attempt < maxRetries
-        | RetryPolicy.ExponentialBackoff(maxRetries, _, _) -> attempt < maxRetries
-        | RetryPolicy.Custom(shouldRetry, _) -> shouldRetry attempt ex
+        let policyAllowsRetry =
+            match policy with
+            | RetryPolicy.None -> false
+            | RetryPolicy.Fixed(maxRetries, _) -> attempt < maxRetries
+            | RetryPolicy.ExponentialBackoff(maxRetries, _, _) -> attempt < maxRetries
+            | RetryPolicy.Custom(shouldRetry, _) -> shouldRetry attempt ex
+
+        match ex with
+        | :? OperationCanceledException -> false
+        | PlatformFailureException failure -> failure.Retryable && policyAllowsRetry
+        | _ -> policyAllowsRetry
 
     /// Execute with resilience policies applied
     let executeAsync

@@ -12,13 +12,7 @@ module private CapturingProvider =
             capturedCorrelation.Value <- Some correlation
             capturedPrompt.Value <- conversation |> List.last |> _.Content
 
-            Task.FromResult(
-                { Content = response
-                  FinishReason = "stop"
-                  TokensUsed = None
-                  Usage = None }
-                : CompletionResult
-            ))
+            Task.FromResult(CompletionResult.text response ProviderFinishReason.Stop ProviderUsage.None))
 
 module private Evaluation =
     let execution correlation =

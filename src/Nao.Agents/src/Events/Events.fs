@@ -273,7 +273,19 @@ module private EventRedaction =
     let completion (result: CompletionResult) =
         { result with
             Content = text result.Content
-            FinishReason = text result.FinishReason }
+            FinishReason =
+                match result.FinishReason with
+                | ProviderFinishReason.Other value -> ProviderFinishReason.Other(text value)
+                | value -> value
+            ToolCalls =
+                result.ToolCalls
+                |> List.map (fun call ->
+                    { call with
+                        Id = text call.Id
+                        Name = text call.Name
+                        ArgumentsJson = text call.ArgumentsJson })
+            StructuredOutputJson = result.StructuredOutputJson |> Option.map text
+            Extensions = textMap result.Extensions }
 
     let spanStatus =
         function

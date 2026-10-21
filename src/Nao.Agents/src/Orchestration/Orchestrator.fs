@@ -302,10 +302,14 @@ module Orchestrator =
                             endLlmSpan span SpanStatus.Ok result.Content.Length started.ElapsedMilliseconds
 
                             let tokens =
-                                match result.Usage, result.TokensUsed with
-                                | Some usage, _ -> ProviderTokenUsage.Split(usage.InputTokens, usage.OutputTokens)
-                                | None, Some total -> ProviderTokenUsage.Aggregate total
-                                | None, None -> ProviderTokenUsage.Unavailable
+                                match result.Usage with
+                                | ProviderUsage.Full(inputTokens, outputTokens) ->
+                                    ProviderTokenUsage.Split(inputTokens, outputTokens)
+                                | ProviderUsage.Aggregate total -> ProviderTokenUsage.Aggregate total
+                                | ProviderUsage.Partial(Some inputTokens, Some outputTokens) ->
+                                    ProviderTokenUsage.Split(inputTokens, outputTokens)
+                                | ProviderUsage.Partial _
+                                | ProviderUsage.None -> ProviderTokenUsage.Unavailable
 
                             recordMetrics tokens started.ElapsedMilliseconds
                             return idempotencyKey, result

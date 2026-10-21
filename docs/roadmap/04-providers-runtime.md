@@ -17,85 +17,85 @@ This workstream turns individual provider adapters and Orleans grains into a res
 
 ## PRV-01 — Provider capability model
 
-- [ ] Define capabilities for chat, streaming, tool calling, structured output, vision, audio, embeddings, context size, and usage reporting.
-- [ ] Define model metadata for quality tier, latency class, data residency, privacy, price, and deprecation.
-- [ ] Probe or configure endpoint capabilities without relying on model-name heuristics alone.
-- [ ] Version capability observations and configuration.
-- [ ] Expose health, readiness, quota, and maintenance status.
-- [ ] Distinguish temporary endpoint failure from unsupported capability.
+- [x] Define capabilities for chat, streaming, tool calling, structured output, vision, audio, embeddings, context size, and usage reporting.
+- [x] Define model metadata for quality tier, latency class, data residency, privacy, price, and deprecation.
+- [x] Probe or configure endpoint capabilities without relying on model-name heuristics alone.
+- [x] Version capability observations and configuration.
+- [x] Expose health, readiness, quota, and maintenance status.
+- [x] Distinguish temporary endpoint failure from unsupported capability.
 
 **Acceptance criteria**
 
-- [ ] Requests can declare required capabilities and reject incompatible models before invocation.
-- [ ] Capability changes are observable and audited.
-- [ ] Unknown capability does not silently imply support.
+- [x] Requests can declare required capabilities and reject incompatible models before invocation.
+- [x] Capability changes are observable and audited.
+- [x] Unknown capability does not silently imply support.
 
 ## PRV-02 — Normalized provider semantics
 
-- [ ] Define a common error taxonomy: authentication, authorization, quota, rate limit, timeout, overload, invalid request, content rejection, protocol, and server failure.
-- [ ] Normalize finish reasons and partial-stream termination.
-- [ ] Standardize tool-call and structured-output representation.
-- [ ] Preserve provider-specific metadata in an extension field.
-- [ ] Define cancellation and timeout behavior.
-- [ ] Define usage reporting when providers supply full, partial, aggregate, or no token data.
-- [ ] Add conformance tests shared by every adapter.
+- [x] Define a common error taxonomy: authentication, authorization, quota, rate limit, timeout, overload, invalid request, content rejection, protocol, and server failure.
+- [x] Normalize finish reasons and partial-stream termination.
+- [x] Standardize tool-call and structured-output representation.
+- [x] Preserve provider-specific metadata in an extension field.
+- [x] Define cancellation and timeout behavior.
+- [x] Define usage reporting when providers supply full, partial, aggregate, or no token data.
+- [x] Add conformance tests shared by every adapter.
 
 **Acceptance criteria**
 
-- [ ] Equivalent buffered and streaming requests produce equivalent final semantic results.
-- [ ] Retry logic uses normalized error categories rather than fragile message matching.
-- [ ] Provider-specific additions do not break common consumers.
+- [x] Equivalent buffered and streaming requests produce equivalent final semantic results.
+- [x] Retry logic uses normalized error categories rather than fragile message matching.
+- [x] Provider-specific additions do not break common consumers.
 
 ## PRV-03 — Routing and scheduling
 
-- [ ] Define a model-routing request with capabilities, policy, quality, latency, cost, privacy, residency, and availability constraints.
-- [ ] Implement static and weighted routing.
-- [ ] Add per-provider and per-model concurrency limits.
-- [ ] Add rate-limit-aware queues and backpressure.
-- [ ] Add tenant quotas and fair scheduling.
-- [ ] Support quality-, latency-, cost-, and residency-aware policies.
-- [ ] Record routing candidates, exclusions, decision, and policy version.
-- [ ] Prevent fallback from weakening privacy or capability requirements.
-- [ ] Support optional request hedging with strict cost controls.
+- [x] Define a model-routing request with capabilities, policy, quality, latency, cost, privacy, residency, and availability constraints.
+- [x] Implement static and weighted routing.
+- [x] Add per-provider and per-model concurrency limits.
+- [x] Add rate-limit-aware queues and backpressure.
+- [x] Add tenant quotas and fair scheduling.
+- [x] Support quality-, latency-, cost-, and residency-aware policies.
+- [x] Record routing candidates, exclusions, decision, and policy version.
+- [x] Prevent fallback from weakening privacy or capability requirements.
+- [x] Support optional request hedging with strict cost controls.
 
 **Acceptance criteria**
 
-- [ ] Routing is deterministic for a pinned policy and health snapshot where required.
-- [ ] One noisy tenant cannot exhaust shared provider capacity.
-- [ ] Fallback never selects a model violating mandatory constraints.
+- [x] Routing is deterministic for a pinned policy and health snapshot where required.
+- [x] One noisy tenant cannot exhaust shared provider capacity.
+- [x] Fallback never selects a model violating mandatory constraints.
 
 ## PRV-04 — Resilience and failover
 
-- [ ] Maintain circuit state per endpoint and failure domain.
-- [ ] Define retry budgets across nested provider calls.
-- [ ] Honor provider retry-after guidance.
-- [ ] Add controlled fallback chains.
-- [ ] Distinguish safe pre-response retries from ambiguous partial-stream retries.
-- [ ] Support draining endpoints during maintenance or deployment.
-- [ ] Add cache contracts for eligible deterministic or embedding requests.
-- [ ] Test regional and multi-endpoint outage scenarios.
+- [x] Maintain circuit state per endpoint and failure domain.
+- [x] Define retry budgets across nested provider calls.
+- [x] Honor provider retry-after guidance.
+- [x] Add controlled fallback chains.
+- [x] Distinguish safe pre-response retries from ambiguous partial-stream retries.
+- [x] Support draining endpoints during maintenance or deployment.
+- [x] Add cache contracts for eligible deterministic or embedding requests.
+- [x] Test regional and multi-endpoint outage scenarios.
 
 **Acceptance criteria**
 
-- [ ] One endpoint failure does not take down unrelated models or sessions.
-- [ ] Retries and fallback remain inside task budget.
-- [ ] Partial responses cannot be silently concatenated with fallback responses.
+- [x] One endpoint failure does not take down unrelated models or sessions.
+- [x] Retries and fallback remain inside task budget.
+- [x] Partial responses cannot be silently concatenated with fallback responses.
 
 ## PRV-05 — Provider configuration and secrets
 
-- [ ] Define validated, versioned provider configuration.
+- [x] Define validated, versioned provider configuration.
 - [x] Store secret references rather than secret values.
-- [ ] Support controlled runtime reload and rollback.
-- [ ] Drain or migrate in-flight work during incompatible changes.
-- [ ] Audit administrative changes without logging credentials.
-- [ ] Add configuration health checks before activation.
-- [ ] Define model allow/deny policy by tenant and workspace.
+- [x] Support controlled runtime reload and rollback.
+- [x] Drain or migrate in-flight work during incompatible changes.
+- [x] Audit administrative changes without logging credentials.
+- [x] Add configuration health checks before activation.
+- [x] Define model allow/deny policy by tenant and workspace.
 
 **Acceptance criteria**
 
-- [ ] Invalid configuration cannot replace the last known-good configuration.
+- [x] Invalid configuration cannot replace the last known-good configuration.
 - [x] Secret rotation does not expose values or require unrelated runtime restart.
-- [ ] Configuration changes identify affected executions and sessions.
+- [x] Configuration changes identify affected executions and sessions.
 
 ## RUN-01 — Runtime tenancy model
 

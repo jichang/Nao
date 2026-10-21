@@ -328,6 +328,26 @@ type ResilienceTests() =
         | Ok _ -> Assert.Fail("Expected Error")
 
     [<TestMethod>]
+    member _.``ExecuteAsync does not retry a normalized permanent provider failure``() =
+        let mutable attempts = 0
+
+        let config =
+            { ResilienceConfig.NoResilience with
+                RetryPolicy = RetryPolicy.Fixed(3, 0) }
+
+        let execute (_: string) =
+            attempts <- attempts + 1
+
+            PlatformFailure.fromHttpStatus None 400 "invalid provider request"
+            |> PlatformFailure.raiseException
+
+        let result = (Resilience.executeAsync config None execute "x").Result
+
+        match result with
+        | Error _ -> Assert.AreEqual(1, attempts)
+        | Ok _ -> Assert.Fail("Expected Error")
+
+    [<TestMethod>]
     member _.CircuitBreakerOpensAfterThreshold() =
         let config = CircuitBreakerConfig.Default
         let cb = CircuitBreaker.create config

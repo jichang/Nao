@@ -71,6 +71,12 @@ type OpenAIUsageDto() =
 
 [<AllowNullLiteral>]
 type OpenAIChatResponseDto() =
+    [<JsonPropertyName("id")>]
+    member val Id: string = null with get, set
+
+    [<JsonPropertyName("model")>]
+    member val Model: string = null with get, set
+
     [<JsonPropertyName("choices")>]
     member val Choices: OpenAIChoiceDto array = null with get, set
 

@@ -53,6 +53,12 @@ type AnthropicUsageDto() =
 
 [<AllowNullLiteral>]
 type AnthropicResponseDto() =
+    [<JsonPropertyName("id")>]
+    member val Id: string = null with get, set
+
+    [<JsonPropertyName("model")>]
+    member val Model: string = null with get, set
+
     [<JsonPropertyName("content")>]
     member val Content: AnthropicContentBlockDto array = null with get, set
 
@@ -64,6 +70,12 @@ type AnthropicResponseDto() =
 
 [<AllowNullLiteral>]
 type AnthropicStreamMessageDto() =
+    [<JsonPropertyName("id")>]
+    member val Id: string = null with get, set
+
+    [<JsonPropertyName("model")>]
+    member val Model: string = null with get, set
+
     [<JsonPropertyName("usage")>]
     member val Usage: AnthropicUsageDto = null with get, set
 

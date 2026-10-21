@@ -67,9 +67,40 @@ type CompletionResultTests() =
     [<TestMethod>]
     member _.CanCreateResult() =
         let result =
-            CompletionResult.create "answer" "stop" (Some 42) (Some { InputTokens = 30; OutputTokens = 12 })
+            CompletionResult.text "answer" ProviderFinishReason.Stop (ProviderUsage.full 30 12)
 
         Assert.AreEqual("answer", result.Content)
-        Assert.AreEqual("stop", result.FinishReason)
-        Assert.AreEqual(Some 42, result.TokensUsed)
-        Assert.AreEqual(Some { InputTokens = 30; OutputTokens = 12 }, result.Usage)
+        Assert.AreEqual(ProviderFinishReason.Stop, result.FinishReason)
+        Assert.AreEqual(ProviderUsage.Full(30, 12), result.Usage)
+
+    [<TestMethod>]
+    member _.``Preserves normalized tool calls structured output and extensions``() =
+        let toolCall =
+            { Id = "call-1"
+              Name = "search"
+              ArgumentsJson = """{"query":"Nao"}""" }
+
+        let result =
+            { Content = ""
+              FinishReason = ProviderFinishReason.ToolCalls
+              Usage = ProviderUsage.Partial(Some 7, None)
+              ToolCalls = [ toolCall ]
+              StructuredOutputJson = Some """{"answer":"Nao"}"""
+              Extensions = Map [ "provider.request_id", "request-1" ] }
+
+        Assert.AreEqual([ toolCall ], result.ToolCalls)
+        Assert.AreEqual(Some """{"answer":"Nao"}""", result.StructuredOutputJson)
+        Assert.AreEqual(Some "request-1", result.Extensions |> Map.tryFind "provider.request_id")
+        Assert.AreEqual(None, ProviderUsage.total result.Usage)
+
+    [<TestMethod>]
+    member _.``Usage total reflects reporting fidelity``() =
+        let cases =
+            [ ProviderUsage.None, None
+              ProviderUsage.Aggregate 12, Some 12
+              ProviderUsage.Partial(Some 7, None), None
+              ProviderUsage.Partial(Some 7, Some 5), Some 12
+              ProviderUsage.Full(7, 5), Some 12 ]
+
+        for usage, expected in cases do
+            Assert.AreEqual(expected, ProviderUsage.total usage)

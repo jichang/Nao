@@ -114,7 +114,7 @@ module EtclovgMockProvider =
                     else
                         sprintf "I understand your request: %s. Here's my response." lastMsg
 
-                Task.FromResult(CompletionResult.create response "stop" (Some 150) None))
+                Task.FromResult(CompletionResult.text response ProviderFinishReason.Stop (ProviderUsage.aggregate 150)))
 
     let createOrchestrator tools =
         let parseActions (response: string) =

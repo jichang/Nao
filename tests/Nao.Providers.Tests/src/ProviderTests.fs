@@ -173,14 +173,32 @@ type ProviderFactoryTests() =
             { LlmProvider.create (fun () -> "test") (fun _ conversation _ _ ->
                   receivedPrompt <- conversation |> List.exactlyOne |> _.Content
 
-                  Task.FromResult(CompletionResult.create $"result:{canary}" $"finish:{canary}" None None)) with
+                  Task.FromResult(
+                      CompletionResult.text
+                          $"result:{canary}"
+                          (ProviderFinishReason.Other $"finish:{canary}")
+                          ProviderUsage.None
+                  )) with
                 StreamAsync =
                     Some(fun _ conversation _ onChunk _ ->
                         receivedPrompt <- conversation |> List.exactlyOne |> _.Content
-                        onChunk (CompletionChunk.create "result:provider-canary-" None None None)
-                        onChunk (CompletionChunk.create "secret" (Some $"finish:{canary}") None None)
+                        onChunk (CompletionChunk.text "result:provider-canary-" None ProviderUsage.None)
 
-                        Task.FromResult(CompletionResult.create $"result:{canary}" $"finish:{canary}" None None)) }
+                        onChunk (
+                            CompletionChunk.text
+                                "secret"
+                                (Some(
+                                    ProviderStreamTermination.Completed(ProviderFinishReason.Other $"finish:{canary}")
+                                ))
+                                ProviderUsage.None
+                        )
+
+                        Task.FromResult(
+                            CompletionResult.text
+                                $"result:{canary}"
+                                (ProviderFinishReason.Other $"finish:{canary}")
+                                ProviderUsage.None
+                        )) }
 
         let provider =
             ProviderFactory.operationScopedProviderWith createProvider "test" authorization reference secretProvider
@@ -200,7 +218,7 @@ type ProviderFactoryTests() =
 
         Assert.AreEqual("prompt:[REDACTED]", receivedPrompt)
         Assert.AreEqual("result:[REDACTED]", result.Content)
-        Assert.AreEqual("finish:[REDACTED]", result.FinishReason)
+        Assert.AreEqual(ProviderFinishReason.Other "finish:[REDACTED]", result.FinishReason)
         Assert.AreEqual("result:[REDACTED]", chunks |> Seq.map _.Delta |> String.concat "")
         Assert.IsFalse(chunks |> Seq.exists (fun chunk -> chunk.Delta.Contains canary))
 
@@ -244,7 +262,7 @@ type ProviderFactoryTests() =
             observed.Add(SecretValue.useValue id credential)
 
             LlmProvider.create (fun () -> "test") (fun _ _ _ _ ->
-                Task.FromResult(CompletionResult.create "ok" "stop" None None))
+                Task.FromResult(CompletionResult.text "ok" ProviderFinishReason.Stop ProviderUsage.None))
 
         let provider =
             ProviderFactory.operationScopedProviderWith
@@ -397,7 +415,7 @@ type OpenAICompatibleProviderTests() =
         Assert.AreEqual("END", body.RootElement.GetProperty("stop").[0].GetString())
         Assert.IsFalse(fst (body.RootElement.TryGetProperty("stream_options")))
         Assert.AreEqual("Hello", result.Content)
-        Assert.AreEqual("stop", result.FinishReason)
+        Assert.AreEqual(ProviderFinishReason.Stop, result.FinishReason)
 
     [<TestMethod>]
     [<DataRow("")>]
@@ -443,17 +461,17 @@ type OpenAICompatibleProviderTests() =
     member _.MapsHttpFailuresToCanonicalCategories() : Task =
         (task {
             let cases =
-                [ 400, PlatformErrorCategory.InvalidInput, false
-                  401, PlatformErrorCategory.PermissionDenied, false
-                  403, PlatformErrorCategory.PermissionDenied, false
-                  404, PlatformErrorCategory.PermanentDependency, false
-                  408, PlatformErrorCategory.ResourceExhausted, true
-                  422, PlatformErrorCategory.InvalidInput, false
-                  429, PlatformErrorCategory.ResourceExhausted, true
-                  500, PlatformErrorCategory.TransientDependency, true
-                  503, PlatformErrorCategory.TransientDependency, true ]
+                [ 400, PlatformErrorCategory.InvalidInput, ProviderErrorCategory.InvalidRequest, false
+                  401, PlatformErrorCategory.PermissionDenied, ProviderErrorCategory.Authentication, false
+                  403, PlatformErrorCategory.PermissionDenied, ProviderErrorCategory.Authorization, false
+                  404, PlatformErrorCategory.InvalidInput, ProviderErrorCategory.InvalidRequest, false
+                  408, PlatformErrorCategory.TransientDependency, ProviderErrorCategory.Timeout, true
+                  422, PlatformErrorCategory.InvalidInput, ProviderErrorCategory.ContentRejection, false
+                  429, PlatformErrorCategory.ResourceExhausted, ProviderErrorCategory.RateLimit, true
+                  500, PlatformErrorCategory.TransientDependency, ProviderErrorCategory.ServerFailure, true
+                  503, PlatformErrorCategory.TransientDependency, ProviderErrorCategory.Overload, true ]
 
-            for statusCode, expectedCategory, expectedRetryable in cases do
+            for statusCode, expectedCategory, expectedProviderCategory, expectedRetryable in cases do
                 let handler =
                     new StubHttpMessageHandler(fun _ ->
                         let response = new HttpResponseMessage(enum<HttpStatusCode> statusCode)
@@ -478,7 +496,9 @@ type OpenAICompatibleProviderTests() =
                             CancellationToken.None)
 
                 Assert.AreEqual(expectedCategory, failure.Category, $"HTTP {statusCode}")
+                Assert.AreEqual(Some expectedProviderCategory, failure.ProviderCategory, $"HTTP {statusCode}")
                 Assert.AreEqual(expectedRetryable, failure.Retryable, $"HTTP {statusCode}")
+                Assert.IsFalse(failure.Message.Contains("provider failure"))
         }
         :> Task)
 
@@ -645,8 +665,8 @@ type AnthropicProviderTests() =
         Assert.AreEqual("user", body.RootElement.GetProperty("messages").[0].GetProperty("role").GetString())
         Assert.AreEqual("END", body.RootElement.GetProperty("stop_sequences").[0].GetString())
         Assert.AreEqual("Hello world", result.Content)
-        Assert.AreEqual("length", result.FinishReason)
-        Assert.AreEqual(Some 15, result.TokensUsed)
+        Assert.AreEqual(ProviderFinishReason.Length, result.FinishReason)
+        Assert.AreEqual(ProviderUsage.Full(10, 5), result.Usage)
 
     [<TestMethod>]
     member _.StreamsTextAndAggregatesUsage() =
@@ -689,11 +709,12 @@ type AnthropicProviderTests() =
             |> _.Result
 
         Assert.AreEqual("Hello world", result.Content)
-        Assert.AreEqual("stop", result.FinishReason)
-        Assert.AreEqual(Some 8, result.TokensUsed)
+        Assert.AreEqual(ProviderFinishReason.Stop, result.FinishReason)
+        Assert.AreEqual(ProviderUsage.Full(5, 3), result.Usage)
         CollectionAssert.AreEqual([| "Hello"; " world"; "" |], chunks |> Seq.map _.Delta |> Seq.toArray)
-        Assert.AreEqual(Some "stop", chunks.[2].FinishReason)
-        Assert.AreEqual(Some 8, chunks.[2].TokensUsed)
+        Assert.AreEqual(Some(ProviderStreamTermination.Completed ProviderFinishReason.Stop), chunks.[2].Termination)
+
+        Assert.AreEqual(ProviderUsage.Full(5, 3), chunks.[2].Usage)
 
 [<TestClass>]
 type VllmConfigTests() =

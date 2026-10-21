@@ -28,7 +28,7 @@ module private ScriptedProvider =
         let responses = Queue<string>(responses)
 
         LlmProvider.create (fun () -> "scripted") (fun _ _ _ _ ->
-            Task.FromResult(CompletionResult.create (responses.Dequeue()) "stop" None None))
+            Task.FromResult(CompletionResult.text (responses.Dequeue()) ProviderFinishReason.Stop ProviderUsage.None))
 
 module private TestOrchestrator =
     let create config parse =
@@ -98,7 +98,7 @@ type OrchestratorObservabilityTests() =
         let provider =
             LlmProvider.create (fun () -> "capturing") (fun correlation _ _ _ ->
                 observed.Add correlation
-                Task.FromResult(CompletionResult.create "done" "stop" None None))
+                Task.FromResult(CompletionResult.text "done" ProviderFinishReason.Stop ProviderUsage.None))
 
         let agent =
             TestOrchestrator.create (config provider [] EventBus.none) (fun response -> [ Respond response ])

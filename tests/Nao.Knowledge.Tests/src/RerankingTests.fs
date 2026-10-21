@@ -1532,13 +1532,7 @@ type RerankingTests() =
                 let response = responses.Value |> List.head
                 responses.Value <- responses.Value |> List.tail
 
-                Task.FromResult(
-                    { Content = response
-                      FinishReason = "stop"
-                      TokensUsed = Some 20
-                      Usage = None }
-                    : CompletionResult
-                ))
+                Task.FromResult(CompletionResult.text response ProviderFinishReason.Stop (ProviderUsage.aggregate 20)))
 
         let adapter =
             KnowledgeGroundedGenerationAdapter.create
@@ -1590,13 +1584,7 @@ type RerankingTests() =
                 let response = responses.Value |> List.head
                 responses.Value <- responses.Value |> List.tail
 
-                Task.FromResult(
-                    { Content = response
-                      FinishReason = "stop"
-                      TokensUsed = Some 30
-                      Usage = None }
-                    : CompletionResult
-                ))
+                Task.FromResult(CompletionResult.text response ProviderFinishReason.Stop (ProviderUsage.aggregate 30)))
 
         let adapter =
             KnowledgeGroundedGenerationAdapter.create
@@ -1692,13 +1680,7 @@ type RerankingTests() =
 
         let provider =
             LlmProvider.create (fun () -> "production-qualification-test") (fun _ _ _ _ ->
-                Task.FromResult(
-                    { Content = response
-                      FinishReason = "stop"
-                      TokensUsed = Some 30
-                      Usage = Some { InputTokens = 20; OutputTokens = 10 } }
-                    : CompletionResult
-                ))
+                Task.FromResult(CompletionResult.text response ProviderFinishReason.Stop (ProviderUsage.full 20 10)))
 
         let generationDescriptor =
             KnowledgeGenerationAdapterDescriptor.create
@@ -1819,12 +1801,12 @@ type RerankingTests() =
             let provider =
                 LlmProvider.create (fun () -> "grounded-test") (fun _ _ _ _ ->
                     Task.FromResult(
-                        { Content =
+                        CompletionResult.text
                             """{"status":"insufficient","reason":"context-insufficient","explanation":"More evidence is required."}"""
-                          FinishReason = "stop"
-                          TokensUsed = tokensUsed
-                          Usage = None }
-                        : CompletionResult
+                            ProviderFinishReason.Stop
+                            (tokensUsed
+                             |> Option.map ProviderUsage.aggregate
+                             |> Option.defaultValue ProviderUsage.None)
                     ))
 
             KnowledgeGroundedGenerationAdapter.create
@@ -1963,13 +1945,7 @@ type RerankingTests() =
                 capturedSystem <- conversation.Head.Content
                 capturedRequest <- conversation[1].Content
 
-                Task.FromResult(
-                    { Content = response
-                      FinishReason = "stop"
-                      TokensUsed = Some 120
-                      Usage = Some { InputTokens = 100; OutputTokens = 20 } }
-                    : CompletionResult
-                ))
+                Task.FromResult(CompletionResult.text response ProviderFinishReason.Stop (ProviderUsage.full 100 20)))
 
         let config =
             KnowledgeLlmClaimSupportConfig.create
@@ -2024,13 +2000,7 @@ type RerankingTests() =
                 let response = responses.Value.Head
                 responses.Value <- responses.Value.Tail
 
-                Task.FromResult(
-                    { Content = response
-                      FinishReason = "stop"
-                      TokensUsed = Some 10
-                      Usage = Some { InputTokens = 8; OutputTokens = 2 } }
-                    : CompletionResult
-                ))
+                Task.FromResult(CompletionResult.text response ProviderFinishReason.Stop (ProviderUsage.full 8 2)))
 
         let config =
             KnowledgeLlmClaimSupportConfig.create
@@ -2067,13 +2037,7 @@ type RerankingTests() =
 
         let invalidProvider =
             LlmProvider.create (fun () -> "invalid-claim-support-test") (fun _ _ _ _ ->
-                Task.FromResult(
-                    { Content = "not-json"
-                      FinishReason = "stop"
-                      TokensUsed = Some 10
-                      Usage = Some { InputTokens = 8; OutputTokens = 2 } }
-                    : CompletionResult
-                ))
+                Task.FromResult(CompletionResult.text "not-json" ProviderFinishReason.Stop (ProviderUsage.full 8 2)))
 
         let invalidEvaluator =
             KnowledgeLlmClaimSupportEvaluator.create invalidProvider (CorrelationContext.root ()) config

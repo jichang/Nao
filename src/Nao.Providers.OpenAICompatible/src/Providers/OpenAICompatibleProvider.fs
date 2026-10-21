@@ -62,7 +62,16 @@ let createWithHandler
     // Parse one streamed SSE JSON object into (text delta, finish reason, total tokens).
     // Any of the three may be absent in a given chunk (deltas carry text; the penultimate
     // chunk carries finish_reason; an optional trailing chunk carries usage).
-    let parseStreamChunk (json: string) : (string * string option * int option) =
+    let extensions (response: OpenAIChatResponseDto) =
+        [ "openai.id", response.Id; "openai.model", response.Model ]
+        |> List.choose (fun (key, value) ->
+            if String.IsNullOrWhiteSpace value then
+                None
+            else
+                Some(key, value))
+        |> Map.ofList
+
+    let parseStreamChunk (json: string) : (string * string option * int option * Map<string, string>) =
         let response = OpenAIChatDto.deserializeResponse json
 
         if isNull (box response) then
@@ -98,7 +107,7 @@ let createWithHandler
             else
                 raise (JsonException("usage.total_tokens is required when usage is present."))
 
-        delta, finish, tokens
+        delta, finish, tokens, extensions response
 
     let parseResponse (json: string) : CompletionResult =
         try
@@ -127,9 +136,14 @@ let createWithHandler
                     raise (JsonException("usage.total_tokens is required when usage is present."))
 
             { Content = choice.Message.Content
-              FinishReason = choice.FinishReason
-              TokensUsed = totalTokens
-              Usage = None }
+              FinishReason = ProviderFinishReason.parse choice.FinishReason
+              Usage =
+                totalTokens
+                |> Option.map ProviderUsage.aggregate
+                |> Option.defaultValue ProviderUsage.None
+              ToolCalls = []
+              StructuredOutputJson = None
+              Extensions = extensions response }
         with ex ->
             PlatformFailure.fromException PlatformFailureBoundary.Provider None ex
             |> PlatformFailure.raiseException
@@ -148,16 +162,16 @@ let createWithHandler
                 let content = new StringContent(body, Encoding.UTF8, "application/json")
 
                 let! response = client.PostAsync(chatUrl, content, cancellationToken)
-                let! responseBody = response.Content.ReadAsStringAsync(cancellationToken)
 
                 if not response.IsSuccessStatusCode then
                     return
                         PlatformFailure.fromHttpStatus
                             None
                             (int response.StatusCode)
-                            (sprintf "Provider returned HTTP %d: %s" (int response.StatusCode) responseBody)
+                            (sprintf "Provider returned HTTP %d." (int response.StatusCode))
                         |> PlatformFailure.raiseException
                 else
+                    let! responseBody = response.Content.ReadAsStringAsync(cancellationToken)
                     return parseResponse responseBody
             with
             | :? OperationCanceledException as error when cancellationToken.IsCancellationRequested ->
@@ -176,6 +190,8 @@ let createWithHandler
         (cancellationToken: CancellationToken)
         : Task<CompletionResult> =
         task {
+            let mutable emitted = false
+
             try
                 let body = buildRequestBody conversation options true
                 use request = new HttpRequestMessage(HttpMethod.Post, chatUrl)
@@ -186,13 +202,11 @@ let createWithHandler
                 let! response = client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
 
                 if not response.IsSuccessStatusCode then
-                    let! errorBody = response.Content.ReadAsStringAsync(cancellationToken)
-
                     return
                         PlatformFailure.fromHttpStatus
                             None
                             (int response.StatusCode)
-                            (sprintf "Provider returned HTTP %d: %s" (int response.StatusCode) errorBody)
+                            (sprintf "Provider returned HTTP %d." (int response.StatusCode))
                         |> PlatformFailure.raiseException
                 else
                     use! responseStream = response.Content.ReadAsStreamAsync(cancellationToken)
@@ -201,6 +215,7 @@ let createWithHandler
                     let mutable finishReason = None
                     let mutable tokens = None
                     let mutable reading = true
+                    let mutable responseExtensions = Map.empty
 
                     while reading do
                         let! line = reader.ReadLineAsync(cancellationToken)
@@ -216,7 +231,13 @@ let createWithHandler
                                 if payload = "[DONE]" then
                                     reading <- false
                                 elif payload <> "" then
-                                    let delta, finish, tk = parseStreamChunk payload
+                                    let delta, finish, tk, chunkExtensions = parseStreamChunk payload
+
+                                    responseExtensions <-
+                                        Map.fold
+                                            (fun state key value -> Map.add key value state)
+                                            responseExtensions
+                                            chunkExtensions
 
                                     match finish with
                                     | Some reason -> finishReason <- Some reason
@@ -227,37 +248,53 @@ let createWithHandler
                                     | None -> ()
 
                                     if delta <> "" then
+                                        emitted <- true
                                         builder.Append(delta) |> ignore
 
                                         onChunk
                                             { Delta = delta
-                                              FinishReason = None
-                                              TokensUsed = None
-                                              Usage = None }
+                                              Termination = None
+                                              Usage = ProviderUsage.None
+                                              ToolCalls = []
+                                              StructuredOutputJson = None
+                                              Extensions = chunkExtensions }
 
                     let finishReason =
                         finishReason
                         |> Option.defaultWith (fun () ->
                             raise (JsonException("The stream ended without a finish_reason.")))
+                        |> ProviderFinishReason.parse
+
+                    let usage =
+                        tokens
+                        |> Option.map ProviderUsage.aggregate
+                        |> Option.defaultValue ProviderUsage.None
 
                     onChunk
                         { Delta = ""
-                          FinishReason = Some finishReason
-                          TokensUsed = tokens
-                          Usage = None }
+                          Termination = Some(ProviderStreamTermination.Completed finishReason)
+                          Usage = usage
+                          ToolCalls = []
+                          StructuredOutputJson = None
+                          Extensions = responseExtensions }
 
                     return
                         { Content = builder.ToString()
                           FinishReason = finishReason
-                          TokensUsed = tokens
-                          Usage = None }
+                          Usage = usage
+                          ToolCalls = []
+                          StructuredOutputJson = None
+                          Extensions = responseExtensions }
             with
             | :? OperationCanceledException as error when cancellationToken.IsCancellationRequested ->
                 return raise error
             | ex ->
-                return
-                    PlatformFailure.fromException PlatformFailureBoundary.Provider None ex
-                    |> PlatformFailure.raiseException
+                let failure = PlatformFailure.fromException PlatformFailureBoundary.Provider None ex
+
+                if emitted then
+                    onChunk (CompletionChunk.partialFailure failure)
+
+                return failure |> PlatformFailure.raiseException
         }
 
     { Name = providerName

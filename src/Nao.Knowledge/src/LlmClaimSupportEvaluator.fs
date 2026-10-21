@@ -312,17 +312,10 @@ Copy claim and citation IDs exactly; never invent IDs.
                         calls <- calls + 1
 
                         match completion.Usage with
-                        | None -> invalidOp "Claim-support provider must report input and output token usage."
-                        | Some usage ->
-                            if usage.InputTokens < 0 || usage.OutputTokens < 0 then
-                                invalidOp "Claim-support provider reported negative token usage."
-
-                            match completion.TokensUsed with
-                            | Some total when total = usage.InputTokens + usage.OutputTokens -> ()
-                            | _ -> invalidOp "Claim-support provider reported inconsistent token usage."
-
-                            inputTokens <- inputTokens + usage.InputTokens
-                            outputTokens <- outputTokens + usage.OutputTokens
+                        | ProviderUsage.Full(input, output) ->
+                            inputTokens <- inputTokens + input
+                            outputTokens <- outputTokens + output
+                        | _ -> invalidOp "Claim-support provider must report full input and output token usage."
 
                         try
                             result <-

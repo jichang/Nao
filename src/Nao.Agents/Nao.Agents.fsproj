@@ -8,16 +8,17 @@
               <Compile Include="src/Core/Identity.fs" />
          <Compile Include="src/Core/Secret.fs" />
          <Compile Include="src/Core/Artifact.fs" />
+           <Compile Include="src/Core/PlatformError.fs" />
     <!-- LLM / message primitives (formerly Nao.Core) -->
     <Compile Include="src/Llm/Role.fs" />
     <Compile Include="src/Llm/Message.fs" />
     <Compile Include="src/Llm/CompletionOptions.fs" />
     <Compile Include="src/Llm/CompletionResult.fs" />
+    <Compile Include="src/Llm/ProviderCapabilities.fs" />
      <Compile Include="src/Llm/LlmProvider.fs" />
      <!-- Core agent and tool contracts -->
     <Compile Include="src/Core/Permission.fs" />
      <Compile Include="src/Governance/PolicyFacts.fs" />
-           <Compile Include="src/Core/PlatformError.fs" />
      <Compile Include="src/Agent/AgentContext.fs" />
      <Compile Include="src/ToolProtocol/ToolSchema.fs" />
      <Compile Include="src/ToolProtocol/ToolCodec.fs" />

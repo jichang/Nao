@@ -59,7 +59,7 @@ type VerificationTests() =
         let provider =
             LlmProvider.create (fun () -> "capturing") (fun actual _conversation _options _ ->
                 observed.Value <- Some actual
-                Task.FromResult(CompletionResult.create "PASS: verified" "stop" None None))
+                Task.FromResult(CompletionResult.text "PASS: verified" ProviderFinishReason.Stop ProviderUsage.None))
 
         let trace =
             Verification.startTrace correlation agentId "input"
@@ -78,7 +78,7 @@ type VerificationTests() =
         let provider =
             LlmProvider.create (fun () -> "capturing") (fun actual _conversation _options _ ->
                 observed.Value <- Some actual
-                Task.FromResult(CompletionResult.create "understood" "stop" None None))
+                Task.FromResult(CompletionResult.text "understood" ProviderFinishReason.Stop ProviderUsage.None))
 
         let result =
             Verification.groundTaskAsync correlation provider CompletionOptions.Default "do the work"

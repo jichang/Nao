@@ -278,11 +278,10 @@ type EvalRunnerTests() =
                 observed.Value <- Some correlation
 
                 Task.FromResult(
-                    { Content = """{"score":5,"reason":"correct"}"""
-                      FinishReason = "stop"
-                      TokensUsed = None
-                      Usage = None }
-                    : CompletionResult
+                    CompletionResult.text
+                        """{"score":5,"reason":"correct"}"""
+                        ProviderFinishReason.Stop
+                        ProviderUsage.None
                 ))
 
         let agent = TestAgents.fixedResponse "42"

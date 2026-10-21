@@ -179,7 +179,7 @@ module KnowledgeGroundedGenerationAdapter =
 
                         providerCalls <- providerCalls + 1
 
-                        match completion.TokensUsed with
+                        match ProviderUsage.total completion.Usage with
                         | None -> outcome <- Some(Error [ KnowledgeGroundedGenerationFailure.MissingTokenUsage ])
                         | Some used ->
                             tokens <- tokens + used

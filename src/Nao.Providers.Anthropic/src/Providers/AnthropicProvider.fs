@@ -28,13 +28,10 @@ let createWithHandler
     let messagesUrl = config.BaseUrl.TrimEnd('/') + "/v1/messages"
 
     let finishReason reason =
-        match reason with
-        | "max_tokens" -> "length"
-        | "tool_use" -> "tool_call"
-        | "end_turn"
-        | "stop_sequence" -> "stop"
-        | value when String.IsNullOrWhiteSpace value -> raise (JsonException("stop_reason must be a non-empty string."))
-        | value -> value
+        try
+            ProviderFinishReason.parse reason
+        with :? ArgumentException as error ->
+            raise (JsonException("stop_reason must be a non-empty string.", error))
 
     let buildRequestBody (conversation: Conversation) (options: CompletionOptions) streaming =
         let systemPrompt =
@@ -77,6 +74,15 @@ let createWithHandler
 
         usage.InputTokens.Value + usage.OutputTokens.Value
 
+    let extensions id model =
+        [ "anthropic.id", id; "anthropic.model", model ]
+        |> List.choose (fun (key, value) ->
+            if String.IsNullOrWhiteSpace value then
+                None
+            else
+                Some(key, value))
+        |> Map.ofList
+
     let parseResponse (json: string) =
         try
             let response = AnthropicDto.deserializeResponse json
@@ -100,8 +106,10 @@ let createWithHandler
 
             { Content = content
               FinishReason = finishReason response.StopReason
-              TokensUsed = Some(responseTokens response.Usage)
-              Usage = None }
+              Usage = ProviderUsage.full response.Usage.InputTokens.Value response.Usage.OutputTokens.Value
+              ToolCalls = []
+              StructuredOutputJson = None
+              Extensions = extensions response.Id response.Model }
         with ex ->
             PlatformFailure.fromException PlatformFailureBoundary.Provider None ex
             |> PlatformFailure.raiseException
@@ -121,7 +129,7 @@ let createWithHandler
             then
                 raise (JsonException("message_start requires message.usage.input_tokens."))
 
-            "", None, Some event.Message.Usage.InputTokens.Value, None
+            "", None, Some event.Message.Usage.InputTokens.Value, None, extensions event.Message.Id event.Message.Model
         | "content_block_delta" ->
             if
                 isNull event.Delta
@@ -130,7 +138,7 @@ let createWithHandler
             then
                 raise (JsonException("content_block_delta requires a text_delta with text."))
 
-            event.Delta.Text, None, None, None
+            event.Delta.Text, None, None, None, Map.empty
         | "message_delta" ->
             if
                 isNull event.Delta
@@ -139,8 +147,8 @@ let createWithHandler
             then
                 raise (JsonException("message_delta requires delta.stop_reason and usage.output_tokens."))
 
-            "", Some(finishReason event.Delta.StopReason), None, Some event.Usage.OutputTokens.Value
-        | _ -> "", None, None, None
+            "", Some(finishReason event.Delta.StopReason), None, Some event.Usage.OutputTokens.Value, Map.empty
+        | _ -> "", None, None, None, Map.empty
 
     let providerName () = sprintf "Anthropic(%s)" config.Model
 
@@ -156,16 +164,16 @@ let createWithHandler
                     new StringContent(buildRequestBody conversation options false, Encoding.UTF8, "application/json")
 
                 let! response = client.PostAsync(messagesUrl, content, cancellationToken)
-                let! responseBody = response.Content.ReadAsStringAsync(cancellationToken)
 
                 if response.IsSuccessStatusCode then
+                    let! responseBody = response.Content.ReadAsStringAsync(cancellationToken)
                     return parseResponse responseBody
                 else
                     return
                         PlatformFailure.fromHttpStatus
                             None
                             (int response.StatusCode)
-                            (sprintf "Provider returned HTTP %d: %s" (int response.StatusCode) responseBody)
+                            (sprintf "Provider returned HTTP %d." (int response.StatusCode))
                         |> PlatformFailure.raiseException
             with
             | :? OperationCanceledException as error when cancellationToken.IsCancellationRequested ->
@@ -184,6 +192,8 @@ let createWithHandler
         (cancellationToken: CancellationToken)
         : Task<CompletionResult> =
         task {
+            let mutable emitted = false
+
             try
                 use request = new HttpRequestMessage(HttpMethod.Post, messagesUrl)
 
@@ -193,22 +203,21 @@ let createWithHandler
                 let! response = client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
 
                 if not response.IsSuccessStatusCode then
-                    let! responseBody = response.Content.ReadAsStringAsync(cancellationToken)
-
                     return
                         PlatformFailure.fromHttpStatus
                             None
                             (int response.StatusCode)
-                            (sprintf "Provider returned HTTP %d: %s" (int response.StatusCode) responseBody)
+                            (sprintf "Provider returned HTTP %d." (int response.StatusCode))
                         |> PlatformFailure.raiseException
                 else
                     use! responseStream = response.Content.ReadAsStreamAsync(cancellationToken)
                     use reader = new System.IO.StreamReader(responseStream)
                     let content = StringBuilder()
-                    let mutable reason = "stop"
+                    let mutable reason = ProviderFinishReason.Stop
                     let mutable inputTokens = 0
                     let mutable outputTokens = 0
                     let mutable reading = true
+                    let mutable responseExtensions = Map.empty
 
                     while reading do
                         let! line = reader.ReadLineAsync(cancellationToken)
@@ -219,42 +228,58 @@ let createWithHandler
                             let trimmed = line.Trim()
 
                             if trimmed.StartsWith("data:") then
-                                let delta, eventReason, eventInputTokens, eventOutputTokens =
+                                let delta, eventReason, eventInputTokens, eventOutputTokens, eventExtensions =
                                     parseStreamEvent (trimmed.Substring(5).Trim())
+
+                                responseExtensions <-
+                                    Map.fold
+                                        (fun state key value -> Map.add key value state)
+                                        responseExtensions
+                                        eventExtensions
 
                                 eventReason |> Option.iter (fun value -> reason <- value)
                                 eventInputTokens |> Option.iter (fun value -> inputTokens <- value)
                                 eventOutputTokens |> Option.iter (fun value -> outputTokens <- value)
 
                                 if delta <> "" then
+                                    emitted <- true
                                     content.Append(delta) |> ignore
 
                                     onChunk
                                         { Delta = delta
-                                          FinishReason = None
-                                          TokensUsed = None
-                                          Usage = None }
+                                          Termination = None
+                                          Usage = ProviderUsage.None
+                                          ToolCalls = []
+                                          StructuredOutputJson = None
+                                          Extensions = eventExtensions }
 
-                    let tokens = Some(inputTokens + outputTokens)
+                    let usage = ProviderUsage.full inputTokens outputTokens
 
                     onChunk
                         { Delta = ""
-                          FinishReason = Some reason
-                          TokensUsed = tokens
-                          Usage = None }
+                          Termination = Some(ProviderStreamTermination.Completed reason)
+                          Usage = usage
+                          ToolCalls = []
+                          StructuredOutputJson = None
+                          Extensions = responseExtensions }
 
                     return
                         { Content = content.ToString()
                           FinishReason = reason
-                          TokensUsed = tokens
-                          Usage = None }
+                          Usage = usage
+                          ToolCalls = []
+                          StructuredOutputJson = None
+                          Extensions = responseExtensions }
             with
             | :? OperationCanceledException as error when cancellationToken.IsCancellationRequested ->
                 return raise error
             | ex ->
-                return
-                    PlatformFailure.fromException PlatformFailureBoundary.Provider None ex
-                    |> PlatformFailure.raiseException
+                let failure = PlatformFailure.fromException PlatformFailureBoundary.Provider None ex
+
+                if emitted then
+                    onChunk (CompletionChunk.partialFailure failure)
+
+                return failure |> PlatformFailure.raiseException
         }
 
     { Name = providerName

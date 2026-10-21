@@ -71,7 +71,7 @@ type ContextCompactionTests() =
         let provider =
             LlmProvider.create (fun () -> "capturing") (fun actual _conversation _options _ ->
                 observed.Value <- Some actual
-                Task.FromResult(CompletionResult.create "summary" "stop" None None))
+                Task.FromResult(CompletionResult.text "summary" ProviderFinishReason.Stop ProviderUsage.None))
 
         let conversation = [ for _ in 1..10 -> makeMsg User (String.replicate 40 "x") ]
         let strategy = CompactionStrategy.Summarize(provider, CompletionOptions.Default)

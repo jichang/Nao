@@ -60,19 +60,20 @@ type PlatformFailureTests() =
     [<TestMethod>]
     member _.MapsProviderHttpStatusesConsistently() =
         let cases =
-            [ 400, PlatformErrorCategory.InvalidInput, false
-              401, PlatformErrorCategory.PermissionDenied, false
-              403, PlatformErrorCategory.PermissionDenied, false
-              404, PlatformErrorCategory.PermanentDependency, false
-              408, PlatformErrorCategory.ResourceExhausted, true
-              422, PlatformErrorCategory.InvalidInput, false
-              429, PlatformErrorCategory.ResourceExhausted, true
-              500, PlatformErrorCategory.TransientDependency, true
-              503, PlatformErrorCategory.TransientDependency, true ]
+            [ 400, PlatformErrorCategory.InvalidInput, ProviderErrorCategory.InvalidRequest, false
+              401, PlatformErrorCategory.PermissionDenied, ProviderErrorCategory.Authentication, false
+              403, PlatformErrorCategory.PermissionDenied, ProviderErrorCategory.Authorization, false
+              404, PlatformErrorCategory.InvalidInput, ProviderErrorCategory.InvalidRequest, false
+              408, PlatformErrorCategory.TransientDependency, ProviderErrorCategory.Timeout, true
+              422, PlatformErrorCategory.InvalidInput, ProviderErrorCategory.ContentRejection, false
+              429, PlatformErrorCategory.ResourceExhausted, ProviderErrorCategory.RateLimit, true
+              500, PlatformErrorCategory.TransientDependency, ProviderErrorCategory.ServerFailure, true
+              503, PlatformErrorCategory.TransientDependency, ProviderErrorCategory.Overload, true ]
 
-        for status, expectedCategory, expectedRetryable in cases do
+        for status, expectedCategory, expectedProviderCategory, expectedRetryable in cases do
             let failure = PlatformFailure.fromHttpStatus None status "provider failed"
             Assert.AreEqual(expectedCategory, failure.Category)
+            Assert.AreEqual(Some expectedProviderCategory, failure.ProviderCategory)
             Assert.AreEqual(expectedRetryable, failure.Retryable)
 
     [<TestMethod>]

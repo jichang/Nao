@@ -41,9 +41,13 @@ module LlmProvider =
             task {
                 let! result = provider.CompleteAsync correlation conversation options cancellationToken
 
-                onChunk (
-                    CompletionChunk.create result.Content (Some result.FinishReason) result.TokensUsed result.Usage
-                )
+                onChunk
+                    { Delta = result.Content
+                      Termination = Some(ProviderStreamTermination.Completed result.FinishReason)
+                      Usage = result.Usage
+                      ToolCalls = result.ToolCalls
+                      StructuredOutputJson = result.StructuredOutputJson
+                      Extensions = result.Extensions }
 
                 return result
             }

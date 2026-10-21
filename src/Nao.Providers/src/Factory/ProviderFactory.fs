@@ -74,7 +74,32 @@ module ProviderFactory =
     let private redactResult (result: CompletionResult) =
         { result with
             Content = SecretRedaction.redact result.Content
-            FinishReason = SecretRedaction.redact result.FinishReason }
+            FinishReason =
+                match result.FinishReason with
+                | ProviderFinishReason.Other value -> ProviderFinishReason.Other(SecretRedaction.redact value)
+                | value -> value
+            ToolCalls =
+                result.ToolCalls
+                |> List.map (fun call ->
+                    { call with
+                        Id = SecretRedaction.redact call.Id
+                        Name = SecretRedaction.redact call.Name
+                        ArgumentsJson = SecretRedaction.redact call.ArgumentsJson })
+            StructuredOutputJson = result.StructuredOutputJson |> Option.map SecretRedaction.redact
+            Extensions = result.Extensions |> Map.map (fun _ -> SecretRedaction.redact) }
+
+    let private redactChunk (streamRedactor: SecretRedactionStream) (chunk: CompletionChunk) =
+        { chunk with
+            Delta = streamRedactor.Push(chunk.Delta, chunk.Termination.IsSome)
+            ToolCalls =
+                chunk.ToolCalls
+                |> List.map (fun call ->
+                    { call with
+                        Id = SecretRedaction.redact call.Id
+                        Name = SecretRedaction.redact call.Name
+                        ArgumentsJson = SecretRedaction.redact call.ArgumentsJson })
+            StructuredOutputJson = chunk.StructuredOutputJson |> Option.map SecretRedaction.redact
+            Extensions = chunk.Extensions |> Map.map (fun _ -> SecretRedaction.redact) }
 
     let private redactingProvider (provider: LlmProvider) =
         let protect operation =
@@ -108,17 +133,13 @@ module ProviderFactory =
                                 correlation
                                 (redactConversation conversation)
                                 options
-                                (fun chunk ->
-                                    onChunk
-                                        { chunk with
-                                            Delta = streamRedactor.Push(chunk.Delta, chunk.FinishReason.IsSome)
-                                            FinishReason = chunk.FinishReason |> Option.map SecretRedaction.redact })
+                                (redactChunk streamRedactor >> onChunk)
                                 cancellationToken
 
                         let trailing = streamRedactor.Flush()
 
                         if trailing.Length > 0 then
-                            onChunk (CompletionChunk.create trailing None None None)
+                            onChunk (CompletionChunk.text trailing None ProviderUsage.None)
 
                         return result
                     }))
@@ -207,4 +228,13 @@ module ProviderFactory =
                 return
                     { Provider = operationScopedProvider authorization reference secretProvider providerType
                       CredentialReference = Some reference }
+        }
+
+    let activateEndpointAsync secretProvider authorization providerType endpointConfiguration cancellationToken =
+        task {
+            let! activation = activateAsync secretProvider authorization providerType cancellationToken
+
+            return
+                ProviderEndpoint.fromConfiguration activation.Provider endpointConfiguration,
+                activation.CredentialReference
         }

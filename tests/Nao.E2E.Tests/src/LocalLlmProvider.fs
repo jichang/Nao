@@ -31,5 +31,8 @@ module LocalLlmProvider =
                         sprintf "I can help with that. You said: %s" lastMessage
 
                 Task.FromResult(
-                    CompletionResult.create response "stop" (Some(lastMessage.Length + response.Length)) None
+                    CompletionResult.text
+                        response
+                        ProviderFinishReason.Stop
+                        (ProviderUsage.aggregate (lastMessage.Length + response.Length))
                 ))

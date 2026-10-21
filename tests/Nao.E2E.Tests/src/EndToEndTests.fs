@@ -145,7 +145,7 @@ type EndToEndProviderTests() =
                 System.Threading.CancellationToken.None
 
         let r = result.Result
-        Assert.AreEqual("stop", r.FinishReason)
+        Assert.AreEqual(ProviderFinishReason.Stop, r.FinishReason)
         Assert.IsTrue(r.Content.Contains("tool"))
         Assert.IsTrue(r.Content.Contains("get_weather"))
 
@@ -180,5 +180,5 @@ type EndToEndProviderTests() =
                 System.Threading.CancellationToken.None)
                 .Result
 
-        Assert.IsTrue(r.TokensUsed.IsSome)
-        Assert.IsTrue(r.TokensUsed.Value > 0)
+        Assert.IsTrue((ProviderUsage.total r.Usage).IsSome)
+        Assert.IsTrue((ProviderUsage.total r.Usage).Value > 0)

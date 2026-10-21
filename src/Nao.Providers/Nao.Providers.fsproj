@@ -8,7 +8,12 @@
   <ItemGroup>
     <Compile Include="src/AssemblyInfo.fs" />
     <Compile Include="src/Factory/ProviderType.fs" />
+    <Compile Include="src/ControlPlane/ProviderEndpoint.fs" />
+    <Compile Include="src/ControlPlane/ProviderRouting.fs" />
+    <Compile Include="src/ControlPlane/ProviderScheduling.fs" />
+    <Compile Include="src/ControlPlane/ProviderResilience.fs" />
     <Compile Include="src/Factory/ProviderFactory.fs" />
+    <Compile Include="src/ControlPlane/ProviderConfigurationControlPlane.fs" />
   </ItemGroup>
 
   <ItemGroup>

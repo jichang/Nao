@@ -25,11 +25,8 @@ module internal RuntimeExecutionBudget =
     let beginLlmCall () =
         current.Value |> Option.bind _.BeginLlmCall()
 
-    let recordLlmUsage usage =
-        let tokens =
-            usage
-            |> Option.map (fun value -> value.InputTokens + value.OutputTokens)
-            |> Option.defaultValue 0
+    let recordLlmUsage (usage: ProviderUsage) =
+        let tokens = usage |> ProviderUsage.total |> Option.defaultValue 0
 
         current.Value |> Option.bind (fun context -> context.RecordLlmUsage(tokens, 0m))
 

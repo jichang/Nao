@@ -22,7 +22,7 @@ module MockSummarizerProvider =
                 // Count messages in the input being summarized
                 let lineCount = lastUserMsg.Split('\n').Length
                 let summary = sprintf "Summarized %d exchanges about various topics." lineCount
-                Task.FromResult(CompletionResult.create summary "stop" (Some 20) None))
+                Task.FromResult(CompletionResult.text summary ProviderFinishReason.Stop (ProviderUsage.aggregate 20)))
 
 [<TestClass>]
 type SummarizerTests() =
@@ -143,7 +143,7 @@ type MemoryConsolidationTests() =
                       "private-value" ] do
                     Assert.IsFalse(prompt.Contains excluded, sprintf "Summary prompt leaked %s." excluded)
 
-                Task.FromResult(CompletionResult.create "own summary" "stop" None None))
+                Task.FromResult(CompletionResult.text "own summary" ProviderFinishReason.Stop ProviderUsage.None))
 
         let strategies =
             [ ConsolidationStrategy.Deduplicate
@@ -204,7 +204,7 @@ type MemoryConsolidationTests() =
         let provider =
             LlmProvider.create (fun () -> "capturing") (fun actual _conversation _options _ ->
                 observed.Value <- Some actual
-                Task.FromResult(CompletionResult.create "consolidated" "stop" None None))
+                Task.FromResult(CompletionResult.text "consolidated" ProviderFinishReason.Stop ProviderUsage.None))
 
         let strategy = ConsolidationStrategy.Summarize(provider, CompletionOptions.Default)
 

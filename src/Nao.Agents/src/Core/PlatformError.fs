@@ -19,9 +19,23 @@ type PlatformErrorCategory =
     | InternalFailure
     | Cancelled
 
+[<RequireQualifiedAccess>]
+type ProviderErrorCategory =
+    | Authentication
+    | Authorization
+    | Quota
+    | RateLimit
+    | Timeout
+    | Overload
+    | InvalidRequest
+    | ContentRejection
+    | Protocol
+    | ServerFailure
+
 /// Structured failure representation shared by versioned platform boundaries.
 type PlatformFailure =
     { Category: PlatformErrorCategory
+      ProviderCategory: ProviderErrorCategory option
       Message: string
       Retryable: bool
       CorrelationId: string option }
@@ -42,25 +56,32 @@ type PlatformFailureBoundary =
 module PlatformFailure =
     let create category message retryable correlationId : PlatformFailure =
         { Category = category
+          ProviderCategory = None
           Message = SecretRedaction.redact message
           Retryable = retryable
           CorrelationId = correlationId }
 
     /// Classify an HTTP response consistently at a provider boundary.
     let fromHttpStatus correlationId statusCode message =
-        let category, retryable =
+        let category, providerCategory, retryable =
             match statusCode with
             | 400
-            | 422 -> PlatformErrorCategory.InvalidInput, false
-            | 401
-            | 403 -> PlatformErrorCategory.PermissionDenied, false
-            | 408
-            | 429 -> PlatformErrorCategory.ResourceExhausted, true
-            | 404 -> PlatformErrorCategory.PermanentDependency, false
-            | status when status >= 500 -> PlatformErrorCategory.TransientDependency, true
-            | _ -> PlatformErrorCategory.PermanentDependency, false
+            | 404 -> PlatformErrorCategory.InvalidInput, ProviderErrorCategory.InvalidRequest, false
+            | 401 -> PlatformErrorCategory.PermissionDenied, ProviderErrorCategory.Authentication, false
+            | 403 -> PlatformErrorCategory.PermissionDenied, ProviderErrorCategory.Authorization, false
+            | 408 -> PlatformErrorCategory.TransientDependency, ProviderErrorCategory.Timeout, true
+            | 422 -> PlatformErrorCategory.InvalidInput, ProviderErrorCategory.ContentRejection, false
+            | 429 -> PlatformErrorCategory.ResourceExhausted, ProviderErrorCategory.RateLimit, true
+            | 503 -> PlatformErrorCategory.TransientDependency, ProviderErrorCategory.Overload, true
+            | status when status >= 500 ->
+                PlatformErrorCategory.TransientDependency, ProviderErrorCategory.ServerFailure, true
+            | _ -> PlatformErrorCategory.PermanentDependency, ProviderErrorCategory.Protocol, false
 
-        create category message retryable correlationId
+        { Category = category
+          ProviderCategory = Some providerCategory
+          Message = SecretRedaction.redact message
+          Retryable = retryable
+          CorrelationId = correlationId }
 
     /// Raise a structured failure through a task-based exception channel.
     let raiseException failure =
@@ -92,4 +113,18 @@ module PlatformFailure =
                     | PlatformFailureBoundary.Tool
                     | PlatformFailureBoundary.Host -> PlatformErrorCategory.InternalFailure, false
 
-            create category error.Message retryable correlationId
+            let providerCategory =
+                if boundary <> PlatformFailureBoundary.Provider then
+                    None
+                else
+                    match error with
+                    | :? TimeoutException
+                    | :? TaskCanceledException -> Some ProviderErrorCategory.Timeout
+                    | :? JsonException -> Some ProviderErrorCategory.Protocol
+                    | :? ArgumentException -> Some ProviderErrorCategory.InvalidRequest
+                    | :? HttpRequestException
+                    | :? IOException -> Some ProviderErrorCategory.ServerFailure
+                    | _ -> Some ProviderErrorCategory.ServerFailure
+
+            { create category error.Message retryable correlationId with
+                ProviderCategory = providerCategory }

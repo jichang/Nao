@@ -30,7 +30,8 @@ usage, vector cardinality, dimensions, and finite values are validated across th
 embedding executor. HTTP error bodies are not copied into platform failures because they may
 echo source content. Callers dispose provider capabilities when their HTTP lifetime ends.
 
-Applications should not select a provider by hard-coded model-name heuristics. A production control plane needs explicit capability metadata for:
+Applications must not select a provider by hard-coded model-name heuristics.
+`ProviderCapabilityObservation` records a versioned configured or probed snapshot for:
 
 - Chat and streaming
 - Tool calling and structured output
@@ -41,35 +42,131 @@ Applications should not select a provider by hard-coded model-name heuristics. A
 - Quality, latency, and cost tiers
 - Health, quota, and maintenance state
 
+Every capability is explicitly `Supported`, `Unsupported`, or `Unknown`; omitted capabilities are
+invalid. Context-window size and usage-reporting fidelity remain independently unknown when an
+endpoint cannot establish them. `ProviderModelMetadata` records quality tier, latency class,
+residency regions, privacy class, caller-owned pricing, and deprecation state.
+
+`ProviderRequirements` declares required capabilities, minimum context size, and minimum usage
+fidelity. `ProviderCompatibility.evaluate` rejects unknown and unsupported capabilities
+distinctly and also rejects unhealthy, unready, quota-constrained, draining, or retired
+endpoints. Unknown never implies support.
+
+Production hosts activate providers with `ProviderFactory.activateEndpointAsync` and a
+`ProviderEndpointConfiguration`. The configuration may return a fixed validated observation or
+probe the endpoint; model names are never inspected to infer support. `ProviderEndpoint` refreshes
+the observation before invocation and prevents incompatible requests from reaching the adapter.
+Activation and semantic observation changes produce content-free `ProviderCapabilityAudit`
+records before the new observation becomes active.
+
 ## Normalized semantics
 
-Provider adapters should normalize common behavior while preserving provider-specific metadata:
+`CompletionResult` is the provider-independent terminal contract. It contains content, a typed
+`ProviderFinishReason`, normalized `ProviderUsage`, canonical tool calls, optional structured
+output JSON, and an extension map. Common consumers use only these fields and ignore unknown
+extension keys. Adapters preserve actual provider metadata in the extension map instead of adding
+provider-specific fields to the common contract.
 
-- Authentication and authorization errors
-- Quota and rate limits
-- Timeout and overload
-- Invalid requests and content rejection
-- Finish reasons
-- Partial-stream termination
-- Tool calls and structured output
-- Full, partial, aggregate, or unavailable token usage
+`ProviderUsage` records reporting fidelity explicitly:
 
-Shared conformance tests should apply to every adapter.
+- `Full` has separate input and output counts.
+- `Partial` has one or both counts and preserves which values are missing.
+- `Aggregate` has only a total.
+- `None` means the provider reported no usage.
+
+`ProviderUsage.total` returns a value only when a trustworthy total can be calculated. Negative
+counts and a partial report with no counts are invalid. Consumers that require input/output
+accounting, including claim-support evaluation, require `Full` rather than guessing a split.
+
+`ProviderErrorCategory` defines authentication, authorization, quota, rate limit, timeout,
+overload, invalid request, content rejection, protocol, and server failure. Provider-boundary
+`PlatformFailure` values carry this category in addition to the broader platform category and
+their retryable flag. HTTP bodies are never copied into failures because they can echo prompts or
+other sensitive provider content. Generic resilience honors structured retryability and never
+retries cancellation or a normalized permanent failure based on message text.
+
+Streaming has an explicit terminal state. A successful final chunk contains
+`Completed finishReason`. If content was emitted before a protocol or provider failure, the
+adapter first emits `Partial providerErrorCategory` and then raises the normalized failure. A
+partial response therefore cannot resemble successful completion. Caller cancellation is
+re-thrown unchanged; provider or internal timeout is normalized as `Timeout`.
+
+The OpenAI-compatible, Anthropic, and Ollama adapters share conformance assertions proving that
+buffered and streaming calls produce the same terminal content, finish reason, usage, tool calls,
+structured output, and extensions. Contract tests separately cover all usage fidelities, tool
+calls, structured output, extensions, cancellation, timeout, HTTP categories, and partial-stream
+failure.
 
 ## Routing and resilience
 
-The current repository provides retry, circuit-breaker, and fallback primitives. A full model control plane remains planned:
+`ProviderRoutingRequest` is the immutable input to model selection. It identifies a policy version
+and deterministic selection key and combines capability requirements with allowed quality tiers,
+latency classes, privacy classes, residency regions, and optional token-price ceilings. Empty
+constraint sets are invalid rather than meaning unrestricted.
 
-- Capability- and policy-based routing
-- Endpoint pools
-- Per-provider/model concurrency
-- Rate-limit-aware queues
-- Tenant quotas and fair scheduling
-- Cost, latency, quality, privacy, and residency constraints
-- Controlled fallback and endpoint draining
-- Optional request hedging with cost controls
+`ProviderRouter` supports closed static-priority policies and deterministic weighted policies.
+Weighted selection uses a stable SHA-256 score over the policy version, selection key, endpoint,
+and model; it does not depend on input enumeration order or process-randomized hashes. Endpoints
+omitted by a policy are excluded rather than appended as an implicit fallback.
 
-Fallback must preserve mandatory security and capability constraints.
+Every `ProviderRoutingDecision` contains:
+
+- The policy version and selected endpoint/model.
+- The complete ordered list of eligible fallback endpoints.
+- Every considered endpoint and its typed compatibility, availability, quality, latency, privacy,
+  residency, cost, or policy exclusions.
+
+`routeAndRecordAsync` requires the content-free decision audit to complete before returning the
+selection. Every fallback candidate has passed the same mandatory constraints as the primary, so
+fallback cannot weaken privacy, residency, capability, or price requirements.
+
+`ProviderScheduler` applies explicit endpoint, endpoint/model, and tenant concurrency limits after
+routing. Admission queues have total and per-tenant bounds. A tenant cannot consume another
+tenant's configured concurrency or fill the global queue beyond its own queue allowance.
+Round-robin dispatch starts after the most recently admitted tenant, preventing a continuously
+queued tenant from winning each newly available slot. Limited and exhausted endpoints retain
+bounded queued work but dispatch nothing until their structured rate-limit state returns to
+available. Cancellation removes queued work from admission accounting.
+
+Optional hedging is planned by `ProviderHedgePlan`. A bounded policy specifies the maximum number
+of additional requests, delay, and maximum incremental estimated cost. Only already eligible
+routing candidates can be hedged, and candidates that would exceed either bound are omitted.
+
+## Provider resilience and failover
+
+`ProviderCircuitRegistry` isolates circuit state by explicit `ProviderFailureDomain`, not merely by
+provider type. A regional endpoint can open without changing the state of another region, model,
+or endpoint. Circuits admit one half-open probe after their configured interval and only retryable
+provider failures contribute to opening them.
+
+`ProviderRetryBudget` is shared across nested provider operations. It enforces both a maximum
+attempt count and an absolute task deadline, so inner retries cannot reset the outer budget.
+`ProviderResilience.executeAsync` consumes this budget across same-endpoint retries and the
+ordered, constraint-safe fallback endpoints produced by routing.
+
+Each attempt failure explicitly records:
+
+- Its normalized `PlatformFailure`.
+- Optional provider retry-after guidance.
+- Whether no response or a partial response was observed.
+
+Retry delay is the greater of bounded exponential delay and provider guidance. If that delay
+cannot fit inside the task deadline, the executor does not violate the guidance by retrying early;
+it moves to the next eligible endpoint. Permanent failures stop immediately. A partial response
+also stops immediately and returns `PartialResponse`; it is never retried, concatenated with, or
+silently replaced by fallback output.
+
+`ProviderScheduler` has a separate endpoint admission state. Draining prevents new or queued
+admission while allowing leases for in-flight work to finish. Returning the endpoint to active
+resumes bounded queued work.
+
+`ProviderCacheKey` allows only explicitly eligible deterministic completions or embeddings. Keys
+include owner, endpoint, model, operation kind, input digest, and configuration digest.
+`ProviderCache` stores typed values with explicit creation and expiration timestamps. Arbitrary
+chat completion requests cannot be labeled through an unrestricted string operation.
+
+The older generic retry and circuit helpers remain available for non-provider agent operations.
+Provider calls use the structured failure, progress, budget, and failure-domain contracts above.
 
 ## Configuration and secrets
 
@@ -89,9 +186,40 @@ running. The short-lived `SecretValue` wrapper renders as
 `[REDACTED]`. All factory-created providers, including local providers with no credential
 reference, redact secrets already known to the active execution from prompts before transport and
 from buffered results, streaming chunks, finish reasons, and structured failures before returning
-them. Local providers require no secret provider. Provider activation should additionally support
-health validation, last-known-good rollback, controlled reload, audit, and model allow/deny
-policies.
+them. Local providers require no secret provider.
+
+## Provider configuration lifecycle
+
+`ProviderRuntimeConfiguration` is an immutable, versioned deployment configuration containing a
+validated `ProviderType`, capability endpoint configuration, and tenant/workspace model policy.
+Provider URLs must be absolute HTTP or HTTPS endpoints, model identities must be canonical,
+timeouts and provider-specific token limits must be positive, and local reasoning settings must
+be canonical.
+
+`ProviderConfigurationControlPlane` activates a candidate independently and refreshes its
+capability observation before any state change. Activation requires:
+
+- The observed model identity to match the configured model.
+- Healthy and ready endpoint state.
+- Available quota.
+- Active rather than draining or maintenance state.
+
+An invalid candidate is disposed, receives a typed rejection audit, and cannot replace the
+last-known-good configuration. For a valid candidate, the content-free administrative audit must
+complete before the atomic current-version swap.
+
+Reload and rollback are serialized. During the short audit-and-swap boundary, new operations
+wait; already registered operations continue on the endpoint version they acquired. The audit
+identifies affected execution, tenant, workspace, and optional session identities without prompt,
+response, or credential content. The old endpoint remains as the previous known-good version for
+rollback. Endpoints retired by a later reload are disposed only after their in-flight operation
+set reaches zero.
+
+`ProviderModelPolicy` is fail-closed by tenant and workspace. A missing scope rule, denied model,
+or model absent from an explicit allowlist fails before provider invocation. Policy and health
+checks are independent of secret lookup. Hosted providers continue resolving their configured
+secret reference for every operation, so rotation or revocation takes effect without reloading
+unrelated endpoints or sessions.
 
 ## Orleans runtime
 
