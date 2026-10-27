@@ -26,6 +26,8 @@
     <Compile Include="src/Evaluators/JudgeQuality.fs" />
     <Compile Include="src/Evaluators/KnowledgeRetrievalComparison.fs" />
     <Compile Include="src/Evaluators/KnowledgeHybridRetrievalEvaluation.fs" />
+    <Compile Include="src/Evaluators/KnowledgeGraphRetrievalEvaluation.fs" />
+    <Compile Include="src/Evaluators/ReasoningSafetyEvaluation.fs" />
     <Compile Include="src/Evaluators/KnowledgeGroundedGenerationEvaluation.fs" />
     <Compile Include="src/Evaluators/KnowledgeQualityRegression.fs" />
     <Compile Include="src/Evaluators/EvalReleaseGate.fs" />
@@ -43,6 +45,8 @@
   <ItemGroup>
     <ProjectReference Include="..\Nao.Agents\Nao.Agents.fsproj" />
     <ProjectReference Include="..\Nao.Knowledge\Nao.Knowledge.fsproj" />
+    <ProjectReference Include="..\Nao.Reasoning\Nao.Reasoning.fsproj" />
+    <ProjectReference Include="..\Nao.Reasoning.Bridge\Nao.Reasoning.Bridge.fsproj" />
   </ItemGroup>
 
   <Import Project="..\..\.paket\Paket.Restore.targets" />

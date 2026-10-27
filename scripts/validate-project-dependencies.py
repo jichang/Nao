@@ -30,6 +30,8 @@ ALLOWED_PROJECT_REFERENCES = {
     Path("src/Nao.Eval/Nao.Eval.fsproj"): {
         Path("src/Nao.Agents/Nao.Agents.fsproj"),
         Path("src/Nao.Knowledge/Nao.Knowledge.fsproj"),
+        Path("src/Nao.Reasoning/Nao.Reasoning.fsproj"),
+        Path("src/Nao.Reasoning.Bridge/Nao.Reasoning.Bridge.fsproj"),
     },
     Path("src/Nao.Identity.Oidc/Nao.Identity.Oidc.fsproj"): {
         Path("src/Nao.Agents/Nao.Agents.fsproj"),
@@ -66,6 +68,11 @@ ALLOWED_PROJECT_REFERENCES = {
         Path("src/Nao.Agents/Nao.Agents.fsproj"),
         Path("src/Nao.Persistence.Infrastructure/Nao.Persistence.Infrastructure.fsproj"),
     },
+    Path("src/Nao.Persistence.Postgres/Nao.Persistence.Postgres.fsproj"): {
+        Path("src/Nao.Agents/Nao.Agents.fsproj"),
+        Path("src/Nao.Persistence.Infrastructure/Nao.Persistence.Infrastructure.fsproj"),
+        Path("src/Nao.Persistence.Memory/Nao.Persistence.Memory.fsproj"),
+    },
     Path("src/Nao.Providers/Nao.Providers.fsproj"): {
         Path("src/Nao.Agents/Nao.Agents.fsproj"),
         Path("src/Nao.Providers.Anthropic/Nao.Providers.Anthropic.fsproj"),
@@ -89,6 +96,28 @@ ALLOWED_PROJECT_REFERENCES = {
     },
     Path("src/Nao.Runtime.Orleans.Codegen/Nao.Runtime.Orleans.Codegen.csproj"): {
         Path("src/Nao.Runtime.Orleans/Nao.Runtime.Orleans.fsproj"),
+    },
+    Path("src/Nao.Reasoning/Nao.Reasoning.fsproj"): {
+        Path("src/Nao.Agents/Nao.Agents.fsproj"),
+    },
+    Path("src/Nao.Reasoning.Bridge/Nao.Reasoning.Bridge.fsproj"): {
+        Path("src/Nao.Agents/Nao.Agents.fsproj"),
+        Path("src/Nao.Reasoning/Nao.Reasoning.fsproj"),
+    },
+    Path("src/Nao.Reasoning.Datalog/Nao.Reasoning.Datalog.fsproj"): {
+        Path("src/Nao.Agents/Nao.Agents.fsproj"),
+        Path("src/Nao.Reasoning/Nao.Reasoning.fsproj"),
+    },
+    Path("src/Nao.Reasoning.Constraints/Nao.Reasoning.Constraints.fsproj"): {
+        Path("src/Nao.Agents/Nao.Agents.fsproj"),
+        Path("src/Nao.Reasoning/Nao.Reasoning.fsproj"),
+    },
+    Path("src/Nao.Semantics/Nao.Semantics.fsproj"): {
+        Path("src/Nao.Agents/Nao.Agents.fsproj"),
+        Path("src/Nao.Reasoning/Nao.Reasoning.fsproj"),
+    },
+    Path("src/Nao.Semantics.Rdf/Nao.Semantics.Rdf.fsproj"): {
+        Path("src/Nao.Semantics/Nao.Semantics.fsproj"),
     },
 }
 

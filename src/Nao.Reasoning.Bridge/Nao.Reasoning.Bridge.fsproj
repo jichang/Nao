@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Description>Validated natural-language bridge for deterministic Nao reasoning engines.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="src/ReasoningBridgeContracts.fs" />
+    <Compile Include="src/ReasoningBridgePipeline.fs" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Nao.Agents\Nao.Agents.fsproj" />
+    <ProjectReference Include="..\Nao.Reasoning\Nao.Reasoning.fsproj" />
+  </ItemGroup>
+  <Import Project="..\..\.paket\Paket.Restore.targets" />
+</Project>

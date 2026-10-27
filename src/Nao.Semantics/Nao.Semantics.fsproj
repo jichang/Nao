@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="src/RdfContracts.fs" />
+    <Compile Include="src/OwlReasoningContracts.fs" />
+    <Compile Include="src/OwlReasoningBridge.fs" />
+    <Compile Include="src/PropertyGraphProjection.fs" />
+    <Compile Include="src/SparqlContracts.fs" />
+    <Compile Include="src/SparqlUpdateContracts.fs" />
+    <Compile Include="src/SparqlRemoteContracts.fs" />
+    <Compile Include="src/SparqlAgentTools.fs" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Nao.Agents\Nao.Agents.fsproj" />
+    <ProjectReference Include="..\Nao.Reasoning\Nao.Reasoning.fsproj" />
+  </ItemGroup>
+  <Import Project="..\..\.paket\Paket.Restore.targets" />
+</Project>

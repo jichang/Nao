@@ -15,11 +15,13 @@ nuget Markdig
 nuget HtmlAgilityPack
 nuget DocumentFormat.OpenXml
 nuget PDFsharp-MigraDoc
+nuget System.Security.Cryptography.Pkcs 10.0.13
 nuget PdfPig
 nuget RtfPipe
 nuget System.Text.Encoding.CodePages
 nuget Newtonsoft.Json
 nuget YamlDotNet
+nuget dotNetRDF 3.5.2
 nuget OpenTelemetry
 nuget OpenTelemetry.Exporter.OpenTelemetryProtocol
 nuget OpenTelemetry.Extensions.Hosting
@@ -35,6 +37,8 @@ group Test
   source https://api.nuget.org/v3/index.json
   storage: none
 
+  nuget System.Formats.Asn1 10.0.14
+  nuget System.Security.Cryptography.Pkcs 10.0.13
   nuget coverlet.collector
   nuget MSTest
   nuget Microsoft.Orleans.TestingHost

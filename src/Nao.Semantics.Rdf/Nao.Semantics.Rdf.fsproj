@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="src/LineRdfSerialization.fs" />
+    <Compile Include="src/LocalSparqlEndpoint.fs" />
+    <Compile Include="src/LocalSparqlUpdateEndpoint.fs" />
+    <Compile Include="src/RemoteSparqlEndpoint.fs" />
+    <Compile Include="src/ElkReasonerEndpoint.fs" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Nao.Semantics\Nao.Semantics.fsproj" />
+  </ItemGroup>
+  <Import Project="..\..\.paket\Paket.Restore.targets" />
+</Project>

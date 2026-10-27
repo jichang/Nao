@@ -1,3 +1,5 @@
+#nowarn "3511"
+
 namespace Nao.Knowledge
 
 open System

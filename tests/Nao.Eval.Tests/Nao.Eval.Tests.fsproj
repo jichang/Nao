@@ -25,6 +25,8 @@
     <Compile Include="src/KnowledgeAdversarialDatasetTests.fs" />
     <Compile Include="src/KnowledgeDatasetCandidateTests.fs" />
     <Compile Include="src/KnowledgeHybridRetrievalEvaluationTests.fs" />
+    <Compile Include="src/KnowledgeGraphRetrievalEvaluationTests.fs" />
+    <Compile Include="src/ReasoningSafetyEvaluationTests.fs" />
     <Compile Include="src/KnowledgeGroundedGenerationEvaluationTests.fs" />
     <Compile Include="src/KnowledgeQualityRegressionTests.fs" />
     <Compile Include="src/EvalReleaseGateTests.fs" />
@@ -36,6 +38,8 @@
     <ProjectReference Include="..\Nao.Testing\Nao.Testing.fsproj" />
     <ProjectReference Include="..\..\src\Nao.Eval\Nao.Eval.fsproj" />
     <ProjectReference Include="..\..\src\Nao.Knowledge\Nao.Knowledge.fsproj" />
+    <ProjectReference Include="..\..\src\Nao.Reasoning\Nao.Reasoning.fsproj" />
+    <ProjectReference Include="..\..\src\Nao.Reasoning.Bridge\Nao.Reasoning.Bridge.fsproj" />
   </ItemGroup>
   <Import Project="..\..\.paket\Paket.Restore.targets" />
 </Project>

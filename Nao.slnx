@@ -14,6 +14,7 @@
     <Project Path="src/Nao.Persistence.Infrastructure/Nao.Persistence.Infrastructure.fsproj" />
     <Project Path="src/Nao.Persistence.Memory/Nao.Persistence.Memory.fsproj" />
     <Project Path="src/Nao.Persistence.Observability/Nao.Persistence.Observability.fsproj" />
+    <Project Path="src/Nao.Persistence.Postgres/Nao.Persistence.Postgres.fsproj" />
     <Project Path="src/Nao.Protocols/Nao.Protocols.fsproj" />
     <Project Path="src/Nao.Providers/Nao.Providers.fsproj" />
     <Project Path="src/Nao.Providers.Anthropic/Nao.Providers.Anthropic.fsproj" />
@@ -21,10 +22,19 @@
     <Project Path="src/Nao.Providers.OpenAICompatible/Nao.Providers.OpenAICompatible.fsproj" />
     <Project Path="src/Nao.Runtime.Orleans/Nao.Runtime.Orleans.fsproj" />
     <Project Path="src/Nao.Runtime.Orleans.Codegen/Nao.Runtime.Orleans.Codegen.csproj" />
+    <Project Path="src/Nao.Reasoning/Nao.Reasoning.fsproj" />
+    <Project Path="src/Nao.Reasoning.Bridge/Nao.Reasoning.Bridge.fsproj" />
+    <Project Path="src/Nao.Reasoning.Datalog/Nao.Reasoning.Datalog.fsproj" />
+    <Project Path="src/Nao.Reasoning.Constraints/Nao.Reasoning.Constraints.fsproj" />
+    <Project Path="src/Nao.Semantics/Nao.Semantics.fsproj" />
+    <Project Path="src/Nao.Semantics.Rdf/Nao.Semantics.Rdf.fsproj" />
     <Project Path="src/Nao.Documents/Nao.Documents.fsproj" />
     <Project Path="src/Nao.Telemetry.OpenTelemetry/Nao.Telemetry.OpenTelemetry.fsproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/Nao.Reasoning.Bridge.Tests/Nao.Reasoning.Bridge.Tests.fsproj" />
+    <Project Path="tests/Nao.Reasoning.Constraints.Tests/Nao.Reasoning.Constraints.Tests.fsproj" />
+    <Project Path="tests/Nao.Reasoning.Datalog.Tests/Nao.Reasoning.Datalog.Tests.fsproj" />
     <Project Path="tests/Nao.Telemetry.OpenTelemetry.Tests/Nao.Telemetry.OpenTelemetry.Tests.fsproj" />
     <Project Path="tests/Nao.Testing/Nao.Testing.fsproj" />
     <Project Path="tests/Nao.Agents.Tests/Nao.Agents.Tests.fsproj" />
@@ -37,6 +47,7 @@
     <Project Path="tests/Nao.Protocols.Tests/Nao.Protocols.Tests.fsproj" />
     <Project Path="tests/Nao.Providers.Tests/Nao.Providers.Tests.fsproj" />
     <Project Path="tests/Nao.Runtime.Orleans.Tests/Nao.Runtime.Orleans.Tests.fsproj" />
+    <Project Path="tests/Nao.Semantics.Tests/Nao.Semantics.Tests.fsproj" />
     <Project Path="tests/Nao.Documents.Tests/Nao.Documents.Tests.fsproj" />
   </Folder>
 </Solution>

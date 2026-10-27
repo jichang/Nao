@@ -158,19 +158,28 @@ type EpisodicTests() =
 let private node id createdAt : GraphNode =
     { Id = id
       EntityType = "thing"
+      Aliases = Set.empty
       Properties = Map.ofList [ "color", "red" ]
+      Provenance = []
       CreatedAt = createdAt
-      LastAccessed = createdAt
-      AccessCount = 0 }
+      UpdatedAt = createdAt }
 
 let private relation subject predicate object' timestamp : GraphRelation =
-    { Subject = subject
+    let provenance =
+        { SourceVersionId = "source-v1"
+          ExtractionOperationId = "operation"
+          EvidenceAddresses = [ "source:0" ] }
+
+    { Id = GraphContracts.relationId subject predicate object' "source-v1" "operation"
+      Subject = subject
       Predicate = predicate
       Object = object'
+      Direction = GraphRelationDirection.Directed
+      Properties = Map.empty
+      Validity = { ValidFrom = None; ValidTo = None }
       Confidence = 1.0
-      Source = Some "test"
-      Timestamp = timestamp
-      Metadata = Map.empty }
+      Provenance = provenance
+      AssertedAt = timestamp }
 
 [<TestClass>]
 type GraphTests() =
@@ -216,7 +225,7 @@ type GraphTests() =
             let! exactNode = reloaded.GetByTypeAsync ownerA "thing"
             Assert.IsTrue(exactNode |> List.exists (fun item -> item.Id = "exact-cutoff"))
 
-            do! reloaded.RemoveRelationAsync ownerA "shared" "exact" "target"
+            do! reloaded.RemoveRelationAsync ownerA (relation "shared" "exact" "target" cutoff).Id
             let afterRelationDelete = make ()
             let! withoutRelation = afterRelationDelete.QueryAsync ownerA (GraphQuery.ByEntity "target")
             Assert.AreEqual(0, withoutRelation.Relations.Length)

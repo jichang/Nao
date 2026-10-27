@@ -9,9 +9,12 @@ open Nao.Agents
 [<RequireQualifiedAccess>]
 type GraphEvent =
     | UpsertNode of GraphNode
-    | AddRelations of GraphRelation list
+    | AddExtraction of GraphExtraction
     | RemoveNode of nodeId: string
-    | RemoveRelation of subject: string * predicate: string * object': string
+    | RemoveRelation of relationId: string
+    | MergeEntity of GraphEntityMerge
+    | SplitEntity of GraphEntitySplit
+    | Replace of GraphSnapshot
     | DeleteOwner
     | DeleteExpired of before: DateTimeOffset
 
@@ -21,7 +24,7 @@ module PersistentGraphMemory =
     /// The host supplies a separate event stream for each claim-free partition key.
     let create
         (openStore: string -> EventStore)
-        (relationExtractor: (string -> Task<GraphRelation list>) option)
+        (relationExtractor: (string -> Task<GraphExtraction>) option)
         : GraphMemory =
         let sync = obj ()
 
@@ -42,13 +45,18 @@ module PersistentGraphMemory =
             for event in events do
                 match event with
                 | GraphEvent.UpsertNode node -> inner.UpsertNodeAsync scope node |> _.GetAwaiter().GetResult()
-                | GraphEvent.AddRelations relations ->
-                    for relation in relations do
+                | GraphEvent.AddExtraction extraction ->
+                    for node in extraction.Nodes do
+                        inner.UpsertNodeAsync scope node |> _.GetAwaiter().GetResult()
+
+                    for relation in extraction.Relations do
                         inner.AddRelationAsync scope relation |> _.GetAwaiter().GetResult()
                 | GraphEvent.RemoveNode nodeId -> inner.RemoveNodeAsync scope nodeId |> _.GetAwaiter().GetResult()
-                | GraphEvent.RemoveRelation(subject, predicate, object') ->
-                    inner.RemoveRelationAsync scope subject predicate object'
-                    |> _.GetAwaiter().GetResult()
+                | GraphEvent.RemoveRelation relationId ->
+                    inner.RemoveRelationAsync scope relationId |> _.GetAwaiter().GetResult()
+                | GraphEvent.MergeEntity merge -> inner.MergeEntityAsync scope merge |> _.GetAwaiter().GetResult()
+                | GraphEvent.SplitEntity split -> inner.SplitEntityAsync scope split |> _.GetAwaiter().GetResult()
+                | GraphEvent.Replace snapshot -> inner.ReplaceAsync scope snapshot |> _.GetAwaiter().GetResult()
                 | GraphEvent.DeleteOwner -> inner.DeleteOwnerAsync scope |> _.GetAwaiter().GetResult() |> ignore
                 | GraphEvent.DeleteExpired before ->
                     inner.DeleteExpiredAsync scope before |> _.GetAwaiter().GetResult() |> ignore
@@ -102,7 +110,7 @@ module PersistentGraphMemory =
                 mutate
                     scope
                     (fun inner -> inner.AddRelationAsync scope relation |> _.GetAwaiter().GetResult())
-                    (GraphEvent.AddRelations [ relation ])
+                    (GraphEvent.AddExtraction { Nodes = []; Relations = [ relation ] })
           QueryAsync =
             fun scope query -> read scope (fun inner -> inner.QueryAsync scope query |> _.GetAwaiter().GetResult())
           RemoveNodeAsync =
@@ -112,23 +120,52 @@ module PersistentGraphMemory =
                     (fun inner -> inner.RemoveNodeAsync scope nodeId |> _.GetAwaiter().GetResult())
                     (GraphEvent.RemoveNode nodeId)
           RemoveRelationAsync =
-            fun scope subject predicate object' ->
+            fun scope relationId ->
                 mutate
                     scope
-                    (fun inner ->
-                        inner.RemoveRelationAsync scope subject predicate object'
-                        |> _.GetAwaiter().GetResult())
-                    (GraphEvent.RemoveRelation(subject, predicate, object'))
+                    (fun inner -> inner.RemoveRelationAsync scope relationId |> _.GetAwaiter().GetResult())
+                    (GraphEvent.RemoveRelation relationId)
+          MergeEntityAsync =
+            fun scope merge ->
+                mutate
+                    scope
+                    (fun inner -> inner.MergeEntityAsync scope merge |> _.GetAwaiter().GetResult())
+                    (GraphEvent.MergeEntity merge)
+          SplitEntityAsync =
+            fun scope split ->
+                mutate
+                    scope
+                    (fun inner -> inner.SplitEntityAsync scope split |> _.GetAwaiter().GetResult())
+                    (GraphEvent.SplitEntity split)
+          SnapshotAsync = fun scope -> read scope (fun inner -> inner.SnapshotAsync scope |> _.GetAwaiter().GetResult())
+          ReplaceAsync =
+            fun scope snapshot ->
+                mutate
+                    scope
+                    (fun inner -> inner.ReplaceAsync scope snapshot |> _.GetAwaiter().GetResult())
+                    (GraphEvent.Replace snapshot)
           GetByTypeAsync =
             fun scope entityType ->
                 read scope (fun inner -> inner.GetByTypeAsync scope entityType |> _.GetAwaiter().GetResult())
-          ExtractRelationsAsync =
+          ExtractAsync =
             fun scope text ->
                 task {
                     do! read scope (fun _ -> ())
                     let extractor = InMemoryGraphMemory.create relationExtractor
-                    let! relations = extractor.ExtractRelationsAsync scope text
-                    return! mutate scope (fun _ -> relations) (GraphEvent.AddRelations relations)
+                    let! extraction = extractor.ExtractAsync scope text
+
+                    return!
+                        mutate
+                            scope
+                            (fun inner ->
+                                for node in extraction.Nodes do
+                                    inner.UpsertNodeAsync scope node |> _.GetAwaiter().GetResult()
+
+                                for relation in extraction.Relations do
+                                    inner.AddRelationAsync scope relation |> _.GetAwaiter().GetResult()
+
+                                extraction)
+                            (GraphEvent.AddExtraction extraction)
                 }
           DeleteOwnerAsync =
             fun scope ->

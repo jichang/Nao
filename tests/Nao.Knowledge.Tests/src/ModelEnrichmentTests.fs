@@ -117,6 +117,12 @@ type ModelEnrichmentTests() =
                                   Evidence =
                                     [ { ContentUnitId = units[1].Id
                                         Quote = "grounded knowledge retrieval" } ] }
+                                { Kind = KnowledgeEnrichmentKind.Relation("provides", "Nao", "retrieval")
+                                  Value = "Nao provides grounded retrieval"
+                                  Confidence = 0.88
+                                  Evidence =
+                                    [ { ContentUnitId = units[1].Id
+                                        Quote = "grounded knowledge retrieval" } ] }
                                 { Kind = KnowledgeEnrichmentKind.Summary
                                   Value = "Nao provides grounded retrieval for agents."
                                   Confidence = 0.9
@@ -137,7 +143,7 @@ type ModelEnrichmentTests() =
         let enriched = first.Chunks |> List.exactlyOne
 
         Assert.AreEqual(1, calls)
-        Assert.AreEqual(3, enriched.Enrichments.Length)
+        Assert.AreEqual(4, enriched.Enrichments.Length)
 
         let entity = enriched.Enrichments[0]
         Assert.AreEqual(KnowledgeEnrichmentKind.Entity "product", entity.Kind)

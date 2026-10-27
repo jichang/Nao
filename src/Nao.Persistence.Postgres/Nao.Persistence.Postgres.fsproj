@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="src/PostgresGraphMemory.fs" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Nao.Agents\Nao.Agents.fsproj" />
+    <ProjectReference Include="..\Nao.Persistence.Infrastructure\Nao.Persistence.Infrastructure.fsproj" />
+    <ProjectReference Include="..\Nao.Persistence.Memory\Nao.Persistence.Memory.fsproj" />
+  </ItemGroup>
+  <Import Project="..\..\.paket\Paket.Restore.targets" />
+</Project>

@@ -622,6 +622,7 @@ type KnowledgeChunkRole =
 [<RequireQualifiedAccess>]
 type KnowledgeEnrichmentKind =
     | Entity of category: string
+    | Relation of predicate: string * sourceEntity: string * targetEntity: string
     | Topic
     | Summary
 
@@ -660,6 +661,13 @@ module KnowledgeEnrichment =
     let private kindKey =
         function
         | KnowledgeEnrichmentKind.Entity category -> "entity:" + Validation.canonical "entity category" category
+        | KnowledgeEnrichmentKind.Relation(predicate, sourceEntity, targetEntity) ->
+            String.concat
+                ":"
+                [ "relation"
+                  Validation.canonical "relation predicate" predicate
+                  Validation.canonical "relation source entity" sourceEntity
+                  Validation.canonical "relation target entity" targetEntity ]
         | KnowledgeEnrichmentKind.Topic -> "topic"
         | KnowledgeEnrichmentKind.Summary -> "summary"
 

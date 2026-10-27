@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="src/ConstraintContracts.fs" />
+    <Compile Include="src/ConstraintValidation.fs" />
+    <Compile Include="src/Z3Endpoint.fs" />
+    <Compile Include="src/ConstraintReasoningBridge.fs" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Nao.Agents\Nao.Agents.fsproj" />
+    <ProjectReference Include="..\Nao.Reasoning\Nao.Reasoning.fsproj" />
+  </ItemGroup>
+  <Import Project="..\..\.paket\Paket.Restore.targets" />
+</Project>

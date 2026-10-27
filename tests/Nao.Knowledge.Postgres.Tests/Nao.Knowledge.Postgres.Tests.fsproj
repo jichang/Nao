@@ -12,11 +12,13 @@
   <ItemGroup>
     <Compile Include="src/MSTestSettings.fs" />
     <Compile Include="src/PostgresKnowledgeIndexTests.fs" />
+    <Compile Include="src/PostgresGraphMemoryTests.fs" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Nao.Testing\Nao.Testing.fsproj" />
     <ProjectReference Include="..\..\src\Nao.Knowledge.Postgres\Nao.Knowledge.Postgres.fsproj" />
+    <ProjectReference Include="..\..\src\Nao.Persistence.Postgres\Nao.Persistence.Postgres.fsproj" />
   </ItemGroup>
 
   <Import Project="..\..\.paket\Paket.Restore.targets" />

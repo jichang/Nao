@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <Using Include="Microsoft.VisualStudio.TestTools.UnitTesting" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="src/ReasoningBridgeTests.fs" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Nao.Testing\Nao.Testing.fsproj" />
+    <ProjectReference Include="..\..\src\Nao.Agents\Nao.Agents.fsproj" />
+    <ProjectReference Include="..\..\src\Nao.Eval\Nao.Eval.fsproj" />
+    <ProjectReference Include="..\..\src\Nao.Reasoning\Nao.Reasoning.fsproj" />
+    <ProjectReference Include="..\..\src\Nao.Reasoning.Bridge\Nao.Reasoning.Bridge.fsproj" />
+  </ItemGroup>
+  <Import Project="..\..\.paket\Paket.Restore.targets" />
+</Project>

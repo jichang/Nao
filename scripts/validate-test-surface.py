@@ -22,6 +22,14 @@ TEST_CATEGORIES = {
     Path("tests/Nao.Protocols.Tests/Nao.Protocols.Tests.fsproj"): "unit",
     Path("tests/Nao.Providers.Tests/Nao.Providers.Tests.fsproj"): "integration",
     Path("tests/Nao.Runtime.Orleans.Tests/Nao.Runtime.Orleans.Tests.fsproj"): "integration",
+    Path(
+        "tests/Nao.Reasoning.Constraints.Tests/Nao.Reasoning.Constraints.Tests.fsproj"
+    ): "integration",
+    Path(
+        "tests/Nao.Reasoning.Bridge.Tests/Nao.Reasoning.Bridge.Tests.fsproj"
+    ): "integration",
+    Path("tests/Nao.Reasoning.Datalog.Tests/Nao.Reasoning.Datalog.Tests.fsproj"): "integration",
+    Path("tests/Nao.Semantics.Tests/Nao.Semantics.Tests.fsproj"): "unit",
     Path("tests/Nao.Documents.Tests/Nao.Documents.Tests.fsproj"): "unit",
 }
 
