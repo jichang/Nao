@@ -76,48 +76,62 @@ type CircuitBreaker =
 
 [<RequireQualifiedAccess>]
 module CircuitBreaker =
-    let create (config: CircuitBreakerConfig) : CircuitBreaker =
+    let create (config: CircuitBreakerConfig) (timeProvider: TimeProvider) : CircuitBreaker =
+        if config.FailureThreshold <= 0 then
+            invalidArg (nameof config) "Circuit-breaker failure threshold must be positive."
+
+        if config.SuccessThreshold <= 0 then
+            invalidArg (nameof config) "Circuit-breaker success threshold must be positive."
+
+        if config.OpenDuration < TimeSpan.Zero then
+            invalidArg (nameof config) "Circuit-breaker open duration cannot be negative."
+
+        ArgumentNullException.ThrowIfNull timeProvider
+        let gate = obj ()
         let mutable failures = 0
         let mutable successes = 0
         let mutable state = CircuitState.Closed
 
         let recordSuccess () =
-            match state with
-            | CircuitState.HalfOpen ->
-                successes <- successes + 1
+            lock gate (fun () ->
+                match state with
+                | CircuitState.HalfOpen ->
+                    successes <- successes + 1
 
-                if successes >= config.SuccessThreshold then
-                    state <- CircuitState.Closed
-                    failures <- 0
-                    successes <- 0
-            | CircuitState.Closed -> failures <- 0
-            | CircuitState.Open _ -> ()
+                    if successes >= config.SuccessThreshold then
+                        state <- CircuitState.Closed
+                        failures <- 0
+                        successes <- 0
+                | CircuitState.Closed -> failures <- 0
+                | CircuitState.Open _ -> ())
 
         let recordFailure () =
-            match state with
-            | CircuitState.Closed ->
-                failures <- failures + 1
+            lock gate (fun () ->
+                match state with
+                | CircuitState.Closed ->
+                    failures <- failures + 1
 
-                if failures >= config.FailureThreshold then
-                    state <- CircuitState.Open(DateTimeOffset.UtcNow + config.OpenDuration)
-            | CircuitState.HalfOpen ->
-                state <- CircuitState.Open(DateTimeOffset.UtcNow + config.OpenDuration)
-                successes <- 0
-            | CircuitState.Open _ -> ()
+                    if failures >= config.FailureThreshold then
+                        state <- CircuitState.Open(timeProvider.GetUtcNow() + config.OpenDuration)
+                | CircuitState.HalfOpen ->
+                    state <- CircuitState.Open(timeProvider.GetUtcNow() + config.OpenDuration)
+                    successes <- 0
+                | CircuitState.Open _ -> ())
 
         let canExecute () =
-            match state with
-            | CircuitState.Closed
-            | CircuitState.HalfOpen -> true
-            | CircuitState.Open until ->
-                if DateTimeOffset.UtcNow >= until then
-                    state <- CircuitState.HalfOpen
-                    successes <- 0
-                    true
-                else
-                    false
+            lock gate (fun () ->
+                match state with
+                | CircuitState.Closed
+                | CircuitState.HalfOpen -> true
+                | CircuitState.Open until ->
+                    if timeProvider.GetUtcNow() >= until then
+                        state <- CircuitState.HalfOpen
+                        successes <- 0
+                        true
+                    else
+                        false)
 
-        { CurrentState = fun () -> state
+        { CurrentState = fun () -> lock gate (fun () -> state)
           RecordSuccessOperation = recordSuccess
           RecordFailureOperation = recordFailure
           CanExecuteOperation = canExecute }

@@ -1,6 +1,6 @@
 # Durable formats
 
-Nao is unreleased. All Nao-owned protocol and durable-schema markers remain version 1 while their current shapes evolve in place; Nao package metadata uses 1.0.0. No earlier released format or backward-compatibility contract is implied. External protocol standards, dependencies, host-supplied version identifiers, and deliberately unsupported test values retain their own versions. Runtime libraries do not carry legacy readers.
+Nao has no stable release. All Nao-owned protocol and durable-schema markers remain version 1 while their current shapes evolve in place; the current package target is `1.0.0-alpha1`. No earlier released format or backward-compatibility contract is implied. External protocol standards, dependencies, host-supplied version identifiers, and deliberately unsupported test values retain their own versions. Runtime libraries do not carry legacy readers.
 
 ## Decode policy
 

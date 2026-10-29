@@ -12,7 +12,11 @@ from urllib.parse import unquote, urlsplit
 
 SECTION = re.compile(r"^## (.+)$", re.MULTILINE)
 LINK = re.compile(r"\[[^]]+\]\(([^)]+)\)")
-VERSION_FILE = re.compile(r"^\d+\.\d+\.\d+\.md$")
+VERSION_FILE = re.compile(
+    r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)"
+    r"(?:-((?:0|[1-9]\d*|[A-Za-z-][0-9A-Za-z-]*)"
+    r"(?:\.(?:0|[1-9]\d*|[A-Za-z-][0-9A-Za-z-]*))*))?\.md$"
+)
 REQUIRED_SECTIONS = {
     "Summary",
     "Added",

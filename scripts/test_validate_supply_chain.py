@@ -55,6 +55,26 @@ class VulnerabilityReportTests(unittest.TestCase):
         )
         self.assertEqual([], MODULE.validate_vulnerability_reports([report]))
 
+    def test_current_release_version_follows_pointer(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        root = Path(directory.name)
+        release = root / "release"
+        release.mkdir()
+        (release / "current.json").write_text(
+            json.dumps(
+                {"schemaVersion": 1, "manifest": "1.0.0-alpha1.json"}
+            ),
+            encoding="utf-8",
+        )
+        (release / "1.0.0-alpha1.json").write_text(
+            json.dumps({"version": "1.0.0-alpha1"}),
+            encoding="utf-8",
+        )
+        self.assertEqual(
+            "1.0.0-alpha1", MODULE.current_release_version(root)
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

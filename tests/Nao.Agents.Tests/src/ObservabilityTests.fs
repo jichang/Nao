@@ -350,7 +350,7 @@ type ResilienceTests() =
     [<TestMethod>]
     member _.CircuitBreakerOpensAfterThreshold() =
         let config = CircuitBreakerConfig.Default
-        let cb = CircuitBreaker.create config
+        let cb = CircuitBreaker.create config TimeProvider.System
         Assert.IsTrue(cb.CanExecute())
         // Record failures to open the circuit
         for _ in 1 .. config.FailureThreshold do
@@ -360,20 +360,32 @@ type ResilienceTests() =
 
     [<TestMethod>]
     member _.CircuitBreakerClosesAfterSuccesses() =
+        let mutable now = DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero)
+        let timeProvider = { new TimeProvider() with override _.GetUtcNow() = now }
+
         let config =
             { CircuitBreakerConfig.Default with
                 FailureThreshold = 1
                 OpenDuration = TimeSpan.FromMilliseconds(50.0)
                 SuccessThreshold = 1 }
 
-        let cb = CircuitBreaker.create config
+        let cb = CircuitBreaker.create config timeProvider
         cb.RecordFailure() // opens circuit
         Assert.IsFalse(cb.CanExecute()) // open, not enough time passed
-        // Wait for open duration to expire
-        System.Threading.Thread.Sleep(60)
+        now <- now + config.OpenDuration
         Assert.IsTrue(cb.CanExecute()) // half-open now
         cb.RecordSuccess()
         Assert.IsTrue(cb.CanExecute()) // closed
+
+    [<TestMethod>]
+    member _.CircuitBreakerRejectsInvalidThresholds() =
+        let config =
+            { CircuitBreakerConfig.Default with
+                FailureThreshold = 0 }
+
+        Assert.ThrowsExactly<ArgumentException>(fun () ->
+            CircuitBreaker.create config TimeProvider.System |> ignore)
+        |> ignore
 
     [<TestMethod>]
     member _.FallbackDefaultValueOnFailure() =

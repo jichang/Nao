@@ -12,7 +12,11 @@ import zipfile
 from pathlib import Path
 from xml.etree import ElementTree
 
-VERSION = re.compile(r"^\d+\.\d+\.\d+$")
+VERSION = re.compile(
+    r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)"
+    r"(?:-((?:0|[1-9]\d*|[A-Za-z-][0-9A-Za-z-]*)"
+    r"(?:\.(?:0|[1-9]\d*|[A-Za-z-][0-9A-Za-z-]*))*))?$"
+)
 ROADMAP_HEADING = re.compile(r"^## ([A-Z]+-\d+)\b", re.MULTILINE)
 CHECKBOX = re.compile(r"^- \[([ x])\]", re.MULTILINE)
 REQUIRED_CHANGE_SECTIONS = {"Added", "Changed", "Fixed", "Security"}
@@ -41,6 +45,30 @@ def load_manifest(path: Path) -> dict[str, object]:
     if not isinstance(value, dict):
         raise ValueError("release manifest must be a JSON object")
     return value
+
+
+def resolve_manifest(root: Path, requested: Path | None) -> Path:
+    if requested is not None:
+        return requested if requested.is_absolute() else root / requested
+
+    pointer_path = root / "release" / "current.json"
+    pointer = load_manifest(pointer_path)
+    if set(pointer) != {"schemaVersion", "manifest"} or pointer["schemaVersion"] != 1:
+        raise ValueError("release/current.json must contain schemaVersion and manifest")
+    target = pointer["manifest"]
+    if not isinstance(target, str):
+        raise ValueError("release/current.json manifest must be a filename")
+    target_path = Path(target)
+    if (
+        target_path.name != target
+        or target_path.suffix != ".json"
+        or not VERSION.fullmatch(target_path.stem)
+    ):
+        raise ValueError("release/current.json manifest must be a versioned JSON filename")
+    manifest_path = pointer_path.parent / target_path
+    if not manifest_path.is_file():
+        raise ValueError(f"current release manifest does not exist: {target}")
+    return manifest_path
 
 
 def release_date(notes: str) -> str | None:
@@ -107,21 +135,29 @@ def validate_manifest(root: Path, path: Path) -> list[str]:
         errors.append("release manifest schemaVersion must be 1")
 
     version = manifest.get("version")
-    if not isinstance(version, str) or not VERSION.fullmatch(version):
-        errors.append("release version must be canonical SemVer without a prefix")
+    match = VERSION.fullmatch(version) if isinstance(version, str) else None
+    if match is None:
+        errors.append("release version must be canonical SemVer without build metadata or a prefix")
         return errors
-    if version != "1.0.0":
-        errors.append("Nao package metadata must remain 1.0.0 while unreleased")
     if path.name != f"{version}.json":
         errors.append("release manifest filename must match its version")
     if manifest.get("tag") != f"v{version}":
-        errors.append("stable release tag must be v<version>")
+        errors.append("release tag must be v<version>")
     if manifest.get("sourceBranch") != "main":
-        errors.append("stable releases must originate from main")
-    if manifest.get("channel") != "stable":
-        errors.append("the 1.0.0 target must use the stable channel")
+        errors.append("releases must originate from main")
+    prerelease = match.group(4)
+    channel_match = (
+        re.fullmatch(r"(alpha|beta|rc)(?:[.-]?(?:0|[1-9]\d*))?", prerelease)
+        if prerelease
+        else None
+    )
+    expected_channel = channel_match.group(1) if channel_match else "stable"
+    if prerelease and channel_match is None:
+        errors.append("release prerelease must use an alpha, beta, or rc identifier")
+    elif manifest.get("channel") != expected_channel:
+        errors.append(f"release channel must be {expected_channel} for version {version}")
     if manifest.get("longTermSupport") is not False:
-        errors.append("1.0.0 must not claim long-term support")
+        errors.append("the initial release line must not claim long-term support")
     if manifest.get("compatibilityBaseline") is not None:
         errors.append("the first supported release cannot name a compatibility baseline")
 
@@ -229,6 +265,12 @@ def verify_packages(root: Path, directory: Path, version: str) -> list[str]:
             nuspec = archive.read(nuspec_name).decode("utf-8")
             if "<repository type=\"git\"" not in nuspec or "github.com/jichang/Nao" not in nuspec:
                 errors.append(f"{package.name}: missing repository/source-link metadata")
+            if f"<version>{version}</version>" not in nuspec:
+                errors.append(f"{package.name}: nuspec version differs from the release")
+            if "<readme>README.md</readme>" not in nuspec:
+                errors.append(f"{package.name}: nuspec does not advertise the package README")
+            if f"docs/releases/{version}.md" not in nuspec:
+                errors.append(f"{package.name}: nuspec release-notes link differs from the release")
             if "README.md" not in names:
                 errors.append(f"{package.name}: missing package README")
             if not any(name.startswith("lib/net10.0/") and name.endswith(".dll") for name in names):
@@ -252,7 +294,7 @@ def write_checksums(directory: Path) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
-    parser.add_argument("--manifest", type=Path, default=Path("release/1.0.0.json"))
+    parser.add_argument("--manifest", type=Path)
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("validate")
     subparsers.add_parser("render")
@@ -264,10 +306,12 @@ def main() -> int:
     args = parser.parse_args()
 
     root = args.root.resolve()
-    manifest_path = args.manifest
-    if not manifest_path.is_absolute():
-        manifest_path = root / manifest_path
-    manifest = load_manifest(manifest_path)
+    try:
+        manifest_path = resolve_manifest(root, args.manifest)
+        manifest = load_manifest(manifest_path)
+    except (OSError, ValueError, json.JSONDecodeError) as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
 
     if args.command == "version":
         print(manifest["version"])

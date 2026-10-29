@@ -573,7 +573,7 @@ type EtclovgObservabilityTests() =
               OpenDuration = TimeSpan.FromMilliseconds(100.0)
               SuccessThreshold = 1 }
 
-        let cb = CircuitBreaker.create cbConfig
+        let cb = CircuitBreaker.create cbConfig TimeProvider.System
 
         // Record failures to open the circuit
         cb.RecordFailure()

@@ -17,6 +17,8 @@ type ExtensionTemplate =
 
 [<RequireQualifiedAccess>]
 module ExtensionTemplate =
+    let private naoPackageVersion = "1.0.0-alpha1"
+
     let parse =
         function
         | "agent" -> ExtensionTemplate.Agent
@@ -103,7 +105,7 @@ module AdapterExtension =
         let reference =
             match contractProject with
             | Some path -> $"    <ProjectReference Include=\"{Path.GetFullPath path}\" />"
-            | None -> $"    <PackageReference Include=\"{package}\" Version=\"1.0.0\" />"
+            | None -> $"    <PackageReference Include=\"{package}\" Version=\"{naoPackageVersion}\" />"
 
         $"""<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>

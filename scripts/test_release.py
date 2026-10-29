@@ -16,7 +16,7 @@ SPEC.loader.exec_module(MODULE)
 class ReleaseManifestTests(unittest.TestCase):
     def test_changelog_is_deterministic(self) -> None:
         manifest = {
-            "version": "1.0.0",
+            "version": "1.0.0-alpha1",
             "releaseDate": "Unreleased",
             "summary": "Summary.",
             "changes": {
@@ -26,10 +26,10 @@ class ReleaseManifestTests(unittest.TestCase):
                 "Security": ["Boundary."],
             },
             "roadmapCompleted": ["FND-01"],
-            "releaseNotes": "docs/releases/1.0.0.md",
+            "releaseNotes": "docs/releases/1.0.0-alpha1.md",
         }
         rendered = MODULE.render_changelog(manifest)
-        self.assertIn("## [1.0.0] - Unreleased", rendered)
+        self.assertIn("## [1.0.0-alpha1] - Unreleased", rendered)
         self.assertIn("- None", rendered)
         self.assertEqual(rendered, MODULE.render_changelog(manifest))
 
@@ -49,6 +49,24 @@ class ReleaseManifestTests(unittest.TestCase):
         path.write_text(json.dumps([]), encoding="utf-8")
         with self.assertRaisesRegex(ValueError, "JSON object"):
             MODULE.load_manifest(path)
+
+    def test_current_pointer_resolves_prerelease_manifest(self) -> None:
+        root = Path(tempfile.mkdtemp())
+        release = root / "release"
+        release.mkdir()
+        (release / "current.json").write_text(
+            json.dumps(
+                {"schemaVersion": 1, "manifest": "1.0.0-alpha1.json"}
+            ),
+            encoding="utf-8",
+        )
+        expected = release / "1.0.0-alpha1.json"
+        expected.write_text("{}", encoding="utf-8")
+        self.assertEqual(expected, MODULE.resolve_manifest(root, None))
+
+    def test_semver_rejects_leading_zero_prerelease_numbers(self) -> None:
+        self.assertIsNotNone(MODULE.VERSION.fullmatch("1.0.0-alpha1"))
+        self.assertIsNone(MODULE.VERSION.fullmatch("1.0.0-alpha.01"))
 
 
 if __name__ == "__main__":

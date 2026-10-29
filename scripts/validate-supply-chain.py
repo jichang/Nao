@@ -20,6 +20,19 @@ def load_json(path: Path) -> object:
         return json.load(stream)
 
 
+def current_release_version(root: Path) -> str:
+    pointer = load_json(root / "release" / "current.json")
+    if not isinstance(pointer, dict) or pointer.get("schemaVersion") != 1:
+        raise ValueError("release/current.json is invalid")
+    manifest_name = pointer.get("manifest")
+    if not isinstance(manifest_name, str) or Path(manifest_name).name != manifest_name:
+        raise ValueError("release/current.json manifest is invalid")
+    manifest = load_json(root / "release" / manifest_name)
+    if not isinstance(manifest, dict) or not isinstance(manifest.get("version"), str):
+        raise ValueError("current release manifest is invalid")
+    return manifest["version"]
+
+
 def validate_policy(root: Path) -> list[str]:
     errors: list[str] = []
     policy_path = root / "supply-chain-policy.json"
@@ -34,8 +47,13 @@ def validate_policy(root: Path) -> list[str]:
     if policy.get("schemaVersion") != 1:
         errors.append("supply-chain policy schemaVersion must be 1")
 
-    if policy.get("packageVersion") != "1.0.0":
-        errors.append("Nao package metadata must remain 1.0.0 while unreleased")
+    try:
+        release_version = current_release_version(root)
+    except (OSError, ValueError, json.JSONDecodeError) as error:
+        return [str(error)]
+
+    if policy.get("packageVersion") != release_version:
+        errors.append("supply-chain package version must match the current release manifest")
 
     lock = policy.get("dependencyLock", {})
     lock_path = root / str(lock.get("path", ""))
@@ -55,8 +73,8 @@ def validate_policy(root: Path) -> list[str]:
     versions = policy.get("supportedVersions", {})
     if versions.get("projectReleased") is not False:
         errors.append("supported-version policy must identify Nao as unreleased")
-    if versions.get("releaseLines") != ["1.0.0"]:
-        errors.append("supported release lines must contain only 1.0.0 while unreleased")
+    if versions.get("releaseTargets") != [release_version]:
+        errors.append("supported release targets must contain only the current release")
     if not str(versions.get("policy", "")).strip():
         errors.append("supported-version policy text is required")
 
@@ -129,8 +147,11 @@ def validate_policy(root: Path) -> list[str]:
             errors.append(f"{workflow_name} must attest published artifacts")
 
     publish = (workflow_dir / "publish.yml").read_text(encoding="utf-8")
-    if "tags: ['v1.0.0']" not in publish or "scripts/release.py version" not in publish:
-        errors.append("NuGet publication must derive fixed package metadata from the release manifest")
+    if "tags: ['v*']" not in publish or "scripts/release.py version" not in publish:
+        errors.append("NuGet publication must derive package metadata from the release manifest")
+    containers = (workflow_dir / "container-images.yml").read_text(encoding="utf-8")
+    if "tags: ['v*']" not in containers or "scripts/release.py version" not in containers:
+        errors.append("container publication must validate its tag against the release manifest")
     if "dotnet nuget sign" not in publish:
         errors.append("NuGet publication must sign packages before upload")
     if "sbom" not in publish.lower():
@@ -149,7 +170,6 @@ def validate_policy(root: Path) -> list[str]:
         if required not in publish:
             errors.append(f"NuGet publication is missing release control: {required}")
 
-    containers = (workflow_dir / "container-images.yml").read_text(encoding="utf-8")
     if "anchore/scan-action" not in containers:
         errors.append("container publication must run a vulnerability scan")
 

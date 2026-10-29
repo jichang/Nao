@@ -43,10 +43,10 @@ affected artifacts.
 
 ## Supported versions
 
-Nao is unreleased. Only the current main branch is supported before the first public release, and
-package metadata remains `1.0.0`. The initial policy names only release line `1.0.0`; a future
-review must update the policy before another line can be claimed as supported. Security fixes are
-not backported to unpublished interfaces or abstractions.
+Nao has no stable release. Only the current main branch is supported. The policy names
+`1.0.0-alpha1` as the current release target, but prerelease packages are evaluation artifacts
+without compatibility or support guarantees. Security fixes are not backported to unpublished
+interfaces or abstractions.
 
 ## Licenses
 
@@ -94,8 +94,8 @@ version.
 Verify a downloaded package before use:
 
 ```bash
-dotnet nuget verify --all Nao.Agents.1.0.0.nupkg
-gh attestation verify Nao.Agents.1.0.0.nupkg --repo jichang/Nao
+dotnet nuget verify --all Nao.Agents.1.0.0-alpha1.nupkg
+gh attestation verify Nao.Agents.1.0.0-alpha1.nupkg --repo jichang/Nao
 ```
 
 Compare its SHA-256 digest with the release evidence and inspect the SPDX SBOM before promotion.

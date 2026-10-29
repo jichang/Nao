@@ -1,14 +1,14 @@
 {
   "schemaVersion": 1,
-  "version": "1.0.0",
+  "version": "1.0.0-alpha1",
   "releaseDate": "Unreleased",
-  "channel": "stable",
+  "channel": "alpha",
   "sourceBranch": "main",
-  "tag": "v1.0.0",
+  "tag": "v1.0.0-alpha1",
   "compatibilityBaseline": null,
   "longTermSupport": false,
-  "releaseNotes": "docs/releases/1.0.0.md",
-  "summary": "Initial supported release of the governed Nao AI platform foundation.",
+  "releaseNotes": "docs/releases/1.0.0-alpha1.md",
+  "summary": "Initial alpha release of the governed Nao AI platform foundation.",
   "changes": {
     "Added": [
       "Governed agent, tool, memory, knowledge, evaluation, provider, runtime, ontology, reasoning, operations, extension, and developer-tooling foundations.",

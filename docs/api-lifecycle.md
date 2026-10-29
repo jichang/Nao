@@ -54,7 +54,7 @@ Nao currently exposes no API marked experimental or obsolete. Domain values such
 
 Each release has an immutable document under [`docs/releases`](releases/README.md). A release with breaking changes must link every affected contract to a guide under [`docs/migrations`](migrations/README.md). The protected package publication workflow validates the exact version document and refuses an `Unreleased` date, template text, empty required sections, or breaking changes without migration links.
 
-The first `1.0.0` document remains a draft while Nao is unreleased. Documentation for the default branch describes the next release candidate; published release notes identify the immutable validation and supply-chain evidence for a released version.
+The `1.0.0-alpha1` document is the current prerelease draft. Documentation for the default branch describes the active target; published release notes identify the immutable validation and supply-chain evidence for a released version.
 
 ## Tested snippets
 

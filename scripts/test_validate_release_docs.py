@@ -12,7 +12,11 @@ assert SPEC.loader is not None
 SPEC.loader.exec_module(MODULE)
 
 
-def release(breaking: str = "None", release_date: str = "Unreleased") -> str:
+def release(
+    breaking: str = "None",
+    release_date: str = "Unreleased",
+    version: str = "1.0.0",
+) -> str:
     sections = {
         "Summary": "First supported package set.",
         "Added": "Initial capabilities.",
@@ -27,7 +31,7 @@ def release(breaking: str = "None", release_date: str = "Unreleased") -> str:
     }
     bodies = "\n\n".join(f"## {name}\n\n{body}" for name, body in sections.items())
     return (
-        f"# Nao 1.0.0 release notes\n\n"
+        f"# Nao {version} release notes\n\n"
         f"- Release date: {release_date}\n"
         "- Milestone: R4\n"
         "- Owners: @owner\n\n"
@@ -66,6 +70,13 @@ class ReleaseDocumentationValidationTests(unittest.TestCase):
         path.write_text(release(), encoding="utf-8")
         errors = MODULE.validate(root, "1.0.0", True)
         self.assertTrue(any("ISO release date" in error for error in errors))
+
+    def test_prerelease_version_document_is_discovered(self) -> None:
+        root = self.root()
+        version = "1.0.0-alpha1"
+        path = root / "docs" / "releases" / f"{version}.md"
+        path.write_text(release(version=version), encoding="utf-8")
+        self.assertEqual([], MODULE.validate(root, version, False))
 
 
 if __name__ == "__main__":

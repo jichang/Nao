@@ -439,6 +439,10 @@ Retries, circuit breakers, fallback, provider routing, and queueing must be visi
 - Model protocol failure
 - User cancellation and deadline expiry
 
+`CircuitBreaker.create` requires an explicit `TimeProvider`, validates positive failure and success
+thresholds plus a non-negative open duration, and serializes every state transition. Hosts normally
+pass `TimeProvider.System`; deterministic tests pass a controlled provider rather than sleeping.
+
 A fallback should never silently weaken privacy, residency, capability, or authorization requirements.
 
 ## Target telemetry model

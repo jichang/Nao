@@ -30,7 +30,7 @@ dotnet run --project src/Nao.DeveloperTools.Cli/Nao.DeveloperTools.Cli.fsproj --
   scaffold adapter ExampleAdapter ./generated
 ```
 
-Supported template names are `agent`, `tool`, `provider`, `evaluator`, and `adapter`. The scaffold contains a source project, source contract, MSTest project, package identity, and fixed Nao package version `1.0.0`.
+Supported template names are `agent`, `tool`, `provider`, `evaluator`, and `adapter`. The scaffold contains a source project, source contract, MSTest project, package identity, and current Nao package version `1.0.0-alpha1`.
 
 Because Nao is not published yet, repository contributors can bind the generated source project directly to a local contract project:
 

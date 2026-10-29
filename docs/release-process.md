@@ -1,19 +1,21 @@
 # Release and compatibility process
 
-Nao is unreleased. The only supported development line is `main`, package metadata remains `1.0.0`, and development snapshots have no compatibility guarantee. The first public release is the protected `v1.0.0` stable release described by [`release/1.0.0.json`](https://github.com/jichang/Nao/blob/main/release/1.0.0.json).
+Nao has no stable release. The only supported development line is `main`, and development snapshots and prerelease packages have no compatibility guarantee. The current protected release target is `v1.0.0-alpha1`, described by [`release/1.0.0-alpha1.json`](https://github.com/jichang/Nao/blob/main/release/1.0.0-alpha1.json).
 
 ## Branches and release channels
 
 - `main` is the single integration branch and the source of release tags.
 - Pull requests are the review boundary. Release metadata, migrations, package changes, and policy changes are reviewed with the implementation they describe.
-- Untagged CI outputs are preview evidence only. They are not published to NuGet and are not supported packages.
-- Stable publication requires the exact protected tag declared by the release manifest.
+- Untagged CI outputs are development evidence only. They are not published to NuGet and are not supported packages.
+- Alpha, beta, release-candidate, and stable publication require the exact protected tag declared by the current release manifest.
+- `release/current.json` selects the only active release target. Historical manifests remain versioned and immutable after publication.
+- Prerelease channels are evaluation artifacts and carry no compatibility or support guarantee.
 - `1.0.0` is not an LTS line. Nao will not claim an LTS line until a later reviewed policy defines its support duration, backport ownership, and successor.
 - Before the first release, breaking APIs and abstractions are changed in place. After a stable release, a release manifest must name the compatibility baseline and package validation must compare against it.
 
 ## Reviewed release metadata
 
-The schema-v1 manifest owns the package version, date, channel, source branch, tag, compatibility baseline, LTS status, release notes, changelog entries, completed roadmap capabilities, mandatory gates, and artifact set. `scripts/release.py validate` rejects drift from package metadata, release notes, supply-chain policy, roadmap state, or the generated changelog.
+The schema-v1 manifest owns the package version, date, channel, source branch, tag, compatibility baseline, LTS status, release notes, changelog entries, completed roadmap capabilities, mandatory gates, and artifact set. The schema-v1 `release/current.json` pointer selects the manifest used by local and protected workflows. `scripts/release.py validate` rejects invalid SemVer/channel combinations and drift from package metadata, release notes, supply-chain policy, roadmap state, or the generated changelog.
 
 Update generated changelog content with:
 

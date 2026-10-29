@@ -1,16 +1,16 @@
 {
   "schemaVersion": 1,
-  "packageVersion": "1.0.0",
+  "packageVersion": "1.0.0-alpha1",
   "dependencyLock": {
     "path": "paket.lock",
     "sha256": "77ba4d44f80bbc0e0f636a990521ff4256a5bcab588e6f15c09762e52b0ff69e"
   },
   "supportedVersions": {
     "projectReleased": false,
-    "releaseLines": [
-      "1.0.0"
+    "releaseTargets": [
+      "1.0.0-alpha1"
     ],
-    "policy": "Before the first public release, only the current main branch is supported. After release, 1.0.0 remains supported until a reviewed policy revision names its successor."
+    "policy": "Before the first stable release, only the current main branch is supported. Prerelease packages are evaluation artifacts without compatibility or support guarantees."
   },
   "vulnerabilityResponse": {
     "critical": {
