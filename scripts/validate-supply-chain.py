@@ -193,7 +193,15 @@ def vulnerabilities(value: object) -> list[dict[str, object]]:
 def validate_vulnerability_reports(paths: list[Path]) -> list[str]:
     errors: list[str] = []
     for path in paths:
-        for vulnerability in vulnerabilities(load_json(path)):
+        report = load_json(path)
+        if isinstance(report, dict):
+            for problem in report.get("problems", []):
+                if str(problem.get("level", "")).lower() == "error":
+                    errors.append(
+                        f"{path}: scanner error for {problem.get('project', 'unknown project')}: "
+                        f"{problem.get('text', 'unknown error')}"
+                    )
+        for vulnerability in vulnerabilities(report):
             severity = str(vulnerability.get("severity", "unknown")).lower()
             advisory = (
                 vulnerability.get("advisoryurl")

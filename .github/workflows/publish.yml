@@ -69,6 +69,7 @@ jobs:
       - name: Scan NuGet dependencies for release-blocking vulnerabilities
         shell: bash
         run: |
+          dotnet restore Nao.slnx
           mkdir -p artifacts/vulnerabilities
           arguments=()
           while IFS= read -r project; do
@@ -78,7 +79,7 @@ jobs:
               --vulnerable \
               --include-transitive \
               --format json \
-              --no-restore > "$report"
+              --no-restore | tee "$report"
             arguments+=(--vulnerability-report "$report")
           done < <(find src -name '*.fsproj' -o -name '*.csproj' | sort)
           python3 scripts/validate-supply-chain.py "${arguments[@]}"

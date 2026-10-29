@@ -111,6 +111,9 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
+      - name: Restore tools
+        run: dotnet tool restore
+
       - name: Restore dependencies
         run: dotnet paket restore
 
@@ -163,6 +166,7 @@ jobs:
       - name: Scan NuGet dependencies for release-blocking vulnerabilities
         shell: bash
         run: |
+          dotnet restore Nao.slnx
           mkdir -p artifacts/vulnerabilities
           arguments=()
           while IFS= read -r project; do
@@ -172,7 +176,7 @@ jobs:
               --vulnerable \
               --include-transitive \
               --format json \
-              --no-restore > "$report"
+              --no-restore | tee "$report"
             arguments+=(--vulnerability-report "$report")
           done < <(find src -name '*.fsproj' -o -name '*.csproj' | sort)
           python3 scripts/validate-supply-chain.py "${arguments[@]}"
@@ -229,6 +233,7 @@ jobs:
           --filter "TestCategory=Isolation"
 
       - name: Run fast evaluation release gates
+        id: evaluation-fast
         if: github.event_name != 'schedule'
         run: >
           dotnet test tests/Nao.Eval.Tests/Nao.Eval.Tests.fsproj
@@ -250,6 +255,7 @@ jobs:
             -c Release --no-build --filter "TestCategory=Performance"
 
       - name: Run full scheduled evaluation release gates
+        id: evaluation-full
         if: github.event_name == 'schedule'
         run: >
           dotnet test tests/Nao.Eval.Tests/Nao.Eval.Tests.fsproj
@@ -268,7 +274,7 @@ jobs:
           --filter "TestCategory=RestoreDrill"
 
       - name: Upload evaluation gate reports
-        if: always()
+        if: always() && (steps.evaluation-fast.outcome != 'skipped' || steps.evaluation-full.outcome != 'skipped')
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: evaluation-gate-reports
@@ -276,6 +282,7 @@ jobs:
           if-no-files-found: error
 
       - name: Test with coverage
+        id: coverage
         shell: bash
         run: |
           while IFS=$'\t' read -r category project; do
@@ -288,7 +295,7 @@ jobs:
           done < <(python3 scripts/validate-test-surface.py --list-tests)
 
       - name: Upload test results and coverage
-        if: always()
+        if: always() && steps.coverage.outcome != 'skipped'
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: test-results-and-coverage

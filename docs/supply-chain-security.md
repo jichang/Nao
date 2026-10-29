@@ -19,6 +19,9 @@ Pull requests run GitHub dependency review with high-severity vulnerability bloc
 repository license denylist. CI also queries NuGet advisories for every production project,
 including transitive dependencies. The machine-readable reports are retained as workflow
 artifacts. The release workflow repeats this scan rather than trusting a previous workflow run.
+Before scanning, both workflows run `dotnet restore Nao.slnx` to generate the NuGet assets files;
+`dotnet paket restore` alone does not generate them. Scanner output is also written to the workflow
+log, and scanner errors block the gate even when a report contains no vulnerability findings.
 
 ## Vulnerability response
 

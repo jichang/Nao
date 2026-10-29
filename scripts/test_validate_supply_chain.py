@@ -14,13 +14,14 @@ SPEC.loader.exec_module(MODULE)
 
 
 class VulnerabilityReportTests(unittest.TestCase):
-    def write_report(self, vulnerabilities):
+    def write_report(self, vulnerabilities, *, problems=None):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         path = Path(directory.name) / "report.json"
         path.write_text(
             json.dumps(
                 {
+                    "problems": problems if problems is not None else [],
                     "projects": [
                         {
                             "frameworks": [
@@ -54,6 +55,34 @@ class VulnerabilityReportTests(unittest.TestCase):
             [{"severity": "Moderate", "advisoryurl": "https://example.invalid/CVE-2"}]
         )
         self.assertEqual([], MODULE.validate_vulnerability_reports([report]))
+
+    def test_scanner_error_blocks_release_without_vulnerabilities(self):
+        report = self.write_report(
+            [],
+            problems=[
+                {
+                    "project": "Example.fsproj",
+                    "level": "error",
+                    "text": "No assets file was found. Run restore before running this command.",
+                }
+            ],
+        )
+        errors = MODULE.validate_vulnerability_reports([report])
+        self.assertEqual(1, len(errors))
+        self.assertIn("scanner error for Example.fsproj", errors[0])
+        self.assertIn("No assets file was found", errors[0])
+
+    def test_scanner_warning_does_not_block_release(self):
+        report = self.write_report(
+            [],
+            problems=[
+                {"project": "Example.fsproj", "level": "warning", "text": "Example warning"}
+            ],
+        )
+        self.assertEqual([], MODULE.validate_vulnerability_reports([report]))
+
+    def test_clean_report_does_not_block_release(self):
+        self.assertEqual([], MODULE.validate_vulnerability_reports([self.write_report([])]))
 
     def test_current_release_version_follows_pointer(self):
         directory = tempfile.TemporaryDirectory()

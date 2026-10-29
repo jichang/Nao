@@ -20,6 +20,10 @@ Both images:
 
 The workers are one-request processes launched by the governed execution environment. They are not Kubernetes services and do not expose health endpoints. The host owns worker admission, deadlines, hard resource controls, image verification, cancellation, and cleanup.
 
+Clean image builds restore the repository-local tools and run `dotnet paket restore` before the
+SDK restore and publish. Paket generates the ignored `.paket/Paket.Restore.targets` import;
+installing the tool or running only `dotnet restore` does not prepare that import for publishing.
+
 Release tags and manual invocations of [`container-images.yml`](https://github.com/jichang/Nao/blob/main/.github/workflows/container-images.yml) publish the images. Deploy by immutable digest, never by the mutable release tag:
 
 ```text
