@@ -130,6 +130,9 @@ The [API documentation and lifecycle guide](api-lifecycle.md) defines compiler-v
 - Add cross-tenant and fail-closed tests to protected operations.
 - Use real adapter integration tests where practical and deterministic fixtures elsewhere.
 - Keep evaluation datasets versioned separately from ordinary unit tests.
+- Locate repository files with `NaoTestFixtures.repositoryRoot()` from `Nao.Testing`, not
+  `__SOURCE_DIRECTORY__`: deterministic CI builds rewrite compiler source paths to `/_/`.
+  The helper searches upward from the test output directory for `Nao.slnx`.
 
 The supported solution uses these primary test categories:
 

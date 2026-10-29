@@ -10,6 +10,7 @@
     <Compile Include="src/DeveloperToolsTests.fs" />
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="../Nao.Testing/Nao.Testing.fsproj" />
     <ProjectReference Include="../../src/Nao.DeveloperTools/Nao.DeveloperTools.fsproj" />
   </ItemGroup>
   <Import Project="../../.paket/Paket.Restore.targets" />

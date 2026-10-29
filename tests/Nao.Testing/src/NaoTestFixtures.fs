@@ -1,10 +1,23 @@
 namespace Nao.Agents
 
+open System
+open System.IO
 open System.Threading
 open System.Threading.Tasks
 
 [<AutoOpen>]
 module NaoTestFixtures =
+
+    let repositoryRoot () =
+        let rec find (directory: DirectoryInfo) =
+            if File.Exists(Path.Combine(directory.FullName, "Nao.slnx")) then
+                directory.FullName
+            elif isNull directory.Parent then
+                invalidOp $"Cannot locate Nao.slnx above test output directory '{AppContext.BaseDirectory}'."
+            else
+                find directory.Parent
+
+        find (DirectoryInfo AppContext.BaseDirectory)
 
     type AgentContext with
         static member unrestrictedForTests() =

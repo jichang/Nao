@@ -8,7 +8,7 @@ open Nao.Platform
 [<TestClass>]
 type DeploymentProfileTests() =
     let profileDirectory =
-        Path.GetFullPath(Path.Combine(__SOURCE_DIRECTORY__, "..", "..", "..", "deploy", "profiles", "v1"))
+        Path.Combine(Nao.Agents.NaoTestFixtures.repositoryRoot (), "deploy", "profiles", "v1")
 
     let parse name =
         Path.Combine(profileDirectory, name)

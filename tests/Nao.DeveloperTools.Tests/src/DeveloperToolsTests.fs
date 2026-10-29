@@ -224,17 +224,7 @@ type DeveloperToolsTests() =
 
             try
                 let contractProject =
-                    Path.GetFullPath(
-                        Path.Combine(
-                            __SOURCE_DIRECTORY__,
-                            "..",
-                            "..",
-                            "..",
-                            "src",
-                            "Nao.Extensions",
-                            "Nao.Extensions.fsproj"
-                        )
-                    )
+                    Path.Combine(repositoryRoot (), "src", "Nao.Extensions", "Nao.Extensions.fsproj")
 
                 let _, _ =
                     ExtensionTemplate.create root ExtensionTemplate.Adapter "ExampleAdapter" (Some contractProject)
