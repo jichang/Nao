@@ -25,7 +25,7 @@ The current implementation provides agent, ETCLOVG harness, persistence, provide
 | [Data lifecycle and disaster recovery](data-lifecycle-recovery.html) | Store inventory, RPO/RTO, backup, PITR, rebuild, deletion, migration, and restore-drill procedures |
 | [Configuration and administration](configuration-administration.html) | Immutable and reloadable settings, last-known-good activation, authenticated changes, audit, and rollback |
 | [Service objectives and error budgets](service-objectives.html) | User-visible indicators, profile objectives, explicit exclusions, error budgets, alerts, and exercises |
-| [Supply-chain security](supply-chain-security.html) | Dependency locks, vulnerability response, licenses, native dependencies, signing, SBOMs, provenance, and verification |
+| [Supply-chain security](supply-chain-security.html) | Dependency locks, vulnerability response, licenses, native dependencies, Trusted Publishing, SBOMs, provenance, and verification |
 | [Durable formats](durable-formats.html) | Current schema markers, decode policy, fail-fast gaps, and migration rules |
 | [Architecture decisions](decisions/README.html) | Decision criteria, lifecycle, and ADR template for platform contracts |
 

@@ -35,7 +35,7 @@ drift or bypass any release gates.
 
 These changes exist only in the publishing checkout: the workflow does not commit, push, or
 modify the tag. A fresh run of a tag still marked `Unreleased` uses that run's UTC date.
-The signed-package workflow artifact retains the finalized manifest, release notes, and changelog
+The package workflow artifact retains the finalized manifest, release notes, and changelog
 alongside the package evidence.
 To reproduce the publication metadata checks locally:
 
@@ -62,9 +62,9 @@ The initial release has no supported predecessor, so its reviewed compatibility 
 
 ## Artifacts and evidence
 
-Every packable library produces a `.nupkg` and `.snupkg` with repository metadata, package README, portable symbols, and source-link build metadata. The protected workflow signs packages, writes `SHA256SUMS`, generates an SPDX SBOM, creates build-provenance and SBOM attestations, publishes through NuGet trusted publishing, and retains the complete evidence set.
+Every packable library produces a `.nupkg` and `.snupkg` with repository metadata, package README, portable symbols, and source-link build metadata. The protected workflow authenticates publication through NuGet Trusted Publishing, writes `SHA256SUMS`, generates an SPDX SBOM, creates build-provenance and SBOM attestations, and retains the complete evidence set. Nao does not currently maintain a NuGet repository-signing certificate and does not claim package signatures.
 
-Consumers verify the signature, checksum, provenance, SBOM, package identity, and immutable version before promotion. A clean temporary F# project installs `Nao.Extensions` and `Nao.Platform` from the produced package directory and compiles against their public APIs before publication.
+Consumers verify the checksum, GitHub provenance, SBOM attestation, package identity, and immutable version before promotion. A clean temporary F# project installs `Nao.Extensions` and `Nao.Platform` from the produced package directory and compiles against their public APIs before publication.
 
 ## Rollback and package yanking
 
@@ -75,8 +75,8 @@ For a defective published release:
 1. stop deployment and promotion;
 2. restore application and authoritative data using the release-specific rollback procedure;
 3. deprecate affected NuGet packages with a replacement or withdrawal message;
-4. revoke compromised signing material or attestations when applicable;
-5. publish a new version from a reviewed fix with new checksums, SBOMs, signatures, and attestations.
+4. revoke compromised publishing identities or attestations when applicable;
+5. publish a new version from a reviewed fix with new checksums, SBOMs, provenance, and attestations.
 
 NuGet unlisting is reserved for legal, security, or severe safety incidents because it harms reproducibility. Ordinary defects use deprecation plus a fixed release. Container tags may be withdrawn, but immutable digests remain in incident and release evidence.
 

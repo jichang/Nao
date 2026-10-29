@@ -76,28 +76,30 @@ threat model, image SBOM, platform matrix, and isolation tests in the same chang
 
 ## Package publication
 
-The NuGet workflow uses the protected `nuget` environment and OIDC trusted publishing. It:
+The NuGet workflow uses the protected `nuget` environment and OIDC Trusted Publishing. It:
 
-1. validates reviewed release metadata, policy, and advisories;
-2. builds and runs compatibility, migration, evaluation, security, performance, and complete-suite gates;
-3. derives the package version from the manifest and verifies the protected tag;
-4. packs libraries and portable symbol packages with repository and source-link metadata;
-5. verifies package contents and installation into a clean consumer;
-6. signs every `.nupkg` with the protected code-signing certificate and trusted timestamp;
+1. derives the package version from the manifest and verifies the protected tag;
+2. obtains a short-lived NuGet API key through OIDC before the expensive build;
+3. validates reviewed release metadata, policy, and advisories;
+4. builds and runs compatibility, migration, evaluation, security, performance, and complete-suite gates;
+5. packs libraries and portable symbol packages with repository and source-link metadata;
+6. verifies package contents and installation into a clean consumer;
 7. generates SHA-256 checksums and an SPDX JSON SBOM;
 8. creates GitHub build-provenance and SBOM attestations;
-9. publishes through NuGet trusted publishing;
-10. retains signed packages and evidence as a workflow artifact.
+9. publishes with the short-lived Trusted Publishing credential;
+10. retains packages and evidence as a workflow artifact.
 
-The environment must restrict reviewers, tag patterns, and access to
-`NUGET_SIGNING_CERTIFICATE_BASE64` and `NUGET_SIGNING_CERTIFICATE_PASSWORD`. Certificate rotation
-must overlap trust long enough to verify existing packages; never replace a package at the same
-version.
+The NuGet.org Trusted Publishing policy must bind the account named by the
+`NUGET_USERNAME` secret to this repository, the `publish.yml` workflow, and the protected `nuget`
+environment. That secret contains the NuGet profile name, not an authentication credential; the
+action exchanges GitHub OIDC identity for the short-lived API key. The workflow requires no
+long-lived NuGet API key or certificate secret. Nao does not currently maintain a NuGet
+repository-signing certificate and does not claim package signatures. Never replace a package at
+the same version or use duplicate-skipping to complete a partial publication.
 
 Verify a downloaded package before use:
 
 ```bash
-dotnet nuget verify --all Nao.Agents.1.0.0-alpha1.nupkg
 gh attestation verify Nao.Agents.1.0.0-alpha1.nupkg --repo jichang/Nao
 ```
 

@@ -104,6 +104,47 @@ class VulnerabilityReportTests(unittest.TestCase):
             "1.0.0-alpha1", MODULE.current_release_version(root)
         )
 
+    def test_trusted_publishing_contract_accepts_configured_identity_preflight(self):
+        workflow = """
+permissions:
+  id-token: write
+on:
+  push:
+    tags: ['v*']
+steps:
+  - run: python3 scripts/release.py version
+  - id: login
+    uses: NuGet/login@commit
+    with:
+      user: ${{ secrets.NUGET_USERNAME }}
+  - name: Build
+  - run: dotnet nuget push package.nupkg --api-key ${{ steps.login.outputs.NUGET_API_KEY }}
+"""
+        self.assertEqual([], MODULE.validate_publish_workflow(workflow))
+
+    def test_unsupported_signing_secrets_and_duplicate_skips_are_rejected(self):
+        workflow = """
+permissions:
+  id-token: write
+on:
+  push:
+    tags: ['v*']
+steps:
+  - run: python3 scripts/release.py version
+  - uses: NuGet/login@commit
+    with:
+      user: ${{ secrets.NUGET_USERNAME }}
+  - name: Build
+  - run: dotnet nuget sign package.nupkg --skip-duplicate
+    env:
+      NUGET_SIGNING_CERTIFICATE_BASE64: value
+  - run: echo ${{ steps.login.outputs.NUGET_API_KEY }}
+"""
+        errors = MODULE.validate_publish_workflow(workflow)
+        self.assertTrue(any("dotnet nuget sign" in error for error in errors))
+        self.assertTrue(any("NUGET_SIGNING_CERTIFICATE" in error for error in errors))
+        self.assertTrue(any("--skip-duplicate" in error for error in errors))
+
 
 if __name__ == "__main__":
     unittest.main()

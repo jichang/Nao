@@ -33,6 +33,32 @@ def current_release_version(root: Path) -> str:
     return manifest["version"]
 
 
+def validate_publish_workflow(publish: str) -> list[str]:
+    errors: list[str] = []
+    if "tags: ['v*']" not in publish or "scripts/release.py version" not in publish:
+        errors.append("NuGet publication must derive package metadata from the release manifest")
+    if (
+        "NuGet/login@" not in publish
+        or "user: ${{ secrets.NUGET_USERNAME }}" not in publish
+    ):
+        errors.append("NuGet publication must use the configured Trusted Publishing identity")
+    if "id-token: write" not in publish:
+        errors.append("NuGet Trusted Publishing requires id-token write permission")
+    if "steps.login.outputs.NUGET_API_KEY" not in publish:
+        errors.append("NuGet publication must push with the Trusted Publishing credential")
+    if "NuGet/login@" in publish and "- name: Build" in publish:
+        if publish.index("NuGet/login@") > publish.index("- name: Build"):
+            errors.append("NuGet Trusted Publishing must fail before the expensive build")
+    for forbidden in (
+        "dotnet nuget sign",
+        "NUGET_SIGNING_CERTIFICATE",
+        "--skip-duplicate",
+    ):
+        if forbidden in publish:
+            errors.append(f"NuGet publication retains unsupported release dependency: {forbidden}")
+    return errors
+
+
 def validate_policy(root: Path) -> list[str]:
     errors: list[str] = []
     policy_path = root / "supply-chain-policy.json"
@@ -147,13 +173,10 @@ def validate_policy(root: Path) -> list[str]:
             errors.append(f"{workflow_name} must attest published artifacts")
 
     publish = (workflow_dir / "publish.yml").read_text(encoding="utf-8")
-    if "tags: ['v*']" not in publish or "scripts/release.py version" not in publish:
-        errors.append("NuGet publication must derive package metadata from the release manifest")
+    errors.extend(validate_publish_workflow(publish))
     containers = (workflow_dir / "container-images.yml").read_text(encoding="utf-8")
     if "tags: ['v*']" not in containers or "scripts/release.py version" not in containers:
         errors.append("container publication must validate its tag against the release manifest")
-    if "dotnet nuget sign" not in publish:
-        errors.append("NuGet publication must sign packages before upload")
     if "sbom" not in publish.lower():
         errors.append("NuGet publication must generate an SBOM")
     for required in (
