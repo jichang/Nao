@@ -18,6 +18,17 @@ dotnet test Nao.slnx
 
 Some test projects and integration scenarios may require services or may not yet be members of the default solution. The [foundations roadmap](roadmap/00-foundations.md) tracks consolidation of the complete supported test surface.
 
+Run the offline reference suite:
+
+```bash
+dotnet run --project examples/Nao.Examples/Nao.Examples.fsproj -- all
+dotnet run --project examples/Nao.OrleansExample/Nao.OrleansExample.fsproj
+```
+
+See [Reference examples](reference-examples.md) before copying a path. It identifies every local
+fixture and the production identity, persistence, isolation, clustering, and governance controls
+that must replace it.
+
 ## Define an agent
 
 Agents publish an explicit name, description, execution guidance, and transport contract. Nao does not infer transport schemas or force one serialization format.

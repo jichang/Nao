@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "profile": "clustered-production",
+  "instanceId": "nao-cluster",
+  "identityMode": "workload-identity",
+  "administrationMode": "authenticated",
+  "toolPolicy": "restricted",
+  "workerIsolation": "container",
+  "durability": "persistent",
+  "clusterMembership": "configured:adonet",
+  "secretReferences": [
+    {
+      "name": "database",
+      "provider": "workload-identity",
+      "key": "nao/database"
+    }
+  ]
+}

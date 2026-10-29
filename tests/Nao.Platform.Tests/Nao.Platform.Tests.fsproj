@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <Using Include="Microsoft.VisualStudio.TestTools.UnitTesting" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="src/DeploymentProfileTests.fs" />
+    <Compile Include="src/ConfigurationLifecycleTests.fs" />
+    <Compile Include="src/RecoveryTests.fs" />
+    <Compile Include="src/MigrationTests.fs" />
+    <Compile Include="src/ServiceReliabilityTests.fs" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Nao.Testing\Nao.Testing.fsproj" />
+    <ProjectReference Include="..\..\src\Nao.Platform\Nao.Platform.fsproj" />
+  </ItemGroup>
+  <Import Project="..\..\.paket\Paket.Restore.targets" />
+</Project>

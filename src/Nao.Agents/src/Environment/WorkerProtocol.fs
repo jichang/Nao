@@ -3,6 +3,7 @@ namespace Nao.Agents
 open System
 open System.Collections.Generic
 open System.IO
+open System.Runtime.InteropServices
 open System.Text.Json
 open System.Threading
 open System.Threading.Tasks
@@ -39,6 +40,8 @@ type WorkerExecutionRequest =
         AllowedPaths: string list
         Secrets: WorkerSecrets
         Budget: WorkerExecutionBudget
+        /// Cancelled when the host request or worker process is shutting down.
+        CancellationToken: CancellationToken
     }
 
 /// Function resolved by a worker for one stable agent identity.
@@ -467,7 +470,10 @@ module WorkerProtocol =
         | "ToolCalls" -> Some Nao.Agents.LimitExceeded.ToolCalls
         | _ -> None
 
-    let internal executionRequest (message: WorkerMessage) : WorkerExecutionRequest * Nao.Agents.ExecutionContext =
+    let internal executionRequest
+        (message: WorkerMessage)
+        (cancellationToken: CancellationToken)
+        : WorkerExecutionRequest * Nao.Agents.ExecutionContext =
         let limits =
             { ResourceLimits.Unlimited with
                 MaxLlmCalls = message.MaxLlmCalls
@@ -541,7 +547,8 @@ module WorkerProtocol =
               EnforceFileSystemPolicy = message.EnforceFileSystemPolicy
               AllowedPaths = message.AllowedPaths |> List.ofArray
               Secrets = secrets
-              Budget = budget }
+              Budget = budget
+              CancellationToken = cancellationToken }
 
         request, context
 
@@ -592,7 +599,7 @@ module WorkerProtocol =
                             |> Task.FromResult
                         | Some handler ->
                             task {
-                                let executionRequest, executionContext = executionRequest request
+                                let executionRequest, executionContext = executionRequest request cancellationToken
 
                                 try
                                     match! handler executionRequest with
@@ -601,9 +608,29 @@ module WorkerProtocol =
                                 with
                                 | ExecutionLimitExceededException limit ->
                                     return limitExceeded protocolVersion limit |> withUsage executionContext
+                                | :? OperationCanceledException when cancellationToken.IsCancellationRequested ->
+                                    return raise (OperationCanceledException cancellationToken)
                                 | error -> return failed protocolVersion error.Message |> withUsage executionContext
                             }
 
                     do! writeMessage writer response cancellationToken
                     return Ok()
+        }
+
+    /// Serve one execution and translate SIGINT/SIGTERM into cooperative worker cancellation.
+    let runSingleProcessAsync protocolVersion handlers reader writer =
+        task {
+            use shutdown = new CancellationTokenSource()
+
+            let cancel (context: PosixSignalContext) =
+                context.Cancel <- true
+                shutdown.Cancel()
+
+            use interrupt = PosixSignalRegistration.Create(PosixSignal.SIGINT, cancel)
+            use terminate = PosixSignalRegistration.Create(PosixSignal.SIGTERM, cancel)
+
+            try
+                return! runSingleAsync protocolVersion handlers reader writer shutdown.Token
+            with :? OperationCanceledException when shutdown.IsCancellationRequested ->
+                return Ok()
         }

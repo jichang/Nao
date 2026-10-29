@@ -1,7 +1,29 @@
 # Default repository owner
 * @jichang
 
+# Release and supply-chain policy
+/.github/workflows/ @jichang
+/.github/dependabot.yml @jichang
+/supply-chain-policy.json @jichang
+/integration-policy.json @jichang
+/paket.dependencies @jichang
+/paket.lock @jichang
+/dotnet-tools.json @jichang
+/release/ @jichang
+/CHANGELOG.md @jichang
+/deploy/images/ @jichang
+/scripts/release.py @jichang
+/scripts/test-release-consumer.sh @jichang
+/scripts/validate-supply-chain.py @jichang
+/scripts/validate-integrations.py @jichang
+
 # Public packages
+/src/Nao.DeveloperTools.Cli/ @jichang
+/src/Nao.DeveloperTools/ @jichang
+/src/Nao.Extensions/ @jichang
+/src/Nao.Platform/ @jichang
+/src/Nao.Identity.Oidc/ @jichang
+/src/Nao.Telemetry.OpenTelemetry/ @jichang
 /src/Nao.Agents/ @jichang
 /src/Nao.Protocols/ @jichang
 /src/Nao.Eval/ @jichang
@@ -20,6 +42,10 @@
 /src/Nao.Providers.Ollama/ @jichang
 /src/Nao.Runtime.Orleans/ @jichang
 /src/Nao.Runtime.Orleans.Codegen/ @jichang
+/src/Nao.Knowledge.Postgres/ @jichang
+/src/Nao.Persistence.Postgres/ @jichang
+/src/Nao.Reasoning.Datalog/ @jichang
+/src/Nao.Reasoning.Constraints/ @jichang
 
 # Roadmap workstreams
 /docs/roadmap/00-foundations.md @jichang

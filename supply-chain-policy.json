@@ -1,0 +1,92 @@
+{
+  "schemaVersion": 1,
+  "packageVersion": "1.0.0",
+  "dependencyLock": {
+    "path": "paket.lock",
+    "sha256": "77ba4d44f80bbc0e0f636a990521ff4256a5bcab588e6f15c09762e52b0ff69e"
+  },
+  "supportedVersions": {
+    "projectReleased": false,
+    "releaseLines": [
+      "1.0.0"
+    ],
+    "policy": "Before the first public release, only the current main branch is supported. After release, 1.0.0 remains supported until a reviewed policy revision names its successor."
+  },
+  "vulnerabilityResponse": {
+    "critical": {
+      "releaseAction": "block",
+      "triageHours": 4,
+      "remediationHours": 24
+    },
+    "high": {
+      "releaseAction": "block",
+      "triageHours": 24,
+      "remediationHours": 72
+    },
+    "medium": {
+      "releaseAction": "review",
+      "triageHours": 72,
+      "remediationHours": 720
+    },
+    "low": {
+      "releaseAction": "track",
+      "triageHours": 168,
+      "remediationHours": 2160
+    }
+  },
+  "licenses": {
+    "allowed": [
+      "Apache-2.0",
+      "BSD-2-Clause",
+      "BSD-3-Clause",
+      "ISC",
+      "MIT",
+      "MS-PL",
+      "PostgreSQL",
+      "Unicode-3.0",
+      "Zlib"
+    ],
+    "denied": [
+      "AGPL-1.0-only",
+      "AGPL-3.0-only",
+      "BUSL-1.1",
+      "GPL-2.0-only",
+      "GPL-3.0-only",
+      "SSPL-1.0"
+    ]
+  },
+  "nativeDependencies": [
+    {
+      "name": "libc",
+      "kind": "host-system-library",
+      "consumers": [
+        "Nao.Agents.Worker"
+      ],
+      "purpose": "Linux user-namespace, Landlock, and numeric identity enforcement.",
+      "distribution": "Not redistributed by Nao; supplied by the digest-pinned runtime image.",
+      "review": "Interop calls are bounded to syscall, prctl, open, close, geteuid, and getegid and are covered by container isolation tests."
+    },
+    {
+      "name": "Z3",
+      "kind": "external-process",
+      "consumers": [
+        "Nao.Reasoning.Constraints"
+      ],
+      "purpose": "Optional SMT constraint solving through the versioned process protocol.",
+      "distribution": "Not redistributed by Nao; hosts provide and isolate the executable.",
+      "review": "Nao validates engine identity, protocol values, statistics, cancellation, and failure classification."
+    },
+    {
+      "name": "PostgreSQL",
+      "kind": "external-service",
+      "consumers": [
+        "Nao.Knowledge.Postgres",
+        "Nao.Persistence.Postgres",
+        "Nao.Runtime.Orleans"
+      ],
+      "purpose": "Optional authoritative persistence, retrieval indexes, and Orleans clustering.",
+      "distribution": "Not redistributed by Nao; operators patch and manage the database service.",
+      "review": "Adapters use managed Npgsql/Pgvector clients, owner-bound schemas, health checks, and restore qualification."
+    }
+  ]
+}

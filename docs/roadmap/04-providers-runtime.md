@@ -12,8 +12,8 @@ This workstream turns individual provider adapters and Orleans grains into a res
 - [x] OpenAI-compatible, Anthropic, DeepSeek, Kimi, Ollama, vLLM, and llama.cpp adapters exist.
 - [x] Orleans sessions, session directory, workspace registry, and persisted state exist.
 - [x] Multiple compiled workspaces can be hosted in one silo.
-- [ ] Providers are pooled and selected through a capability- and policy-aware control plane.
-- [ ] Multi-silo tenant isolation, upgrade, failover, and operations are comprehensively defined.
+- [x] Providers are pooled and selected through a capability- and policy-aware control plane.
+- [x] Multi-silo tenant isolation, upgrade, failover, and operations are comprehensively defined.
 
 ## PRV-01 — Provider capability model
 

@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "profile": "isolated-worker",
+  "instanceId": "nao-worker",
+  "identityMode": "workload-identity",
+  "administrationMode": "disabled",
+  "toolPolicy": "restricted",
+  "workerIsolation": "container",
+  "durability": "persistent",
+  "clusterMembership": "standalone",
+  "secretReferences": []
+}

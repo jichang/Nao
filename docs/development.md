@@ -63,6 +63,7 @@ Optional vendor integrations should not add dependencies to core contract packag
 - Make cancellation, timeout, identity, and ownership explicit at external boundaries.
 - Use structured errors for expected platform outcomes.
 - Add XML documentation to public APIs.
+- Mark experimental APIs with `ExperimentalAttribute` and deprecated APIs with `ObsoleteAttribute`; update the capability inventory and release notes in the same change.
 
 ## Project boundaries
 
@@ -70,6 +71,9 @@ Dependencies point inward from runtimes and adapters to core contracts:
 
 | Project | Role | Allowed project dependencies |
 |---|---|---|
+| `Nao.DeveloperTools.Cli` | Non-packable command-line host | `Nao.DeveloperTools` |
+| `Nao.DeveloperTools` | Executable developer workflows and authenticated operational diagnostics | `Nao.Platform`, `Nao.Runtime.Orleans` |
+| `Nao.Extensions` | Dependency-light compiled adapter lifecycle and conformance SDK | None |
 | `Nao.Protocols` | Core response contracts | None |
 | `Nao.Agents` | Core agent, tool, memory, governance, and observability contracts and execution | `Nao.Protocols` |
 | `Nao.Eval` | Evaluation implementation | `Nao.Agents` |
@@ -95,6 +99,8 @@ Create a separate package when a capability introduces a replaceable backend, op
 
 Optional adapter packages use `Nao.<Domain>.<Adapter>` names. Reserved families are `Nao.Knowledge.<Adapter>`, `Nao.Telemetry.<Adapter>`, `Nao.Identity.<Adapter>`, `Nao.Vector.<Adapter>`, `Nao.Graph.<Adapter>`, and `Nao.Reasoning.<Adapter>`. Vendor-specific packages place the vendor or protocol in `<Adapter>` and remain outside core.
 
+Adapter packages expose their domain-specific capability through the common `Nao.Extensions` lifecycle. See the [extension and adapter SDK](extension-adapter-sdk.md) for registration, compatibility, conformance, configuration, and dynamic isolation requirements.
+
 Run the architecture policy and its rejection tests locally with:
 
 ```bash
@@ -112,6 +118,8 @@ Nao currently supports .NET 10 and the F# toolchain selected by that SDK. CI fol
 
 Public APIs are stable only when documented as supported. Experimental APIs use a `.Experimental` namespace or an `Experimental` module and may change or be removed in any minor release without a compatibility shim. Experimental durable formats still require an explicit schema version and fail-fast diagnostics; they must not be silently read as stable formats.
 
+The [API documentation and lifecycle guide](api-lifecycle.md) defines compiler-visible stability markers, strict reference generation, versioned release documentation, migration-link enforcement, and tested-snippet policy.
+
 ## Testing
 
 - Test project names use the `<ProjectName>.Tests` convention where applicable.
@@ -127,7 +135,7 @@ The supported solution uses these primary test categories:
 
 | Category | Projects | Purpose |
 |---|---|---|
-| Unit | `Nao.Agents.Tests`, `Nao.Protocols.Tests` | In-process contract and behavior checks |
+| Unit | `Nao.DeveloperTools.Tests`, `Nao.Extensions.Tests`, `Nao.Agents.Tests`, `Nao.Protocols.Tests` | Developer commands, adapter conformance, and in-process contract and behavior checks |
 | Knowledge unit | `Nao.Knowledge.Tests` | Source, version, lineage, lifecycle, citation, and retrieval contracts |
 | Integration | `Nao.Identity.Oidc.Tests`, `Nao.Knowledge.Postgres.Tests`, `Nao.Telemetry.OpenTelemetry.Tests`, `Nao.Persistence.Tests`, `Nao.Providers.Tests`, `Nao.Runtime.Orleans.Tests` | Identity-adapter, external knowledge-index, telemetry-export, storage, provider-adapter, and runtime checks |
 | End-to-end | `Nao.E2E.Tests` | Full harness and orchestration flows using local fakes |

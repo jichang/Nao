@@ -10,6 +10,7 @@
     <Project Path="src/Nao.Knowledge.Documents/Nao.Knowledge.Documents.fsproj" />
     <Project Path="src/Nao.Knowledge.Documents.Worker/Nao.Knowledge.Documents.Worker.fsproj" />
     <Project Path="src/Nao.Persistence/Nao.Persistence.fsproj" />
+    <Project Path="src/Nao.Platform/Nao.Platform.fsproj" />
     <Project Path="src/Nao.Persistence.Feedback/Nao.Persistence.Feedback.fsproj" />
     <Project Path="src/Nao.Persistence.Infrastructure/Nao.Persistence.Infrastructure.fsproj" />
     <Project Path="src/Nao.Persistence.Memory/Nao.Persistence.Memory.fsproj" />
@@ -29,9 +30,13 @@
     <Project Path="src/Nao.Semantics/Nao.Semantics.fsproj" />
     <Project Path="src/Nao.Semantics.Rdf/Nao.Semantics.Rdf.fsproj" />
     <Project Path="src/Nao.Documents/Nao.Documents.fsproj" />
+    <Project Path="src/Nao.DeveloperTools.Cli/Nao.DeveloperTools.Cli.fsproj" />
+    <Project Path="src/Nao.DeveloperTools/Nao.DeveloperTools.fsproj" />
+    <Project Path="src/Nao.Extensions/Nao.Extensions.fsproj" />
     <Project Path="src/Nao.Telemetry.OpenTelemetry/Nao.Telemetry.OpenTelemetry.fsproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/Nao.Platform.Tests/Nao.Platform.Tests.fsproj" />
     <Project Path="tests/Nao.Reasoning.Bridge.Tests/Nao.Reasoning.Bridge.Tests.fsproj" />
     <Project Path="tests/Nao.Reasoning.Constraints.Tests/Nao.Reasoning.Constraints.Tests.fsproj" />
     <Project Path="tests/Nao.Reasoning.Datalog.Tests/Nao.Reasoning.Datalog.Tests.fsproj" />
@@ -39,6 +44,7 @@
     <Project Path="tests/Nao.Testing/Nao.Testing.fsproj" />
     <Project Path="tests/Nao.Agents.Tests/Nao.Agents.Tests.fsproj" />
     <Project Path="tests/Nao.E2E.Tests/Nao.E2E.Tests.fsproj" />
+    <Project Path="tests/Nao.Extensions.Tests/Nao.Extensions.Tests.fsproj" />
     <Project Path="tests/Nao.Eval.Tests/Nao.Eval.Tests.fsproj" />
     <Project Path="tests/Nao.Identity.Oidc.Tests/Nao.Identity.Oidc.Tests.fsproj" />
     <Project Path="tests/Nao.Knowledge.Tests/Nao.Knowledge.Tests.fsproj" />
@@ -49,5 +55,11 @@
     <Project Path="tests/Nao.Runtime.Orleans.Tests/Nao.Runtime.Orleans.Tests.fsproj" />
     <Project Path="tests/Nao.Semantics.Tests/Nao.Semantics.Tests.fsproj" />
     <Project Path="tests/Nao.Documents.Tests/Nao.Documents.Tests.fsproj" />
+    <Project Path="tests/Nao.DeveloperTools.Tests/Nao.DeveloperTools.Tests.fsproj" />
+  </Folder>
+  <Folder Name="/examples/">
+    <Project Path="examples/Nao.DocumentationSnippets/Nao.DocumentationSnippets.fsproj" />
+    <Project Path="examples/Nao.Examples/Nao.Examples.fsproj" />
+    <Project Path="examples/Nao.OrleansExample/Nao.OrleansExample.fsproj" />
   </Folder>
 </Solution>

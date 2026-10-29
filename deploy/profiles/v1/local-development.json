@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "profile": "local-development",
+  "instanceId": "nao-local",
+  "identityMode": "development-permissive",
+  "administrationMode": "disabled",
+  "toolPolicy": "restricted",
+  "workerIsolation": "in-process",
+  "durability": "ephemeral",
+  "clusterMembership": "standalone",
+  "secretReferences": []
+}

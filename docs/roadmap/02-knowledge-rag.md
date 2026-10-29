@@ -230,7 +230,7 @@ This workstream creates a reusable knowledge subsystem for ingestion, indexing, 
 
 ### Exit criteria for R2
 
-- [ ] KNO-01 through KNO-06 and RAG-01 through RAG-05 are complete for at least one production adapter set.
+- [x] KNO-01 through KNO-06 and RAG-01 through RAG-05 are complete for at least one production adapter set.
 - [x] MEM-01 boundaries are implemented and documented.
 - [x] Incremental ingestion, re-indexing, deletion, backup, and restore are tested.
 - [x] Retrieval quality, latency, cost, safety, and isolation gates pass.

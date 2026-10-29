@@ -539,7 +539,7 @@ explicit telemetry loss, never as an execution failure.
 hosts that expose their own authenticated scrape endpoint. OTLP metrics remain the preferred
 multi-tenant production path.
 
-The local reference deployment in [`deploy/observability`](../deploy/observability/) runs an OTLP
+The local reference deployment in [`deploy/observability`](https://github.com/jichang/Nao/tree/main/deploy/observability) runs an OTLP
 collector with gRPC and HTTP/protobuf receivers, Tempo, Prometheus, Loki, and provisioned Grafana
 data sources and dashboards:
 

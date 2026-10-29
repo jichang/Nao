@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Description>Compiled adapter registration, lifecycle, compatibility, conformance, and isolation contracts for Nao extensions.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="src/AdapterSdk.fs" />
+  </ItemGroup>
+  <Import Project="../../.paket/Paket.Restore.targets" />
+</Project>

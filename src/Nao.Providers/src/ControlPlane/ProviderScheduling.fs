@@ -89,24 +89,24 @@ type ProviderSchedulingLease internal (release: unit -> unit) =
             if Interlocked.Exchange(&released, 1) = 0 then
                 release ()
 
-type private AdmissionRequest =
+type internal AdmissionRequest =
     { Key: ProviderSchedulingKey
       Completion: TaskCompletionSource<ProviderSchedulingLease> }
 
-type ProviderScheduler =
-    private
-        { Configuration: ProviderSchedulerConfiguration
-          SyncRoot: obj
-          Queues: Dictionary<string, Queue<AdmissionRequest>>
-          TenantOrder: ResizeArray<string>
-          EndpointActive: Dictionary<string, int>
-          ModelActive: Dictionary<string * string, int>
-          TenantActive: Dictionary<string, int>
-          RateLimits: Dictionary<string, ProviderRateLimitState>
-          EndpointStates: Dictionary<string, ProviderEndpointAdmissionState>
-          mutable QueueCount: int
-          mutable Cursor: int
-          mutable LastAdmittedTenant: string option }
+/// Enforces provider concurrency, queue, endpoint, and tenant admission limits.
+type ProviderScheduler internal (configuration: ProviderSchedulerConfiguration) =
+    member internal _.Configuration = configuration
+    member val internal SyncRoot = obj ()
+    member val internal Queues = Dictionary<string, Queue<AdmissionRequest>>()
+    member val internal TenantOrder = ResizeArray<string>()
+    member val internal EndpointActive = Dictionary<string, int>()
+    member val internal ModelActive = Dictionary<string * string, int>()
+    member val internal TenantActive = Dictionary<string, int>()
+    member val internal RateLimits = Dictionary<string, ProviderRateLimitState>()
+    member val internal EndpointStates = Dictionary<string, ProviderEndpointAdmissionState>()
+    member val internal QueueCount = 0 with get, set
+    member val internal Cursor = 0 with get, set
+    member val internal LastAdmittedTenant: string option = None with get, set
 
 [<RequireQualifiedAccess>]
 module ProviderScheduler =
@@ -125,21 +125,9 @@ module ProviderScheduler =
         else
             values.[key] <- next
 
-    let create configuration =
-        { Configuration = configuration
-          SyncRoot = obj ()
-          Queues = Dictionary()
-          TenantOrder = ResizeArray()
-          EndpointActive = Dictionary()
-          ModelActive = Dictionary()
-          TenantActive = Dictionary()
-          RateLimits = Dictionary()
-          EndpointStates = Dictionary()
-          QueueCount = 0
-          Cursor = 0
-          LastAdmittedTenant = None }
+    let create configuration = ProviderScheduler configuration
 
-    let private canAdmit scheduler request =
+    let private canAdmit (scheduler: ProviderScheduler) request =
         let key = request.Key
         let modelKey = key.EndpointId, key.ModelId
 
@@ -160,7 +148,7 @@ module ProviderScheduler =
         && count modelKey scheduler.ModelActive < scheduler.Configuration.ModelConcurrency.[modelKey]
         && count key.TenantId scheduler.TenantActive < scheduler.Configuration.TenantConcurrency.[key.TenantId]
 
-    let rec private dispatch scheduler =
+    let rec private dispatch (scheduler: ProviderScheduler) =
         if scheduler.QueueCount > 0 && scheduler.TenantOrder.Count > 0 then
             scheduler.Cursor <-
                 scheduler.LastAdmittedTenant
@@ -207,7 +195,7 @@ module ProviderScheduler =
             if admitted then
                 dispatch scheduler
 
-    let private validateKey scheduler key =
+    let private validateKey (scheduler: ProviderScheduler) key =
         if not (Map.containsKey key.EndpointId scheduler.Configuration.EndpointConcurrency) then
             Some ProviderAdmissionFailure.UnknownEndpoint
         elif not (Map.containsKey (key.EndpointId, key.ModelId) scheduler.Configuration.ModelConcurrency) then
@@ -217,7 +205,7 @@ module ProviderScheduler =
         else
             None
 
-    let acquireAsync key (cancellationToken: CancellationToken) scheduler =
+    let acquireAsync key (cancellationToken: CancellationToken) (scheduler: ProviderScheduler) =
         lock scheduler.SyncRoot (fun () ->
             match validateKey scheduler key with
             | Some failure -> Task.FromResult(Error failure)
@@ -259,7 +247,7 @@ module ProviderScheduler =
                         return Ok lease
                     })
 
-    let setRateLimit endpointId state scheduler =
+    let setRateLimit endpointId state (scheduler: ProviderScheduler) =
         lock scheduler.SyncRoot (fun () ->
             if not (Map.containsKey endpointId scheduler.Configuration.EndpointConcurrency) then
                 invalidArg (nameof endpointId) $"Unknown provider endpoint '{endpointId}'."
@@ -269,7 +257,7 @@ module ProviderScheduler =
             if state = ProviderRateLimitState.Available then
                 dispatch scheduler)
 
-    let setEndpointState endpointId state scheduler =
+    let setEndpointState endpointId state (scheduler: ProviderScheduler) =
         lock scheduler.SyncRoot (fun () ->
             if not (Map.containsKey endpointId scheduler.Configuration.EndpointConcurrency) then
                 invalidArg (nameof endpointId) $"Unknown provider endpoint '{endpointId}'."

@@ -412,14 +412,14 @@ automatic conflict resolution are not supported.
 ## Administration
 
 `RuntimeAdministrationGrain` is the tenant-keyed control-plane boundary for provider, workspace,
-policy, quota, session, and health administration. Hosts own UI and transport authentication, then
+policy, quota, knowledge, evaluation, operation, session, and health administration. Hosts own UI and transport authentication, then
 pass the resulting `SecurityPrincipal`; agent `AuthorizationScope` is deliberately not accepted.
 Every call is tenant-scoped. Mutations reject impersonation and require multi-factor or
 phishing-resistant authentication plus either `nao.control.admin` or the resource-specific
 `nao.control.<kind>.manage` role.
 
-Administrative requests carry a caller-stable operation ID, resource identity, action, expected
-revision, and canonical non-secret parameters. `PreviewAsync` validates the same request and
+Administrative requests carry a caller-stable operation ID, resource identity, action, reason,
+expected revision, and canonical non-secret parameters. `PreviewAsync` validates the same request and
 returns current and target revisions, affected resource identities, and warnings without changing
 state. `MutateAsync` rejects stale revisions. Reusing an operation ID with changed content also
 fails. Parameter values may contain secret references but raw password, token, API-key, or secret
@@ -429,8 +429,9 @@ Before invoking a host adapter, the grain persists a pending operation and its i
 must use the operation ID idempotently and acknowledge both application and propagation to all
 silo-facing observers. A failure leaves the operation pending for retry on the same call or grain
 reactivation. Only after apply, propagation, and durable idempotent audit recording does the grain
-publish the target resource revision. Audit evidence records parameter names and impact counts,
-never parameter values.
+publish the target resource revision. Audit evidence records actor, reason, prior and new
+revisions, exact affected resource identities, parameter names, and warning counts, never
+parameter values.
 
 Models, tools, agents, connectors, and tenants support only explicit `disable` and `enable`
 mutations and additionally require `nao.control.emergency`. Disablement is persisted in the
@@ -438,6 +439,11 @@ tenant grain, so every silo reads one authoritative state. Session execution che
 and resolved tool disablement before invoking new work. Provider and connector host adapters must
 perform the equivalent model or connector check at their transport boundary. Terminal turn replay
 does not rerun work and remains available during disablement.
+
+`RuntimeAdministrationClient` is the reference principal-carrying client over a host-supplied
+authenticated transport. See [Configuration and administration](configuration-administration.md)
+for the immutable/reloadable boundary, last-known-good activation, client flow, and host
+responsibilities.
 
 ## Roadmap
 

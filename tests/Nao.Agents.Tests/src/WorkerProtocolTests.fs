@@ -70,6 +70,45 @@ type WorkerProtocolTests() =
             Assert.AreEqual(1, document.RootElement.GetProperty("protocolVersion").GetInt32())
 
     [<TestMethod>]
+    member _.WorkerHandlerReceivesCooperativeShutdownCancellation() : Task =
+        task {
+            use reader =
+                new StringReader(
+                    message "hello" "null" false
+                    + "\n"
+                    + message "execute" principalJson true
+                    + "\n"
+                )
+
+            use writer = new StringWriter()
+            use cancellation = new CancellationTokenSource()
+
+            let started =
+                TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)
+
+            let running =
+                WorkerProtocol.runSingleAsync
+                    WorkerProtocol.CurrentVersion
+                    (Map.ofList
+                        [ "test",
+                          fun request ->
+                              task {
+                                  started.SetResult()
+                                  do! Task.Delay(Timeout.InfiniteTimeSpan, request.CancellationToken)
+                                  return Ok "unexpected"
+                              } ])
+                    reader
+                    writer
+                    cancellation.Token
+
+            do! started.Task
+            cancellation.Cancel()
+            let! _ = Assert.ThrowsExactlyAsync<System.OperationCanceledException>(fun () -> running :> Task)
+
+            return ()
+        }
+
+    [<TestMethod>]
     member _.WorkerReceivesPrincipalSeparatelyFromInputWithoutEchoingAuthentication() =
         let expected =
             SecurityPrincipal.createAuthenticated

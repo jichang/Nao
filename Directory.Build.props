@@ -1,6 +1,7 @@
 <Project>
   <PropertyGroup>
     <NoWarn>$(NoWarn);NU1510</NoWarn>
+    <WarnOn>$(WarnOn);3390</WarnOn>
     <FSharpCoreImplicitPackageVersion>10.1.301</FSharpCoreImplicitPackageVersion>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <RepositoryUrl>https://github.com/jichang/Nao</RepositoryUrl>
@@ -13,6 +14,22 @@
     <Description>Nao AI Agent Framework</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/jichang/Nao</PackageProjectUrl>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageReleaseNotes>https://github.com/jichang/Nao/blob/main/docs/releases/$(Version).md</PackageReleaseNotes>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <DebugSymbols>true</DebugSymbols>
+    <IncludeSymbols>true</IncludeSymbols>
+    <IncludeSource>true</IncludeSource>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <AllowedOutputExtensionsInPackageBuildOutputFolder>$(AllowedOutputExtensionsInPackageBuildOutputFolder);.pdb</AllowedOutputExtensionsInPackageBuildOutputFolder>
+    <EnablePackageValidation>true</EnablePackageValidation>
+    <ContinuousIntegrationBuild Condition="'$(CI)' == 'true'">true</ContinuousIntegrationBuild>
     <IsPackable>true</IsPackable>
   </PropertyGroup>
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)README.md" Pack="true" PackagePath="/">
+      <Link>README.md</Link>
+    </None>
+  </ItemGroup>
 </Project>

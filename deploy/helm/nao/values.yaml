@@ -1,0 +1,88 @@
+runtime:
+  replicaCount: 3
+  image:
+    repository: ""
+    digest: ""
+    pullPolicy: IfNotPresent
+  port: 8080
+  platformConfiguration:
+    schemaVersion: 1
+    profile: clustered-production
+    instanceId: nao-cluster
+    identityMode: workload-identity
+    administrationMode: disabled
+    toolPolicy: restricted
+    workerIsolation: container
+    durability: persistent
+    clusterMembership: configured:adonet
+    secretReferences: []
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 10
+    targetCpuUtilization: 70
+  terminationGracePeriodSeconds: 60
+
+workerImages:
+  agents:
+    repository: ghcr.io/jichang/nao-agents-worker
+    digest: ""
+  documents:
+    repository: ghcr.io/jichang/nao-documents-worker
+    digest: ""
+
+capacity:
+  providerQuotaSafeReplicas: 10
+  storageSafeReplicas: 10
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+podDisruptionBudget:
+  maxUnavailable: 1
+
+networkPolicy:
+  enabled: true
+  ingressNamespaceSelector: null
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+
+migration:
+  enabled: false
+  image:
+    repository: ""
+    digest: ""
+  args: []
+
+administration:
+  enabled: false
+  replicaCount: 1
+  image:
+    repository: ""
+    digest: ""
+  port: 8080
+  args: []
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi

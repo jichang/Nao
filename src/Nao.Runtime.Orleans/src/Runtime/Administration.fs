@@ -14,6 +14,9 @@ type AdministrativeResourceKind =
     | Workspace
     | Policy
     | Quota
+    | Knowledge
+    | Evaluation
+    | Operation
     | Session
     | Health
     | Model
@@ -30,6 +33,9 @@ module AdministrativeResourceKind =
         | AdministrativeResourceKind.Workspace -> "workspace"
         | AdministrativeResourceKind.Policy -> "policy"
         | AdministrativeResourceKind.Quota -> "quota"
+        | AdministrativeResourceKind.Knowledge -> "knowledge"
+        | AdministrativeResourceKind.Evaluation -> "evaluation"
+        | AdministrativeResourceKind.Operation -> "operation"
         | AdministrativeResourceKind.Session -> "session"
         | AdministrativeResourceKind.Health -> "health"
         | AdministrativeResourceKind.Model -> "model"
@@ -44,6 +50,9 @@ module AdministrativeResourceKind =
         | "workspace" -> AdministrativeResourceKind.Workspace
         | "policy" -> AdministrativeResourceKind.Policy
         | "quota" -> AdministrativeResourceKind.Quota
+        | "knowledge" -> AdministrativeResourceKind.Knowledge
+        | "evaluation" -> AdministrativeResourceKind.Evaluation
+        | "operation" -> AdministrativeResourceKind.Operation
         | "session" -> AdministrativeResourceKind.Session
         | "health" -> AdministrativeResourceKind.Health
         | "model" -> AdministrativeResourceKind.Model
@@ -73,6 +82,7 @@ type AdministrativeExecution =
       ResourceKind: AdministrativeResourceKind
       ResourceId: string
       Action: string
+      Reason: string
       Parameters: Map<string, string>
       TargetRevision: int64 }
 
@@ -101,11 +111,80 @@ type AdministrationAuditEvidence =
       ResourceKind: AdministrativeResourceKind
       ResourceId: string
       Action: string
-      Revision: int64
+      Reason: string
+      PriorRevision: int64
+      NewRevision: int64
       ParameterNames: string list
       ImpactSummary: string
-      AffectedResourceCount: int
+      AffectedResourceIds: string list
       WarningCount: int }
+
+[<RequireQualifiedAccess>]
+module AdministrationAuditEvidence =
+    let private canonical argumentName value =
+        if String.IsNullOrWhiteSpace value || value <> value.Trim() then
+            invalidArg argumentName "Administrative audit values must be canonical and non-blank."
+
+        value
+
+    let create
+        id
+        operationId
+        timestamp
+        tenantId
+        actorId
+        resourceKind
+        resourceId
+        action
+        reason
+        priorRevision
+        newRevision
+        parameterNames
+        impactSummary
+        affectedResourceIds
+        warningCount
+        =
+        canonical (nameof resourceId) resourceId |> ignore
+        canonical (nameof action) action |> ignore
+        canonical (nameof reason) reason |> ignore
+        canonical (nameof impactSummary) impactSummary |> ignore
+
+        if id = Guid.Empty || operationId = Guid.Empty then
+            invalidArg (nameof id) "Administrative audit identities cannot be empty."
+
+        if priorRevision < 0L || newRevision <> priorRevision + 1L then
+            invalidArg (nameof newRevision) "Administrative audit revisions must describe one optimistic mutation."
+
+        if warningCount < 0 then
+            invalidArg (nameof warningCount) "Administrative audit warning count cannot be negative."
+
+        let affected =
+            resourceId :: affectedResourceIds
+            |> List.map (canonical (nameof affectedResourceIds))
+            |> List.distinct
+            |> List.sort
+
+        { Id = id
+          OperationId = operationId
+          Timestamp = timestamp
+          TenantId = tenantId
+          ActorId = actorId
+          ResourceKind = resourceKind
+          ResourceId = resourceId
+          Action = action
+          Reason = reason
+          PriorRevision = priorRevision
+          NewRevision = newRevision
+          ParameterNames = parameterNames |> List.distinct |> List.sort
+          ImpactSummary = impactSummary
+          AffectedResourceIds = affected
+          WarningCount = warningCount }
+
+    let actorId value = value.ActorId
+    let reason value = value.Reason
+    let priorRevision value = value.PriorRevision
+    let newRevision value = value.NewRevision
+    let affectedResourceIds value = value.AffectedResourceIds
 
 type IRuntimeAdministrationAuditStore =
     /// Implementations must record Id idempotently in durable storage.
@@ -198,6 +277,7 @@ module RuntimeAdministrationValidation =
         resourceKind
         resourceId
         action
+        reason
         expectedRevision
         (parameters: Map<string, string>)
         =
@@ -213,6 +293,7 @@ module RuntimeAdministrationValidation =
               AdministrativeResourceKind.serialize resourceKind
               resourceId
               action
+              reason
               string expectedRevision
               canonicalParameters ]
         |> Encoding.UTF8.GetBytes

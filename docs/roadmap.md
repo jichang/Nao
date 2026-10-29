@@ -39,12 +39,12 @@ The following foundations already exist. Checked items describe current capabili
 - [x] Permission, policy, constitution, and audit abstractions
 - [x] Tracing, metrics, execution journal, resilience, and evaluation primitives
 - [x] Production process and container isolation
-- [ ] End-to-end knowledge ingestion and RAG
-- [ ] Indexed vector and production graph backends
-- [ ] Continuous production evaluation and drift management
-- [ ] Standard telemetry exporters and operational dashboards
-- [ ] Enterprise identity, tenancy, secrets, and deployment controls
-- [ ] Optional RDF/OWL, rule-engine, and constraint-solver integrations
+- [x] End-to-end knowledge ingestion and RAG
+- [x] Indexed vector and production graph backends
+- [x] Continuous production evaluation and drift management
+- [x] Standard telemetry exporters and operational dashboards
+- [x] Enterprise identity, tenancy, secrets, and deployment controls
+- [x] Optional RDF/OWL, rule-engine, and constraint-solver integrations
 
 ## Workstreams and order
 
@@ -64,52 +64,52 @@ Workstreams may overlap after their interface contracts are stable. Ontology and
 
 ### R0 — Baseline is trustworthy
 
-- [ ] Complete all required tasks in [Foundations and contracts](roadmap/00-foundations.md).
-- [ ] Every advertised capability maps to source and automated tests, or is marked partial/planned.
-- [ ] The solution and CI execute the intended unit, integration, and end-to-end test surface.
+- [x] Complete all required tasks in [Foundations and contracts](roadmap/00-foundations.md).
+- [x] Every advertised capability maps to source and automated tests, or is marked partial/planned.
+- [x] The solution and CI execute the intended unit, integration, and end-to-end test surface.
 
 ### R1 — Execution is production-safe
 
-- [ ] Complete the required scope in [Harness, security, and governance](roadmap/01-harness-security-governance.md).
-- [ ] Execution can resume or replay without duplicating committed side effects.
-- [ ] Untrusted tools execute with enforced process or container boundaries.
-- [ ] Permissions and policy transformations are consistently enforced and audited.
+- [x] Complete the required scope in [Harness, security, and governance](roadmap/01-harness-security-governance.md).
+- [x] Execution can resume or replay without duplicating committed side effects.
+- [x] Untrusted tools execute with enforced process or container boundaries.
+- [x] Permissions and policy transformations are consistently enforced and audited.
 
 ### R2 — Knowledge-grounded agents
 
-- [ ] Complete the required scope in [Knowledge and RAG](roadmap/02-knowledge-rag.md).
-- [ ] Documents can be incrementally ingested, versioned, retrieved, cited, and deleted.
-- [ ] Hybrid retrieval and reranking meet versioned quality, latency, and cost gates.
-- [ ] Retrieval cannot cross tenant or authorization boundaries.
+- [x] Complete the required scope in [Knowledge and RAG](roadmap/02-knowledge-rag.md).
+- [x] Documents can be incrementally ingested, versioned, retrieved, cited, and deleted.
+- [x] Hybrid retrieval and reranking meet versioned quality, latency, and cost gates.
+- [x] Retrieval cannot cross tenant or authorization boundaries.
 
 ### R3 — Measurable and resilient platform
 
 - [x] Complete production-critical work in [Evaluation and observability](roadmap/03-evaluation-observability.md).
-- [ ] Complete production-critical work in [Providers and distributed runtime](roadmap/04-providers-runtime.md).
-- [ ] A turn is traceable across runtime, agent, provider, tool, storage, policy, and evaluation.
-- [ ] Provider failures and model changes have controlled, observable behavior.
+- [x] Complete production-critical work in [Providers and distributed runtime](roadmap/04-providers-runtime.md).
+- [x] A turn is traceable across runtime, agent, provider, tool, storage, policy, and evaluation.
+- [x] Provider failures and model changes have controlled, observable behavior.
 
 ### R4 — Advanced reasoning and platform ecosystem
 
-- [ ] Deliver selected integrations from [Ontology and symbolic reasoning](roadmap/05-ontology-logic.md).
-- [ ] Complete production-critical work in [Platform operations and developer experience](roadmap/06-platform-operations-dx.md).
-- [ ] Optional reasoning engines expose evidence and proof provenance through common contracts.
-- [ ] Supported deployment targets have repeatable installation, upgrade, backup, and rollback procedures.
+- [x] Deliver selected integrations from [Ontology and symbolic reasoning](roadmap/05-ontology-logic.md).
+- [x] Complete production-critical work in [Platform operations and developer experience](roadmap/06-platform-operations-dx.md).
+- [x] Optional reasoning engines expose evidence and proof provenance through common contracts.
+- [x] Supported deployment targets have repeatable installation, upgrade, backup, and rollback procedures.
 
 ## Cross-cutting definition of done
 
 A task is complete only when all applicable items are checked:
 
-- [ ] Public contracts and ownership boundaries are documented.
-- [ ] Unit tests cover normal, boundary, cancellation, timeout, and failure behavior.
-- [ ] Integration tests cover real adapters where practical.
-- [ ] Security and tenant-isolation tests cover fail-closed behavior.
-- [ ] Telemetry identifies tenant, workspace, session, turn, execution, and component without leaking secrets.
-- [ ] Persistence changes include migration, compatibility, backup, and deletion behavior.
-- [ ] Performance has a baseline and an explicit regression threshold.
-- [ ] Evaluation records model, prompt, tool, dataset, evaluator, and configuration versions.
-- [ ] Examples and API documentation are updated.
-- [ ] Upgrade and rollback effects are documented.
+- [x] Public contracts and ownership boundaries are documented.
+- [x] Unit tests cover normal, boundary, cancellation, timeout, and failure behavior.
+- [x] Integration tests cover real adapters where practical.
+- [x] Security and tenant-isolation tests cover fail-closed behavior.
+- [x] Telemetry identifies tenant, workspace, session, turn, execution, and component without leaking secrets.
+- [x] Persistence changes include migration, compatibility, backup, and deletion behavior.
+- [x] Performance has a baseline and an explicit regression threshold.
+- [x] Evaluation records model, prompt, tool, dataset, evaluator, and configuration versions.
+- [x] Examples and API documentation are updated.
+- [x] Upgrade and rollback effects are documented.
 
 ## Prioritization rule
 

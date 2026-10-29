@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Description>Deployment profile, startup safety, and effective configuration contracts for Nao hosts.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="src/DeploymentProfiles.fs" />
+    <Compile Include="src/PlatformConfigurationJson.fs" />
+    <Compile Include="src/ReloadableConfiguration.fs" />
+    <Compile Include="src/Recovery.fs" />
+    <Compile Include="src/Migrations.fs" />
+    <Compile Include="src/ServiceReliability.fs" />
+  </ItemGroup>
+  <Import Project="..\..\.paket\Paket.Restore.targets" />
+</Project>

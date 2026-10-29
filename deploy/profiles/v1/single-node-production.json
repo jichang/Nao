@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "profile": "single-node-production",
+  "instanceId": "nao-single-node",
+  "identityMode": "authenticated",
+  "administrationMode": "authenticated",
+  "toolPolicy": "restricted",
+  "workerIsolation": "process",
+  "durability": "persistent",
+  "clusterMembership": "standalone",
+  "secretReferences": [
+    {
+      "name": "database",
+      "provider": "environment",
+      "key": "NAO_DATABASE_CONNECTION"
+    }
+  ]
+}

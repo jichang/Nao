@@ -2,11 +2,11 @@ name: Publish NuGet Packages
 
 on:
   push:
-    tags: ['v*']
+    tags: ['v1.0.0']
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
   id-token: write
   packages: write
 
@@ -14,10 +14,26 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     environment: nuget
+    env:
+      NAO_TEST_POSTGRES: Host=127.0.0.1;Port=5432;Database=nao_test;Username=nao_test;Password=nao_test
+    services:
+      postgres:
+        image: pgvector/pgvector@sha256:ac08538c6f8b9904c33c8224c5e5706dbe760aca29db1d096972b4052c22a75d
+        env:
+          POSTGRES_DB: nao_test
+          POSTGRES_USER: nao_test
+          POSTGRES_PASSWORD: nao_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U nao_test -d nao_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
-      - uses: actions/setup-dotnet@v5
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
         with:
           dotnet-version: '10.0.x'
 
@@ -27,22 +43,155 @@ jobs:
       - name: Restore dependencies
         run: dotnet paket restore
 
+      - name: Determine version from reviewed manifest
+        id: version
+        shell: bash
+        run: |
+          version="$(python3 scripts/release.py version)"
+          test "$GITHUB_REF_NAME" = "v$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Validate release metadata and generated changelog
+        run: |
+          python3 scripts/release.py validate
+          python3 -m unittest scripts/test_release.py
+
+      - name: Validate integration selection and support
+        run: |
+          python3 scripts/validate-integrations.py
+          python3 -m unittest scripts/test_validate_integrations.py
+
+      - name: Validate supply-chain policy
+        run: |
+          python3 scripts/validate-supply-chain.py
+          python3 -m unittest scripts/test_validate_supply_chain.py
+
+      - name: Scan NuGet dependencies for release-blocking vulnerabilities
+        shell: bash
+        run: |
+          mkdir -p artifacts/vulnerabilities
+          arguments=()
+          while IFS= read -r project; do
+            report="artifacts/vulnerabilities/$(echo "$project" | tr '/.' '__').json"
+            dotnet package list \
+              --project "$project" \
+              --vulnerable \
+              --include-transitive \
+              --format json \
+              --no-restore > "$report"
+            arguments+=(--vulnerability-report "$report")
+          done < <(find src -name '*.fsproj' -o -name '*.csproj' | sort)
+          python3 scripts/validate-supply-chain.py "${arguments[@]}"
+
       - name: Build
         run: dotnet build Nao.slnx -c Release
 
-      - name: Test
+      - name: Run compatibility gate
+        run: >
+          dotnet test tests/Nao.Extensions.Tests/Nao.Extensions.Tests.fsproj
+          -c Release --no-build --filter "TestCategory=Compatibility"
+
+      - name: Run migration gate
+        run: >
+          dotnet test tests/Nao.Platform.Tests/Nao.Platform.Tests.fsproj
+          -c Release --no-build --filter "TestCategory=Migration"
+
+      - name: Run evaluation gate
+        run: >
+          dotnet test tests/Nao.Eval.Tests/Nao.Eval.Tests.fsproj
+          -c Release --no-build --filter "TestCategory=EvalFast"
+
+      - name: Run security gate
+        shell: bash
+        run: |
+          projects=(
+            tests/Nao.Agents.Tests/Nao.Agents.Tests.fsproj
+            tests/Nao.E2E.Tests/Nao.E2E.Tests.fsproj
+            tests/Nao.Identity.Oidc.Tests/Nao.Identity.Oidc.Tests.fsproj
+            tests/Nao.Persistence.Tests/Nao.Persistence.Tests.fsproj
+            tests/Nao.Providers.Tests/Nao.Providers.Tests.fsproj
+            tests/Nao.Runtime.Orleans.Tests/Nao.Runtime.Orleans.Tests.fsproj
+          )
+          for project in "${projects[@]}"; do
+            dotnet test "$project" -c Release --no-build \
+              --settings tests/security.runsettings \
+              --filter "TestCategory=FailClosed"
+          done
+
+      - name: Run performance gate
+        run: >
+          dotnet test tests/Nao.Knowledge.Tests/Nao.Knowledge.Tests.fsproj
+          -c Release --no-build --filter "TestCategory=Performance"
+
+      - name: Run PostgreSQL integration qualification
+        run: >
+          dotnet test tests/Nao.Knowledge.Postgres.Tests/Nao.Knowledge.Postgres.Tests.fsproj
+          -c Release --no-build --filter "TestCategory=ExternalDatabase"
+
+      - name: Run complete test surface
         run: dotnet test Nao.slnx -c Release --no-build
 
-      - name: Determine version from tag
-        id: version
-        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - name: Validate versioned release and migration documentation
+        run: |
+          python3 scripts/validate-release-docs.py \
+            --version "${{ steps.version.outputs.version }}" \
+            --publishing
 
       - name: Pack
-        run: dotnet pack Nao.slnx -c Release --no-build -o ./nupkgs -p:Version=${{ steps.version.outputs.version }}
+        run: dotnet pack Nao.slnx -c Release --no-restore -o ./nupkgs -p:Version=${{ steps.version.outputs.version }}
+
+      - name: Verify packages and clean consumer installation
+        run: |
+          python3 scripts/release.py verify-packages --directory ./nupkgs
+          bash scripts/test-release-consumer.sh ./nupkgs "${{ steps.version.outputs.version }}"
+
+      - name: Import NuGet signing certificate
+        env:
+          CERTIFICATE_BASE64: ${{ secrets.NUGET_SIGNING_CERTIFICATE_BASE64 }}
+        run: |
+          test -n "$CERTIFICATE_BASE64"
+          printf '%s' "$CERTIFICATE_BASE64" | base64 --decode > "$RUNNER_TEMP/nao-signing.pfx"
+          chmod 600 "$RUNNER_TEMP/nao-signing.pfx"
+
+      - name: Sign NuGet packages
+        env:
+          CERTIFICATE_PASSWORD: ${{ secrets.NUGET_SIGNING_CERTIFICATE_PASSWORD }}
+        run: |
+          test -n "$CERTIFICATE_PASSWORD"
+          for package in ./nupkgs/*.nupkg; do
+            dotnet nuget sign "$package" \
+              --certificate-path "$RUNNER_TEMP/nao-signing.pfx" \
+              --certificate-password "$CERTIFICATE_PASSWORD" \
+              --timestamper http://timestamp.digicert.com
+          done
+
+      - name: Generate package SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          path: .
+          format: spdx-json
+          output-file: ./nupkgs/nao-packages.spdx.json
+
+      - name: Generate artifact checksums
+        run: python3 scripts/release.py checksums --directory ./nupkgs
+
+      - name: Attest package provenance
+        uses: actions/attest-build-provenance@8beda2b7ed98355c0e97c0a63bec38ae472e66c4 # v4
+        with:
+          subject-path: |
+            ./nupkgs/*.nupkg
+            ./nupkgs/*.snupkg
+            ./nupkgs/SHA256SUMS
+
+      - name: Attest package SBOM
+        uses: actions/attest-sbom@4651f806c01d8637787e274ac3bdf724ef169f34 # v3.0.0
+        with:
+          subject-path: ./nupkgs/*.nupkg
+          sbom-path: ./nupkgs/nao-packages.spdx.json
 
       - name: Login to NuGet (Trusted Publishing)
         id: login
-        uses: NuGet/login@v1
+        uses: NuGet/login@ebc737b6fc418a6ca0073cf116ec8dc156d8b81e # v1
         with:
           user: ${{ secrets.NUGET_USERNAME }}
 
@@ -55,3 +204,9 @@ jobs:
               --skip-duplicate
           done
 
+      - name: Upload signed packages and supply-chain evidence
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: signed-nuget-packages
+          path: ./nupkgs
+          if-no-files-found: error

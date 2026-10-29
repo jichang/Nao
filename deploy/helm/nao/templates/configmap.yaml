@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "nao.fullname" . }}-configuration
+  labels:
+    {{- include "nao.labels" . | nindent 4 }}
+data:
+  platform.json: |
+    {{- .Values.runtime.platformConfiguration | toPrettyJson | nindent 4 }}
+  worker-images.json: |
+    {
+      "agents": {{ include "nao.image" (list "workerImages.agents" .Values.workerImages.agents) | quote }},
+      "documents": {{ include "nao.image" (list "workerImages.documents" .Values.workerImages.documents) | quote }}
+    }

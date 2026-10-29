@@ -12,21 +12,122 @@ permissions:
   contents: read
 
 jobs:
+  dependency-review:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Review dependency vulnerabilities and licenses
+        uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4.9.0
+        with:
+          fail-on-severity: high
+          deny-licenses: AGPL-1.0-only, AGPL-3.0-only, BUSL-1.1, GPL-2.0-only, GPL-3.0-only, SSPL-1.0
+
   container-security:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Run container escape regressions
         run: bash scripts/validate-container-isolation.sh
 
+  deployment-assets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - uses: azure/setup-helm@bf6a7d304bc2fdb57e0331155b7ebf2c504acf0a # v4
+
+      - name: Validate deployment source policy
+        run: python3 scripts/validate-deployment-assets.py
+
+      - name: Build and smoke-test worker images
+        run: bash scripts/validate-worker-images.sh
+
+      - name: Lint and render clustered deployment
+        shell: bash
+        run: |
+          digest="sha256:$(printf '0%.0s' {1..64})"
+          helm lint deploy/helm/nao \
+            --set runtime.image.repository=example.invalid/nao-runtime \
+            --set runtime.image.digest="$digest" \
+            --set workerImages.agents.digest="$digest" \
+            --set workerImages.documents.digest="$digest"
+          helm template smoke deploy/helm/nao \
+            --set runtime.image.repository=example.invalid/nao-runtime \
+            --set runtime.image.digest="$digest" \
+            --set workerImages.agents.digest="$digest" \
+            --set workerImages.documents.digest="$digest" \
+            > /tmp/nao-rendered.yaml
+          python3 scripts/validate-deployment-assets.py --rendered /tmp/nao-rendered.yaml
+          if helm template unsafe-capacity deploy/helm/nao \
+            --set runtime.image.repository=example.invalid/nao-runtime \
+            --set runtime.image.digest="$digest" \
+            --set workerImages.agents.digest="$digest" \
+            --set workerImages.documents.digest="$digest" \
+            --set runtime.autoscaling.maxReplicas=11; then
+            echo "unsafe autoscaling capacity unexpectedly rendered" >&2
+            exit 1
+          fi
+          if helm template unsafe-profile deploy/helm/nao \
+            --set runtime.image.repository=example.invalid/nao-runtime \
+            --set runtime.image.digest="$digest" \
+            --set workerImages.agents.digest="$digest" \
+            --set workerImages.documents.digest="$digest" \
+            --set runtime.platformConfiguration.profile=local-development; then
+            echo "unsafe deployment profile unexpectedly rendered" >&2
+            exit 1
+          fi
+
+  postgres-integrations:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      NAO_TEST_POSTGRES: Host=127.0.0.1;Port=5432;Database=nao_test;Username=nao_test;Password=nao_test
+    services:
+      postgres:
+        image: pgvector/pgvector@sha256:ac08538c6f8b9904c33c8224c5e5706dbe760aca29db1d096972b4052c22a75d
+        env:
+          POSTGRES_DB: nao_test
+          POSTGRES_USER: nao_test
+          POSTGRES_PASSWORD: nao_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U nao_test -d nao_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore dependencies
+        run: dotnet paket restore
+
+      - name: Build PostgreSQL integration tests
+        run: dotnet build tests/Nao.Knowledge.Postgres.Tests/Nao.Knowledge.Postgres.Tests.fsproj -c Release
+
+      - name: Run vector lexical graph recovery and benchmark qualification
+        run: >
+          dotnet test tests/Nao.Knowledge.Postgres.Tests/Nao.Knowledge.Postgres.Tests.fsproj
+          -c Release --no-build --filter "TestCategory=ExternalDatabase"
+
   build-and-test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
-      - uses: actions/setup-dotnet@v5
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
         with:
           dotnet-version: '10.0.x'
 
@@ -44,6 +145,46 @@ jobs:
           python3 scripts/validate-project-dependencies.py
           python3 -m unittest scripts/test_validate_project_dependencies.py
 
+      - name: Validate supply-chain policy
+        run: |
+          python3 scripts/validate-supply-chain.py
+          python3 -m unittest scripts/test_validate_supply_chain.py
+
+      - name: Validate release metadata
+        run: |
+          python3 scripts/release.py validate
+          python3 -m unittest scripts/test_release.py
+
+      - name: Validate integration selection and support
+        run: |
+          python3 scripts/validate-integrations.py
+          python3 -m unittest scripts/test_validate_integrations.py
+
+      - name: Scan NuGet dependencies for release-blocking vulnerabilities
+        shell: bash
+        run: |
+          mkdir -p artifacts/vulnerabilities
+          arguments=()
+          while IFS= read -r project; do
+            report="artifacts/vulnerabilities/$(echo "$project" | tr '/.' '__').json"
+            dotnet package list \
+              --project "$project" \
+              --vulnerable \
+              --include-transitive \
+              --format json \
+              --no-restore > "$report"
+            arguments+=(--vulnerability-report "$report")
+          done < <(find src -name '*.fsproj' -o -name '*.csproj' | sort)
+          python3 scripts/validate-supply-chain.py "${arguments[@]}"
+
+      - name: Upload vulnerability reports
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: dependency-vulnerability-reports
+          path: artifacts/vulnerabilities
+          if-no-files-found: error
+
       - name: Validate production security configuration
         run: |
           python3 scripts/validate-production-security.py
@@ -54,6 +195,12 @@ jobs:
 
       - name: Build
         run: dotnet build Nao.slnx -c Release
+
+      - name: Run reference examples
+        run: |
+          dotnet run --project examples/Nao.DocumentationSnippets/Nao.DocumentationSnippets.fsproj -c Release --no-build
+          dotnet run --project examples/Nao.Examples/Nao.Examples.fsproj -c Release --no-build -- all
+          dotnet run --project examples/Nao.OrleansExample/Nao.OrleansExample.fsproj -c Release --no-build
 
       - name: Run fail-closed security regressions
         shell: bash
@@ -91,6 +238,17 @@ jobs:
           --logger "trx;LogFileName=evaluation-fast.trx"
           --results-directory artifacts/evaluation/fast
 
+      - name: Run compatibility migration and performance release gates
+        if: github.event_name != 'schedule'
+        shell: bash
+        run: |
+          dotnet test tests/Nao.Extensions.Tests/Nao.Extensions.Tests.fsproj \
+            -c Release --no-build --filter "TestCategory=Compatibility"
+          dotnet test tests/Nao.Platform.Tests/Nao.Platform.Tests.fsproj \
+            -c Release --no-build --filter "TestCategory=Migration"
+          dotnet test tests/Nao.Knowledge.Tests/Nao.Knowledge.Tests.fsproj \
+            -c Release --no-build --filter "TestCategory=Performance"
+
       - name: Run full scheduled evaluation release gates
         if: github.event_name == 'schedule'
         run: >
@@ -101,9 +259,17 @@ jobs:
           --logger "trx;LogFileName=evaluation-full.trx"
           --results-directory artifacts/evaluation/full
 
+      - name: Run scheduled restore drill
+        if: github.event_name == 'schedule'
+        run: >
+          dotnet test tests/Nao.Platform.Tests/Nao.Platform.Tests.fsproj
+          -c Release
+          --no-build
+          --filter "TestCategory=RestoreDrill"
+
       - name: Upload evaluation gate reports
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: evaluation-gate-reports
           path: artifacts/evaluation
@@ -123,7 +289,7 @@ jobs:
 
       - name: Upload test results and coverage
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: test-results-and-coverage
           path: artifacts/test-results

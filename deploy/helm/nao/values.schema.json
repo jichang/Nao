@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["runtime", "workerImages", "capacity"],
+  "properties": {
+    "runtime": {
+      "type": "object",
+      "required": ["replicaCount", "image", "platformConfiguration", "resources", "autoscaling"],
+      "properties": {
+        "replicaCount": { "type": "integer", "minimum": 3 },
+        "image": { "$ref": "#/$defs/image" },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "platformConfiguration": {
+          "type": "object",
+          "required": [
+            "schemaVersion",
+            "profile",
+            "instanceId",
+            "identityMode",
+            "administrationMode",
+            "toolPolicy",
+            "workerIsolation",
+            "durability",
+            "clusterMembership",
+            "secretReferences"
+          ],
+          "properties": {
+            "schemaVersion": { "const": 1 },
+            "profile": { "const": "clustered-production" },
+            "instanceId": { "type": "string", "minLength": 1 },
+            "identityMode": { "enum": ["authenticated", "workload-identity"] },
+            "administrationMode": { "enum": ["disabled", "authenticated"] },
+            "toolPolicy": { "const": "restricted" },
+            "workerIsolation": { "const": "container" },
+            "durability": { "const": "persistent" },
+            "clusterMembership": {
+              "type": "string",
+              "pattern": "^configured:[^[:space:]]+$"
+            },
+            "secretReferences": { "type": "array" }
+          },
+          "additionalProperties": false
+        },
+        "resources": { "type": "object" },
+        "autoscaling": {
+          "type": "object",
+          "required": ["enabled", "minReplicas", "maxReplicas", "targetCpuUtilization"],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "minReplicas": { "type": "integer", "minimum": 3 },
+            "maxReplicas": { "type": "integer", "minimum": 3 },
+            "targetCpuUtilization": { "type": "integer", "minimum": 1, "maximum": 100 }
+          }
+        },
+        "terminationGracePeriodSeconds": { "type": "integer", "minimum": 30 }
+      }
+    },
+    "workerImages": {
+      "type": "object",
+      "required": ["agents", "documents"],
+      "properties": {
+        "agents": { "$ref": "#/$defs/image" },
+        "documents": { "$ref": "#/$defs/image" }
+      }
+    },
+    "capacity": {
+      "type": "object",
+      "required": ["providerQuotaSafeReplicas", "storageSafeReplicas"],
+      "properties": {
+        "providerQuotaSafeReplicas": { "type": "integer", "minimum": 3 },
+        "storageSafeReplicas": { "type": "integer", "minimum": 3 }
+      }
+    }
+  },
+  "$defs": {
+    "image": {
+      "type": "object",
+      "required": ["repository", "digest"],
+      "properties": {
+        "repository": { "type": "string" },
+        "digest": {
+          "type": "string",
+          "pattern": "^$|^sha256:[a-f0-9]{64}$"
+        },
+        "pullPolicy": {
+          "type": "string",
+          "enum": ["Always", "IfNotPresent", "Never"]
+        }
+      }
+    }
+  }
+}

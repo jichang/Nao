@@ -1,0 +1,6 @@
+apiVersion: v2
+name: nao
+description: Governed single-region deployment boundary for a Nao host application
+type: application
+version: 1.0.0
+appVersion: "1.0.0"

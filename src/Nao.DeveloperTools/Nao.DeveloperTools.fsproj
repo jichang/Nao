@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Description>Machine-readable scaffolding, validation, diagnostics, evaluation, and migration commands for Nao developers.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="src/Contracts.fs" />
+    <Compile Include="src/Scaffolding.fs" />
+    <Compile Include="src/LocalDiagnostics.fs" />
+    <Compile Include="src/OperationalDiagnostics.fs" />
+    <Compile Include="src/CommandLine.fs" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Nao.Extensions/Nao.Extensions.fsproj" />
+    <ProjectReference Include="../Nao.Platform/Nao.Platform.fsproj" />
+    <ProjectReference Include="../Nao.Runtime.Orleans/Nao.Runtime.Orleans.fsproj" />
+  </ItemGroup>
+  <Import Project="../../.paket/Paket.Restore.targets" />
+</Project>

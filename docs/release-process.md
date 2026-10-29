@@ -1,0 +1,64 @@
+# Release and compatibility process
+
+Nao is unreleased. The only supported development line is `main`, package metadata remains `1.0.0`, and development snapshots have no compatibility guarantee. The first public release is the protected `v1.0.0` stable release described by [`release/1.0.0.json`](https://github.com/jichang/Nao/blob/main/release/1.0.0.json).
+
+## Branches and release channels
+
+- `main` is the single integration branch and the source of release tags.
+- Pull requests are the review boundary. Release metadata, migrations, package changes, and policy changes are reviewed with the implementation they describe.
+- Untagged CI outputs are preview evidence only. They are not published to NuGet and are not supported packages.
+- Stable publication requires the exact protected tag declared by the release manifest.
+- `1.0.0` is not an LTS line. Nao will not claim an LTS line until a later reviewed policy defines its support duration, backport ownership, and successor.
+- Before the first release, breaking APIs and abstractions are changed in place. After a stable release, a release manifest must name the compatibility baseline and package validation must compare against it.
+
+## Reviewed release metadata
+
+The schema-v1 manifest owns the package version, date, channel, source branch, tag, compatibility baseline, LTS status, release notes, changelog entries, completed roadmap capabilities, mandatory gates, and artifact set. `scripts/release.py validate` rejects drift from package metadata, release notes, supply-chain policy, roadmap state, or the generated changelog.
+
+Update generated changelog content with:
+
+```bash
+python3 scripts/release.py render
+python3 scripts/release.py validate
+```
+
+Do not edit `CHANGELOG.md` directly.
+
+## Protected release gates
+
+Publication reruns evidence from the tagged commit and does not trust an earlier workflow:
+
+1. compatibility and package validation;
+2. durable migration and rollback tests;
+3. fast evaluation release gates;
+4. fail-closed security regressions and vulnerability policy;
+5. deterministic performance/benchmark contract tests;
+6. the complete build and test surface;
+7. strict release and migration documentation;
+8. package-content, symbols, source metadata, and clean-consumer installation checks.
+
+The initial release has no supported predecessor, so its reviewed compatibility baseline is `null`. This is an explicit first-release decision, not a skipped check.
+
+## Artifacts and evidence
+
+Every packable library produces a `.nupkg` and `.snupkg` with repository metadata, package README, portable symbols, and source-link build metadata. The protected workflow signs packages, writes `SHA256SUMS`, generates an SPDX SBOM, creates build-provenance and SBOM attestations, publishes through NuGet trusted publishing, and retains the complete evidence set.
+
+Consumers verify the signature, checksum, provenance, SBOM, package identity, and immutable version before promotion. A clean temporary F# project installs `Nao.Extensions` and `Nao.Platform` from the produced package directory and compiles against their public APIs before publication.
+
+## Rollback and package yanking
+
+Published package bytes are immutable and never overwritten with `--skip-duplicate` as a recovery mechanism. If publication fails before NuGet push, discard the run and correct the reviewed source or metadata. If only part of the package set reaches NuGet, stop promotion, mark every pushed package version deprecated, and publish incident guidance; do not complete the partial set from a different commit.
+
+For a defective published release:
+
+1. stop deployment and promotion;
+2. restore application and authoritative data using the release-specific rollback procedure;
+3. deprecate affected NuGet packages with a replacement or withdrawal message;
+4. revoke compromised signing material or attestations when applicable;
+5. publish a new version from a reviewed fix with new checksums, SBOMs, signatures, and attestations.
+
+NuGet unlisting is reserved for legal, security, or severe safety incidents because it harms reproducibility. Ordinary defects use deprecation plus a fixed release. Container tags may be withdrawn, but immutable digests remain in incident and release evidence.
+
+## Release record
+
+The versioned release notes are immutable after publication and record validation results, exact source/tag identity, package and image digests, checksums, SBOM and attestation locations, dependency-lock identity, security review, rollback limits, known limitations, and the completed roadmap capability IDs generated into the changelog.

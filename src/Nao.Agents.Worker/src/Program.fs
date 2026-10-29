@@ -219,7 +219,7 @@ module StandardWorkerHandlers =
 
     let processDelay (request: WorkerExecutionRequest) =
         task {
-            do! Task.Delay(Int32.Parse request.Input)
+            do! Task.Delay(Int32.Parse request.Input, request.CancellationToken)
             return Ok "completed"
         }
 
@@ -230,6 +230,7 @@ module StandardWorkerHandlers =
             let mutable value = 0
 
             while started.Elapsed < duration do
+                request.CancellationToken.ThrowIfCancellationRequested()
                 value <- value + 1
 
             return Ok(string value)
@@ -337,7 +338,7 @@ module StandardWorkerHandlers =
                 let pendingPath = request.Input + ".pending"
                 File.WriteAllText(pendingPath, string child.Id)
                 File.Move(pendingPath, request.Input)
-                do! child.WaitForExitAsync()
+                do! child.WaitForExitAsync(request.CancellationToken)
                 return Ok "completed"
         }
 
@@ -388,12 +389,11 @@ module Program =
                 | _ -> WorkerProtocol.CurrentVersion
 
             match
-                WorkerProtocol.runSingleAsync
+                WorkerProtocol.runSingleProcessAsync
                     protocolVersion
                     StandardWorkerHandlers.restricted
                     Console.In
                     Console.Out
-                    CancellationToken.None
                 |> _.GetAwaiter().GetResult()
             with
             | Ok() -> 0

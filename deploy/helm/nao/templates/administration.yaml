@@ -1,0 +1,45 @@
+{{- if .Values.administration.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "nao.fullname" . }}-administration
+  labels:
+    {{- include "nao.labels" . | nindent 4 }}
+    app.kubernetes.io/component: administration
+spec:
+  replicas: {{ .Values.administration.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "nao.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: administration
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "nao.name" . }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: administration
+    spec:
+      serviceAccountName: {{ include "nao.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: administration
+          image: {{ include "nao.image" (list "administration.image" .Values.administration.image) | quote }}
+          args:
+            {{- toYaml .Values.administration.args | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.administration.port }}
+          resources:
+            {{- toYaml .Values.administration.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+{{- end }}

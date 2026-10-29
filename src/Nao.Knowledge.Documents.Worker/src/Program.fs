@@ -33,7 +33,11 @@ module DocumentParserWorkerHandler =
                         raise (UnauthorizedAccessException "Parser worker requires a valid authorization scope."))
 
                 let! response =
-                    parser.ParseAsync authorization parserRequest.Content parserRequest.FileName CancellationToken.None
+                    parser.ParseAsync
+                        authorization
+                        parserRequest.Content
+                        parserRequest.FileName
+                        request.CancellationToken
 
                 return Ok(DocumentParserWorkerProtocol.serializeResponse response)
         }
@@ -45,12 +49,11 @@ module Program =
             Map.ofList [ DocumentParserWorkerProtocol.WorkerId, DocumentParserWorkerHandler.handle ]
 
         match
-            WorkerProtocol.runSingleAsync
+            WorkerProtocol.runSingleProcessAsync
                 WorkerProtocol.CurrentVersion
                 handlers
                 System.Console.In
                 System.Console.Out
-                CancellationToken.None
             |> _.GetAwaiter().GetResult()
         with
         | Ok() -> 0

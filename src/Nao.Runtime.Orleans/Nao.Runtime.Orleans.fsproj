@@ -18,6 +18,7 @@
     <Compile Include="src/Grains/SessionTurnLedger.fs" />
     <Compile Include="src/Grains/ClusterHealthGrain.fs" />
     <Compile Include="src/Grains/RuntimeAdministrationGrain.fs" />
+    <Compile Include="src/Runtime/AdministrationClient.fs" />
     <Compile Include="src/Grains/GroupDirectoryGrain.fs" />
     <Compile Include="src/Grains/WorkspaceLifecycleGrain.fs" />
     <Compile Include="src/Grains/SessionDirectoryGrain.fs" />

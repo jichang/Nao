@@ -13,7 +13,7 @@ This workstream connects production execution, telemetry, replay, evaluation, re
 - [x] Traces, spans, metrics, token usage, execution journals, and regression primitives exist.
 - [x] In-memory and persistent observability implementations exist.
 - [x] Evaluation runs use the same complete harness configuration as production.
-- [ ] Standard external telemetry export and continuous drift workflows exist.
+- [x] Standard external telemetry export and continuous drift workflows exist.
 
 ## EVAL-01 — Versioned evaluation specification
 

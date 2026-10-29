@@ -127,23 +127,30 @@ type ManagedProviderInvocationFailure =
     | ModelDenied
     | EndpointRejected of ProviderInvocationFailure
 
-type private ProviderConfigurationState =
+type internal ProviderConfigurationState =
     { Configuration: ProviderRuntimeConfiguration
       Endpoint: ProviderEndpoint
       CredentialReference: SecretReference option
       Operations: Dictionary<Guid, ProviderOperationReference>
       mutable DisposeWhenIdle: bool }
 
-type ProviderConfigurationControlPlane =
-    private
-        { ActivateAsync:
-            ProviderRuntimeConfiguration -> CancellationToken -> Task<ProviderEndpoint * SecretReference option>
-          RecordAuditAsync: ProviderConfigurationAudit -> Task
-          Clock: unit -> DateTimeOffset
-          ReloadGate: SemaphoreSlim
-          OperationGate: SemaphoreSlim
-          mutable Current: ProviderConfigurationState
-          mutable Previous: ProviderConfigurationState option }
+/// Owns the active provider configuration and coordinates validated reloads and rollbacks.
+type ProviderConfigurationControlPlane
+    internal
+    (
+        activateAsync:
+            ProviderRuntimeConfiguration -> CancellationToken -> Task<ProviderEndpoint * SecretReference option>,
+        recordAuditAsync: ProviderConfigurationAudit -> Task,
+        clock: unit -> DateTimeOffset,
+        current: ProviderConfigurationState
+    ) =
+    member internal _.ActivateAsync = activateAsync
+    member internal _.RecordAuditAsync = recordAuditAsync
+    member internal _.Clock = clock
+    member val internal ReloadGate = new SemaphoreSlim(1, 1)
+    member val internal OperationGate = new SemaphoreSlim(1, 1)
+    member val internal Current = current with get, set
+    member val internal Previous: ProviderConfigurationState option = None with get, set
 
 [<RequireQualifiedAccess>]
 module ProviderConfigurationControlPlane =
@@ -238,22 +245,18 @@ module ProviderConfigurationControlPlane =
                         audit clock ProviderConfigurationAuditKind.Activated None initialConfiguration None []
                     )
 
-                return
-                    Ok
-                        { ActivateAsync = activateAsync
-                          RecordAuditAsync = recordAuditAsync
-                          Clock = clock
-                          ReloadGate = new SemaphoreSlim(1, 1)
-                          OperationGate = new SemaphoreSlim(1, 1)
-                          Current = state
-                          Previous = None }
+                return Ok(ProviderConfigurationControlPlane(activateAsync, recordAuditAsync, clock, state))
         }
 
     let private disposeIfIdle state =
         if state.DisposeWhenIdle && state.Operations.Count = 0 then
             ProviderEndpoint.dispose state.Endpoint
 
-    let reloadAsync configuration (cancellationToken: CancellationToken) controlPlane =
+    let reloadAsync
+        configuration
+        (cancellationToken: CancellationToken)
+        (controlPlane: ProviderConfigurationControlPlane)
+        =
         task {
             do! controlPlane.ReloadGate.WaitAsync cancellationToken
 
@@ -305,7 +308,7 @@ module ProviderConfigurationControlPlane =
                 controlPlane.ReloadGate.Release() |> ignore
         }
 
-    let rollbackAsync (cancellationToken: CancellationToken) controlPlane =
+    let rollbackAsync (cancellationToken: CancellationToken) (controlPlane: ProviderConfigurationControlPlane) =
         task {
             do! controlPlane.ReloadGate.WaitAsync cancellationToken
 
@@ -352,7 +355,7 @@ module ProviderConfigurationControlPlane =
         conversation
         options
         (cancellationToken: CancellationToken)
-        controlPlane
+        (controlPlane: ProviderConfigurationControlPlane)
         =
         task {
             do! controlPlane.OperationGate.WaitAsync cancellationToken
@@ -409,10 +412,10 @@ module ProviderConfigurationControlPlane =
                 | None -> return invocationResult.Value
         }
 
-    let currentVersion controlPlane =
+    let currentVersion (controlPlane: ProviderConfigurationControlPlane) =
         ProviderRuntimeConfiguration.version controlPlane.Current.Configuration
 
-    let dispose controlPlane =
+    let dispose (controlPlane: ProviderConfigurationControlPlane) =
         let activeOperations =
             controlPlane.Current.Operations.Count
             + (controlPlane.Previous

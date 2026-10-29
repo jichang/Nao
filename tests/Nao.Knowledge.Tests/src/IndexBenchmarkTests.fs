@@ -6,7 +6,7 @@ open System.Threading.Tasks
 open Microsoft.VisualStudio.TestTools.UnitTesting
 open Nao.Knowledge
 
-[<TestClass>]
+[<TestClass; TestCategory("Performance")>]
 type IndexBenchmarkTests() =
     let chunk value =
         KnowledgeChunkId.parse ("chunk_" + String.replicate 63 "0" + value)

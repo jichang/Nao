@@ -119,7 +119,8 @@ type IsolatedParsingTests() =
                   RecordLlmUsage = fun _ _ -> ()
                   BeginEmbeddingCall = ignore
                   RecordEmbeddingUsage = fun _ _ -> ()
-                  BeginToolCall = ignore } }
+                  BeginToolCall = ignore }
+              CancellationToken = CancellationToken.None }
 
         let response =
             DocumentParserWorkerHandler.handle request |> _.GetAwaiter().GetResult()

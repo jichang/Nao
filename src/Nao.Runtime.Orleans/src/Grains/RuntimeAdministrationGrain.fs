@@ -37,6 +37,9 @@ type AdministrativeMutationRequest() =
     [<Id(5u)>]
     member val Parameters: ResizeArray<AdministrativeParameter> = ResizeArray() with get, set
 
+    [<Id(6u)>]
+    member val Reason: string = "" with get, set
+
 [<GenerateSerializer>]
 type AdministrativeImpactPreview() =
     [<Id(0u)>]
@@ -85,6 +88,9 @@ type AdministrativeResourceSnapshot() =
     [<Id(4u)>]
     member val UpdatedAt: DateTimeOffset = DateTimeOffset.MinValue with get, set
 
+    [<Id(5u)>]
+    member val Metadata: Dictionary<string, string> = Dictionary() with get, set
+
 [<GenerateSerializer>]
 type AdministrativePendingOperation() =
     [<Id(0u)>]
@@ -122,6 +128,9 @@ type AdministrativePendingOperation() =
 
     [<Id(11u)>]
     member val CreatedAt: DateTimeOffset = DateTimeOffset.MinValue with get, set
+
+    [<Id(12u)>]
+    member val Reason: string = "" with get, set
 
 [<GenerateSerializer>]
 type AdministrativeCompletedOperation() =
@@ -225,6 +234,7 @@ type RuntimeAdministrationGrain
         let kind = AdministrativeResourceKind.parse request.ResourceKind
         let values = parameters request
         RuntimeAdministrationValidation.validate kind request.ResourceId request.Action values
+        RuntimeAdministrationValidation.canonical (nameof request.Reason) request.Reason
         kind, values
 
     let preview currentRevision (impact: AdministrativeImpact) =
@@ -258,6 +268,7 @@ type RuntimeAdministrationGrain
           ResourceKind = AdministrativeResourceKind.parse pending.ResourceKind
           ResourceId = pending.ResourceId
           Action = pending.Action
+          Reason = pending.Reason
           Parameters = operationParameters pending
           TargetRevision = pending.TargetRevision }
 
@@ -278,20 +289,24 @@ type RuntimeAdministrationGrain
             let impact = pending.Impact
 
             do!
-                auditStore.RecordAsync
-                    { Id = pending.AuditId
-                      OperationId = pending.OperationId
-                      Timestamp = pending.CreatedAt
-                      TenantId = tenant
-                      ActorId = UserId.parse pending.ActorId
-                      ResourceKind = operation.ResourceKind
-                      ResourceId = operation.ResourceId
-                      Action = operation.Action
-                      Revision = operation.TargetRevision
-                      ParameterNames = operation.Parameters |> Map.keys |> Seq.sort |> Seq.toList
-                      ImpactSummary = impact.Summary
-                      AffectedResourceCount = impact.AffectedResourceIds.Count
-                      WarningCount = impact.Warnings.Count }
+                auditStore.RecordAsync(
+                    AdministrationAuditEvidence.create
+                        pending.AuditId
+                        pending.OperationId
+                        pending.CreatedAt
+                        tenant
+                        (UserId.parse pending.ActorId)
+                        operation.ResourceKind
+                        operation.ResourceId
+                        operation.Action
+                        operation.Reason
+                        pending.CurrentRevision
+                        operation.TargetRevision
+                        (operation.Parameters |> Map.keys |> Seq.toList)
+                        impact.Summary
+                        (impact.AffectedResourceIds |> Seq.toList)
+                        impact.Warnings.Count
+                )
 
             let resource =
                 RuntimeAdministrationState.tryResource operation.ResourceKind operation.ResourceId state.State
@@ -393,6 +408,7 @@ type RuntimeAdministrationGrain
                         kind
                         request.ResourceId
                         request.Action
+                        request.Reason
                         request.ExpectedRevision
                         values
 
@@ -453,6 +469,7 @@ type RuntimeAdministrationGrain
                                 ResourceKind = request.ResourceKind,
                                 ResourceId = request.ResourceId,
                                 Action = request.Action,
+                                Reason = request.Reason,
                                 CurrentRevision = current,
                                 TargetRevision = current + 1L,
                                 Impact = impactPreview,

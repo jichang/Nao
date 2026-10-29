@@ -4,6 +4,8 @@
 - Milestone: Rn
 - Owners: @owner
 
+The matching `release/VERSION.json` manifest is required and generates `CHANGELOG.md`.
+
 ## Summary
 
 Describe the release outcome and supported audience.
@@ -35,6 +37,19 @@ State prerequisites, deployment order, validation, and rollback limits.
 ## Validation
 
 List build, test, documentation, compatibility, and operational checks completed for the release.
+
+## Supply-chain evidence
+
+- Source commit and protected tag:
+- Signed NuGet package digests:
+- Container image digests:
+- SPDX SBOM locations:
+- Build provenance and SBOM attestations:
+- Dependency-lock SHA-256:
+- Vulnerability scan result:
+- License review result:
+- Native dependency changes:
+- Signing identity or certificate rotation:
 
 ## Known limitations
 

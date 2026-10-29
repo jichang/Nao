@@ -44,6 +44,73 @@ do not paste protected content into incident systems.
 3. Route to an approved alternative provider or reduce concurrency when limits are saturated.
 4. Do not relax execution deadlines without validating aggregate duration budgets.
 
+## Provider outage
+
+1. Confirm user-visible availability or latency violations are attributed to `Provider`, then
+   inspect the named provider/model circuit, retry, quota, and upstream-status diagnostics.
+2. Stop retries that are consuming deadlines or quota without increasing success.
+3. Preview and apply routing to an approved healthy provider, or use authenticated emergency
+   disablement for the exact failed model or connector.
+4. Do not route across residency, capability, safety, or cost policy merely to restore traffic.
+5. Verify successful operations and stable error-budget consumption before restoring the route.
+
+## Storage degradation
+
+1. Confirm failures are attributed to `Storage`; distinguish authoritative state, journals,
+   artifacts, telemetry, backup storage, and derived indexes.
+2. Keep admission fail-closed when authoritative writes or durable terminal outcomes cannot be
+   acknowledged. Never return success from volatile fallback state.
+3. Reduce admission and retries to protect the dependency. Fail over only to a deployment-approved
+   replica with verified freshness and fencing.
+4. If integrity is uncertain, invoke the backup/restore procedure and digest verification rather
+   than repairing records in place.
+5. Restore readiness only after write/read verification, sequence checks, and backlog recovery.
+
+## Worker exhaustion
+
+1. Confirm platform-attributed queue rejection or latency violations and identify the exhausted
+   worker class, not only aggregate CPU.
+2. Inspect active work, queued work, process limits, memory, provider concurrency, and the bounded
+   autoscaling recommendation.
+3. Reduce admission or scale within provider and storage safe-capacity limits. Do not make queues
+   unbounded or remove isolation limits.
+4. Cancel only work permitted by its operation semantics; preserve durable checkpoints and
+   terminal outcomes.
+5. Confirm queues drain, rejection stops, and utilization remains below 80 percent.
+
+## Policy failure
+
+1. Attribute unavailable, invalid, or incorrectly enforced governance to `Policy`; ordinary denied
+   customer requests remain `CustomerInput`.
+2. Preserve fail-closed enforcement. Never bypass authorization, approval, safety, residency, or
+   tool restrictions to restore availability.
+3. Compare the active policy revision with the last-known-good snapshot and audit evidence.
+4. Preview and apply an optimistic rollback through the authenticated administration client.
+5. Reproduce the failure through deterministic policy tests before reactivating the candidate.
+
+## Index corruption
+
+1. Mark affected retrieval routes unready and attribute the dependency failure to `Storage`.
+2. Identify the authoritative source/checkpoint and affected vector, lexical, or graph index
+   revision. Do not promote a partial index.
+3. Rebuild derived indexes from authoritative records under the current deletion ledger and
+   owner/region constraints.
+4. Verify record counts, source/checkpoint identities, content digests, ACL filtering, and
+   citations before atomically publishing the rebuilt revision.
+5. Keep the corrupt generation isolated until incident evidence is retained, then delete it under
+   the ordinary retention policy.
+
+## Bad rollout
+
+1. Correlate the first user-visible violation with deployment, configuration, provider, policy,
+   knowledge, or evaluation revision changes.
+2. Stop promotion and preserve the failing revision, trace identities, and alert evidence.
+3. For binaries, drain affected silos/workers and roll back to the previous compatible image. For
+   reloadable settings, preview and activate the retained last-known-good snapshot as a new
+   monotonic version.
+4. Use emergency disablement when the failing component can still receive new work during rollback.
+5. Verify availability, latency, safety, and error-budget trajectory before resuming promotion.
+
 ## Evaluation drift
 
 1. Identify the governed quality metric that crossed its configured drift threshold.
@@ -65,3 +132,38 @@ do not paste protected content into incident systems.
    Terminal turn replay remains available because it performs no new execution.
 6. Correct the incident, preview `enable`, and submit it against the current revision. Do not bypass
    the control plane by changing process-local caches.
+
+## Backup or restore failure
+
+1. Keep runtime admission disabled in the restore target and preserve the failed evidence.
+2. Verify the provider recovery point, backup manifest, deletion ledger, target region, and
+   encryption-key versions before retrying.
+3. Reject partial event streams, sequence gaps, hash mismatches, foreign owners, dangling
+   references, and missing deletion-ledger entries. Never substitute empty state.
+4. Restore authoritative records before rebuilding derived indexes. Keep retrieval unready until
+   every required rebuild and citation check succeeds.
+5. Fence the old write environment before enabling the restored environment.
+6. Record actual data loss and recovery duration against the selected deployment profile. Open a
+   corrective issue when either objective is missed.
+
+## Migration failure
+
+1. Fence incompatible writers and inspect the durable migration checkpoint.
+2. Verify that the migration identity and immutable plan digest match the deployed code.
+3. Resume only incomplete steps. Never rerun a completed non-idempotent effect outside the runner.
+4. If forward recovery is unsafe, execute rollback; completed steps roll back in reverse order.
+5. Restore the verified preflight backup when rollback fails or the storage layout is uncertain.
+6. Keep the prior deployment and source data until post-migration integrity, authorization,
+   deletion-suppression, and readiness checks pass.
+
+## Alert exercise and incident closure
+
+1. Inject bounded synthetic violations for platform, provider, policy, storage, and customer-input
+   domains without sending real customer content.
+2. Confirm the alert requires user-visible violations and error-budget burn, identifies the right
+   objective and dominant domain, and links to working diagnostics and the matching runbook.
+3. Execute the non-destructive mitigation or preview the authenticated rollback. Never exercise an
+   unreviewed production mutation.
+4. Record timestamps, alert configuration revision, observed routing, and recovery evidence.
+5. After an incident, record corrective actions and at least one named regression test. Do not
+   close the review until the test or operational exercise passes.

@@ -9,6 +9,8 @@ from pathlib import Path
 from xml.etree import ElementTree
 
 TEST_CATEGORIES = {
+    Path("tests/Nao.DeveloperTools.Tests/Nao.DeveloperTools.Tests.fsproj"): "unit",
+    Path("tests/Nao.Extensions.Tests/Nao.Extensions.Tests.fsproj"): "unit",
     Path("tests/Nao.Agents.Tests/Nao.Agents.Tests.fsproj"): "unit",
     Path("tests/Nao.E2E.Tests/Nao.E2E.Tests.fsproj"): "end-to-end",
     Path("tests/Nao.Eval.Tests/Nao.Eval.Tests.fsproj"): "evaluation",
@@ -19,6 +21,7 @@ TEST_CATEGORIES = {
         "tests/Nao.Telemetry.OpenTelemetry.Tests/Nao.Telemetry.OpenTelemetry.Tests.fsproj"
     ): "integration",
     Path("tests/Nao.Persistence.Tests/Nao.Persistence.Tests.fsproj"): "integration",
+    Path("tests/Nao.Platform.Tests/Nao.Platform.Tests.fsproj"): "unit",
     Path("tests/Nao.Protocols.Tests/Nao.Protocols.Tests.fsproj"): "unit",
     Path("tests/Nao.Providers.Tests/Nao.Providers.Tests.fsproj"): "integration",
     Path("tests/Nao.Runtime.Orleans.Tests/Nao.Runtime.Orleans.Tests.fsproj"): "integration",
@@ -37,7 +40,16 @@ TEST_SUPPORT_PROJECTS = {
     Path("tests/Nao.Testing/Nao.Testing.fsproj"),
 }
 
+EXAMPLE_PROJECTS = {
+    Path("examples/Nao.DocumentationSnippets/Nao.DocumentationSnippets.fsproj"),
+    Path("examples/Nao.Examples/Nao.Examples.fsproj"),
+    Path("examples/Nao.OrleansExample/Nao.OrleansExample.fsproj"),
+}
+
 REQUIRED_MSTEST_CATEGORIES = {
+    Path("tests/Nao.Extensions.Tests/Nao.Extensions.Tests.fsproj"): {
+        "Compatibility",
+    },
     Path("tests/Nao.Agents.Tests/Nao.Agents.Tests.fsproj"): {
         "Security",
         "FailClosed",
@@ -52,6 +64,9 @@ REQUIRED_MSTEST_CATEGORIES = {
         "Security",
         "FailClosed",
     },
+    Path("tests/Nao.Platform.Tests/Nao.Platform.Tests.fsproj"): {
+        "Migration",
+    },
     Path("tests/Nao.Providers.Tests/Nao.Providers.Tests.fsproj"): {
         "Security",
         "FailClosed",
@@ -59,6 +74,9 @@ REQUIRED_MSTEST_CATEGORIES = {
     Path("tests/Nao.Runtime.Orleans.Tests/Nao.Runtime.Orleans.Tests.fsproj"): {
         "Security",
         "FailClosed",
+    },
+    Path("tests/Nao.Knowledge.Tests/Nao.Knowledge.Tests.fsproj"): {
+        "Performance",
     },
 }
 
@@ -81,7 +99,11 @@ def solution_projects(root: Path) -> set[Path]:
 
 
 def validate(root: Path) -> list[str]:
-    discovered = project_paths(root, "src") | project_paths(root, "tests")
+    discovered = (
+        project_paths(root, "src")
+        | project_paths(root, "tests")
+        | project_paths(root, "examples")
+    )
     declared = solution_projects(root)
     errors: list[str] = []
 
@@ -100,6 +122,12 @@ def validate(root: Path) -> list[str]:
 
     for project in sorted(TEST_SUPPORT_PROJECTS - declared):
         errors.append(f"test support project is not declared in Nao.slnx: {project}")
+
+    for project in sorted(EXAMPLE_PROJECTS - declared):
+        errors.append(f"reference example is not declared in Nao.slnx: {project}")
+
+    for project in sorted((project_paths(root, "examples") & declared) - EXAMPLE_PROJECTS):
+        errors.append(f"reference example has no execution policy: {project}")
 
     for project, categories in REQUIRED_MSTEST_CATEGORIES.items():
         source = "\n".join(

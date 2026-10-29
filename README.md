@@ -30,6 +30,8 @@ Nao connects models, agents, tools, memory, knowledge, distributed execution, go
 | [Evaluation and observability](docs/evaluation-observability.md) | Evaluators, reproducibility, release gates, traces, metrics, telemetry, and drift |
 | [Providers and distributed runtime](docs/providers-runtime.md) | Provider semantics, routing direction, Orleans sessions, tenancy, workspaces, and operations |
 | [Durable formats](docs/durable-formats.md) | Durable schema inventory, decode policy, and migration rules |
+| [Release and compatibility process](docs/release-process.md) | Reviewed release metadata, package gates, compatibility, rollback, and artifact verification |
+| [Integration selection and support](docs/integration-support.md) | Selected vector, lexical, graph, telemetry, identity, secret, and formal-reasoning integrations |
 
 ### Roadmap workstreams
 

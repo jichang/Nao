@@ -266,11 +266,11 @@ type RuntimeScalingRecommendation =
     | Stable
     | ScaleIn
 
-type private RuntimeAdmissionRequest =
+type internal RuntimeAdmissionRequest =
     { TenantId: string
       Completion: TaskCompletionSource<Result<RuntimeAdmissionLease, RuntimeAdmissionFailure>> }
 
-type private RuntimeAdmissionPool =
+type internal RuntimeAdmissionPool =
     { Limits: RuntimeAdmissionLimits
       Queues: Dictionary<string, Queue<RuntimeAdmissionRequest>>
       TenantOrder: ResizeArray<string>
@@ -280,11 +280,12 @@ type private RuntimeAdmissionPool =
       mutable Rejected: int64
       mutable Cursor: int }
 
-type RuntimeAdmissionController =
-    private
-        { SyncRoot: obj
-          Pools: Map<RuntimeAdmissionClass, RuntimeAdmissionPool>
-          mutable Availability: RuntimeAvailabilityState }
+/// Coordinates tenant-fair admission across runtime work classes.
+type RuntimeAdmissionController
+    internal (pools: Map<RuntimeAdmissionClass, RuntimeAdmissionPool>, availability: RuntimeAvailabilityState) =
+    member val internal SyncRoot = obj ()
+    member internal _.Pools = pools
+    member val internal Availability = availability with get, set
 
 [<RequireQualifiedAccess>]
 module RuntimeAdmissionController =
@@ -304,17 +305,17 @@ module RuntimeAdmissionController =
           Cursor = 0 }
 
     let create activationLimits executionLimits =
-        { SyncRoot = obj ()
-          Pools =
+        RuntimeAdmissionController(
             Map.ofList
                 [ RuntimeAdmissionClass.SessionActivation, createPool activationLimits
-                  RuntimeAdmissionClass.TurnExecution, createPool executionLimits ]
-          Availability = RuntimeAvailabilityState.Healthy }
+                  RuntimeAdmissionClass.TurnExecution, createPool executionLimits ],
+            RuntimeAvailabilityState.Healthy
+        )
 
-    let setAvailability state controller =
+    let setAvailability state (controller: RuntimeAdmissionController) =
         lock controller.SyncRoot (fun () -> controller.Availability <- state)
 
-    let rec private dispatch controller workClass =
+    let rec private dispatch (controller: RuntimeAdmissionController) workClass =
         let pool = controller.Pools.[workClass]
 
         if
@@ -464,7 +465,7 @@ module RuntimeAdmissionController =
                   Rejected = pool.Rejected
                   ObservedAt = DateTimeOffset.UtcNow }))
 
-    let saturationSignals controller =
+    let saturationSignals (controller: RuntimeAdmissionController) =
         snapshot controller
         |> List.map (fun snapshot ->
             SaturationSignal.create
@@ -477,7 +478,7 @@ module RuntimeAdmissionController =
                 snapshot.Rejected
                 snapshot.ObservedAt)
 
-    let scalingRecommendation controller =
+    let scalingRecommendation (controller: RuntimeAdmissionController) =
         let snapshots = snapshot controller
 
         if

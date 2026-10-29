@@ -1,0 +1,276 @@
+{
+  "schemaVersion": 1,
+  "selectionCriteria": {
+    "userDemand": "A named platform use case and roadmap requirement must require the integration.",
+    "maintenanceHealth": "The dependency or host boundary must have an identified owner and review path.",
+    "licensing": "Distributed dependencies must satisfy the repository license policy; host dependencies remain operator-owned.",
+    "deployment": "The integration must fit a supported profile or an explicit host-owned isolation boundary.",
+    "conformance": "Domain behavior, failure semantics, authorization, lifecycle, and operational evidence must be tested."
+  },
+  "supportTiers": {
+    "production": "Release-blocking package with domain, security, lifecycle, and operational evidence.",
+    "optional": "Supported package for explicitly validated use cases with host-owned external dependencies.",
+    "host-boundary": "Supported Nao contract and guidance; the application owns vendor selection, credentials, availability, and operations."
+  },
+  "integrations": [
+    {
+      "id": "postgres-pgvector",
+      "capability": "vector",
+      "supportTier": "production",
+      "delivery": "package",
+      "package": "Nao.Knowledge.Postgres",
+      "project": "src/Nao.Knowledge.Postgres/Nao.Knowledge.Postgres.fsproj",
+      "owner": "@jichang",
+      "selection": {
+        "userDemand": "Production semantic retrieval for grounded RAG.",
+        "maintenanceHealth": "Owned with the PostgreSQL knowledge adapter and exercised against a real database.",
+        "licensing": "Pgvector and PostgreSQL are covered by the approved dependency and external-service policy.",
+        "deployment": "Runs against operator-managed PostgreSQL with the pgvector extension.",
+        "conformance": "Authorization filters, ranking, mutation lifecycle, backup, restore, deletion, and benchmarks are tested."
+      },
+      "evidence": {
+        "tests": [
+          "tests/Nao.Knowledge.Postgres.Tests/src/PostgresKnowledgeIndexTests.fs"
+        ],
+        "docs": [
+          "docs/migrations/2026-09-pgvector-knowledge-index.md",
+          "docs/knowledge-index-benchmarks.md"
+        ],
+        "operations": [
+          "docs/data-lifecycle-recovery.md"
+        ]
+      },
+      "validatedDomainUseCases": [
+        "authorized semantic retrieval",
+        "hybrid grounded RAG"
+      ]
+    },
+    {
+      "id": "postgres-lexical",
+      "capability": "lexical",
+      "supportTier": "production",
+      "delivery": "package",
+      "package": "Nao.Knowledge.Postgres",
+      "project": "src/Nao.Knowledge.Postgres/Nao.Knowledge.Postgres.fsproj",
+      "owner": "@jichang",
+      "selection": {
+        "userDemand": "Production keyword retrieval and hybrid fusion.",
+        "maintenanceHealth": "Uses the same owned PostgreSQL adapter and integration-test surface as vector retrieval.",
+        "licensing": "PostgreSQL is an operator-supplied external service under the approved policy.",
+        "deployment": "Uses built-in PostgreSQL full-text search without another service.",
+        "conformance": "Authorization filters, ranking, mutation lifecycle, backup, restore, and deletion are tested."
+      },
+      "evidence": {
+        "tests": [
+          "tests/Nao.Knowledge.Postgres.Tests/src/PostgresKnowledgeIndexTests.fs"
+        ],
+        "docs": [
+          "docs/migrations/2026-09-postgresql-lexical-index.md"
+        ],
+        "operations": [
+          "docs/data-lifecycle-recovery.md"
+        ]
+      },
+      "validatedDomainUseCases": [
+        "authorized lexical retrieval",
+        "hybrid grounded RAG"
+      ]
+    },
+    {
+      "id": "postgres-graph-memory",
+      "capability": "graph",
+      "supportTier": "production",
+      "delivery": "package",
+      "package": "Nao.Persistence.Postgres",
+      "project": "src/Nao.Persistence.Postgres/Nao.Persistence.Postgres.fsproj",
+      "owner": "@jichang",
+      "selection": {
+        "userDemand": "Durable graph memory and graph-enhanced retrieval require a production graph store.",
+        "maintenanceHealth": "Owned with the PostgreSQL persistence adapters and exercised against a real database.",
+        "licensing": "PostgreSQL is an operator-supplied external service under the approved policy.",
+        "deployment": "Reuses supported PostgreSQL deployment, backup, isolation, and recovery controls.",
+        "conformance": "Tenant isolation, concurrent mutation, lifecycle, restore, and physical deletion are tested."
+      },
+      "evidence": {
+        "tests": [
+          "tests/Nao.Knowledge.Postgres.Tests/src/PostgresGraphMemoryTests.fs"
+        ],
+        "docs": [
+          "docs/memory-knowledge.md",
+          "docs/migrations/2026-10-graph-neighborhood-expansion.md"
+        ],
+        "operations": [
+          "docs/data-lifecycle-recovery.md"
+        ]
+      },
+      "validatedDomainUseCases": [
+        "durable tenant graph memory",
+        "graph-enhanced retrieval evidence"
+      ],
+      "graphJustification": "BRG-02 requires graph neighborhoods as independently evaluated retrieval candidates."
+    },
+    {
+      "id": "opentelemetry",
+      "capability": "telemetry",
+      "supportTier": "production",
+      "delivery": "package",
+      "package": "Nao.Telemetry.OpenTelemetry",
+      "project": "src/Nao.Telemetry.OpenTelemetry/Nao.Telemetry.OpenTelemetry.fsproj",
+      "owner": "@jichang",
+      "selection": {
+        "userDemand": "Standard traces, metrics, logs, and Prometheus projection for production operations.",
+        "maintenanceHealth": "Built on the maintained OpenTelemetry .NET packages with a dedicated integration suite.",
+        "licensing": "Managed dependencies pass the repository license policy.",
+        "deployment": "Supports authenticated OTLP endpoints and host-exposed Prometheus scraping.",
+        "conformance": "Identity correlation, privacy, backpressure, retry, flush, shutdown, and protocol export are tested."
+      },
+      "evidence": {
+        "tests": [
+          "tests/Nao.Telemetry.OpenTelemetry.Tests/src/TelemetryRuntimeTests.fs"
+        ],
+        "docs": [
+          "docs/evaluation-observability.md"
+        ],
+        "operations": [
+          "docs/operations-runbooks.md"
+        ]
+      },
+      "validatedDomainUseCases": [
+        "OTLP telemetry export",
+        "Prometheus metric projection"
+      ]
+    },
+    {
+      "id": "oidc-principal",
+      "capability": "identity",
+      "supportTier": "production",
+      "delivery": "package",
+      "package": "Nao.Identity.Oidc",
+      "project": "src/Nao.Identity.Oidc/Nao.Identity.Oidc.fsproj",
+      "owner": "@jichang",
+      "selection": {
+        "userDemand": "Enterprise OIDC and OAuth claims must map into Nao authorization identities.",
+        "maintenanceHealth": "Provider-neutral adapter is owned and covered by fail-closed security tests.",
+        "licensing": "Uses platform claims APIs and introduces no vendor SDK.",
+        "deployment": "Composes behind host authentication middleware in every supported host profile.",
+        "conformance": "Authentication, claims, delegation, impersonation, ambiguity, and malformed authority fail closed."
+      },
+      "evidence": {
+        "tests": [
+          "tests/Nao.Identity.Oidc.Tests/src/OidcPrincipalAdapterTests.fs"
+        ],
+        "docs": [
+          "docs/getting-started.md",
+          "docs/architecture.md"
+        ],
+        "operations": [
+          "docs/security-threat-model.md"
+        ]
+      },
+      "validatedDomainUseCases": [
+        "host-validated OIDC identity mapping",
+        "service delegation and explicit impersonation"
+      ]
+    },
+    {
+      "id": "host-secret-provider",
+      "capability": "secret",
+      "supportTier": "host-boundary",
+      "delivery": "host-guidance",
+      "package": "Nao.Agents",
+      "project": "src/Nao.Agents/Nao.Agents.fsproj",
+      "owner": "@jichang",
+      "selection": {
+        "userDemand": "Providers, workers, and connectors require authorized secret resolution without secret-bearing configuration.",
+        "maintenanceHealth": "Nao owns the provider contract while applications own their selected enterprise vault.",
+        "licensing": "No vendor SDK is imposed; the host reviews its vault client and license.",
+        "deployment": "Workload identity resolves references at the host boundary and never places values in manifests.",
+        "conformance": "Reference binding, authorization scope, cancellation, rotation, revocation, mismatch, and redaction are tested."
+      },
+      "evidence": {
+        "tests": [
+          "tests/Nao.Agents.Tests/src/SecretTests.fs",
+          "tests/Nao.Agents.Tests/src/EnvironmentTests.fs"
+        ],
+        "docs": [
+          "docs/integration-support.md",
+          "docs/architecture.md"
+        ],
+        "operations": [
+          "docs/container-orchestration.md",
+          "docs/data-lifecycle-recovery.md"
+        ]
+      },
+      "validatedDomainUseCases": [
+        "enterprise vault resolution through SecretProvider",
+        "post-handshake isolated worker secret delivery"
+      ]
+    },
+    {
+      "id": "souffle-datalog",
+      "capability": "reasoner-datalog",
+      "supportTier": "optional",
+      "delivery": "package",
+      "package": "Nao.Reasoning.Datalog",
+      "project": "src/Nao.Reasoning.Datalog/Nao.Reasoning.Datalog.fsproj",
+      "owner": "@jichang",
+      "selection": {
+        "userDemand": "Validated typed rule use cases require stratified Datalog derivations.",
+        "maintenanceHealth": "Nao owns the typed compiler and protocol; the host owns the isolated Souffle executable.",
+        "licensing": "The executable is host-supplied and not redistributed by Nao.",
+        "deployment": "Runs only through a host-owned filesystem, network, and process-isolated boundary.",
+        "conformance": "Typing, safety, stratification, limits, engine identity, bindings, derivations, and failures are tested."
+      },
+      "evidence": {
+        "tests": [
+          "tests/Nao.Reasoning.Datalog.Tests/src/DatalogTests.fs"
+        ],
+        "docs": [
+          "docs/capabilities.md",
+          "docs/roadmap/05-ontology-logic.md"
+        ],
+        "operations": [
+          "docs/security-threat-model.md"
+        ]
+      },
+      "validatedDomainUseCases": [
+        "typed stratified rules",
+        "proof-backed deterministic derivation"
+      ],
+      "generalPurposeReasoning": false
+    },
+    {
+      "id": "z3-constraints",
+      "capability": "reasoner-constraints",
+      "supportTier": "optional",
+      "delivery": "package",
+      "package": "Nao.Reasoning.Constraints",
+      "project": "src/Nao.Reasoning.Constraints/Nao.Reasoning.Constraints.fsproj",
+      "owner": "@jichang",
+      "selection": {
+        "userDemand": "Validated finite-domain scheduling and constraint use cases require exact models and unsat evidence.",
+        "maintenanceHealth": "Nao owns the typed compiler and protocol; the host owns the isolated Z3 executable.",
+        "licensing": "The executable is host-supplied and not redistributed by Nao.",
+        "deployment": "Runs only through a host-owned filesystem, network, and child-process-isolated boundary.",
+        "conformance": "Sorts, bounds, models, unsat cores, objectives, limits, engine identity, and failures are tested."
+      },
+      "evidence": {
+        "tests": [
+          "tests/Nao.Reasoning.Constraints.Tests/src/ConstraintTests.fs"
+        ],
+        "docs": [
+          "docs/capabilities.md",
+          "docs/roadmap/05-ontology-logic.md"
+        ],
+        "operations": [
+          "docs/security-threat-model.md"
+        ]
+      },
+      "validatedDomainUseCases": [
+        "bounded integer scheduling",
+        "typed satisfiability and optimization"
+      ],
+      "generalPurposeReasoning": false
+    }
+  ]
+}

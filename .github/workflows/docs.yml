@@ -7,7 +7,19 @@ on:
     paths:
       - README.md
       - docs/**
+      - src/**
+      - examples/Nao.DocumentationSnippets/**
+      - Directory.Build.props
+      - Nao.slnx
       - scripts/validate-docs.py
+      - scripts/validate-release-docs.py
+      - scripts/release.py
+      - scripts/test_release.py
+      - release/**
+      - integration-policy.json
+      - scripts/validate-integrations.py
+      - scripts/test_validate_integrations.py
+      - CHANGELOG.md
       - dotnet-tools.json
       - .github/workflows/docs.yml
   workflow_dispatch:
@@ -25,9 +37,9 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
-      - uses: actions/setup-dotnet@v5
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
         with:
           dotnet-version: '10.0.x'
 
@@ -41,13 +53,23 @@ jobs:
         run: dotnet build Nao.slnx -c Release
 
       - name: Validate documentation sources
-        run: python3 scripts/validate-docs.py
+        run: |
+          python3 scripts/validate-docs.py
+          python3 scripts/validate-release-docs.py
+          python3 -m unittest scripts/test_validate_release_docs.py
+          python3 scripts/release.py validate
+          python3 -m unittest scripts/test_release.py
+          python3 scripts/validate-integrations.py
+          python3 -m unittest scripts/test_validate_integrations.py
+
+      - name: Run compiled documentation snippets
+        run: dotnet run --project examples/Nao.DocumentationSnippets/Nao.DocumentationSnippets.fsproj -c Release --no-build
 
       - name: Generate docs
-        run: dotnet fsdocs build --clean --output ./site --properties Configuration=Release --parameters root /Nao/
+        run: dotnet fsdocs build --strict --clean --output ./site --properties Configuration=Release --parameters root /Nao/
 
       - name: Validate generated documentation
-        run: python3 scripts/validate-docs.py --site ./site
+        run: python3 scripts/validate-docs.py --site ./site --external-links
 
       - name: Add .nojekyll
         if: github.event_name != 'pull_request'
@@ -55,7 +77,7 @@ jobs:
 
       - name: Upload Pages artifact
         if: github.event_name != 'pull_request'
-        uses: actions/upload-pages-artifact@v5
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5
         with:
           path: ./site
           include-hidden-files: true
@@ -70,4 +92,4 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v5
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5

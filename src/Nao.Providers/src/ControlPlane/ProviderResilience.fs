@@ -46,26 +46,23 @@ module ProviderCircuitConfiguration =
         { FailureThreshold = failureThreshold
           OpenDuration = openDuration }
 
-type private ProviderCircuitEntry =
+type internal ProviderCircuitEntry =
     { mutable State: ProviderCircuitState
       mutable ConsecutiveFailures: int }
 
-type ProviderCircuitRegistry =
-    private
-        { Configuration: ProviderCircuitConfiguration
-          Clock: unit -> DateTimeOffset
-          SyncRoot: obj
-          Entries: Dictionary<ProviderFailureDomain, ProviderCircuitEntry> }
+/// Maintains isolated circuit-breaker state for provider failure domains.
+type ProviderCircuitRegistry internal (configuration: ProviderCircuitConfiguration, clock: unit -> DateTimeOffset) =
+    member internal _.Configuration = configuration
+    member internal _.Clock = clock
+    member val internal SyncRoot = obj ()
+    member val internal Entries = Dictionary<ProviderFailureDomain, ProviderCircuitEntry>()
 
 [<RequireQualifiedAccess>]
 module ProviderCircuitRegistry =
     let create configuration clock =
-        { Configuration = configuration
-          Clock = clock
-          SyncRoot = obj ()
-          Entries = Dictionary() }
+        ProviderCircuitRegistry(configuration, clock)
 
-    let private entry domain registry =
+    let private entry domain (registry: ProviderCircuitRegistry) =
         match registry.Entries.TryGetValue domain with
         | true, value -> value
         | _ ->
@@ -76,7 +73,7 @@ module ProviderCircuitRegistry =
             registry.Entries.Add(domain, value)
             value
 
-    let tryEnter domain registry =
+    let tryEnter domain (registry: ProviderCircuitRegistry) =
         lock registry.SyncRoot (fun () ->
             let value = entry domain registry
 
@@ -88,13 +85,13 @@ module ProviderCircuitRegistry =
                 true
             | ProviderCircuitState.Open _ -> false)
 
-    let recordSuccess domain registry =
+    let recordSuccess domain (registry: ProviderCircuitRegistry) =
         lock registry.SyncRoot (fun () ->
             let value = entry domain registry
             value.State <- ProviderCircuitState.Closed
             value.ConsecutiveFailures <- 0)
 
-    let recordFailure domain registry =
+    let recordFailure domain (registry: ProviderCircuitRegistry) =
         lock registry.SyncRoot (fun () ->
             let value = entry domain registry
             value.ConsecutiveFailures <- value.ConsecutiveFailures + 1
@@ -105,7 +102,7 @@ module ProviderCircuitRegistry =
             then
                 value.State <- ProviderCircuitState.Open(registry.Clock() + registry.Configuration.OpenDuration))
 
-    let state domain registry =
+    let state domain (registry: ProviderCircuitRegistry) =
         lock registry.SyncRoot (fun () -> (entry domain registry).State)
 
 type ProviderRetryBudget =
