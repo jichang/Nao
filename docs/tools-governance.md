@@ -151,7 +151,9 @@ A modified policy result must alter the operation that actually executes. A poli
 
 Policy callbacks are asynchronous, receive caller-linked cancellation, and run within the
 positive timeout configured on `PolicyEngine`. A callback can return a typed
-`PolicyEvaluationFailure`; timeout, non-fatal callback exceptions, and modification-transform
+`PolicyEvaluationFailure`. The same deadline token cancels the callback and bounds the engine's
+wait; the engine does not wait for a callback that ignores cancellation, and cooperative callback
+cleanup may finish after the engine returns. Timeouts, non-fatal callback exceptions, and modification-transform
 exceptions are converted to explicit failures. Every such failure blocks regardless of whether
 the policy declared warning, confirmation, or modification enforcement. Caller cancellation and
 fatal runtime exceptions propagate rather than being relabeled as policy failures.

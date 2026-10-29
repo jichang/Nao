@@ -376,7 +376,7 @@ module PolicyEngine =
                                 try
                                     return!
                                         policy.EvaluateAsync effectiveContext evaluationCancellation.Token
-                                        |> fun pending -> pending.WaitAsync(evaluationTimeout, cancellationToken)
+                                        |> fun pending -> pending.WaitAsync(evaluationCancellation.Token)
                                 with
                                 | :? OperationCanceledException when cancellationToken.IsCancellationRequested ->
                                     return raise (OperationCanceledException(cancellationToken))

@@ -1188,34 +1188,73 @@ type PolicyEngineTests() =
         )
 
     [<TestMethod>]
-    member _.EvaluationTimeoutCancelsCallbackAndFailsClosed() =
-        let mutable callbackCancelled = false
+    member _.EvaluationTimeoutCancelsCallbackAndFailsClosed() : Task =
+        task {
+            let callbackCancelled =
+                TaskCompletionSource<unit>(TaskCreationOptions.RunContinuationsAsynchronously)
 
-        let policy =
-            { Id = "slow-policy"
-              Version = "test-v1"
-              Description = "Never completes within the deadline"
-              Scope = PolicyScope.platform
-              Enforcement = PolicyEnforcement.Warn
-              EvaluateAsync =
-                fun _ cancellationToken ->
-                    task {
-                        try
-                            do! Task.Delay(TimeSpan.FromSeconds 5.0, cancellationToken)
-                            return Ok None
-                        with :? OperationCanceledException ->
-                            callbackCancelled <- true
-                            return raise (OperationCanceledException(cancellationToken))
-                    } }
+            let policy =
+                { Id = "slow-policy"
+                  Version = "test-v1"
+                  Description = "Never completes within the deadline"
+                  Scope = PolicyScope.platform
+                  Enforcement = PolicyEnforcement.Warn
+                  EvaluateAsync =
+                    fun _ cancellationToken ->
+                        task {
+                            try
+                                do! Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken)
+                                return Ok None
+                            with :? OperationCanceledException ->
+                                callbackCancelled.TrySetResult() |> ignore
+                                return raise (OperationCanceledException(cancellationToken))
+                        } }
 
-        let result =
-            PolicyEngine.create (TimeSpan.FromMilliseconds 20.0) [ policy ]
-            |> fun engine -> evaluate engine (context None)
+            let engine = PolicyEngine.create (TimeSpan.FromMilliseconds 20.0) [ policy ]
+            let! result = engine.EvaluateAsync(context None, CancellationToken.None)
+            do! callbackCancelled.Task.WaitAsync(TimeSpan.FromSeconds 5.0)
 
-        Assert.IsFalse(result.Proceed)
-        Assert.IsTrue(callbackCancelled)
-        Assert.AreEqual(Some "policy_evaluation_timeout", result.Evaluations.Head.FailureCode)
-        Assert.AreEqual(PolicyEvaluationOutcome.Failed, result.Evaluations.Head.Outcome)
+            Assert.IsFalse(result.Proceed)
+            Assert.AreEqual(Some "policy_evaluation_timeout", result.Evaluations.Head.FailureCode)
+            Assert.AreEqual(PolicyEvaluationOutcome.Failed, result.Evaluations.Head.Outcome)
+        }
+
+    [<TestMethod>]
+    member _.EvaluationTimeoutCancelsTokenWithoutWaitingForUncooperativeCallback() : Task =
+        task {
+            let pending =
+                TaskCompletionSource<Result<string option, PolicyEvaluationFailure>>(
+                    TaskCreationOptions.RunContinuationsAsynchronously
+                )
+
+            let mutable callbackToken = CancellationToken.None
+
+            let policy =
+                { Id = "uncooperative-policy"
+                  Version = "test-v1"
+                  Description = "Ignores cancellation and completes after the deadline"
+                  Scope = PolicyScope.platform
+                  Enforcement = PolicyEnforcement.Warn
+                  EvaluateAsync =
+                    fun _ cancellationToken ->
+                        callbackToken <- cancellationToken
+                        pending.Task }
+
+            try
+                let engine = PolicyEngine.create (TimeSpan.FromMilliseconds 20.0) [ policy ]
+
+                let! result =
+                    engine.EvaluateAsync(context None, CancellationToken.None)
+                    |> fun evaluation -> evaluation.WaitAsync(TimeSpan.FromSeconds 5.0)
+
+                Assert.IsTrue(callbackToken.IsCancellationRequested)
+                Assert.IsFalse(pending.Task.IsCompleted)
+                Assert.IsFalse(result.Proceed)
+                Assert.AreEqual(Some "policy_evaluation_timeout", result.Evaluations.Head.FailureCode)
+                Assert.AreEqual(PolicyEvaluationOutcome.Failed, result.Evaluations.Head.Outcome)
+            finally
+                pending.TrySetResult(Ok None) |> ignore
+        }
 
     [<TestMethod>]
     member _.CallbackAndTransformExceptionsFailClosed() =
