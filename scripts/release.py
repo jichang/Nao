@@ -9,6 +9,7 @@ import json
 import re
 import sys
 import zipfile
+from datetime import date, datetime, timezone
 from pathlib import Path
 from xml.etree import ElementTree
 
@@ -215,6 +216,33 @@ def validate_manifest(root: Path, path: Path) -> list[str]:
     return errors
 
 
+def prepare_publication(root: Path, manifest_path: Path) -> list[str]:
+    errors = validate_manifest(root, manifest_path)
+    if errors:
+        return errors
+
+    manifest = load_manifest(manifest_path)
+    if manifest["releaseDate"] != "Unreleased":
+        try:
+            date.fromisoformat(str(manifest["releaseDate"]))
+        except ValueError:
+            return ["releaseDate must be Unreleased or an ISO release date"]
+        return []
+
+    publication_date = datetime.now(timezone.utc).date().isoformat()
+    notes_path = root / str(manifest["releaseNotes"])
+    notes = notes_path.read_text(encoding="utf-8")
+    manifest["releaseDate"] = publication_date
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    notes_path.write_text(
+        notes.replace("- Release date: Unreleased", f"- Release date: {publication_date}", 1),
+        encoding="utf-8",
+    )
+    (root / "CHANGELOG.md").write_text(render_changelog(manifest), encoding="utf-8")
+    print(f"Prepared publication date {publication_date} in the working checkout.")
+    return []
+
+
 def packable_projects(root: Path) -> set[str]:
     packages: set[str] = set()
     for path in sorted((root / "src").glob("*/*.*proj")):
@@ -299,6 +327,10 @@ def main() -> int:
     subparsers.add_parser("validate")
     subparsers.add_parser("render")
     subparsers.add_parser("version")
+    subparsers.add_parser(
+        "prepare-publication",
+        help="resolve an Unreleased date to today's UTC date in the working checkout",
+    )
     verify = subparsers.add_parser("verify-packages")
     verify.add_argument("--directory", type=Path, required=True)
     checksums = subparsers.add_parser("checksums")
@@ -319,7 +351,9 @@ def main() -> int:
     if args.command == "render":
         (root / "CHANGELOG.md").write_text(render_changelog(manifest), encoding="utf-8")
         return 0
-    if args.command == "verify-packages":
+    if args.command == "prepare-publication":
+        errors = prepare_publication(root, manifest_path)
+    elif args.command == "verify-packages":
         errors = verify_packages(root, args.directory.resolve(), str(manifest["version"]))
     elif args.command == "checksums":
         write_checksums(args.directory.resolve())

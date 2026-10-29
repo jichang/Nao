@@ -51,6 +51,9 @@ jobs:
           test "$GITHUB_REF_NAME" = "v$version"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
+      - name: Prepare publication date in checkout
+        run: python3 scripts/release.py prepare-publication
+
       - name: Validate release metadata and generated changelog
         run: |
           python3 scripts/release.py validate
@@ -209,5 +212,10 @@ jobs:
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: signed-nuget-packages
-          path: ./nupkgs
+          path: |
+            ./nupkgs
+            release/current.json
+            release/${{ steps.version.outputs.version }}.json
+            docs/releases/${{ steps.version.outputs.version }}.md
+            CHANGELOG.md
           if-no-files-found: error

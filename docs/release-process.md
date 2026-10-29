@@ -26,6 +26,25 @@ python3 scripts/release.py validate
 
 Do not edit `CHANGELOG.md` directly.
 
+Release metadata can retain `Unreleased` while preparing a release. After verifying the release
+tag, the NuGet publishing workflow runs `prepare-publication` to replace it with the current
+UTC date (`YYYY-MM-DD`) in the checked-out manifest and release notes and regenerate the changelog.
+An explicit ISO release date is preserved, including on repeated invocations in the same checkout.
+The command validates the reviewed metadata before changing anything; it does not repair metadata
+drift or bypass any release gates.
+
+These changes exist only in the publishing checkout: the workflow does not commit, push, or
+modify the tag. A fresh run of a tag still marked `Unreleased` uses that run's UTC date.
+The signed-package workflow artifact retains the finalized manifest, release notes, and changelog
+alongside the package evidence.
+To reproduce the publication metadata checks locally:
+
+```bash
+python3 scripts/release.py prepare-publication
+python3 scripts/release.py validate
+python3 scripts/validate-release-docs.py --version "$(python3 scripts/release.py version)" --publishing
+```
+
 ## Protected release gates
 
 Publication reruns evidence from the tagged commit and does not trust an earlier workflow:
