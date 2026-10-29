@@ -44,6 +44,8 @@ def validate_publish_workflow(publish: str) -> list[str]:
         errors.append("NuGet publication must use the configured Trusted Publishing identity")
     if "id-token: write" not in publish:
         errors.append("NuGet Trusted Publishing requires id-token write permission")
+    if "attestations: write" not in publish:
+        errors.append("NuGet artifact attestation requires attestations write permission")
     if "steps.login.outputs.NUGET_API_KEY" not in publish:
         errors.append("NuGet publication must push with the Trusted Publishing credential")
     if "NuGet/login@" in publish and "- name: Build" in publish:

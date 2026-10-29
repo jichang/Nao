@@ -108,6 +108,7 @@ class VulnerabilityReportTests(unittest.TestCase):
         workflow = """
 permissions:
   id-token: write
+  attestations: write
 on:
   push:
     tags: ['v*']
@@ -126,6 +127,7 @@ steps:
         workflow = """
 permissions:
   id-token: write
+  attestations: write
 on:
   push:
     tags: ['v*']
@@ -144,6 +146,25 @@ steps:
         self.assertTrue(any("dotnet nuget sign" in error for error in errors))
         self.assertTrue(any("NUGET_SIGNING_CERTIFICATE" in error for error in errors))
         self.assertTrue(any("--skip-duplicate" in error for error in errors))
+
+    def test_missing_attestation_permission_is_rejected(self):
+        workflow = """
+permissions:
+  id-token: write
+on:
+  push:
+    tags: ['v*']
+steps:
+  - run: python3 scripts/release.py version
+  - id: login
+    uses: NuGet/login@commit
+    with:
+      user: ${{ secrets.NUGET_USERNAME }}
+  - name: Build
+  - run: echo ${{ steps.login.outputs.NUGET_API_KEY }}
+"""
+        errors = MODULE.validate_publish_workflow(workflow)
+        self.assertTrue(any("attestations write permission" in error for error in errors))
 
 
 if __name__ == "__main__":

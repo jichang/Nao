@@ -9,6 +9,7 @@ permissions:
   contents: read
   id-token: write
   packages: write
+  attestations: write
 
 jobs:
   publish:
