@@ -361,7 +361,10 @@ type ResilienceTests() =
     [<TestMethod>]
     member _.CircuitBreakerClosesAfterSuccesses() =
         let mutable now = DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero)
-        let timeProvider = { new TimeProvider() with override _.GetUtcNow() = now }
+
+        let timeProvider =
+            { new TimeProvider() with
+                override _.GetUtcNow() = now }
 
         let config =
             { CircuitBreakerConfig.Default with
@@ -383,8 +386,7 @@ type ResilienceTests() =
             { CircuitBreakerConfig.Default with
                 FailureThreshold = 0 }
 
-        Assert.ThrowsExactly<ArgumentException>(fun () ->
-            CircuitBreaker.create config TimeProvider.System |> ignore)
+        Assert.ThrowsExactly<ArgumentException>(fun () -> CircuitBreaker.create config TimeProvider.System |> ignore)
         |> ignore
 
     [<TestMethod>]
