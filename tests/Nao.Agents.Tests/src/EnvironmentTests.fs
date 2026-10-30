@@ -593,7 +593,7 @@ type ExecutionEnvironmentTests() =
                 runtime,
                 "#!/bin/sh\nif [ \"$1\" = \"info\" ]; then printf '%s\\n' '"
                 + supportedContainerCapabilities
-                + "'; exit 0; fi\nif [ \"$1\" = \"rm\" ]; then printf '%s\\n' \"$@\" > \"$0.cleanup\"; exit 0; fi\nprintf '%s\\n' \"$@\" > \"$NAO_TEST_ARGUMENTS\"\ncidfile=''\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = \"--cidfile\" ]; then shift; cidfile=\"$1\"; fi\n  shift\ndone\nprintf 'test-container' > \"$cidfile\"\nif [ \"$NAO_TEST_RUNTIME_MODE\" = \"fail\" ]; then exit 17; fi\nif [ \"$NAO_TEST_RUNTIME_MODE\" = \"wait\" ]; then while :; do sleep 1; done; fi\nexec \"$NAO_TEST_WORKER\"\n"
+                + "'; exit 0; fi\nif [ \"$1\" = \"rm\" ]; then printf '%s\\n' \"$@\" > \"$0.cleanup\"; exit 0; fi\narguments_tmp=\"$NAO_TEST_ARGUMENTS.tmp.$$\"\nprintf '%s\\n' \"$@\" > \"$arguments_tmp\"\nmv \"$arguments_tmp\" \"$NAO_TEST_ARGUMENTS\"\ncidfile=''\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = \"--cidfile\" ]; then shift; cidfile=\"$1\"; fi\n  shift\ndone\nprintf 'test-container' > \"$cidfile\"\nif [ \"$NAO_TEST_RUNTIME_MODE\" = \"fail\" ]; then exit 17; fi\nif [ \"$NAO_TEST_RUNTIME_MODE\" = \"wait\" ]; then while :; do sleep 1; done; fi\nexec \"$NAO_TEST_WORKER\"\n"
             )
 
             IO.File.SetUnixFileMode(
