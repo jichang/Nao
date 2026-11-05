@@ -3,6 +3,7 @@ namespace Nao.DeveloperTools
 open System
 open System.Diagnostics
 open System.IO
+open System.Reflection
 open System.Text.RegularExpressions
 open System.Threading
 open System.Threading.Tasks
@@ -17,7 +18,11 @@ type ExtensionTemplate =
 
 [<RequireQualifiedAccess>]
 module ExtensionTemplate =
-    let private naoPackageVersion = "1.0.0-alpha1"
+    let private naoPackageVersion =
+        let version = typeof<ExtensionTemplate>.Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+        if isNull version then
+            invalidOp "The Nao developer-tools assembly is missing its package version."
+        version.InformationalVersion.Split('+')[0]
 
     let parse =
         function

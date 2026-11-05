@@ -18,6 +18,7 @@ VERSION = re.compile(
     r"(?:-((?:0|[1-9]\d*|[A-Za-z-][0-9A-Za-z-]*)"
     r"(?:\.(?:0|[1-9]\d*|[A-Za-z-][0-9A-Za-z-]*))*))?$"
 )
+DEVELOPMENT_VERSION = "1.0.0-dev"
 ROADMAP_HEADING = re.compile(r"^## ([A-Z]+-\d+)\b", re.MULTILINE)
 CHECKBOX = re.compile(r"^- \[([ x])\]", re.MULTILINE)
 REQUIRED_CHANGE_SECTIONS = {"Added", "Changed", "Fixed", "Security"}
@@ -38,6 +39,25 @@ REQUIRED_ARTIFACTS = {
     "build-provenance",
     "sbom-attestation",
 }
+
+def release_version(tag: str) -> str:
+    if not tag.startswith("v"):
+        raise ValueError("release tag must be v<version>")
+    version = tag[1:]
+    match = VERSION.fullmatch(version)
+    if match is None:
+        raise ValueError("release tag must contain canonical SemVer without build metadata")
+    prerelease = match.group(4)
+    if prerelease and re.fullmatch(r"(alpha|beta|rc)(?:[.-]?(?:0|[1-9]\d*))?", prerelease) is None:
+        raise ValueError("release tag must use a stable, alpha, beta, or rc version; development versions cannot be published")
+    return version
+
+
+def release_channel(version: str) -> str:
+    match = VERSION.fullmatch(version)
+    assert match is not None
+    prerelease = match.group(4)
+    return re.match(r"[a-z]+", prerelease).group() if prerelease else "stable"
 
 
 def load_manifest(path: Path) -> dict[str, object]:
@@ -63,9 +83,9 @@ def resolve_manifest(root: Path, requested: Path | None) -> Path:
     if (
         target_path.name != target
         or target_path.suffix != ".json"
-        or not VERSION.fullmatch(target_path.stem)
+        or (target != "template.json" and not VERSION.fullmatch(target_path.stem))
     ):
-        raise ValueError("release/current.json manifest must be a versioned JSON filename")
+        raise ValueError("release/current.json manifest must be template.json or a versioned JSON filename")
     manifest_path = pointer_path.parent / target_path
     if not manifest_path.is_file():
         raise ValueError(f"current release manifest does not exist: {target}")
@@ -98,7 +118,7 @@ def render_changelog(manifest: dict[str, object]) -> str:
         "",
         "This file is generated from reviewed metadata under `release/`; do not edit it directly.",
         "",
-        f"## [{manifest['version']}] - {manifest['releaseDate']}",
+        f"## [{'Unreleased' if manifest['version'] == DEVELOPMENT_VERSION else manifest['version']}] - {manifest['releaseDate']}",
         "",
         str(manifest["summary"]),
         "",
@@ -140,23 +160,29 @@ def validate_manifest(root: Path, path: Path) -> list[str]:
     if match is None:
         errors.append("release version must be canonical SemVer without build metadata or a prefix")
         return errors
-    if path.name != f"{version}.json":
+    if manifest.get("releaseDate") != "Unreleased":
+        try:
+            date.fromisoformat(str(manifest.get("releaseDate")))
+        except ValueError:
+            errors.append("releaseDate must be Unreleased or an ISO release date")
+    development = version == DEVELOPMENT_VERSION
+    if path.name != ("template.json" if development else f"{version}.json"):
         errors.append("release manifest filename must match its version")
-    if manifest.get("tag") != f"v{version}":
+    if manifest.get("tag") != (None if development else f"v{version}"):
         errors.append("release tag must be v<version>")
     if manifest.get("sourceBranch") != "main":
         errors.append("releases must originate from main")
-    prerelease = match.group(4)
-    channel_match = (
-        re.fullmatch(r"(alpha|beta|rc)(?:[.-]?(?:0|[1-9]\d*))?", prerelease)
-        if prerelease
-        else None
-    )
-    expected_channel = channel_match.group(1) if channel_match else "stable"
-    if prerelease and channel_match is None:
-        errors.append("release prerelease must use an alpha, beta, or rc identifier")
-    elif manifest.get("channel") != expected_channel:
-        errors.append(f"release channel must be {expected_channel} for version {version}")
+    if development:
+        if manifest.get("channel") != "development":
+            errors.append("the release template channel must be development")
+    else:
+        try:
+            release_version(f"v{version}")
+        except ValueError as error:
+            errors.append(str(error))
+        else:
+            if manifest.get("channel") != release_channel(version):
+                errors.append(f"release channel differs from version {version}")
     if manifest.get("longTermSupport") is not False:
         errors.append("the initial release line must not claim long-term support")
     if manifest.get("compatibilityBaseline") is not None:
@@ -168,14 +194,15 @@ def validate_manifest(root: Path, path: Path) -> list[str]:
         errors.append(f"release notes do not exist: {notes_value}")
     else:
         notes = notes_path.read_text(encoding="utf-8")
-        if not notes.startswith(f"# Nao {version} release notes\n"):
+        notes_version = "development" if development else version
+        if not notes.startswith(f"# Nao {notes_version} release notes\n"):
             errors.append("release notes title does not match the manifest version")
         if release_date(notes) != manifest.get("releaseDate"):
             errors.append("release date differs between manifest and release notes")
 
-    props = (root / "Directory.Build.props").read_text(encoding="utf-8")
-    if f"<Version>{version}</Version>" not in props:
-        errors.append("Directory.Build.props version differs from the release manifest")
+    props = ElementTree.parse(root / "Directory.Build.props")
+    if props.findtext(".//Version") != DEVELOPMENT_VERSION:
+        errors.append("Directory.Build.props must default to 1.0.0-dev, not a release version")
 
     supply = json.loads((root / "supply-chain-policy.json").read_text(encoding="utf-8"))
     if supply.get("packageVersion") != version:
@@ -216,30 +243,50 @@ def validate_manifest(root: Path, path: Path) -> list[str]:
     return errors
 
 
-def prepare_publication(root: Path, manifest_path: Path) -> list[str]:
+def prepare_publication(root: Path, manifest_path: Path, tag: str) -> list[str]:
+    try:
+        version = release_version(tag)
+    except ValueError as error:
+        return [str(error)]
     errors = validate_manifest(root, manifest_path)
     if errors:
         return errors
 
     manifest = load_manifest(manifest_path)
-    if manifest["releaseDate"] != "Unreleased":
-        try:
-            date.fromisoformat(str(manifest["releaseDate"]))
-        except ValueError:
-            return ["releaseDate must be Unreleased or an ISO release date"]
+    if manifest["version"] != DEVELOPMENT_VERSION:
+        if manifest["version"] != version:
+            return ["prepared release version differs from the Git tag"]
+        if manifest["releaseDate"] == "Unreleased":
+            return ["prepared release requires an ISO release date"]
         return []
 
-    publication_date = datetime.now(timezone.utc).date().isoformat()
-    notes_path = root / str(manifest["releaseNotes"])
-    notes = notes_path.read_text(encoding="utf-8")
+    publication_date = manifest["releaseDate"]
+    if publication_date == "Unreleased":
+        publication_date = datetime.now(timezone.utc).date().isoformat()
+    target_manifest = root / "release" / f"{version}.json"
+    target_notes = root / "docs" / "releases" / f"{version}.md"
+    if target_manifest.exists() or target_notes.exists():
+        return ["release records already exist; historical manifests and notes must not be overwritten"]
+    notes = (root / str(manifest["releaseNotes"])).read_text(encoding="utf-8")
+    notes = notes.replace("# Nao development release notes\n", f"# Nao {version} release notes\n", 1)
+    notes = notes.replace(f"- Release date: {manifest['releaseDate']}", f"- Release date: {publication_date}", 1)
+    manifest["version"] = version
+    manifest["tag"] = tag
+    manifest["channel"] = release_channel(version)
     manifest["releaseDate"] = publication_date
-    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
-    notes_path.write_text(
-        notes.replace("- Release date: Unreleased", f"- Release date: {publication_date}", 1),
-        encoding="utf-8",
-    )
+    manifest["releaseNotes"] = f"docs/releases/{version}.md"
+    supply_path = root / "supply-chain-policy.json"
+    supply = json.loads(supply_path.read_text(encoding="utf-8"))
+    supply["packageVersion"] = version
+    supply["supportedVersions"]["releaseTargets"] = [version]
+    target_manifest.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    target_notes.write_text(notes, encoding="utf-8")
+    supply_path.write_text(json.dumps(supply, indent=2) + "\n", encoding="utf-8")
+    (root / "release" / "current.json").write_text(
+        json.dumps({"schemaVersion": 1, "manifest": target_manifest.name}, indent=2) + "\n",
+        encoding="utf-8")
     (root / "CHANGELOG.md").write_text(render_changelog(manifest), encoding="utf-8")
-    print(f"Prepared publication date {publication_date} in the working checkout.")
+    print(f"Prepared {tag} dated {publication_date} in the working checkout.")
     return []
 
 
@@ -297,7 +344,7 @@ def verify_packages(root: Path, directory: Path, version: str) -> list[str]:
                 errors.append(f"{package.name}: nuspec version differs from the release")
             if "<readme>README.md</readme>" not in nuspec:
                 errors.append(f"{package.name}: nuspec does not advertise the package README")
-            if f"docs/releases/{version}.md" not in nuspec:
+            if f"/blob/v{version}/docs/releases/template.md" not in nuspec:
                 errors.append(f"{package.name}: nuspec release-notes link differs from the release")
             if "README.md" not in names:
                 errors.append(f"{package.name}: missing package README")
@@ -326,11 +373,13 @@ def main() -> int:
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("validate")
     subparsers.add_parser("render")
-    subparsers.add_parser("version")
-    subparsers.add_parser(
+    version_parser = subparsers.add_parser("version")
+    version_parser.add_argument("--tag", help="derive a publishable version from a Git tag")
+    prepare = subparsers.add_parser(
         "prepare-publication",
-        help="resolve an Unreleased date to today's UTC date in the working checkout",
+        help="generate tagged release records from the reviewed development template",
     )
+    prepare.add_argument("--tag", required=True)
     verify = subparsers.add_parser("verify-packages")
     verify.add_argument("--directory", type=Path, required=True)
     checksums = subparsers.add_parser("checksums")
@@ -338,6 +387,13 @@ def main() -> int:
     args = parser.parse_args()
 
     root = args.root.resolve()
+    if args.command == "version" and args.tag is not None:
+        try:
+            print(release_version(args.tag))
+        except ValueError as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 1
+        return 0
     try:
         manifest_path = resolve_manifest(root, args.manifest)
         manifest = load_manifest(manifest_path)
@@ -352,9 +408,14 @@ def main() -> int:
         (root / "CHANGELOG.md").write_text(render_changelog(manifest), encoding="utf-8")
         return 0
     if args.command == "prepare-publication":
-        errors = prepare_publication(root, manifest_path)
+        errors = prepare_publication(root, manifest_path, args.tag)
     elif args.command == "verify-packages":
-        errors = verify_packages(root, args.directory.resolve(), str(manifest["version"]))
+        try:
+            release_version(str(manifest["tag"]))
+        except ValueError as error:
+            errors = [str(error)]
+        else:
+            errors = verify_packages(root, args.directory.resolve(), str(manifest["version"]))
     elif args.command == "checksums":
         write_checksums(args.directory.resolve())
         return 0

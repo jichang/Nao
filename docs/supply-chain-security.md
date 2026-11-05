@@ -46,10 +46,12 @@ affected artifacts.
 
 ## Supported versions
 
-Nao has no stable release. Only the current main branch is supported. The policy names
-`1.0.0-alpha1` as the current release target, but prerelease packages are evaluation artifacts
-without compatibility or support guarantees. Security fixes are not backported to unpublished
-interfaces or abstractions.
+Nao has no stable release. Only the current main branch is supported. Development
+policy uses `1.0.0-dev` with no release target. A validated Git tag supplies the package
+version and the sole release target in the publishing checkout. Development versions
+are never published; prerelease packages are evaluation artifacts without compatibility
+or support guarantees. Security fixes are not backported to unpublished interfaces or
+abstractions.
 
 ## Licenses
 
@@ -100,7 +102,7 @@ the same version or use duplicate-skipping to complete a partial publication.
 Verify a downloaded package before use:
 
 ```bash
-gh attestation verify Nao.Agents.1.0.0-alpha1.nupkg --repo jichang/Nao
+gh attestation verify Nao.Agents.1.0.0-alpha2.nupkg --repo jichang/Nao
 ```
 
 Compare its SHA-256 digest with the release evidence and inspect the SPDX SBOM before promotion.

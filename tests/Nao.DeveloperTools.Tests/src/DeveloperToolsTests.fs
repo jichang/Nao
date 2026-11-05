@@ -2,6 +2,7 @@ namespace Nao.DeveloperTools.Tests
 
 open System
 open System.IO
+open System.Reflection
 open System.Threading
 open System.Threading.Tasks
 open Microsoft.VisualStudio.TestTools.UnitTesting
@@ -214,6 +215,10 @@ type DeveloperToolsTests() =
                 let _, files = ExtensionTemplate.create root kind $"Example{kind}" None
                 Assert.AreEqual(4, files.Length)
                 files |> List.iter (fun path -> Assert.IsTrue(File.Exists path, path))
+                let project = files |> List.find (fun path -> path.EndsWith($"Example{kind}.fsproj", StringComparison.Ordinal))
+                let version =
+                    typeof<ExtensionTemplate>.Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>().InformationalVersion.Split('+')[0]
+                StringAssert.Contains(File.ReadAllText project, $"<PackageReference Include=\"{ExtensionTemplate.package kind}\" Version=\"{version}\" />")
             finally
                 Directory.Delete(root, true)
 

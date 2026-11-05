@@ -1,21 +1,32 @@
 # Release and compatibility process
 
-Nao has no stable release. The only supported development line is `main`, and development snapshots and prerelease packages have no compatibility guarantee. The current protected release target is `v1.0.0-alpha1`, described by [`release/1.0.0-alpha1.json`](https://github.com/jichang/Nao/blob/main/release/1.0.0-alpha1.json).
+Nao has no stable release. The only supported development line is `main`, and
+development snapshots and prerelease packages have no compatibility guarantee.
+Main always defaults to `1.0.0-dev`, which is never published. A pushed Git tag
+such as `v1.0.0-alpha2` supplies the release version without a source-code version bump.
 
 ## Branches and release channels
 
 - `main` is the single integration branch and the source of release tags.
 - Pull requests are the review boundary. Release metadata, migrations, package changes, and policy changes are reviewed with the implementation they describe.
 - Untagged CI outputs are development evidence only. They are not published to NuGet and are not supported packages.
-- Alpha, beta, release-candidate, and stable publication require the exact protected tag declared by the current release manifest.
-- `release/current.json` selects the only active release target. Historical manifests remain versioned and immutable after publication.
+- Alpha, beta, release-candidate, and stable publication require a canonical `v<SemVer>` Git tag. Branch dispatches and development-version tags are rejected.
+- `release/current.json` selects `release/template.json` on main. Publication generates a versioned manifest and selects it only in the workflow checkout. Historical manifests remain immutable.
 - Prerelease channels are evaluation artifacts and carry no compatibility or support guarantee.
 - `1.0.0` is not an LTS line. Nao will not claim an LTS line until a later reviewed policy defines its support duration, backport ownership, and successor.
 - Before the first release, breaking APIs and abstractions are changed in place. After a stable release, a release manifest must name the compatibility baseline and package validation must compare against it.
 
 ## Reviewed release metadata
 
-The schema-v1 manifest owns the package version, date, channel, source branch, tag, compatibility baseline, LTS status, release notes, changelog entries, completed roadmap capabilities, mandatory gates, and artifact set. The schema-v1 `release/current.json` pointer selects the manifest used by local and protected workflows. `scripts/release.py validate` rejects invalid SemVer/channel combinations and drift from package metadata, release notes, supply-chain policy, roadmap state, or the generated changelog.
+The reviewed `release/template.json` and `docs/releases/template.md` own development
+release content, compatibility baseline, LTS status, changelog entries, completed
+roadmap capabilities, mandatory gates, and artifact requirements. They contain no
+future release number. The tag owns the published package version; its prerelease
+identifier determines the channel. Schema versions change only with their contracts.
+
+`scripts/release.py validate` rejects metadata, release-note, supply-chain policy,
+roadmap, and generated-changelog drift. Build defaults remain `1.0.0-dev` even when
+validating generated release records.
 
 Update generated changelog content with:
 
@@ -26,24 +37,39 @@ python3 scripts/release.py validate
 
 Do not edit `CHANGELOG.md` directly.
 
-Release metadata can retain `Unreleased` while preparing a release. After verifying the release
-tag, the NuGet publishing workflow runs `prepare-publication` to replace it with the current
-UTC date (`YYYY-MM-DD`) in the checked-out manifest and release notes and regenerate the changelog.
-An explicit ISO release date is preserved, including on repeated invocations in the same checkout.
-The command validates the reviewed metadata before changing anything; it does not repair metadata
-drift or bypass any release gates.
+After validating the tag, the publishing workflow runs `prepare-publication --tag`
+to generate `release/<version>.json` and `docs/releases/<version>.md`, update the
+checkout's policy and current pointer, and regenerate the changelog. An `Unreleased`
+date becomes the current UTC date; an explicit ISO date is preserved. The command
+validates reviewed metadata before writing, refuses to overwrite historical records,
+and is idempotent for the same prepared tag. It does not repair drift or bypass gates.
 
 These changes exist only in the publishing checkout: the workflow does not commit, push, or
 modify the tag. A fresh run of a tag still marked `Unreleased` uses that run's UTC date.
-The package workflow artifact retains the finalized manifest, release notes, and changelog
-alongside the package evidence.
+Restore, build, and pack receive the same tag-derived MSBuild `Version`, so package
+dependencies, assembly metadata, and scaffold references agree. The workflow retains
+the finalized manifest, notes, policy, and changelog alongside the package evidence.
+Package release-note links reference the reviewed template at the immutable Git tag;
+the finalized, dated notes are retained in the workflow artifacts.
 To reproduce the publication metadata checks locally:
 
 ```bash
-python3 scripts/release.py prepare-publication
+python3 scripts/release.py version --tag v1.0.0-alpha3
+python3 scripts/release.py prepare-publication --tag v1.0.0-alpha3
 python3 scripts/release.py validate
 python3 scripts/validate-release-docs.py --version "$(python3 scripts/release.py version)" --publishing
 ```
+
+Run publication preparation only in a disposable checkout, not on the development
+worktree. To release after the reviewed main commit is pushed:
+
+```bash
+git tag v1.0.0-alpha3
+git push origin v1.0.0-alpha3
+```
+
+The tag triggers protected package and container publication. No release-version
+edit on main is required.
 
 ## Protected release gates
 

@@ -113,12 +113,15 @@ on:
   push:
     tags: ['v*']
 steps:
-  - run: python3 scripts/release.py version
+  - run: |
+      test "$GITHUB_REF_TYPE" = "tag"
+      python3 scripts/release.py version --tag "$GITHUB_REF_NAME"
   - id: login
     uses: NuGet/login@commit
     with:
       user: ${{ secrets.NUGET_USERNAME }}
   - name: Build
+    run: dotnet build Nao.slnx -c Release -p:Version=${{ steps.version.outputs.version }}
   - run: dotnet nuget push package.nupkg --api-key ${{ steps.login.outputs.NUGET_API_KEY }}
 """
         self.assertEqual([], MODULE.validate_publish_workflow(workflow))
@@ -132,11 +135,14 @@ on:
   push:
     tags: ['v*']
 steps:
-  - run: python3 scripts/release.py version
+  - run: |
+      test "$GITHUB_REF_TYPE" = "tag"
+      python3 scripts/release.py version --tag "$GITHUB_REF_NAME"
   - uses: NuGet/login@commit
     with:
       user: ${{ secrets.NUGET_USERNAME }}
   - name: Build
+    run: dotnet build Nao.slnx -c Release -p:Version=${{ steps.version.outputs.version }}
   - run: dotnet nuget sign package.nupkg --skip-duplicate
     env:
       NUGET_SIGNING_CERTIFICATE_BASE64: value
@@ -155,16 +161,34 @@ on:
   push:
     tags: ['v*']
 steps:
-  - run: python3 scripts/release.py version
+  - run: |
+      test "$GITHUB_REF_TYPE" = "tag"
+      python3 scripts/release.py version --tag "$GITHUB_REF_NAME"
   - id: login
     uses: NuGet/login@commit
     with:
       user: ${{ secrets.NUGET_USERNAME }}
   - name: Build
+    run: dotnet build Nao.slnx -c Release -p:Version=${{ steps.version.outputs.version }}
   - run: echo ${{ steps.login.outputs.NUGET_API_KEY }}
 """
         errors = MODULE.validate_publish_workflow(workflow)
         self.assertTrue(any("attestations write permission" in error for error in errors))
+
+    def test_branch_publication_guard_cannot_be_removed(self):
+        workflow = (MODULE_PATH.parents[1] / ".github/workflows/publish.yml").read_text()
+        workflow = workflow.replace('test "$GITHUB_REF_TYPE" = "tag"', "")
+        errors = MODULE.validate_publish_workflow(workflow)
+        self.assertTrue(any("from a Git tag" in error for error in errors))
+
+    def test_release_build_cannot_use_the_development_default(self):
+        workflow = (MODULE_PATH.parents[1] / ".github/workflows/publish.yml").read_text()
+        workflow = workflow.replace(
+            "dotnet build Nao.slnx -c Release -p:Version=${{ steps.version.outputs.version }}",
+            "dotnet build Nao.slnx -c Release",
+        )
+        errors = MODULE.validate_publish_workflow(workflow)
+        self.assertTrue(any("build assemblies with the tag-derived" in error for error in errors))
 
 
 if __name__ == "__main__":

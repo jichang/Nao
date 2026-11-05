@@ -78,6 +78,14 @@ class ReleaseDocumentationValidationTests(unittest.TestCase):
         path.write_text(release(version=version), encoding="utf-8")
         self.assertEqual([], MODULE.validate(root, version, False))
 
+    def test_development_template_is_validated_but_cannot_be_published(self) -> None:
+        root = self.root()
+        path = root / "docs" / "releases" / "template.md"
+        path.write_text(release(version="development"), encoding="utf-8")
+        self.assertEqual([], MODULE.validate(root, None, False))
+        errors = MODULE.validate(root, None, True)
+        self.assertTrue(any("cannot be published" in error for error in errors))
+
 
 if __name__ == "__main__":
     unittest.main()

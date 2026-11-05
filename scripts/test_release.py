@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import shutil
 import tempfile
 import unittest
 from datetime import datetime, timezone
@@ -70,6 +71,16 @@ class ReleaseManifestTests(unittest.TestCase):
         self.assertIsNotNone(MODULE.VERSION.fullmatch("1.0.0-alpha1"))
         self.assertIsNone(MODULE.VERSION.fullmatch("1.0.0-alpha.01"))
 
+    def test_release_versions_come_from_arbitrary_valid_tags(self) -> None:
+        for version in ("1.0.0-alpha2", "2.4.0-beta.3", "7.0.1-rc2", "9.4.2"):
+            with self.subTest(version=version):
+                self.assertEqual(version, MODULE.release_version(f"v{version}"))
+
+    def test_release_tags_reject_development_and_malformed_versions(self) -> None:
+        for tag in ("main", "1.0.0", "v1.0.0-dev", "v1.0.0-alpha.01", "v1.0.0+build", "v../escape"):
+            with self.subTest(tag=tag), self.assertRaises(ValueError):
+                MODULE.release_version(tag)
+
 
 class PublicationPreparationTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -78,19 +89,21 @@ class PublicationPreparationTests(unittest.TestCase):
         self.root = Path(directory.name)
         (self.root / "release").mkdir()
         (self.root / "docs" / "releases").mkdir(parents=True)
-        self.manifest_path = self.root / "release" / "1.0.0-alpha1.json"
-        self.notes_path = self.root / "docs" / "releases" / "1.0.0-alpha1.md"
+        self.tag = "v1.0.0-alpha7"
+        self.version = "1.0.0-alpha7"
+        self.manifest_path = self.root / "release" / "template.json"
+        self.notes_path = self.root / "docs" / "releases" / "template.md"
         self.changelog_path = self.root / "CHANGELOG.md"
         self.manifest = {
             "schemaVersion": 1,
-            "version": "1.0.0-alpha1",
+            "version": "1.0.0-dev",
             "releaseDate": "Unreleased",
-            "channel": "alpha",
+            "channel": "development",
             "sourceBranch": "main",
-            "tag": "v1.0.0-alpha1",
+            "tag": None,
             "longTermSupport": False,
             "compatibilityBaseline": None,
-            "releaseNotes": "docs/releases/1.0.0-alpha1.md",
+            "releaseNotes": "docs/releases/template.md",
             "summary": "Summary.",
             "changes": {section: [] for section in MODULE.REQUIRED_CHANGE_SECTIONS},
             "roadmapCompleted": [],
@@ -98,10 +111,13 @@ class PublicationPreparationTests(unittest.TestCase):
             "artifacts": sorted(MODULE.REQUIRED_ARTIFACTS),
         }
         (self.root / "Directory.Build.props").write_text(
-            "<Project><Version>1.0.0-alpha1</Version></Project>", encoding="utf-8"
+            "<Project><Version>1.0.0-dev</Version></Project>", encoding="utf-8"
         )
         (self.root / "supply-chain-policy.json").write_text(
-            json.dumps({"packageVersion": "1.0.0-alpha1"}), encoding="utf-8"
+            json.dumps({"packageVersion": "1.0.0-dev", "supportedVersions": {"releaseTargets": []}}), encoding="utf-8"
+        )
+        (self.root / "release" / "current.json").write_text(
+            json.dumps({"schemaVersion": 1, "manifest": "template.json"}), encoding="utf-8"
         )
         self.write_release("Unreleased")
 
@@ -109,72 +125,135 @@ class PublicationPreparationTests(unittest.TestCase):
         self.manifest["releaseDate"] = release_date
         self.manifest_path.write_text(json.dumps(self.manifest), encoding="utf-8")
         self.notes_path.write_text(
-            f"# Nao 1.0.0-alpha1 release notes\n\n- Release date: {release_date}\n",
+            f"# Nao development release notes\n\n- Release date: {release_date}\n",
             encoding="utf-8",
         )
         self.changelog_path.write_text(
             MODULE.render_changelog(self.manifest), encoding="utf-8"
         )
 
-    def snapshot(self) -> list[bytes]:
-        return [
-            path.read_bytes()
-            for path in (self.manifest_path, self.notes_path, self.changelog_path)
-        ]
+    def snapshot(self) -> dict[str, bytes]:
+        return {
+            str(path.relative_to(self.root)): path.read_bytes()
+            for path in self.root.rglob("*") if path.is_file()
+        }
+
+    def prepare(self) -> list[str]:
+        return MODULE.prepare_publication(
+            self.root, MODULE.resolve_manifest(self.root, None), self.tag
+        )
 
     def test_unreleased_date_is_resolved_consistently_in_utc(self) -> None:
         with patch.object(MODULE, "datetime") as clock:
             clock.now.return_value = datetime(2026, 10, 30, tzinfo=timezone.utc)
-            self.assertEqual([], MODULE.prepare_publication(self.root, self.manifest_path))
+            self.assertEqual([], self.prepare())
             clock.now.assert_called_once_with(timezone.utc)
-        manifest = MODULE.load_manifest(self.manifest_path)
+        path = MODULE.resolve_manifest(self.root, None)
+        manifest = MODULE.load_manifest(path)
         self.assertEqual("2026-10-30", manifest["releaseDate"])
+        self.assertEqual(self.version, manifest["version"])
+        self.assertEqual(self.tag, manifest["tag"])
+        self.assertEqual(1, manifest["schemaVersion"])
+        notes_path = self.root / manifest["releaseNotes"]
         self.assertEqual(
-            "2026-10-30", MODULE.release_date(self.notes_path.read_text(encoding="utf-8"))
+            "2026-10-30", MODULE.release_date(notes_path.read_text(encoding="utf-8"))
         )
         self.assertEqual(
             MODULE.render_changelog(manifest),
             self.changelog_path.read_text(encoding="utf-8"),
         )
-        self.assertEqual([], MODULE.validate_manifest(self.root, self.manifest_path))
+        self.assertEqual([], MODULE.validate_manifest(self.root, path))
+        self.assertEqual("1.0.0-dev", MODULE.load_manifest(self.manifest_path)["version"])
+        policy = json.loads((self.root / "supply-chain-policy.json").read_text())
+        self.assertEqual(self.version, policy["packageVersion"])
+        self.assertEqual([self.version], policy["supportedVersions"]["releaseTargets"])
 
-    def test_explicit_date_is_preserved_without_rewriting_files(self) -> None:
+    def test_explicit_date_and_reviewed_templates_are_preserved(self) -> None:
         self.write_release("2026-10-28")
-        before = self.snapshot()
-        self.assertEqual([], MODULE.prepare_publication(self.root, self.manifest_path))
-        self.assertEqual(before, self.snapshot())
+        before = self.manifest_path.read_bytes(), self.notes_path.read_bytes()
+        self.assertEqual([], self.prepare())
+        self.assertEqual(before, (self.manifest_path.read_bytes(), self.notes_path.read_bytes()))
+        prepared = MODULE.load_manifest(MODULE.resolve_manifest(self.root, None))
+        self.assertEqual("2026-10-28", prepared["releaseDate"])
 
     def test_preparation_is_idempotent(self) -> None:
-        self.assertEqual([], MODULE.prepare_publication(self.root, self.manifest_path))
+        self.assertEqual([], self.prepare())
         before = self.snapshot()
         with patch.object(MODULE, "datetime") as clock:
-            self.assertEqual([], MODULE.prepare_publication(self.root, self.manifest_path))
+            self.assertEqual([], self.prepare())
             clock.now.assert_not_called()
         self.assertEqual(before, self.snapshot())
 
     def test_mismatched_notes_block_preparation_without_changes(self) -> None:
         self.notes_path.write_text(
-            "# Nao 1.0.0-alpha1 release notes\n\n- Release date: 2026-10-28\n",
+            "# Nao development release notes\n\n- Release date: 2026-10-28\n",
             encoding="utf-8",
         )
         before = self.snapshot()
-        errors = MODULE.prepare_publication(self.root, self.manifest_path)
+        errors = self.prepare()
         self.assertIn("release date differs between manifest and release notes", errors)
         self.assertEqual(before, self.snapshot())
 
     def test_stale_changelog_blocks_preparation_without_changes(self) -> None:
         self.changelog_path.write_text("Stale changelog\n", encoding="utf-8")
         before = self.snapshot()
-        errors = MODULE.prepare_publication(self.root, self.manifest_path)
+        errors = self.prepare()
         self.assertIn("CHANGELOG.md is not the deterministic manifest rendering", errors)
         self.assertEqual(before, self.snapshot())
 
     def test_invalid_date_blocks_preparation_without_changes(self) -> None:
         self.write_release("2026-02-30")
         before = self.snapshot()
-        errors = MODULE.prepare_publication(self.root, self.manifest_path)
+        errors = self.prepare()
         self.assertIn("releaseDate must be Unreleased or an ISO release date", errors)
         self.assertEqual(before, self.snapshot())
+
+    def test_invalid_tag_cannot_change_release_files(self) -> None:
+        self.tag = "v1.0.0-dev"
+        before = self.snapshot()
+        self.assertTrue(self.prepare())
+        self.assertEqual(before, self.snapshot())
+
+    def test_existing_historical_records_are_never_overwritten(self) -> None:
+        for path in (
+            self.root / "release" / f"{self.version}.json",
+            self.root / "docs" / "releases" / f"{self.version}.md",
+        ):
+            with self.subTest(path=path):
+                path.write_text("Historical record\n", encoding="utf-8")
+                before = self.snapshot()
+                self.assertTrue(any("already exist" in error for error in self.prepare()))
+                self.assertEqual(before, self.snapshot())
+                path.unlink()
+
+    def test_prepared_release_cannot_be_reused_for_another_tag(self) -> None:
+        self.assertEqual([], self.prepare())
+        self.tag = "v9.0.0"
+        before = self.snapshot()
+        self.assertTrue(any("differs" in error for error in self.prepare()))
+        self.assertEqual(before, self.snapshot())
+
+
+class RepositoryTemplateTests(unittest.TestCase):
+    def test_next_tag_uses_reviewed_templates_without_source_version_edits(self) -> None:
+        repository = SCRIPT.parents[1]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ("release", "docs/releases", "docs/roadmap"):
+                shutil.copytree(repository / name, root / name)
+            for name in ("Directory.Build.props", "supply-chain-policy.json", "CHANGELOG.md"):
+                shutil.copy2(repository / name, root / name)
+            props = (root / "Directory.Build.props").read_bytes()
+            template = (root / "release" / "template.json").read_bytes()
+            errors = MODULE.prepare_publication(
+                root, MODULE.resolve_manifest(root, None), "v9.8.7-alpha99"
+            )
+            self.assertEqual([], errors)
+            prepared = MODULE.resolve_manifest(root, None)
+            self.assertEqual([], MODULE.validate_manifest(root, prepared))
+            self.assertEqual("9.8.7-alpha99", MODULE.load_manifest(prepared)["version"])
+            self.assertEqual(props, (root / "Directory.Build.props").read_bytes())
+            self.assertEqual(template, (root / "release" / "template.json").read_bytes())
 
 
 if __name__ == "__main__":

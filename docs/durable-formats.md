@@ -1,6 +1,11 @@
 # Durable formats
 
-Nao has no stable release. All Nao-owned protocol and durable-schema markers remain version 1 while their current shapes evolve in place; the current package target is `1.0.0-alpha1`. No earlier released format or backward-compatibility contract is implied. External protocol standards, dependencies, host-supplied version identifiers, and deliberately unsupported test values retain their own versions. Runtime libraries do not carry legacy readers.
+Nao has no stable release. Schema and protocol versions describe their own contracts,
+independently of package versions. An unchanged format keeps its version across
+package releases; contract changes determine whether that format needs a new revision.
+Current formats use the versions recorded below. Untagged builds use `1.0.0-dev`;
+published package versions come from Git release tags. Runtime libraries do not carry
+legacy readers solely for development-snapshot compatibility.
 
 ## Decode policy
 
@@ -45,7 +50,7 @@ Knowledge-record persistence is not implemented and therefore has no durable for
 
 ## Change process
 
-1. Change the current schema directly.
+1. Assess the changed contract and revise only the affected schema version when required; do not change versions for unchanged formats or package releases.
 2. Reject old or incompatible state before mutation.
 3. Add a guide under `docs/migrations/` describing backup, external transformation or reset, validation, and rollback limits.
 4. Update this inventory and affected tests.

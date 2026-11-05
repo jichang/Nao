@@ -44,12 +44,12 @@ jobs:
       - name: Restore dependencies
         run: dotnet paket restore
 
-      - name: Determine version from reviewed manifest
+      - name: Determine version from Git tag
         id: version
         shell: bash
         run: |
-          version="$(python3 scripts/release.py version)"
-          test "$GITHUB_REF_NAME" = "v$version"
+          test "$GITHUB_REF_TYPE" = "tag"
+          version="$(python3 scripts/release.py version --tag "$GITHUB_REF_NAME")"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Login to NuGet with Trusted Publishing
@@ -58,8 +58,8 @@ jobs:
         with:
           user: ${{ secrets.NUGET_USERNAME }}
 
-      - name: Prepare publication date in checkout
-        run: python3 scripts/release.py prepare-publication
+      - name: Generate release metadata in checkout
+        run: python3 scripts/release.py prepare-publication --tag "$GITHUB_REF_NAME"
 
       - name: Validate release metadata and generated changelog
         run: |
@@ -79,7 +79,7 @@ jobs:
       - name: Scan NuGet dependencies for release-blocking vulnerabilities
         shell: bash
         run: |
-          dotnet restore Nao.slnx
+          dotnet restore Nao.slnx -p:Version=${{ steps.version.outputs.version }}
           mkdir -p artifacts/vulnerabilities
           arguments=()
           while IFS= read -r project; do
@@ -95,7 +95,7 @@ jobs:
           python3 scripts/validate-supply-chain.py "${arguments[@]}"
 
       - name: Build
-        run: dotnet build Nao.slnx -c Release
+        run: dotnet build Nao.slnx -c Release -p:Version=${{ steps.version.outputs.version }}
 
       - name: Run compatibility gate
         run: >
@@ -195,6 +195,7 @@ jobs:
           path: |
             ./nupkgs
             release/current.json
+            supply-chain-policy.json
             release/${{ steps.version.outputs.version }}.json
             docs/releases/${{ steps.version.outputs.version }}.md
             CHANGELOG.md

@@ -9,13 +9,14 @@
     <FsDocsReleaseNotesLink>https://github.com/jichang/Nao/blob/main/CHANGELOG.md</FsDocsReleaseNotesLink>
     <!-- NuGet packaging -->
     <PackageId>$(MSBuildProjectName)</PackageId>
-    <Version>1.0.0-alpha1</Version>
+    <Version Condition="'$(Version)' == ''">1.0.0-dev</Version>
     <Authors>jichang</Authors>
     <Description>Nao AI Agent Framework</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/jichang/Nao</PackageProjectUrl>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <PackageReleaseNotes>https://github.com/jichang/Nao/blob/main/docs/releases/$(Version).md</PackageReleaseNotes>
+    <PackageReleaseNotes>https://github.com/jichang/Nao/blob/v$(Version)/docs/releases/template.md</PackageReleaseNotes>
+    <PackageReleaseNotes Condition="'$(Version)' == '1.0.0-dev'">https://github.com/jichang/Nao/blob/main/CHANGELOG.md</PackageReleaseNotes>
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
     <EmbedUntrackedSources>true</EmbedUntrackedSources>
     <DebugSymbols>true</DebugSymbols>

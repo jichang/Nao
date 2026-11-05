@@ -35,8 +35,10 @@ def current_release_version(root: Path) -> str:
 
 def validate_publish_workflow(publish: str) -> list[str]:
     errors: list[str] = []
-    if "tags: ['v*']" not in publish or "scripts/release.py version" not in publish:
-        errors.append("NuGet publication must derive package metadata from the release manifest")
+    if "tags: ['v*']" not in publish or 'scripts/release.py version --tag "$GITHUB_REF_NAME"' not in publish or 'test "$GITHUB_REF_TYPE" = "tag"' not in publish:
+        errors.append("NuGet publication must derive package metadata from a Git tag")
+    if "dotnet build Nao.slnx -c Release -p:Version=${{ steps.version.outputs.version }}" not in publish:
+        errors.append("NuGet publication must build assemblies with the tag-derived package version")
     if (
         "NuGet/login@" not in publish
         or "user: ${{ secrets.NUGET_USERNAME }}" not in publish
@@ -101,8 +103,9 @@ def validate_policy(root: Path) -> list[str]:
     versions = policy.get("supportedVersions", {})
     if versions.get("projectReleased") is not False:
         errors.append("supported-version policy must identify Nao as unreleased")
-    if versions.get("releaseTargets") != [release_version]:
-        errors.append("supported release targets must contain only the current release")
+    targets = [] if release_version == "1.0.0-dev" else [release_version]
+    if versions.get("releaseTargets") != targets:
+        errors.append("supported release targets must be empty during development or contain only the tagged release")
     if not str(versions.get("policy", "")).strip():
         errors.append("supported-version policy text is required")
 
@@ -177,8 +180,8 @@ def validate_policy(root: Path) -> list[str]:
     publish = (workflow_dir / "publish.yml").read_text(encoding="utf-8")
     errors.extend(validate_publish_workflow(publish))
     containers = (workflow_dir / "container-images.yml").read_text(encoding="utf-8")
-    if "tags: ['v*']" not in containers or "scripts/release.py version" not in containers:
-        errors.append("container publication must validate its tag against the release manifest")
+    if "tags: ['v*']" not in containers or 'scripts/release.py version --tag "$GITHUB_REF_NAME"' not in containers or 'test "$GITHUB_REF_TYPE" = "tag"' not in containers:
+        errors.append("container publication must validate its Git release tag")
     if "sbom" not in publish.lower():
         errors.append("NuGet publication must generate an SBOM")
     for required in (

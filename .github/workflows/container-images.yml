@@ -25,11 +25,11 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Validate tag against reviewed manifest
+      - name: Validate Git release tag
         shell: bash
         run: |
-          version="$(python3 scripts/release.py version)"
-          test "$GITHUB_REF_NAME" = "v$version"
+          test "$GITHUB_REF_TYPE" = "tag"
+          python3 scripts/release.py version --tag "$GITHUB_REF_NAME"
 
       - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
 

@@ -42,12 +42,15 @@ def section_body(text: str, section: str) -> str:
 
 def validate_release(root: Path, path: Path, publishing: bool) -> list[str]:
     errors: list[str] = []
-    version = path.stem
+    development = path.name == "template.md"
+    version = "development" if development else path.stem
     text = path.read_text(encoding="utf-8")
     location = path.relative_to(root)
 
     if not text.startswith(f"# Nao {version} release notes\n"):
         errors.append(f"{location}: title must identify version {version}")
+    if development and publishing:
+        errors.append(f"{location}: the development template cannot be published")
 
     release_date = re.search(r"^- Release date: (.+)$", text, re.MULTILINE)
     if not release_date:
@@ -99,7 +102,7 @@ def validate_release(root: Path, path: Path, publishing: bool) -> list[str]:
 def validate(root: Path, version: str | None, publishing: bool) -> list[str]:
     releases = root / "docs" / "releases"
     paths = sorted(
-        path for path in releases.glob("*.md") if VERSION_FILE.match(path.name)
+        path for path in releases.glob("*.md") if VERSION_FILE.match(path.name) or path.name == "template.md"
     )
     errors: list[str] = []
 
