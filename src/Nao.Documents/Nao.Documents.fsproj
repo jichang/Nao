@@ -21,7 +21,7 @@
     <Compile Include="src/Formats/Markdown.fs" />
     <Compile Include="src/Formats/Html.fs" />
     <Compile Include="src/Formats/Rtf.fs" />
-    <Compile Include="src/Formats/SignedByteDoc.fs" />
+    <Compile Include="src/Formats/NaoDoc.fs" />
     <Compile Include="src/Formats/PdfWriter.fs" />
     <Compile Include="src/Formats/PdfReader.fs" />
     <Compile Include="src/Formats/Pdf.fs" />

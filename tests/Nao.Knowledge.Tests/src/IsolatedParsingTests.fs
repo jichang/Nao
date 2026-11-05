@@ -92,7 +92,7 @@ type IsolatedParsingTests() =
     member _.``Document worker protocol round-trips parsed units``() =
         let parserRequest =
             { Schema = DocumentParserWorkerProtocol.CurrentSchema
-              ParserId = "signedbyte.documents.markdown"
+              ParserId = "nao.documents.markdown"
               FileName = Some "guide.md"
               Content = Encoding.UTF8.GetBytes "# Guide"
               GroupId = None
@@ -141,7 +141,7 @@ type IsolatedParsingTests() =
 
         let request =
             { Schema = "nao-document-parser/v2"
-              ParserId = "signedbyte.documents.markdown"
+              ParserId = "nao.documents.markdown"
               FileName = None
               Content = Array.empty
               GroupId = None

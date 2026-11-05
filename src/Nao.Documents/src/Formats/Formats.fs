@@ -3,8 +3,8 @@ namespace Nao.Documents
 /// A `ConverterRegistry` preconfigured with every built-in format, so any supported
 /// A → unified → B conversion works out of the box.
 ///
-/// Readable: text, csv, markdown, html, rtf, docx, odt, pdf, signedbytedoc.
-/// Writable: text, csv, markdown, html, docx, odt, signedbytedoc, pdf, xlsx, pptx.
+/// Readable: text, csv, markdown, html, rtf, docx, odt, pdf, naodoc.
+/// Writable: text, csv, markdown, html, docx, odt, naodoc, pdf, xlsx, pptx.
 [<RequireQualifiedAccess>]
 module Formats =
 
@@ -25,9 +25,9 @@ module Formats =
         // HTML (fluid).
         reg.RegisterReader(Html.Reader())
         reg.RegisterWriter(Html.Writer())
-        // Unified SignedByte document model JSON.
-        reg.RegisterReader(SignedByteDoc.Reader())
-        reg.RegisterWriter(SignedByteDoc.Writer())
+        // Unified Nao document model JSON.
+        reg.RegisterReader(NaoDoc.Reader())
+        reg.RegisterWriter(NaoDoc.Writer())
         // Rich Text Format input (via RtfPipe).
         reg.RegisterReader(Rtf.Reader())
         // Word (fluid).

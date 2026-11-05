@@ -10,19 +10,19 @@ open System.Text.Json.Nodes
 open System.Text.Json.Serialization
 open Microsoft.FSharp.Reflection
 
-/// Reader/writer for the unified SignedByte document model. The current on-disk payload
-/// is JSON, but callers should treat the `.signedbytedoc` file as an opaque document format.
-module SignedByteDoc =
+/// Reader/writer for the unified Nao document model. The current on-disk payload
+/// is JSON, but callers should treat the `.naodoc` file as an opaque document format.
+module NaoDoc =
 
     [<Literal>]
-    let MediaType = "application/vnd.signedbyte.document"
+    let MediaType = "application/vnd.nao.document"
 
     [<Literal>]
-    let Extension = ".signedbytedoc"
+    let Extension = ".naodoc"
 
     let private mediaTypes = [ MediaType ]
 
-    /// JSON serializer settings used by the native SignedByte document format.
+    /// JSON serializer settings used by the native Nao document format.
     let JsonOptions =
         let options = JsonSerializerOptions(WriteIndented = false)
         options.Converters.Add(JsonFSharpConverter())
@@ -178,8 +178,8 @@ module SignedByteDoc =
 
         let result = documentDefinition.DeepClone().AsObject()
         result.Add("$schema", JsonValue.Create "https://json-schema.org/draft/2020-12/schema")
-        result.Add("$id", JsonValue.Create "https://signedbyte.dev/schemas/document/1.json")
-        result.Add("title", JsonValue.Create "SignedByte document")
+        result.Add("$id", JsonValue.Create "urn:nao:document:1")
+        result.Add("title", JsonValue.Create "Nao document")
         result.Add("$defs", definitions)
         result.ToJsonString(schemaJsonOptions)
 

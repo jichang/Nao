@@ -171,7 +171,7 @@ module internal DocumentParserRuntime =
     let markdown packageReadLimits =
         create
             packageReadLimits
-            { Parser = ComponentVersion.create "signedbyte.documents.markdown" "1"
+            { Parser = ComponentVersion.create "nao.documents.markdown" "1"
               MediaTypes = Set.ofList [ "text/markdown"; "text/x-markdown" ]
               Signatures = [] }
             (Markdown.Reader())
@@ -179,7 +179,7 @@ module internal DocumentParserRuntime =
     let html packageReadLimits =
         create
             packageReadLimits
-            { Parser = ComponentVersion.create "signedbyte.documents.html" "1"
+            { Parser = ComponentVersion.create "nao.documents.html" "1"
               MediaTypes = Set.ofList [ "text/html"; "application/xhtml+xml" ]
               Signatures = [] }
             (Html.Reader())
@@ -187,7 +187,7 @@ module internal DocumentParserRuntime =
     let docx packageReadLimits =
         create
             packageReadLimits
-            { Parser = ComponentVersion.create "signedbyte.documents.docx" "1"
+            { Parser = ComponentVersion.create "nao.documents.docx" "1"
               MediaTypes = Set.singleton Docx.MediaType
               Signatures = [] }
             (Docx.Reader())
@@ -195,7 +195,7 @@ module internal DocumentParserRuntime =
     let odt packageReadLimits =
         create
             packageReadLimits
-            { Parser = ComponentVersion.create "signedbyte.documents.odt" "1"
+            { Parser = ComponentVersion.create "nao.documents.odt" "1"
               MediaTypes = Set.singleton Odt.MediaType
               Signatures = [] }
             (Odt.Reader())
@@ -203,7 +203,7 @@ module internal DocumentParserRuntime =
     let pdf packageReadLimits =
         create
             packageReadLimits
-            { Parser = ComponentVersion.create "signedbyte.documents.pdf" "1"
+            { Parser = ComponentVersion.create "nao.documents.pdf" "1"
               MediaTypes = Set.singleton Pdf.MediaType
               Signatures =
                 [ { Offset = 0

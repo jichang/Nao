@@ -92,13 +92,13 @@ type ConversionTests() =
         [ "rich-sample.md", Markdown.MediaType
           "rich-sample.html", Html.MediaType
           "rich-sample.rtf", Rtf.MediaType
-          "rich-sample.signedbytedoc", SignedByteDoc.MediaType ]
+          "rich-sample.naodoc", NaoDoc.MediaType ]
 
     let supportedTargets =
         [ PlainText.MediaType, ExactText "txt"
           Markdown.MediaType, ExactText "md"
           Html.MediaType, ExactText "html"
-          SignedByteDoc.MediaType, ExactText "signedbytedoc"
+          NaoDoc.MediaType, ExactText "naodoc"
           Docx.MediaType, PackageManifest "docx.entries.txt"
           Pdf.MediaType, PdfManifest "pdf.manifest.txt"
           Xlsx.MediaType, PackageManifest "xlsx.entries.txt"
@@ -127,7 +127,7 @@ type ConversionTests() =
               Docx.MediaType
               Odt.MediaType
               Pdf.MediaType
-              SignedByteDoc.MediaType ] do
+              NaoDoc.MediaType ] do
             Assert.IsTrue(List.contains mt readable, sprintf "Expected readable type: %s" mt)
 
     [<TestMethod>]
@@ -139,7 +139,7 @@ type ConversionTests() =
               Csv.MediaType
               Markdown.MediaType
               Html.MediaType
-              SignedByteDoc.MediaType
+              NaoDoc.MediaType
               Docx.MediaType
               Odt.MediaType
               Pdf.MediaType
@@ -345,20 +345,28 @@ type ConversionTests() =
         Assert.IsTrue(md.Contains "First item", "DOCX→Markdown lost the list item")
 
     [<TestMethod>]
+    member _.NativeFormatUsesNaoIdentifiers() =
+        Assert.AreEqual(".naodoc", NaoDoc.Extension)
+        Assert.AreEqual("application/vnd.nao.document", NaoDoc.MediaType)
+        Assert.AreEqual("nao-doc/1", Document.CurrentSchema)
+        use schema = JsonDocument.Parse(NaoDoc.JsonSchema)
+        Assert.AreEqual("urn:nao:document:1", schema.RootElement.GetProperty("$id").GetString())
+
+    [<TestMethod>]
     member _.NativeJsonApiRoundTripsDocument() =
         let original = Document.OfBlocks [ Doc.heading 1 "JSON API"; Doc.para "Round-trip" ]
-        let json = SignedByteDoc.serialize original
+        let json = NaoDoc.serialize original
         Assert.IsFalse(json.Contains('\n'), "Native document JSON must remain compact")
         Assert.IsFalse(json.Contains('\r'), "Native document JSON must remain compact")
         use parsed = JsonDocument.Parse(json)
         Assert.AreEqual(Document.CurrentSchema, parsed.RootElement.GetProperty("Schema").GetString())
-        let restored = SignedByteDoc.deserialize json
+        let restored = NaoDoc.deserialize json
         Assert.AreEqual(original, restored)
-        Assert.IsTrue(SignedByteDoc.isValid restored)
+        Assert.IsTrue(NaoDoc.isValid restored)
 
     [<TestMethod>]
     member _.NativeJsonSchemaIsExportedAsJson() =
-        use parsed = JsonDocument.Parse(SignedByteDoc.JsonSchema)
+        use parsed = JsonDocument.Parse(NaoDoc.JsonSchema)
 
         Assert.AreEqual(
             "https://json-schema.org/draft/2020-12/schema",
@@ -374,8 +382,8 @@ type ConversionTests() =
     member _.NativeJsonValidationReportsInvalidSchema() =
         let invalid =
             { Document.Empty with
-                Schema = "signedbyte-doc/unknown" }
+                Schema = "nao-doc/unknown" }
 
-        let errors = SignedByteDoc.validate invalid
-        Assert.IsFalse(SignedByteDoc.isValid invalid)
+        let errors = NaoDoc.validate invalid
+        Assert.IsFalse(NaoDoc.isValid invalid)
         Assert.IsTrue(errors |> List.exists (fun error -> error.Contains "Schema"))

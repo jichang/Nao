@@ -185,7 +185,7 @@ type Document =
     }
 
     /// Current schema identifier.
-    static member CurrentSchema = "signedbyte-doc/1"
+    static member CurrentSchema = "nao-doc/1"
 
     /// An empty fluid document.
     static member Empty =

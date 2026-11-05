@@ -65,12 +65,23 @@ See [Getting started](docs/getting-started.md) for the first typed agent and har
 | `Nao.Agents` | Core agent/tool contracts and ETCLOVG harness |
 | `Nao.Identity.Oidc` | Strict, provider-neutral OIDC/OAuth claims-to-principal adapter |
 | `Nao.Knowledge` | Source-backed knowledge, provenance, citation, and retrieval contracts |
+| `Nao.Documents` | Reusable document model, native `.naodoc` files, and format conversion |
 | `Nao.Protocols` | Typed response protocols and repair |
 | `Nao.Persistence.*` | Persistence capability packages and opt-in composition |
 | `Nao.Providers.*` | Hosted and local model-provider adapter packages and opt-in composition |
 | `Nao.Eval` | Evaluation cases, runners, evaluators, and reports |
 | `Nao.Runtime.Orleans` | Distributed sessions and workspace runtime |
 | `Nao.Runtime.Orleans.Codegen` | Orleans serialization source-generation support |
+
+## Native documents
+
+`Nao.Documents.NaoDoc` reads and writes compact JSON `.naodoc` files with media
+type `application/vnd.nao.document` and schema marker `nao-doc/1`. Its JSON Schema
+identifier is `urn:nao:document:1`. `Formats.fullRegistry()` includes the native
+reader and writer alongside the supported import and export formats.
+
+These native identifiers are canonical; no legacy format aliases are registered.
+Existing files are not automatically migrated.
 
 ## License
 
