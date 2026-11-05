@@ -2,26 +2,7 @@ name: Deploy Docs to GitHub Pages
 
 on:
   push:
-    branches: [main]
-  pull_request:
-    paths:
-      - README.md
-      - docs/**
-      - src/**
-      - examples/Nao.DocumentationSnippets/**
-      - Directory.Build.props
-      - Nao.slnx
-      - scripts/validate-docs.py
-      - scripts/validate-release-docs.py
-      - scripts/release.py
-      - scripts/test_release.py
-      - release/**
-      - integration-policy.json
-      - scripts/validate-integrations.py
-      - scripts/test_validate_integrations.py
-      - CHANGELOG.md
-      - dotnet-tools.json
-      - .github/workflows/docs.yml
+    tags: ['v*']
   workflow_dispatch:
 
 permissions:
