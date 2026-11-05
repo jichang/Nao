@@ -341,7 +341,8 @@ type ExecutionEnvironmentTests() =
                   OutputCapture = None }
 
             // Directly executing a script with a live writer reproduces Linux ETXTBSY.
-            use writer = new IO.FileStream(runtime, IO.FileMode.Open, IO.FileAccess.Write, IO.FileShare.ReadWrite)
+            use writer =
+                new IO.FileStream(runtime, IO.FileMode.Open, IO.FileAccess.Write, IO.FileShare.ReadWrite)
 
             match ExecutionEnvironment.detectContainerHost config with
             | ContainerHostSupport.Unsupported reasons ->

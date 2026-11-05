@@ -12,7 +12,7 @@ dotnet build Nao.slnx
 dotnet test Nao.slnx
 ```
 
-Format all F# source files before committing:
+To format all F# source files manually:
 
 ```bash
 dotnet fantomas .
@@ -23,6 +23,14 @@ Enable the pre-commit hook:
 ```bash
 git config core.hooksPath .githooks
 ```
+
+The hook requires Bash and restored local tools (`dotnet tool restore`). It runs
+Fantomas on an isolated snapshot of staged `.fs`, `.fsi`, and `.fsx` files, applies
+only formatting changes to the index and working tree, then runs the existing
+test suite. Unstaged edits remain unstaged. If formatting conflicts with those
+edits, the commit stops without changing files or staged content; stage or stash
+the conflicting edits before retrying. Formatter and test failures block commits.
+Hooks must be enabled separately in each clone.
 
 The [foundations roadmap](roadmap/00-foundations.md) tracks alignment of all source and test projects with the supported solution and CI surface.
 

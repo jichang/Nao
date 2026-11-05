@@ -1,7 +1,55 @@
-#!/usr/bin/env sh
-set -eu
+#!/usr/bin/env bash
+set -euo pipefail
 
 repository_root=$(git rev-parse --show-toplevel)
 cd "$repository_root"
+
+temporary_directory=$(mktemp -d)
+trap 'rm -rf -- "$temporary_directory"' EXIT
+
+git diff --cached --name-only --diff-filter=ACMR -z -- '*.fs' '*.fsi' '*.fsx' > "$temporary_directory/paths"
+files=()
+while IFS= read -r -d '' file; do
+    files+=("./$file")
+done < "$temporary_directory/paths"
+
+if ((${#files[@]})); then
+    staged_tree=$(git write-tree)
+    GIT_INDEX_FILE="$temporary_directory/index" git read-tree "$staged_tree"
+    snapshot="$temporary_directory/staged"
+    mkdir "$snapshot"
+    GIT_INDEX_FILE="$temporary_directory/index" git checkout-index --all --prefix="$snapshot/"
+
+    inputs=()
+    for file in "${files[@]}"; do
+        if [[ ! -f "$snapshot/$file" || -L "$snapshot/$file" ]]; then
+            printf 'Cannot format staged F# file: %s\n' "$file" >&2
+            exit 1
+        fi
+        inputs+=("$snapshot/$file")
+    done
+
+    printf '%s\n' 'Formatting staged F# files with Fantomas...'
+    if ! dotnet fantomas "${inputs[@]}"; then
+        printf '%s\n' 'Fantomas failed. Run dotnet tool restore if needed, fix any formatting errors, and retry.' >&2
+        exit 1
+    fi
+
+    GIT_INDEX_FILE="$temporary_directory/index" git -c core.fsmonitor=false --work-tree="$snapshot" diff --binary --no-ext-diff --no-textconv -- "${files[@]}" > "$temporary_directory/format.patch"
+
+    if [[ -s "$temporary_directory/format.patch" ]]; then
+        if ! git apply --check "$temporary_directory/format.patch"; then
+            printf '%s\n' 'Formatting conflicts with working-tree edits. Stage or stash the conflicting edits and retry. No files or staged content were changed.' >&2
+            exit 1
+        fi
+        git apply --cached --check "$temporary_directory/format.patch"
+        git apply --cached "$temporary_directory/format.patch"
+        if ! git apply "$temporary_directory/format.patch"; then
+            git apply --cached --reverse "$temporary_directory/format.patch"
+            printf '%s\n' 'Could not apply formatting to the working tree; staged formatting was rolled back.' >&2
+            exit 1
+        fi
+    fi
+fi
 
 dotnet test Nao.slnx
