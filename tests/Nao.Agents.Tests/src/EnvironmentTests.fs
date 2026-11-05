@@ -231,13 +231,6 @@ type ExecutionEnvironmentTests() =
             + "'; exit 0; fi\nexit 99\n"
         )
 
-        IO.File.SetUnixFileMode(
-            runtime,
-            IO.UnixFileMode.UserRead
-            ||| IO.UnixFileMode.UserWrite
-            ||| IO.UnixFileMode.UserExecute
-        )
-
         directory, runtime
 
     let supportedContainerCapabilities =
@@ -295,8 +288,8 @@ type ExecutionEnvironmentTests() =
         try
             let result =
                 ExecutionEnvironment.tryContainerWorker
-                    { RuntimeFileName = runtime
-                      RuntimeArguments = []
+                    { RuntimeFileName = "/bin/sh"
+                      RuntimeArguments = [ runtime ]
                       ImageReference = "nao-worker@sha256:" + String('a', 64)
                       SupplyChainMetadata = Map.empty
                       ImageVerifier = testImageVerifier
@@ -333,8 +326,8 @@ type ExecutionEnvironmentTests() =
 
         try
             let config =
-                { RuntimeFileName = runtime
-                  RuntimeArguments = []
+                { RuntimeFileName = "/bin/sh"
+                  RuntimeArguments = [ runtime ]
                   ImageReference = "nao-worker@sha256:" + String('a', 64)
                   SupplyChainMetadata = Map.empty
                   ImageVerifier = testImageVerifier
@@ -346,6 +339,9 @@ type ExecutionEnvironmentTests() =
                   ProtocolVersion = WorkerProtocol.CurrentVersion
                   SecretResolver = None
                   OutputCapture = None }
+
+            // Directly executing a script with a live writer reproduces Linux ETXTBSY.
+            use writer = new IO.FileStream(runtime, IO.FileMode.Open, IO.FileAccess.Write, IO.FileShare.ReadWrite)
 
             match ExecutionEnvironment.detectContainerHost config with
             | ContainerHostSupport.Unsupported reasons ->
@@ -388,8 +384,8 @@ type ExecutionEnvironmentTests() =
 
             let environment =
                 ExecutionEnvironment.containerWorker
-                    { RuntimeFileName = runtime
-                      RuntimeArguments = []
+                    { RuntimeFileName = "/bin/sh"
+                      RuntimeArguments = [ runtime ]
                       ImageReference = "nao-worker@sha256:" + String('a', 64)
                       SupplyChainMetadata = Map.empty
                       ImageVerifier = testImageVerifier
@@ -442,8 +438,8 @@ type ExecutionEnvironmentTests() =
 
             let environment =
                 ExecutionEnvironment.containerWorker
-                    { RuntimeFileName = runtime
-                      RuntimeArguments = []
+                    { RuntimeFileName = "/bin/sh"
+                      RuntimeArguments = [ runtime ]
                       ImageReference = "nao-worker@sha256:" + String('a', 64)
                       SupplyChainMetadata = Map.empty
                       ImageVerifier = testImageVerifier
@@ -505,8 +501,8 @@ type ExecutionEnvironmentTests() =
 
             let environment =
                 ExecutionEnvironment.containerWorker
-                    { RuntimeFileName = runtime
-                      RuntimeArguments = []
+                    { RuntimeFileName = "/bin/sh"
+                      RuntimeArguments = [ runtime ]
                       ImageReference = "nao-worker@sha256:" + String('c', 64)
                       SupplyChainMetadata = Map.empty
                       ImageVerifier = verifier
@@ -596,17 +592,10 @@ type ExecutionEnvironmentTests() =
                 + "'; exit 0; fi\nif [ \"$1\" = \"rm\" ]; then printf '%s\\n' \"$@\" > \"$0.cleanup\"; exit 0; fi\narguments_tmp=\"$NAO_TEST_ARGUMENTS.tmp.$$\"\nprintf '%s\\n' \"$@\" > \"$arguments_tmp\"\nmv \"$arguments_tmp\" \"$NAO_TEST_ARGUMENTS\"\ncidfile=''\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = \"--cidfile\" ]; then shift; cidfile=\"$1\"; fi\n  shift\ndone\nprintf 'test-container' > \"$cidfile\"\nif [ \"$NAO_TEST_RUNTIME_MODE\" = \"fail\" ]; then exit 17; fi\nif [ \"$NAO_TEST_RUNTIME_MODE\" = \"wait\" ]; then while :; do sleep 1; done; fi\nexec \"$NAO_TEST_WORKER\"\n"
             )
 
-            IO.File.SetUnixFileMode(
-                runtime,
-                IO.UnixFileMode.UserRead
-                ||| IO.UnixFileMode.UserWrite
-                ||| IO.UnixFileMode.UserExecute
-            )
-
             try
                 let containerConfig =
-                    { RuntimeFileName = runtime
-                      RuntimeArguments = []
+                    { RuntimeFileName = "/bin/sh"
+                      RuntimeArguments = [ runtime ]
                       ImageReference = "nao-worker@sha256:" + String('a', 64)
                       SupplyChainMetadata = Map.ofList [ "provenance", "https://example.invalid/nao-worker" ]
                       ImageVerifier = testImageVerifier
