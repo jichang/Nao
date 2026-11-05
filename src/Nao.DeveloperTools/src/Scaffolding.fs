@@ -19,9 +19,12 @@ type ExtensionTemplate =
 [<RequireQualifiedAccess>]
 module ExtensionTemplate =
     let private naoPackageVersion =
-        let version = typeof<ExtensionTemplate>.Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+        let version =
+            typeof<ExtensionTemplate>.Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+
         if isNull version then
             invalidOp "The Nao developer-tools assembly is missing its package version."
+
         version.InformationalVersion.Split('+')[0]
 
     let parse =
