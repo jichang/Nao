@@ -226,6 +226,84 @@ class PublicationPreparationTests(unittest.TestCase):
                 self.assertEqual(before, self.snapshot())
                 path.unlink()
 
+    def write_draft(self) -> tuple[Path, Path]:
+        manifest_path = self.root / "release" / f"{self.version}.json"
+        notes_path = self.root / "docs" / "releases" / f"{self.version}.md"
+        draft = dict(self.manifest)
+        draft.update(
+            version=self.version,
+            tag=self.tag,
+            channel="alpha",
+            releaseNotes=f"docs/releases/{self.version}.md",
+            summary="Reviewed version-specific draft.",
+        )
+        manifest_path.write_text(json.dumps(draft), encoding="utf-8")
+        notes_path.write_text(
+            f"# Nao {self.version} release notes\n\n- Release date: Unreleased\n\n"
+            "Reviewed version-specific content.\n",
+            encoding="utf-8",
+        )
+        return manifest_path, notes_path
+
+    def test_existing_unreleased_draft_is_finalized_without_using_template_content(self) -> None:
+        manifest_path, notes_path = self.write_draft()
+        templates = self.manifest_path.read_bytes(), self.notes_path.read_bytes()
+        with patch.object(MODULE, "datetime") as clock:
+            clock.now.return_value = datetime(2026, 11, 5, tzinfo=timezone.utc)
+            self.assertEqual([], self.prepare())
+        prepared = MODULE.load_manifest(manifest_path)
+        self.assertEqual("Reviewed version-specific draft.", prepared["summary"])
+        self.assertEqual("2026-11-05", prepared["releaseDate"])
+        self.assertEqual(1, prepared["schemaVersion"])
+        self.assertEqual(
+            f"# Nao {self.version} release notes\n\n- Release date: 2026-11-05\n\n"
+            "Reviewed version-specific content.\n",
+            notes_path.read_text(encoding="utf-8"),
+        )
+        self.assertEqual(templates, (self.manifest_path.read_bytes(), self.notes_path.read_bytes()))
+        self.assertEqual([], MODULE.validate_manifest(self.root, manifest_path))
+        before = self.snapshot()
+        self.assertEqual([], self.prepare())
+        self.assertEqual(before, self.snapshot())
+
+    def test_dated_or_invalid_drafts_are_never_changed(self) -> None:
+        for field, value in (
+            ("schemaVersion", 2),
+            ("releaseDate", "2026-10-28"),
+            ("version", "1.0.0-alpha6"),
+            ("tag", "v1.0.0-alpha6"),
+            ("channel", "stable"),
+            ("releaseNotes", "docs/releases/template.md"),
+            ("gates", []),
+            ("artifacts", []),
+            ("roadmapCompleted", ["FND-01"]),
+        ):
+            with self.subTest(field=field):
+                manifest_path, notes_path = self.write_draft()
+                draft = MODULE.load_manifest(manifest_path)
+                draft[field] = value
+                manifest_path.write_text(json.dumps(draft), encoding="utf-8")
+                if field == "releaseDate":
+                    notes_path.write_text(
+                        f"# Nao {self.version} release notes\n\n- Release date: {value}\n",
+                        encoding="utf-8",
+                    )
+                before = self.snapshot()
+                self.assertTrue(self.prepare())
+                self.assertEqual(before, self.snapshot())
+
+    def test_mismatched_draft_notes_are_never_changed(self) -> None:
+        for notes in (
+            "# Nao other release notes\n\n- Release date: Unreleased\n",
+            f"# Nao {self.version} release notes\n\n- Release date: 2026-10-28\n",
+        ):
+            with self.subTest(notes=notes):
+                _, notes_path = self.write_draft()
+                notes_path.write_text(notes, encoding="utf-8")
+                before = self.snapshot()
+                self.assertTrue(self.prepare())
+                self.assertEqual(before, self.snapshot())
+
     def test_prepared_release_cannot_be_reused_for_another_tag(self) -> None:
         self.assertEqual([], self.prepare())
         self.tag = "v9.0.0"
@@ -235,14 +313,31 @@ class PublicationPreparationTests(unittest.TestCase):
 
 
 class RepositoryTemplateTests(unittest.TestCase):
-    def test_next_tag_uses_reviewed_templates_without_source_version_edits(self) -> None:
+    def copy_development_checkout(self, root: Path) -> None:
         repository = SCRIPT.parents[1]
+        for name in ("release", "docs/releases"):
+            (root / name).mkdir(parents=True)
+        for name in ("release/template.json", "docs/releases/template.md"):
+            shutil.copy2(repository / name, root / name)
+        shutil.copytree(repository / "docs" / "roadmap", root / "docs" / "roadmap")
+        for name in ("Directory.Build.props", "supply-chain-policy.json", "CHANGELOG.md"):
+            shutil.copy2(repository / name, root / name)
+        # CI runs these tests after preparing publication metadata in its checkout.
+        (root / "release" / "current.json").write_text(
+            json.dumps({"schemaVersion": 1, "manifest": "template.json"}), encoding="utf-8"
+        )
+        supply_path = root / "supply-chain-policy.json"
+        supply = json.loads(supply_path.read_text(encoding="utf-8"))
+        supply["packageVersion"] = MODULE.DEVELOPMENT_VERSION
+        supply["supportedVersions"]["releaseTargets"] = []
+        supply_path.write_text(json.dumps(supply), encoding="utf-8")
+        template = MODULE.load_manifest(root / "release" / "template.json")
+        (root / "CHANGELOG.md").write_text(MODULE.render_changelog(template), encoding="utf-8")
+
+    def test_next_tag_uses_reviewed_templates_without_source_version_edits(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            for name in ("release", "docs/releases", "docs/roadmap"):
-                shutil.copytree(repository / name, root / name)
-            for name in ("Directory.Build.props", "supply-chain-policy.json", "CHANGELOG.md"):
-                shutil.copy2(repository / name, root / name)
+            self.copy_development_checkout(root)
             props = (root / "Directory.Build.props").read_bytes()
             template = (root / "release" / "template.json").read_bytes()
             errors = MODULE.prepare_publication(
@@ -252,6 +347,37 @@ class RepositoryTemplateTests(unittest.TestCase):
             prepared = MODULE.resolve_manifest(root, None)
             self.assertEqual([], MODULE.validate_manifest(root, prepared))
             self.assertEqual("9.8.7-alpha99", MODULE.load_manifest(prepared)["version"])
+            self.assertEqual(props, (root / "Directory.Build.props").read_bytes())
+            self.assertEqual(template, (root / "release" / "template.json").read_bytes())
+
+    def test_existing_alpha2_draft_can_be_published(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.copy_development_checkout(root)
+            draft_path = root / "release" / "1.0.0-alpha2.json"
+            repository = SCRIPT.parents[1]
+            draft = MODULE.load_manifest(repository / "release" / draft_path.name)
+            notes_path = root / str(draft["releaseNotes"])
+            notes = (repository / str(draft["releaseNotes"])).read_text(encoding="utf-8")
+            notes_path.write_text(
+                notes.replace(f"- Release date: {draft['releaseDate']}", "- Release date: Unreleased", 1),
+                encoding="utf-8",
+            )
+            draft["releaseDate"] = "Unreleased"
+            draft_path.write_text(json.dumps(draft), encoding="utf-8")
+            props = (root / "Directory.Build.props").read_bytes()
+            template = (root / "release" / "template.json").read_bytes()
+            self.assertEqual(
+                [],
+                MODULE.prepare_publication(root, MODULE.resolve_manifest(root, None), "v1.0.0-alpha2"),
+            )
+            prepared = MODULE.resolve_manifest(root, None)
+            self.assertEqual(draft_path, prepared)
+            self.assertEqual([], MODULE.validate_manifest(root, prepared))
+            finalized = MODULE.load_manifest(prepared)
+            self.assertNotEqual("Unreleased", finalized["releaseDate"])
+            draft["releaseDate"] = finalized["releaseDate"]
+            self.assertEqual(draft, finalized)
             self.assertEqual(props, (root / "Directory.Build.props").read_bytes())
             self.assertEqual(template, (root / "release" / "template.json").read_bytes())
 

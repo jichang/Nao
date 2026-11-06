@@ -145,7 +145,7 @@ def render_changelog(manifest: dict[str, object]) -> str:
     return "\n".join(lines)
 
 
-def validate_manifest(root: Path, path: Path) -> list[str]:
+def validate_release_record(root: Path, path: Path) -> list[str]:
     errors: list[str] = []
     try:
         manifest = load_manifest(path)
@@ -200,14 +200,6 @@ def validate_manifest(root: Path, path: Path) -> list[str]:
         if release_date(notes) != manifest.get("releaseDate"):
             errors.append("release date differs between manifest and release notes")
 
-    props = ElementTree.parse(root / "Directory.Build.props")
-    if props.findtext(".//Version") != DEVELOPMENT_VERSION:
-        errors.append("Directory.Build.props must default to 1.0.0-dev, not a release version")
-
-    supply = json.loads((root / "supply-chain-policy.json").read_text(encoding="utf-8"))
-    if supply.get("packageVersion") != version:
-        errors.append("supply-chain package version differs from the release manifest")
-
     changes = manifest.get("changes")
     if not isinstance(changes, dict) or set(changes) != REQUIRED_CHANGE_SECTIONS:
         errors.append("changes must contain exactly Added, Changed, Fixed, and Security")
@@ -236,6 +228,23 @@ def validate_manifest(root: Path, path: Path) -> list[str]:
             if stale:
                 errors.append(f"manifest records incomplete roadmap capabilities: {stale}")
 
+    return errors
+
+
+def validate_manifest(root: Path, path: Path) -> list[str]:
+    errors = validate_release_record(root, path)
+    if errors:
+        return errors
+
+    manifest = load_manifest(path)
+    props = ElementTree.parse(root / "Directory.Build.props")
+    if props.findtext(".//Version") != DEVELOPMENT_VERSION:
+        errors.append("Directory.Build.props must default to 1.0.0-dev, not a release version")
+
+    supply = json.loads((root / "supply-chain-policy.json").read_text(encoding="utf-8"))
+    if supply.get("packageVersion") != manifest["version"]:
+        errors.append("supply-chain package version differs from the release manifest")
+
     changelog = root / "CHANGELOG.md"
     expected = render_changelog(manifest)
     if not changelog.is_file() or changelog.read_text(encoding="utf-8") != expected:
@@ -260,13 +269,23 @@ def prepare_publication(root: Path, manifest_path: Path, tag: str) -> list[str]:
             return ["prepared release requires an ISO release date"]
         return []
 
-    publication_date = manifest["releaseDate"]
-    if publication_date == "Unreleased":
-        publication_date = datetime.now(timezone.utc).date().isoformat()
     target_manifest = root / "release" / f"{version}.json"
     target_notes = root / "docs" / "releases" / f"{version}.md"
     if target_manifest.exists() or target_notes.exists():
-        return ["release records already exist; historical manifests and notes must not be overwritten"]
+        if not target_manifest.is_file() or not target_notes.is_file():
+            return ["release records already exist; finalizing a draft requires both its manifest and notes"]
+        errors = validate_release_record(root, target_manifest)
+        if errors:
+            return [f"existing release draft: {error}" for error in errors]
+        manifest = load_manifest(target_manifest)
+        if manifest["releaseDate"] != "Unreleased":
+            return ["release records already exist; dated manifests and notes must not be overwritten"]
+        if manifest["releaseNotes"] != f"docs/releases/{version}.md":
+            return ["existing release draft must reference its matching versioned notes"]
+
+    publication_date = manifest["releaseDate"]
+    if publication_date == "Unreleased":
+        publication_date = datetime.now(timezone.utc).date().isoformat()
     notes = (root / str(manifest["releaseNotes"])).read_text(encoding="utf-8")
     notes = notes.replace("# Nao development release notes\n", f"# Nao {version} release notes\n", 1)
     notes = notes.replace(f"- Release date: {manifest['releaseDate']}", f"- Release date: {publication_date}", 1)
@@ -377,7 +396,7 @@ def main() -> int:
     version_parser.add_argument("--tag", help="derive a publishable version from a Git tag")
     prepare = subparsers.add_parser(
         "prepare-publication",
-        help="generate tagged release records from the reviewed development template",
+        help="prepare tagged release records from reviewed templates or matching Unreleased drafts",
     )
     prepare.add_argument("--tag", required=True)
     verify = subparsers.add_parser("verify-packages")

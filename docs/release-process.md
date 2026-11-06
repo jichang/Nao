@@ -11,7 +11,7 @@ such as `v1.0.0-alpha2` supplies the release version without a source-code versi
 - Pull requests are the review boundary. Release metadata, migrations, package changes, and policy changes are reviewed with the implementation they describe.
 - Untagged CI outputs are development evidence only. They are not published to NuGet and are not supported packages.
 - Alpha, beta, release-candidate, and stable publication require a canonical `v<SemVer>` Git tag. Branch dispatches and development-version tags are rejected.
-- `release/current.json` selects `release/template.json` on main. Publication generates a versioned manifest and selects it only in the workflow checkout. Historical manifests remain immutable.
+- `release/current.json` selects `release/template.json` on main. Publication generates a versioned manifest or finalizes a matching `Unreleased` draft, and selects it only in the workflow checkout. Dated historical manifests remain immutable.
 - Prerelease channels are evaluation artifacts and carry no compatibility or support guarantee.
 - `1.0.0` is not an LTS line. Nao will not claim an LTS line until a later reviewed policy defines its support duration, backport ownership, and successor.
 - Before the first release, breaking APIs and abstractions are changed in place. After a stable release, a release manifest must name the compatibility baseline and package validation must compare against it.
@@ -41,8 +41,12 @@ After validating the tag, the publishing workflow runs `prepare-publication --ta
 to generate `release/<version>.json` and `docs/releases/<version>.md`, update the
 checkout's policy and current pointer, and regenerate the changelog. An `Unreleased`
 date becomes the current UTC date; an explicit ISO date is preserved. The command
-validates reviewed metadata before writing, refuses to overwrite historical records,
-and is idempotent for the same prepared tag. It does not repair drift or bypass gates.
+validates reviewed metadata before writing and is idempotent for the same prepared tag.
+If matching versioned records already exist, both the manifest and notes must be valid,
+agree with the tag, and be marked `Unreleased`. Their reviewed content is used instead
+of the template, and only their publication date is finalized. Missing, inconsistent,
+or dated records block preparation without changes; dated history is never overwritten.
+The command does not repair drift or bypass gates.
 
 These changes exist only in the publishing checkout: the workflow does not commit, push, or
 modify the tag. A fresh run of a tag still marked `Unreleased` uses that run's UTC date.
