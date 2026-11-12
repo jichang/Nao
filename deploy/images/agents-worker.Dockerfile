@@ -11,7 +11,7 @@ RUN dotnet tool restore \
         --output /app \
         /p:UseAppHost=false
 
-FROM mcr.microsoft.com/dotnet/runtime:10.0@sha256:a3f9f81954b9c810af2ed18849716c8dc74a4707bd0907fdbd69be81554c0f30
+FROM mcr.microsoft.com/dotnet/runtime:11.0@sha256:3fe5f5495141c97986a49d3a4e76061f6225c3f93f94e8a7e522781376193863
 ARG SOURCE_REVISION=unknown
 LABEL org.opencontainers.image.source="https://github.com/jichang/Nao" \
       org.opencontainers.image.revision="${SOURCE_REVISION}" \
