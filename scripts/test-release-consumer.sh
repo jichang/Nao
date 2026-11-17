@@ -2,10 +2,13 @@
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-packages="${1:-$root/artifacts/packages}"
+packages="$(cd "${1:-$root/artifacts/packages}" && pwd)"
 version="${2:-1.0.0}"
 consumer="$(mktemp -d)"
 trap 'rm -rf "$consumer"' EXIT
+
+cp "$root/global.json" "$consumer/global.json"
+cd "$consumer"
 
 export FSharpCoreImplicitPackageVersion=10.1.401
 dotnet new console --language F# --framework net10.0 --output "$consumer"

@@ -47,7 +47,7 @@ Nao connects models, agents, tools, memory, knowledge, distributed execution, go
 
 ## Quick start
 
-Requires .NET 10.0 or later.
+Requires a stable .NET 10.0 SDK. [global.json](global.json) allows any patch and feature band within 10.0, but not another major/minor version or a preview.
 
 ```bash
 dotnet tool restore

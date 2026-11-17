@@ -20,6 +20,64 @@ def load_json(path: Path) -> object:
         return json.load(stream)
 
 
+def validate_sdk(root: Path) -> list[str]:
+    try:
+        configuration = load_json(root / "global.json")
+    except (OSError, ValueError) as error:
+        return [f"cannot read SDK lock global.json: {error}"]
+
+    sdk = configuration.get("sdk") if isinstance(configuration, dict) else None
+    if not isinstance(sdk, dict):
+        return ["global.json must contain an SDK lock object"]
+
+    errors: list[str] = []
+    version = sdk.get("version")
+    version_match = re.fullmatch(r"(\d+\.\d+)\.100", version) if isinstance(version, str) else None
+    if version_match is None:
+        errors.append("global.json SDK version must start at major.minor.100 to allow every stable feature band")
+    if sdk.get("rollForward") != "latestFeature":
+        errors.append("global.json SDK rollForward must be latestFeature")
+    if sdk.get("allowPrerelease") is not False:
+        errors.append("global.json SDK allowPrerelease must be false")
+    if version_match is None:
+        return errors
+    sdk_family = version_match.group(1)
+
+    for directory in ("src", "tests", "examples"):
+        for path in sorted((root / directory).rglob("global.json")):
+            errors.append(f"{path.relative_to(root)} overrides the root SDK lock")
+
+    for workflow in sorted((root / ".github" / "workflows").glob("*.yml")):
+        for step in re.split(r"(?m)^\s*-\s+", workflow.read_text(encoding="utf-8")):
+            if "uses: actions/setup-dotnet@" not in step:
+                continue
+            versions = [
+                value.split("#", 1)[0].strip().strip("'\"")
+                for value in re.findall(r"(?m)^[ \t]*dotnet-version:[ \t]*([^\n]*)", step)
+            ]
+            if versions != [f"{sdk_family}.x"] or re.search(r"(?m)^\s*(?:global-json-file|dotnet-version-file):", step):
+                errors.append(f"{workflow.relative_to(root)} SDK setup must install only {sdk_family}.x")
+
+    for dockerfile in sorted((root / "deploy" / "images").glob("*.Dockerfile")):
+        for image in re.findall(r"(?m)^FROM\s+(mcr\.microsoft\.com/dotnet/sdk:\S+)", dockerfile.read_text(encoding="utf-8")):
+            if not re.fullmatch(rf"mcr\.microsoft\.com/dotnet/sdk:{re.escape(sdk_family)}(?:\.\d+)?@sha256:[a-f0-9]{{64}}", image):
+                errors.append(f"{dockerfile.relative_to(root)} SDK image must match the global.json major.minor and use an immutable digest")
+
+    consumer = (root / "scripts" / "test-release-consumer.sh").read_text(encoding="utf-8")
+    copy_lock = 'cp "$root/global.json" "$consumer/global.json"'
+    enter_consumer = 'cd "$consumer"'
+    first_dotnet = consumer.find("dotnet ")
+    if (
+        copy_lock not in consumer
+        or enter_consumer not in consumer
+        or first_dotnet < 0
+        or not consumer.index(copy_lock) < consumer.index(enter_consumer) < first_dotnet
+    ):
+        errors.append("release consumer must copy and enter the root SDK lock before running dotnet")
+
+    return errors
+
+
 def current_release_version(root: Path) -> str:
     pointer = load_json(root / "release" / "current.json")
     if not isinstance(pointer, dict) or pointer.get("schemaVersion") != 1:
@@ -64,7 +122,7 @@ def validate_publish_workflow(publish: str) -> list[str]:
 
 
 def validate_policy(root: Path) -> list[str]:
-    errors: list[str] = []
+    errors = validate_sdk(root)
     policy_path = root / "supply-chain-policy.json"
 
     if not policy_path.exists():

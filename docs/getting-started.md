@@ -4,7 +4,7 @@ This guide builds the current Nao solution and introduces the smallest typed age
 
 ## Prerequisites
 
-- .NET 10.0 or later
+- A stable .NET 10.0 SDK; [global.json](../global.json) allows any 10.0 patch and feature band, but not another major/minor version or a preview
 - Paket, installed through the repository's local .NET tool manifest
 
 ## Restore, build, and test

@@ -1,4 +1,6 @@
 import json
+import re
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -11,6 +13,144 @@ SPEC = importlib.util.spec_from_file_location("validate_supply_chain", MODULE_PA
 MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
 SPEC.loader.exec_module(MODULE)
+
+
+class SdkLockTests(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        repository = MODULE_PATH.parents[1]
+        for name in (".github/workflows", "deploy/images"):
+            shutil.copytree(repository / name, self.root / name)
+        (self.root / "scripts").mkdir()
+        self.consumer = self.root / "scripts/test-release-consumer.sh"
+        shutil.copyfile(repository / "scripts/test-release-consumer.sh", self.consumer)
+        self.lock = self.root / "global.json"
+        shutil.copyfile(repository / "global.json", self.lock)
+
+    def update_sdk(self, **changes):
+        configuration = json.loads(self.lock.read_text())
+        configuration["sdk"].update(changes)
+        self.lock.write_text(json.dumps(configuration), encoding="utf-8")
+
+    def test_repository_has_one_consistent_sdk_lock(self):
+        self.assertEqual([], MODULE.validate_sdk(MODULE_PATH.parents[1]))
+        self.assertEqual([], MODULE.validate_sdk(self.root))
+
+    def test_missing_or_malformed_lock_is_rejected(self):
+        self.lock.unlink()
+        self.assertIn("cannot read SDK lock", MODULE.validate_sdk(self.root)[0])
+        for value in ("{", "[]", '{"sdk": null}'):
+            with self.subTest(value=value):
+                self.lock.write_text(value, encoding="utf-8")
+                self.assertTrue(MODULE.validate_sdk(self.root))
+
+    def test_sdk_baseline_must_allow_every_stable_feature_band(self):
+        for version in ("10.0.x", "10.0", "10.0.101", "10.0.404", "11.0.100-preview.1", None, 10):
+            with self.subTest(version=version):
+                self.update_sdk(version=version)
+                self.assertIn(
+                    "global.json SDK version must start at major.minor.100 to allow every stable feature band",
+                    MODULE.validate_sdk(self.root),
+                )
+
+    def test_roll_forward_must_allow_all_patches_but_not_another_major_minor(self):
+        for policy in ("disable", "patch", "latestPatch", "feature", "minor", "latestMinor", "major", "latestMajor", None):
+            with self.subTest(policy=policy):
+                self.update_sdk(rollForward=policy)
+                self.assertIn(
+                    "global.json SDK rollForward must be latestFeature",
+                    MODULE.validate_sdk(self.root),
+                )
+        self.update_sdk(rollForward="latestFeature", allowPrerelease=True)
+        self.assertIn(
+            "global.json SDK allowPrerelease must be false",
+            MODULE.validate_sdk(self.root),
+        )
+
+    def test_nested_sdk_locks_are_rejected_for_all_solution_trees(self):
+        for directory in ("src", "tests", "examples"):
+            path = self.root / directory / "Project" / "global.json"
+            path.parent.mkdir(parents=True)
+            shutil.copyfile(self.lock, path)
+            with self.subTest(directory=directory):
+                self.assertIn(
+                    f"{directory}/Project/global.json overrides the root SDK lock",
+                    MODULE.validate_sdk(self.root),
+                )
+
+    def test_every_workflow_must_install_the_supported_major_minor(self):
+        for workflow in sorted((self.root / ".github/workflows").glob("*.yml")):
+            original = workflow.read_text()
+            if "uses: actions/setup-dotnet@" not in original:
+                continue
+            for selection in ("10.1.x", "11.0.x", "10.0.404"):
+                with self.subTest(workflow=workflow.name, selection=selection):
+                    workflow.write_text(
+                        original.replace("dotnet-version: '10.0.x'", f"dotnet-version: '{selection}'"),
+                        encoding="utf-8",
+                    )
+                    self.assertTrue(any("SDK setup must install only 10.0.x" in error for error in MODULE.validate_sdk(self.root)))
+            workflow.write_text(original, encoding="utf-8")
+
+    def test_workflow_cannot_replace_the_family_selector_with_the_baseline(self):
+        workflow = self.root / ".github/workflows/ci.yml"
+        workflow.write_text(
+            workflow.read_text().replace(
+                "dotnet-version: '10.0.x'",
+                "global-json-file: global.json",
+            ),
+            encoding="utf-8",
+        )
+        self.assertTrue(any("SDK setup must install only 10.0.x" in error for error in MODULE.validate_sdk(self.root)))
+
+    def test_workflow_cannot_install_extra_sdks_alongside_the_family(self):
+        workflow = self.root / ".github/workflows/ci.yml"
+        original = workflow.read_text()
+        for selection in (
+            "dotnet-version: |\n            10.0.x\n            11.0.x",
+            "dotnet-version: '10.0.x'\n          dotnet-version: '11.0.x'",
+            "dotnet-version: '10.0.x'\n          dotnet-version-file: versions.txt",
+        ):
+            with self.subTest(selection=selection):
+                workflow.write_text(original.replace("dotnet-version: '10.0.x'", selection), encoding="utf-8")
+                self.assertTrue(any("SDK setup must install only 10.0.x" in error for error in MODULE.validate_sdk(self.root)))
+
+    def test_worker_sdk_images_must_match_the_major_minor(self):
+        for dockerfile in sorted((self.root / "deploy/images").glob("*.Dockerfile")):
+            original = dockerfile.read_text()
+            for version in ("10.1.100", "11.0.100", "10.0.100-preview.1"):
+                with self.subTest(dockerfile=dockerfile.name, version=version):
+                    dockerfile.write_text(re.sub(r"sdk:[^@\s]+@", f"sdk:{version}@", original), encoding="utf-8")
+                    self.assertTrue(any("SDK image must match the global.json major.minor" in error for error in MODULE.validate_sdk(self.root)))
+            dockerfile.write_text(original, encoding="utf-8")
+
+    def test_worker_sdk_images_can_use_different_patches_and_feature_bands(self):
+        for dockerfile in sorted((self.root / "deploy/images").glob("*.Dockerfile")):
+            original = dockerfile.read_text()
+            for version in ("10.0", "10.0.100", "10.0.102", "10.0.403", "10.0.404"):
+                with self.subTest(dockerfile=dockerfile.name, version=version):
+                    dockerfile.write_text(re.sub(r"sdk:[^@\s]+@", f"sdk:{version}@", original), encoding="utf-8")
+                    self.assertEqual([], MODULE.validate_sdk(self.root))
+            dockerfile.write_text(original, encoding="utf-8")
+
+    def test_worker_sdk_images_cannot_drop_the_digest(self):
+        dockerfile = self.root / "deploy/images/agents-worker.Dockerfile"
+        text = dockerfile.read_text()
+        first_line, remaining = text.split(" AS build", 1)
+        dockerfile.write_text(first_line.split("@sha256:", 1)[0] + " AS build" + remaining, encoding="utf-8")
+        self.assertTrue(any("SDK image must match the global.json major.minor" in error for error in MODULE.validate_sdk(self.root)))
+
+    def test_release_consumer_cannot_escape_the_sdk_lock(self):
+        original = self.consumer.read_text()
+        for command in ('cp "$root/global.json" "$consumer/global.json"', 'cd "$consumer"'):
+            with self.subTest(command=command):
+                self.consumer.write_text(original.replace(command, ""), encoding="utf-8")
+                self.assertIn(
+                    "release consumer must copy and enter the root SDK lock before running dotnet",
+                    MODULE.validate_sdk(self.root),
+                )
 
 
 class VulnerabilityReportTests(unittest.TestCase):

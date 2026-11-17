@@ -4,6 +4,12 @@ This guide describes repository conventions for extending the current Nao implem
 
 ## Build workflow
 
+Install a stable .NET 10.0 SDK before running any `dotnet` command.
+[global.json](../global.json) selects the latest installed patch and feature band
+within that major/minor version for every source, test, and example project,
+including commands run from project subdirectories. Another major/minor version
+or a preview cannot substitute for a missing 10.0 SDK.
+
 ```bash
 dotnet tool restore
 dotnet paket install
@@ -122,7 +128,26 @@ Adding a production project or changing an allowed edge requires updating the va
 
 ## Runtime and API support
 
-Nao currently supports .NET 10 and the F# toolchain selected by that SDK. CI follows the latest .NET 10 feature band and centrally pins `FSharp.Core`; dependency lock updates are reviewed explicitly. The supported SDK and F# core are reviewed quarterly and before each minor release. Moving to a new .NET major or F# language generation requires a documented compatibility decision, a clean solution build, the full supported test surface, and migration notes.
+Nao currently supports .NET 10.0 and the F# toolchain selected by
+[global.json](../global.json). Its `10.0.100` baseline and `latestFeature`
+roll-forward policy allow every stable 10.0 patch and feature band, without
+selecting another major/minor version or a preview. GitHub Actions installs
+`10.0.x`. Worker build images use immutable image digests within the same SDK
+major/minor; their patch need not match a developer machine or CI. The isolated
+release consumer copies the same SDK policy. Nested SDK pins in source, test,
+or example trees are forbidden. Supply-chain validation rejects drift in these
+settings.
+
+Major/minor SDK upgrades are explicit: update the root policy, workflow SDK
+selectors, and worker SDK images together. Worker patch updates change their
+image versions and digests without changing the root policy. Validate upgrades
+with supply-chain validation and its tests, a clean
+Release solution build, all reference examples, the full supported test surface,
+and worker-image smoke tests. `FSharp.Core` is pinned separately; review its
+compatibility and dependency lock updates explicitly. The supported SDK and F#
+core are reviewed quarterly and before each minor release. Moving to a new .NET
+major or F# language generation also requires a documented compatibility
+decision and migration notes.
 
 Public APIs are stable only when documented as supported. Experimental APIs use a `.Experimental` namespace or an `Experimental` module and may change or be removed in any minor release without a compatibility shim. Experimental durable formats still require an explicit schema version and fail-fast diagnostics; they must not be silently read as stable formats.
 
