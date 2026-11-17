@@ -1196,6 +1196,9 @@ type SessionGrain
                     EventBus.unsubscribe recorder.Consumer eventBus
                     currentRecorder <- None
             }
+
+    member private this.DeactivateAfterDeletion() = this.DeactivateOnIdle()
+
     // ─── Activation ───
 
     /// Resolve this session's per-session services from its tenant/workspace/user/session key.
@@ -1658,7 +1661,7 @@ type SessionGrain
                                 grainFactory.GetGrain<ISessionDirectoryGrain>(directoryKey).RemoveAsync sessionId)
                             persistentState.ClearStateAsync
                     with
-                    | Ok() -> this.DeactivateOnIdle()
+                    | Ok() -> this.DeactivateAfterDeletion()
                     | Error failure -> return PlatformFailure.raiseException failure
                 with ex ->
                     return

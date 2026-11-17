@@ -5,6 +5,8 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="src/OidcPrincipalAdapter.fs" />
+    <Compile Include="src/AccountConnections.fs" />
+    <Compile Include="src/OAuthProviders.fs" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Nao.Agents\Nao.Agents.fsproj" />

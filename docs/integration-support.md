@@ -39,6 +39,36 @@ The host must:
 4. retain authentication and revocation evidence in host audit records;
 5. pass the resulting `SecurityPrincipal`, never raw claims, into Nao runtime boundaries.
 
+## External account connections
+
+`Nao.Identity.Oidc` also provides `IAccountTokenBroker`, `IAccountConnectionStore`
+and `IOAuthTokenRefresher` for external-service accounts. This is separate from
+application login: the original `SecurityPrincipal` stays authoritative. Connections
+are bound to tenant, original/effective user, workspace and service lineage, and may
+be used by owned sessions and delegated agents without changing their user identity.
+
+Built-in provider definitions cover Microsoft personal and Entra work/school accounts
+through the Microsoft `common` endpoint, and Google accounts. Hosts supply registered
+OAuth client credentials, an encrypted connection store, browser authorization-code
+handling with PKCE/state/correlation protection, and account-management UI.
+`OAuthTokenRefresher` uses provider-pinned HTTPS token endpoints; supply an `HttpClient`
+with redirects disabled. Refresh-token responses may omit unchanged scope and refresh
+token values; new values replace old ones when returned.
+
+After separately authorizing its action, trusted tool code calls `AcquireAsync` with
+an `AuthorizationScope`, connection ID and required scope set. It receives a
+`SecretValue` and expiry, or a structured connection, reauthentication or additional
+consent requirement. Tokens are resolved through the existing execution secret-redaction
+boundary; adapters must still never return them to models or include them in logs.
+Concurrent refresh is serialized within a broker instance. `invalid_grant` clears local
+credential material and requires reconnection; transient/provider-configuration failures
+propagate rather than being disguised as missing accounts. Storage and distributed
+coordination across multiple host processes remain host responsibilities.
+
+Microsoft Graph scopes are normalized to their short names; other providers' scope
+identifiers remain exact. The broker does not manufacture user consent, bypass tool
+permissions, implement service APIs, or revoke upstream consent on local disconnect.
+
 ## Enterprise secret-provider boundary
 
 Nao deliberately does not select a vault vendor before a deployment has chosen workload identity, tenancy, rotation, and availability requirements. A production host adapts its enterprise vault through `SecretProvider.create`.

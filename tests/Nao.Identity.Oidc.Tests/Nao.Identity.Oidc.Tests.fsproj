@@ -11,6 +11,7 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="src/OidcPrincipalAdapterTests.fs" />
+    <Compile Include="src/AccountConnectionTests.fs" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\Nao.Identity.Oidc\Nao.Identity.Oidc.fsproj" />
