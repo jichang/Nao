@@ -71,7 +71,8 @@ type private ConnectionFixture() =
     member _.Account =
         { Provider = "microsoft"
           Subject = "external-user"
-          DisplayName = "Test account" }
+          DisplayName = "Test account"
+          Email = Some "account@example.invalid" }
 
 [<TestClass>]
 type AccountConnectionTests() =
@@ -89,6 +90,33 @@ type AccountConnectionTests() =
     let owner = scope "tenant" "user" None
     let token = CancellationToken.None
 
+    [<DataTestMethod>]
+    [<DataRow("scope\"quote")>]
+    [<DataRow("scope\\slash")>]
+    [<DataRow("scope\u007f")>]
+    member _.MalformedScopeCannotBeStoredOrAcquired(scopeName: string) : Task =
+        task {
+            let fixture = ConnectionFixture()
+            let broker = fixture.Broker
+            let malformed = Set.singleton scopeName
+
+            let tokens =
+                { fixture.Tokens 30.0 with
+                    Scopes = malformed }
+
+            let! _ =
+                Assert.ThrowsExactlyAsync<ArgumentException>(fun () ->
+                    broker.CompleteAsync(owner, None, fixture.Account, tokens, token) :> Task)
+
+            let! account = broker.CompleteAsync(owner, None, fixture.Account, fixture.Tokens 30.0, token)
+
+            let! _ =
+                Assert.ThrowsExactlyAsync<ArgumentException>(fun () ->
+                    broker.AcquireAsync(owner, account.Id, malformed, token) :> Task)
+
+            Assert.AreEqual(0, fixture.Refreshes)
+        }
+
     [<TestMethod>]
     member _.ValidTokenDoesNotRefresh() : Task =
         task {
@@ -102,6 +130,27 @@ type AccountConnectionTests() =
             | _ -> Assert.Fail "Expected a usable token."
 
             Assert.AreEqual(0, fixture.Refreshes)
+        }
+
+    [<TestMethod>]
+    member _.ReconnectPreservesKnownEmailWhenProviderOmitsIt() : Task =
+        task {
+            let fixture = ConnectionFixture()
+            let broker = fixture.Broker
+            let! account = broker.CompleteAsync(owner, None, fixture.Account, fixture.Tokens 30.0, token)
+
+            let! updated =
+                broker.CompleteAsync(
+                    owner,
+                    Some account.Id,
+                    { fixture.Account with Email = None },
+                    fixture.Tokens 30.0,
+                    token
+                )
+
+            Assert.AreEqual(fixture.Account.Email, updated.Email)
+            let! stored = broker.ListAsync(owner, token)
+            Assert.AreEqual(updated.Email, stored.Head.Email)
         }
 
     [<TestMethod>]
@@ -134,6 +183,7 @@ type AccountConnectionTests() =
 
             let! owned = broker.ListAsync(scope "tenant" "user" (Some "session"), token)
             Assert.AreEqual(account.Id, owned.Head.Id)
+            Assert.AreEqual(fixture.Account.Email, owned.Head.Email)
         }
 
     [<TestMethod>]

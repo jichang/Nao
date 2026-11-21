@@ -91,6 +91,58 @@ type OrchestratorObservabilityTests() =
             Map.empty
             context.Correlation
 
+    [<DataTestMethod>]
+    [<DataRow(false)>]
+    [<DataRow(true)>]
+    member _.``round exhaustion rejects a final tool action without repeating side effects``(succeeds: bool) =
+        let mutable calls = 0
+
+        let tool =
+            Tool.create
+                "send_email"
+                "Synthetic send."
+                0
+                []
+                ToolCodec.text
+                ToolCodec.text
+                (ToolOperation.create ToolReplaySafety.ExternallySideEffecting (fun _ _ ->
+                    calls <- calls + 1
+
+                    Task.FromResult(
+                        if succeeds then
+                            Ok "accepted"
+                        else
+                            Error(ToolExecError.InvalidInput "Rejected parameters.")
+                    )))
+
+        let provider = ScriptedProvider.create [ "invoke"; "invoke" ]
+
+        let configuration =
+            { config provider [ tool ] EventBus.none with
+                MaxRounds = 1 }
+
+        let agent =
+            TestOrchestrator.create configuration (fun _ -> [ InvokeTool("send_email", "synthetic") ])
+
+        let context = AgentContext.unrestrictedForTests ()
+
+        let harnessConfig =
+            { EtclovgConfig.Default with
+                ExecutionJournal = Some(InMemory.executionJournal ()) }
+
+        let result =
+            EtclovgHarness.runAsync harnessConfig context agent (request context agent "start")
+            |> _.Result
+
+        Assert.AreEqual(1, calls, $"Execution status: {result.Status}")
+        Assert.IsTrue result.Outputs.Response.IsNone
+
+        match result.Status with
+        | ExecutionTerminalStatus.Failed error ->
+            Assert.IsFalse error.Retryable
+            StringAssert.Contains(error.Message, "without a final response")
+        | status -> Assert.Fail $"Expected failure, got {status}."
+
     [<TestMethod>]
     member _.``provider receives the active event correlation``() =
         let observed = ResizeArray<CorrelationContext>()

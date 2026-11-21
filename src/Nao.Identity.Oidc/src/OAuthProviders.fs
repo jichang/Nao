@@ -10,13 +10,16 @@ open System.Threading.Tasks
 open Nao.Agents
 
 type OAuthProviderDefinition =
-    { Id: string
-      Name: string
-      AuthorizationEndpoint: string
-      TokenEndpoint: string
-      UserInformationEndpoint: string
-      IdentityScopes: Set<string>
-      ServiceScopes: Set<string> }
+    {
+        Id: string
+        Name: string
+        AuthorizationEndpoint: string
+        TokenEndpoint: string
+        UserInformationEndpoint: string
+        IdentityScopes: Set<string>
+        /// Suggested scopes for discovery, not an authorization allowlist.
+        ServiceScopes: Set<string>
+    }
 
 module OAuthProviders =
     let microsoft =

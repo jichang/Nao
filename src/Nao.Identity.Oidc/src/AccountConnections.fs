@@ -13,6 +13,7 @@ type ConnectedAccount =
       Provider: string
       Subject: string
       DisplayName: string
+      Email: string option
       Scopes: Set<string>
       ExpiresAt: DateTimeOffset
       ReconnectRequired: bool }
@@ -20,7 +21,8 @@ type ConnectedAccount =
 type OAuthAccount =
     { Provider: string
       Subject: string
-      DisplayName: string }
+      DisplayName: string
+      Email: string option }
 
 type OAuthTokens =
     { AccessToken: SecretValue
@@ -67,6 +69,17 @@ type IAccountTokenBroker =
 
     abstract DisconnectAsync: AuthorizationScope * connectionId: string * CancellationToken -> Task<bool>
 
+module OAuthScopes =
+    let isValid (scope: string) =
+        not (String.IsNullOrEmpty scope)
+        && (scope
+            |> Seq.forall (fun character ->
+                character >= '!' && character <= '~' && character <> '"' && character <> '\\'))
+
+    let validate scopes =
+        if scopes |> Set.exists (isValid >> not) then
+            invalidArg (nameof scopes) "OAuth scopes must be individual RFC 6749 scope names."
+
 module AccountConnectionOwner =
     let key authorization =
         let principal = AuthorizationScope.principal authorization
@@ -95,13 +108,6 @@ type AccountTokenBroker(store: IAccountConnectionStore, refresher: IOAuthTokenRe
         match Guid.TryParseExact(id, "N") with
         | true, _ -> ()
         | _ -> invalidArg (nameof id) "Connection ID must be a canonical opaque ID."
-
-    let validateScopes scopes =
-        if
-            scopes
-            |> Set.exists (fun scope -> String.IsNullOrWhiteSpace scope || scope |> Seq.exists Char.IsWhiteSpace)
-        then
-            invalidArg (nameof scopes) "OAuth scopes must be non-blank individual scope names."
 
     let verify owner connection =
         if connection.OwnerKey <> owner then
@@ -161,7 +167,7 @@ type AccountTokenBroker(store: IAccountConnectionStore, refresher: IOAuthTokenRe
                 then
                     invalidArg (nameof account) "Provider account identity is required."
 
-                validateScopes tokens.Scopes
+                OAuthScopes.validate tokens.Scopes
 
                 if tokens.ExpiresAt <= now () then
                     invalidArg (nameof tokens) "An unexpired access token is required."
@@ -200,6 +206,9 @@ type AccountTokenBroker(store: IAccountConnectionStore, refresher: IOAuthTokenRe
                                   Provider = account.Provider
                                   Subject = account.Subject
                                   DisplayName = account.DisplayName
+                                  Email =
+                                    account.Email
+                                    |> Option.orElseWith (fun () -> previous |> Option.bind _.Account.Email)
                                   Scopes = tokens.Scopes
                                   ExpiresAt = tokens.ExpiresAt
                                   ReconnectRequired = false }
@@ -218,7 +227,7 @@ type AccountTokenBroker(store: IAccountConnectionStore, refresher: IOAuthTokenRe
 
         member _.AcquireAsync(authorization, id, requiredScopes, cancellationToken) =
             task {
-                validateScopes requiredScopes
+                OAuthScopes.validate requiredScopes
                 let owner = AccountConnectionOwner.key authorization
 
                 return!
@@ -263,7 +272,7 @@ type AccountTokenBroker(store: IAccountConnectionStore, refresher: IOAuthTokenRe
 
                                         return AccountTokenResult.ReauthenticationRequired
                                     | OAuthRefreshResult.Refreshed fresh ->
-                                        validateScopes fresh.Scopes
+                                        OAuthScopes.validate fresh.Scopes
 
                                         if fresh.ExpiresAt <= now () then
                                             invalidOp "The OAuth provider returned an expired access token."

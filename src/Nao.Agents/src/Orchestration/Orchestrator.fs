@@ -437,6 +437,7 @@ module Orchestrator =
                 let mutable rounds = 0
                 let mutable finalAnswer = ""
                 let mutable finished = false
+                let mutable lastToolFailure = None
                 let successfulToolCalls = Collections.Generic.HashSet<string * string>()
 
                 while not finished && rounds < config.MaxRounds do
@@ -498,6 +499,7 @@ module Orchestrator =
                                         | None -> ()
 
                                         if toolExecution.Success then
+                                            lastToolFailure <- None
                                             let toolResult = toolExecution.Output
                                             report (ToolCompleted(toolName, toolResult))
                                             let resultContent = sprintf "[Tool Result from %s]: %s" toolName toolResult
@@ -533,6 +535,7 @@ module Orchestrator =
                                                     guidance
 
                                             conversation <- conversation @ [ { Role = User; Content = failMsg } ]
+                                            lastToolFailure <- Some failure.Message
 
                                             endToolSpan
                                                 toolSpan
@@ -639,13 +642,31 @@ module Orchestrator =
 
                     let! response, parseActions = reasonAsync agentContext conversation (rounds + 1) successfulToolCalls
 
-                    finalAnswer <-
-                        parseActions response
+                    let actions = parseActions response
+
+                    let terminal =
+                        actions
                         |> List.tryPick (function
                             | Respond answer
                             | RequestUserInput answer -> Some answer
                             | _ -> None)
-                        |> Option.defaultValue response
+
+                    match terminal, actions with
+                    | Some answer, _ -> finalAnswer <- answer
+                    | None, [] -> finalAnswer <- response
+                    | None, _ ->
+                        let detail =
+                            lastToolFailure
+                            |> Option.map (sprintf " Last tool error: %s")
+                            |> Option.defaultValue ""
+
+                        PlatformFailure.create
+                            PlatformErrorCategory.InvalidOutput
+                            ("Maximum orchestration rounds reached without a final response. Final tool instructions were not executed. Check tool outcomes before explicitly repeating side-effecting operations."
+                             + detail)
+                            false
+                            None
+                        |> PlatformFailure.raiseException
 
                 report (AnswerProduced finalAnswer)
                 return finalAnswer

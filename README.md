@@ -80,6 +80,9 @@ type `application/vnd.nao.document` and schema marker `nao-doc/1`. Its JSON Sche
 identifier is `urn:nao:document:1`. `Formats.fullRegistry()` includes the native
 reader and writer alongside the supported import and export formats.
 
+See the [Nao document format specification](src/Nao.Documents/FORMAT.md) for the
+JSON representation, content types, resources, validation, and extension boundaries.
+
 These native identifiers are canonical; no legacy format aliases are registered.
 Existing files are not automatically migrated.
 
